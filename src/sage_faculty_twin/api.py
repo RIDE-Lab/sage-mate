@@ -202,15 +202,12 @@ CHAT_REQUEST_TIMEOUT_SECONDS = float(
 # connection mid-answer. We emit a typed ``{"type": "keepalive"}`` event
 # every ``CHAT_SSE_KEEPALIVE_SECONDS`` seconds so the connection stays warm.
 CHAT_SSE_KEEPALIVE_SECONDS = float(os.environ.get("DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS", "15"))
-# Chat Latency Optimizations Task 5: when this flag is enabled the LLM
-# stage emits each token chunk over the workflow-events SSE channel as a
-# typed ``answer_delta`` event, followed by a final ``answer_done`` event
-# carrying the full ChatResponse dict. The /chat POST still returns the
-# same JSON ChatResponse so CLI/test callers see the same contract; the
-# browser uses the SSE deltas to paint the answer progressively. Defaults
-# to on so streaming works out of the box; set to ``false`` to disable.
+# Legacy upstream-streaming switch. Even when explicitly enabled, /chat now
+# buffers generation chunks inside the request and emits only the validated
+# ``answer_done`` payload. The workflow may reject and regenerate an attempt,
+# so publishing raw chunks would expose internal or degenerate text.
 STREAM_CHAT_ANSWER = os.environ.get(
-    "DIGITAL_TWIN_STREAM_CHAT_ANSWER", "true"
+    "DIGITAL_TWIN_STREAM_CHAT_ANSWER", "false"
 ).strip().lower() not in {"0", "false", "no", "off"}
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
 SLACK_TWIN_ALLOWED_USER_IDS = {
@@ -1692,13 +1689,14 @@ async def chat(
 
     answer_chunk_callback = None
     if STREAM_CHAT_ANSWER:
-        # Chat Latency Optimizations Task 5: only attach the streaming
-        # callback when the feature flag is on. The service then asks
-        # the LLM client for a streaming completion and forwards each
-        # chunk to the SSE broker so the browser can paint tokens as
-        # they arrive.
+        # The upstream completion may still use streaming transport, but raw
+        # chunks are request-local until answer validation and retry handling
+        # finish. Only ``answer_done`` below crosses the public SSE boundary.
+        buffered_answer_chunks: list[str] = []
+
         def _on_answer_chunk(delta: str) -> None:
-            workflow_event_broker.publish_answer_chunk(request_id, delta)
+            if delta:
+                buffered_answer_chunks.append(delta)
 
         answer_chunk_callback = _on_answer_chunk
 

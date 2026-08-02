@@ -1,6 +1,6 @@
 """Regression tests for the Chat Latency Optimizations Task 5 streaming.
 
-When ``DIGITAL_TWIN_STREAM_CHAT_ANSWER`` is enabled the LLM client asks
+When the legacy ``DIGITAL_TWIN_STREAM_CHAT_ANSWER`` flag is enabled the LLM client asks
 for an OpenAI-compatible streaming completion (``stream=true``) and
 forwards each token chunk through the ``answer_chunk_callback`` plumbed
 all the way from ``/chat`` -> ``DigitalTwinService.answer`` ->
@@ -10,7 +10,9 @@ all the way from ``/chat`` -> ``DigitalTwinService.answer`` ->
 final ``{"type": "answer_done", "response": {...}}`` once the /chat POST
 finishes rendering.
 
-The tests below cover three guarantees:
+The public ``/chat`` route buffers these chunks and exposes only the validated
+final response. The lower-level tests below cover the internal streaming
+transport and broker primitives:
 
 1. ``WorkflowEventBroker.publish_answer_chunk`` / ``publish_answer_done``
    land on the SSE stream as typed JSON events with the expected shape.
@@ -25,6 +27,7 @@ The tests below cover three guarantees:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import threading
 from collections import OrderedDict
@@ -96,6 +99,13 @@ def test_publish_answer_delta_then_done_emits_in_order(
     last_delta_index = max(i for i, e in enumerate(events) if e.get("type") == "answer_delta")
     done_index = next(i for i, e in enumerate(events) if e.get("type") == "answer_done")
     assert done_index > last_delta_index
+
+
+def test_public_chat_route_does_not_publish_unvalidated_answer_chunks() -> None:
+    source = inspect.getsource(api_module.chat)
+
+    assert "buffered_answer_chunks.append(delta)" in source
+    assert "workflow_event_broker.publish_answer_chunk(request_id, delta)" not in source
 
 
 def test_answer_done_complete_gate_defers_close_until_answer_done() -> None:

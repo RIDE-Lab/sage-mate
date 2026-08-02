@@ -132,6 +132,49 @@ def test_normalize_interaction_intent_for_office_hour_information_query() -> Non
     assert normalized.exclude_scopes == ["courseware"]
 
 
+def test_joining_preparation_question_is_advising_not_review_queue() -> None:
+    client = object.__new__(VllmChatClient)
+    raw_intent = InteractionIntent(
+        action="review_queue",
+        domain="advising",
+        retrieval_scopes=["meeting_policy", "profile"],
+        exclude_scopes=["courseware"],
+        decision_mode="review_queue",
+        confidence=0.7,
+    )
+
+    normalized = client._normalize_interaction_intent(
+        "张老师您好，请用两三句话介绍一下您目前主要研究什么，并说明学生如果想加入课题组应该提前准备什么？",
+        "科研指导",
+        raw_intent,
+    )
+
+    assert normalized.action == "answer"
+    assert normalized.domain == "advising"
+    assert normalized.decision_mode == "advise_only"
+    assert normalized.retrieval_scopes == ["preparation", "meeting_policy", "profile"]
+
+
+@pytest.mark.parametrize(
+    "question",
+    (
+        "张老师，我想加入课题组，可以吗？",
+        "老师能收我吗？",
+        "能不能批准我延期？",
+    ),
+)
+def test_faculty_commitment_requests_still_require_review(question: str) -> None:
+    client = object.__new__(VllmChatClient)
+    normalized = client._normalize_interaction_intent(
+        question,
+        "科研指导",
+        InteractionIntent(action="answer", domain="advising", confidence=0.7),
+    )
+
+    assert normalized.action == "review_queue"
+    assert normalized.decision_mode == "review_queue"
+
+
 def test_normalize_interaction_intent_for_project_scoping_guidance() -> None:
     client = object.__new__(VllmChatClient)
     raw_intent = InteractionIntent(

@@ -260,12 +260,18 @@ SAGE, NeuroMem, vLLM-HUST, SageVDB, and SageANNS. Versions are resolved at
 runtime via `/stack/versions` (pip metadata → module import → pyproject.toml
 parse, in that order).
 
-## 8. LLM Streaming and the chunked-transfer gotcha
+## 8. Validated answers and optional token streaming
 
-Faculty-twin can stream LLM tokens to the browser per-token via SSE
-(`answer_delta` / `answer_done` events) when
-`DIGITAL_TWIN_STREAM_CHAT_ANSWER=true`. For this to work end-to-end the
-upstream OpenAI-compatible endpoint MUST emit `Transfer-Encoding: chunked`.
+Keep `DIGITAL_TWIN_STREAM_CHAT_ANSWER=false` in normal deployments. Workflow
+trace updates still use SSE, while the browser renders only the final answer
+after grounding, relevance, and retry validation succeeds. This avoids showing
+tokens from an attempt that the workflow later rejects.
+
+The legacy `true` setting may still use streaming transport between Sage Mate
+and the upstream model, but `/chat` buffers those chunks and emits only the
+validated `answer_done` payload to the browser. Raw model tokens never cross
+the public SSE boundary. For upstream streaming transport to work end-to-end,
+the OpenAI-compatible endpoint MUST emit `Transfer-Encoding: chunked`.
 
 Reproduction recipe to verify any candidate `LLM_BASE_URL`:
 

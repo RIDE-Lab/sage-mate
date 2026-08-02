@@ -53,11 +53,20 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'identityModal.classList.contains("hidden") &&' not in script
 
 
+def test_general_visitor_onboarding_preserves_the_typed_question() -> None:
+    response = client.get("/app.js")
+
+    assert response.status_code == 200
+    script = response.text
+    assert "step.question.replace(/_+/g, question)" not in script
+    assert "onboardingWrappedQuestion = effectiveQuestion;" in script
+
+
 def test_local_site_proxy_routes_home_to_embedded_app() -> None:
     nginx_template = NGINX_TEMPLATE.read_text(encoding="utf-8")
 
     assert "location /home/ {" in nginx_template
-    assert "proxy_pass http://127.0.0.1:__APP_PORT__/home/;" in nginx_template
+    assert "proxy_pass http://__APP_HOST__:__APP_PORT__/home/;" in nginx_template
     assert "example.invalid" not in nginx_template
     assert "__HOMEPAGE_UPSTREAM_HOST__" not in nginx_template
     assert "__HOMEPAGE_UPSTREAM_SCHEME__" not in nginx_template

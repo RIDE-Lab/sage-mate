@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.models import ChatRequest, InteractionIntent
+from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.service import (
     ChatWorkflowContext,
     FacultyTwinWorkflowSupport,
@@ -256,10 +256,28 @@ def test_compact_general_answer_is_used_without_grounding(tmp_path: Path) -> Non
     compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
     assert "KV Cache" in compact_prompt
     assert "不要把训练优化写成推理优化" in compact_prompt
+    assert "NEVER fabricate or invent any academic reference" in compact_prompt
+    assert "严格遵循用户指定的" in compact_prompt
+    assert "三条简短依据" not in compact_prompt
     assert service._should_use_curated_technical_guidance(context.request.question)
     assert service._should_use_curated_technical_guidance(
         "为什么首 token 延迟和吞吐量往往互相冲突？"
     )
+
+
+def test_tensor_parallel_explanation_uses_safe_compact_prompt(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    context = _build_context()
+    context.request.question = "请用一个简单例子解释大模型推理中的张量并行，控制在150字以内。"
+
+    assert service._should_use_compact_general_answer(context)
+    compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
+    assert "提供简单具体的例子" in compact_prompt
+    assert "内容、格式和长度" in compact_prompt
+    assert "When no source context is supplied" in compact_prompt
+    assert "推理阶段如何把同一层的矩阵计算切到多个设备" in compact_prompt
+    assert "不要改写成训练或数据并行示例" in compact_prompt
 
 
 def test_general_technical_fast_path_preempts_llm_handoff_classification(tmp_path: Path) -> None:
@@ -428,6 +446,66 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
     assert service._llm_client.max_tokens == [384]
 
 
+def test_owner_grounded_retry_keeps_retrieved_profile_facts(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.user_prompts: list[str] = []
+
+        def answer_question_sync(
+            self,
+            _system_prompt: str,
+            user_prompt: str,
+            **_kwargs: object,
+        ) -> str:
+            self.user_prompts.append(user_prompt)
+            return (
+                "当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体中间件展开。"
+                "加入前建议准备简历、项目代码和一两个具体研究问题。"
+            )
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context()
+    context.request.question = "张老师目前主要研究什么？加入课题组前应该准备什么？"
+    context.knowledge_hits = [
+        KnowledgeSearchHit(
+            document_id="owner-focus",
+            title="公开资料精选｜当前研究主线",
+            excerpt="当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体中间件展开。",
+            score=77.0,
+            tags=["profile", "research-agenda"],
+            source_name="public-profile:current-focus",
+        )
+    ]
+
+    answer = service._retry_answer_with_compact_prompt(context)
+
+    assert "大模型推理引擎" in answer
+    assert "Mandatory owner-fact grounding" in service._llm_client.user_prompts[0]
+    assert "记忆智能体中间件" in service._llm_client.user_prompts[0]
+
+
+def test_owner_fallback_extracts_research_summary_from_retrieved_hit(tmp_path: Path) -> None:
+    context = _build_context()
+    context.request.question = "张老师目前主要研究什么？加入课题组前应该准备什么？"
+    context.knowledge_hits = [
+        KnowledgeSearchHit(
+            document_id="portable-owner-focus",
+            title="公开资料精选｜当前研究主线",
+            excerpt="当前工作主要围绕可移植系统甲、服务系统乙与中间件丙展开。",
+            score=77.0,
+            tags=["profile", "research-agenda"],
+            source_name="public-profile:current-focus",
+        )
+    ]
+
+    answer = FacultyTwinWorkflowSupport._build_deterministic_fallback_answer(context)
+
+    assert "可移植系统甲、服务系统乙与中间件丙" in answer
+    assert "项目/代码证据" in answer
+
+
 def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     tmp_path: Path,
 ) -> None:
@@ -462,7 +540,9 @@ def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     assert "背景、目标、约束和评估指标" not in answer
     assert len(service._llm_client.calls) == 1
     system_prompt, user_prompt, kwargs = service._llm_client.calls[0]
-    assert "先明确判断" in system_prompt
+    assert "严格遵循用户指定的" in system_prompt
+    assert "NEVER fabricate or invent any academic reference" in system_prompt
+    assert "先明确判断" not in system_prompt
     assert "背景：科研指导" in user_prompt
     assert kwargs["max_tokens"] == 768
     assert kwargs["temperature"] == 0.2

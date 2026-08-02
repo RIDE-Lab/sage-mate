@@ -686,7 +686,7 @@ ensure_env_kv() {
 		log "  appended $key"
 	fi
 }
-ensure_env_kv DIGITAL_TWIN_STREAM_CHAT_ANSWER       true
+ensure_env_kv DIGITAL_TWIN_STREAM_CHAT_ANSWER       false
 ensure_env_kv DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS 80
 ensure_env_kv DIGITAL_TWIN_LLM_TIMEOUT_SECONDS       60
 ensure_env_kv DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS 15

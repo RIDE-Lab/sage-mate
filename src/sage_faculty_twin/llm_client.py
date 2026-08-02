@@ -25,6 +25,7 @@ bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 from sage.serving.integrations import policy as serving_policy
 
 from .config import AppSettings
+from .interaction_policy import requires_faculty_review
 from .models import InteractionIntent
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
@@ -2529,24 +2530,8 @@ def _looks_like_decision_request(lowered: str, question: str) -> bool:
 
 
 def _looks_like_review_queue_request(lowered: str, question: str) -> bool:
-    markers = (
-        "破例",
-        "例外",
-        "延期",
-        "审批",
-        "审核",
-        "批准",
-        "同意我",
-        "推荐信",
-        "推荐一下",
-        "加入课题组",
-        "加入你们组",
-        "能收我吗",
-        "能不能给我",
-    )
-    return any(marker in lowered for marker in markers) or any(
-        marker in question for marker in markers
-    )
+    del lowered
+    return requires_faculty_review(question)
 
 
 def _looks_like_human_handoff_request(lowered: str, question: str) -> bool:

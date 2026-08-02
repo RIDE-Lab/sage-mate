@@ -1187,6 +1187,45 @@ def test_service_filters_generic_profile_hits_for_preparation_guidance_queries(
     assert [hit.document_id for hit in filtered] == ["meeting-hit"]
 
 
+def test_service_drops_scope_matched_hit_without_query_evidence(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    intent = InteractionIntent(
+        action="answer",
+        domain="research",
+        retrieval_scopes=["publications", "profile"],
+        exclude_scopes=["courseware"],
+        decision_mode="direct_answer",
+        confidence=0.94,
+    )
+
+    filtered = support._filter_knowledge_hits_by_intent(
+        [
+            KnowledgeSearchHit(
+                document_id="irrelevant-profile-pdf",
+                title="2026 parallel distributed state management survey（第16部分）",
+                excerpt="References and bibliography for distributed state management.",
+                score=515.0,
+                tags=["homepage", "profile", "attachment", "pdf"],
+                source_name="research-paper-part-16",
+            ),
+            KnowledgeSearchHit(
+                document_id="tensor-parallel-guide",
+                title="大模型张量并行入门",
+                excerpt="张量并行把矩阵按维度切分到多个设备上计算，再聚合结果。",
+                score=18.0,
+                tags=["research", "publication"],
+                source_name="public-guide",
+            ),
+        ],
+        intent,
+        question="请用一个简单例子解释大模型推理中的张量并行，控制在150字以内。",
+    )
+
+    assert [hit.document_id for hit in filtered] == ["tensor-parallel-guide"]
+
+
 def test_service_prompt_adds_meeting_preparation_checklist_guidance(
     tmp_path: Path,
 ) -> None:
@@ -1222,6 +1261,57 @@ def test_service_prompt_adds_meeting_preparation_checklist_guidance(
         "Do not ask for time slots unless the student explicitly asks to book a meeting."
         in prompt
     )
+
+
+def test_mixed_joining_question_repeats_owner_facts_next_to_question(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    question = (
+        "张老师您好，请介绍一下您目前主要研究什么，并说明学生如果想加入课题组"
+        "应该提前准备什么？"
+    )
+    prompt = service._build_student_prompt(
+        request=type(
+            "Request",
+            (),
+            {
+                "student_name": "Alice",
+                "course_context": "科研指导",
+                "question": question,
+                "visitor_profile": "general_visitor",
+                "attachments": [],
+                "deep_thinking": False,
+                "deep_thinking_explicit": False,
+            },
+        )(),
+        knowledge_hits=[
+            KnowledgeSearchHit(
+                document_id="owner-current-focus",
+                title="公开资料精选｜当前研究主线",
+                excerpt=(
+                    "当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体"
+                    "中间件展开。"
+                ),
+                score=77.0,
+                tags=["profile", "research-agenda"],
+                source_name="public-profile:current-focus",
+            )
+        ],
+        interaction_intent=InteractionIntent(
+            action="answer",
+            domain="advising",
+            retrieval_scopes=["preparation", "meeting_policy", "profile"],
+            exclude_scopes=["courseware"],
+            decision_mode="advise_only",
+            confidence=0.9,
+        ),
+    )
+
+    grounding_position = prompt.index("Mandatory owner-fact grounding")
+    question_position = prompt.index("Current user question")
+    assert grounding_position < question_position
+    assert "大模型推理引擎、推理服务系统与记忆智能体中间件" in prompt
+    assert "do not substitute a plausible unrelated field" in prompt
 
 
 def test_service_prompt_adds_project_scoping_guidance(tmp_path: Path) -> None:

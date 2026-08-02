@@ -46,6 +46,7 @@ from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
 from .escalation_store import EscalationQueueStore
 from .follow_up_store import FollowUpQueueStore
+from .interaction_policy import requires_faculty_review
 from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
@@ -154,7 +155,7 @@ from .notifications import BookingEmailNotifier, BookingNotificationError
 from .online_presence_store import OnlinePresenceStore
 from .operations_store import OperationsTaskStateStore
 from .runtime_feature_store import RuntimeFeatureFlagStore
-from .persona import build_system_prompt
+from .persona import CITATION_GROUNDING_RULES, build_system_prompt
 from .planner_comparison_store import PlannerComparisonEntry, PlannerComparisonStore
 from .planner_metrics_store import PlannerMetricsStore
 from .service_runtime import ServiceRuntimeManager
@@ -1230,7 +1231,11 @@ class FacultyTwinWorkflowSupport:
                 visitor_profile=context.request.visitor_profile,
                 admin_role=self._resolve_admin_role(),
             )
-            context.knowledge_hits = self._filter_knowledge_hits_by_intent(raw_hits, interaction_intent)
+            context.knowledge_hits = self._filter_knowledge_hits_by_intent(
+                raw_hits,
+                interaction_intent,
+                question=context.request.question,
+            )
             hit_count = len(context.knowledge_hits)
             top_score = context.knowledge_hits[0].score if context.knowledge_hits else 0.0
 
@@ -2214,8 +2219,9 @@ class FacultyTwinWorkflowSupport:
     @staticmethod
     def _build_compact_answer_system_prompt(question: str) -> str:
         prompt = (
-            "你是一位严谨的科研导师。请直接回答用户问题：先明确判断，"
-            "再用三条简短依据说明关键取舍，最后给一项可执行验证。"
+            "你是一位严谨的科研导师。请直接、准确地回答用户问题，严格遵循用户指定的"
+            "内容、格式和长度。概念解释应给出清晰定义，并在用户要求时提供简单具体的例子。"
+            f" {CITATION_GROUNDING_RULES}"
         )
         lowered = question.lower()
         if any(marker in lowered for marker in ("ascend", "npu", "昇腾")):
@@ -2223,6 +2229,11 @@ class FacultyTwinWorkflowSupport:
                 " 对 Ascend NPU 推理问题，只围绕精度或量化、算子与图优化、"
                 "KV Cache 和内存生命周期、并行通信、连续批处理与调度，以及 "
                 "TTFT、TPOT、吞吐和尾延迟评测回答；不要把训练优化写成推理优化。"
+            )
+        if ("张量并行" in question or "tensor parallel" in lowered) and "推理" in question:
+            prompt += (
+                " 张量并行的例子必须描述推理阶段如何把同一层的矩阵计算切到多个设备并合并结果；"
+                "不要改写成训练或数据并行示例。"
             )
         return prompt
 
@@ -2236,6 +2247,16 @@ class FacultyTwinWorkflowSupport:
         )
         compact_user_prompt = context.request.question.strip()
         compact_user_prompt = re.sub(r"^请?深入分析[：:，,、\\s]*", "", compact_user_prompt)
+        owner_fact_grounding = self._build_owner_fact_grounding_guidance(
+            context.request.question,
+            context.knowledge_hits,
+        )
+        if owner_fact_grounding:
+            compact_user_prompt = (
+                f"{owner_fact_grounding}"
+                "Current user question (answer this directly):\n"
+                f"{compact_user_prompt}"
+            )
         if self._looks_like_contextual_follow_up(
             context.request.question,
             context.recent_session_context,
@@ -2308,6 +2329,20 @@ class FacultyTwinWorkflowSupport:
     def _build_deterministic_fallback_answer(context: ChatWorkflowContext) -> str:
         question = context.request.question.strip()
         lowered_question = question.lower()
+        owner_research_summary = (
+            FacultyTwinWorkflowSupport._extract_owner_research_summary(context)
+        )
+        if owner_research_summary:
+            if any(
+                marker in question
+                for marker in ("加入课题组", "加入你们组", "提前准备", "怎么准备")
+            ):
+                return (
+                    f"{owner_research_summary}。"
+                    "如果希望加入课题组，建议先阅读公开研究资料，准备能说明系统研究或工程能力的"
+                    "简历、项目/代码证据，并写清自己最想切入的 1–2 个具体问题。"
+                )
+            return f"{owner_research_summary}。"
         if "三个问题" in question or ("3个问题" in question and "问" in question):
             return (
                 "可以先问这三个问题，能最快抓住一位老师的研究路线：\n\n"
@@ -2470,6 +2505,38 @@ class FacultyTwinWorkflowSupport:
             "用主指标、P95 或失败率等直接证据决定下一步；如果实验不能区分两种判断，"
             "应先改进问题定义和评测，而不是继续增加实现复杂度。"
         )
+
+    @staticmethod
+    def _extract_owner_research_summary(context: ChatWorkflowContext) -> str | None:
+        if not FacultyTwinWorkflowSupport._IDENTITY_QUESTION_PATTERN.search(
+            context.request.question
+        ):
+            return None
+        candidates: list[tuple[int, str]] = []
+        for hit in context.knowledge_hits:
+            hit_tags = {tag.lower() for tag in hit.tags}
+            if not hit_tags & {"profile", "research", "research-agenda", "overview"}:
+                continue
+            for sentence in re.split(r"[。！？\n]+", hit.excerpt):
+                normalized = re.sub(r"\s+", " ", sentence).strip(" ：:；;")
+                if not normalized or not any(
+                    marker in normalized for marker in ("研究", "当前工作", "研究主线")
+                ):
+                    continue
+                if not any(
+                    marker in normalized
+                    for marker in ("大模型", "推理", "状态管理", "当前工作", "研究主线")
+                ):
+                    continue
+                priority = sum(
+                    marker in normalized
+                    for marker in ("当前工作", "研究聚焦", "研究主线", "大模型推理")
+                )
+                candidates.append((priority, normalized[:260]))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (-item[0], len(item[1])))
+        return candidates[0][1]
 
     @staticmethod
     def _is_degenerate_answer(answer: str | None) -> bool:
@@ -3804,6 +3871,10 @@ class FacultyTwinWorkflowSupport:
         technical_guidance = self._build_general_technical_response_guidance(
             request.question, interaction_intent
         )
+        owner_fact_grounding = self._build_owner_fact_grounding_guidance(
+            request.question,
+            prompt_hits,
+        )
         availability_context = self._meeting_service.describe_current_availability()
         live_calendar_context = self._calendar_bridge.describe_for_prompt(request.question)
         return (
@@ -3836,9 +3907,43 @@ class FacultyTwinWorkflowSupport:
             f"{memory_context}"
             f"{knowledge_context}"
             f"{web_search_context}"
+            f"{owner_fact_grounding}"
             "Current user question (answer this directly):\n"
             f"{request.question}\n"
         )
+
+    @classmethod
+    def _build_owner_fact_grounding_guidance(
+        cls,
+        question: str,
+        knowledge_hits: list[KnowledgeSearchHit],
+    ) -> str:
+        """Repeat retrieved owner facts next to the final question.
+
+        Mixed questions can be classified as advising even when they also ask
+        for the owner's current research. Keeping the relevant retrieved facts
+        adjacent to the final question prevents a small model from replacing
+        them with a plausible but unsupported faculty profile.
+        """
+
+        if not cls._IDENTITY_QUESTION_PATTERN.search(question):
+            return ""
+        owner_hits = [
+            hit
+            for hit in knowledge_hits
+            if {tag.lower() for tag in hit.tags}
+            & {"profile", "research", "research-agenda", "overview"}
+        ][:2]
+        if not owner_hits:
+            return ""
+        lines = [
+            "Mandatory owner-fact grounding for the current question:",
+            "Answer owner-specific facts only from the retrieved statements below. Reuse their concrete research terms; do not substitute a plausible unrelated field.",
+        ]
+        for hit in owner_hits:
+            excerpt = re.sub(r"\s+", " ", hit.excerpt).strip()[:700]
+            lines.append(f"- {hit.title}: {excerpt}")
+        return "\n".join(lines) + "\n"
 
     @staticmethod
     def _build_deep_answer_guidance(request: ChatRequest) -> str:
@@ -5246,6 +5351,8 @@ class FacultyTwinWorkflowSupport:
         self,
         knowledge_hits: list[KnowledgeSearchHit],
         interaction_intent: InteractionIntent | None,
+        *,
+        question: str | None = None,
     ) -> list[KnowledgeSearchHit]:
         if interaction_intent is None or not knowledge_hits:
             return knowledge_hits
@@ -5261,14 +5368,69 @@ class FacultyTwinWorkflowSupport:
             and not self._matches_intent_scopes(hit, interaction_intent.exclude_scopes)
         ]
         if scoped_hits:
-            return scoped_hits
+            candidates = scoped_hits
+        else:
+            non_excluded_hits = [
+                hit
+                for hit in knowledge_hits
+                if not self._matches_intent_scopes(hit, interaction_intent.exclude_scopes)
+            ]
+            candidates = non_excluded_hits or knowledge_hits
 
-        non_excluded_hits = [
-            hit
-            for hit in knowledge_hits
-            if not self._matches_intent_scopes(hit, interaction_intent.exclude_scopes)
-        ]
-        return non_excluded_hits or knowledge_hits
+        if question and interaction_intent.domain in {"general", "research", "teaching"}:
+            return [
+                hit
+                for hit in candidates
+                if self._knowledge_hit_has_query_evidence(question, hit)
+            ]
+        return candidates
+
+    @staticmethod
+    def _knowledge_hit_has_query_evidence(
+        question: str,
+        hit: KnowledgeSearchHit,
+    ) -> bool:
+        """Require topic evidence beyond broad scope tags.
+
+        Scope tags express document type, not whether a particular chunk
+        answers the current question. Three-character Chinese spans and
+        substantive ASCII terms provide a conservative, backend-independent
+        relevance floor after retrieval and reranking.
+        """
+
+        stop_words = {
+            "please",
+            "explain",
+            "example",
+            "simple",
+            "what",
+            "with",
+            "within",
+            "请用一",
+            "一个简",
+            "个简单",
+            "简单例",
+            "单例子",
+            "例子解",
+            "子解释",
+            "控制在",
+            "字以内",
+        }
+        anchors = {
+            token.lower()
+            for token in re.findall(r"[A-Za-z0-9_+-]{4,}", question)
+            if token.lower() not in stop_words
+        }
+        for span in re.findall(r"[\u4e00-\u9fff]+", question):
+            anchors.update(
+                span[index : index + 3]
+                for index in range(max(len(span) - 2, 0))
+                if span[index : index + 3] not in stop_words
+            )
+        if not anchors:
+            return True
+        searchable = f"{hit.title}\n{hit.excerpt}".lower()
+        return any(anchor in searchable for anchor in anchors)
 
     def _prioritize_guidance_hits(
         self,
@@ -5907,21 +6069,7 @@ class FacultyTwinWorkflowSupport:
         )
 
     def _should_queue_for_review(self, question: str) -> bool:
-        markers = (
-            "破例",
-            "例外",
-            "延期",
-            "审批",
-            "审核",
-            "批准",
-            "推荐信",
-            "加入课题组",
-            "能收我吗",
-        )
-        lowered = question.lower()
-        return any(marker in lowered for marker in markers) or any(
-            marker in question for marker in markers
-        )
+        return requires_faculty_review(question)
 
     def _build_escalation_message(self, context: ChatWorkflowContext) -> str:
         record = context.escalation_record
