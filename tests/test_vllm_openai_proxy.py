@@ -122,7 +122,7 @@ def test_proxy_forwards_streaming_request_with_auth(monkeypatch: pytest.MonkeyPa
     assert payload["stream"] is True
 
 
-def test_proxy_does_not_forward_upstream_key_to_loopback_vllm(
+def test_proxy_forwards_configured_upstream_key_to_loopback_vllm(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = create_app(
@@ -132,7 +132,7 @@ def test_proxy_does_not_forward_upstream_key_to_loopback_vllm(
             upstream_base_url="http://127.0.0.1:18000/v1",
             path_prefix="/v1",
             api_key="secret",
-            upstream_api_key="must-not-reach-local-vllm",
+            upstream_api_key="local-vllm-secret",
         )
     )
     monkeypatch.setattr("sage_faculty_twin.vllm_openai_proxy.httpx.AsyncClient", _FakeAsyncClient)
@@ -149,7 +149,7 @@ def test_proxy_does_not_forward_upstream_key_to_loopback_vllm(
 
     assert response.status_code == 200
     assert _FakeAsyncClient.last_request is not None
-    assert "Authorization" not in _FakeAsyncClient.last_request["headers"]
+    assert _FakeAsyncClient.last_request["headers"]["Authorization"] == "Bearer local-vllm-secret"
 
 
 def test_proxy_returns_503_when_upstream_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:

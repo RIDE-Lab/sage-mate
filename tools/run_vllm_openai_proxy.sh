@@ -6,29 +6,20 @@ repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 runtime_dir="$repo_root/.runtime"
 source "$repo_root/tools/lib/runtime_env.sh"
 
+load_repo_env_if_unset "$repo_root"
 export_repo_runtime_env "$repo_root"
 python_bin="$PYTHON_BIN"
 
 mkdir -p "$runtime_dir"
 cd "$repo_root"
 
-if [[ -f "$repo_root/.env" ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-        key="${line%%=*}"
-        key="${key// /}"
-        [[ -z "$key" || -n "${!key:-}" ]] && continue
-        export "$line"
-    done < "$repo_root/.env"
-fi
-
 if [[ ! -x "$python_bin" ]]; then
     echo "Python interpreter not found or not executable: $python_bin" >&2
     exit 1
 fi
 
-proxy_host="${VLLM_PROXY_HOST:-127.0.0.1}"
-proxy_port="${VLLM_PROXY_PORT:-18001}"
+proxy_host="$(require_runtime_setting VLLM_PROXY_HOST)"
+proxy_port="$(require_runtime_setting VLLM_PROXY_PORT)"
 
 if ! "$python_bin" - "$proxy_host" "$proxy_port" <<'PY' >/dev/null 2>&1
 import socket

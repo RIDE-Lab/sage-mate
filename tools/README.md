@@ -15,7 +15,7 @@ Prefer the top-level entrypoints unless you are debugging one component.
     verifies with `manage.sh verify-hosted-web`.
 - `../manage.sh` - runtime management entrypoint.
   - Status/restart/logs for systemd user services.
-  - Hosted verification: `./manage.sh verify-hosted-web --public-url https://twin.sage.org.ai/`
+  - Hosted verification: `./manage.sh verify-hosted-web --public-url "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/"`
 
 ## Runtime Launchers
 

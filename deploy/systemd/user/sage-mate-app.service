@@ -6,8 +6,6 @@ Wants=network-online.target
 [Service]
 Type=simple
 WorkingDirectory=__REPO_ROOT__
-Environment=APP_PORT=55601
-Environment=DIGITAL_TWIN_HOMEPAGE_PUBLIC_URL=https://me.sage.org.ai/
 Environment=PYTHON_BIN=__PYTHON_BIN__
 # Optional calendar bridge settings are loaded from .env by tools/run_app_server.sh.
 ExecStart=__REPO_ROOT__/tools/run_app_server.sh

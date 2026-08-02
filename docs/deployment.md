@@ -1,12 +1,12 @@
 # Deployment Guide
 
 This document describes the generic deployment shape for `sage-mate` after moving the
-repository into the IntelliStream organization.
+repository into the SAGE-Research organization.
 
 For a fresh-machine bring-up, the fastest path is:
 
 ```bash
-git clone https://github.com/intellistream/sage-mate.git
+git clone https://github.com/SAGE-Research/sage-mate.git
 cd sage-mate
 ./quickstart.sh --target hosted-web
 ./quickstart.sh --with-vllm      # also pull and editable-install vllm-hust
@@ -18,13 +18,26 @@ cd sage-mate
 accidentally expose local repository features. See §7 below for the chunked-transfer / streaming
 gotcha that the latency rollout uncovered.
 
+## Portable deployment contract
+
+Tracked code and systemd templates do not select a machine path, accelerator ID, model, domain, or
+deployment port. Copy `.env.example` to the ignored `.env` and set the topology for that machine.
+In particular, an Ascend launch requires `VLLM_ENGINE_MODEL_PATH` and
+`VLLM_ENGINE_NPU_DEVICES`; `VLLM_ENGINE_TP_SIZE` must equal the number of selected devices. The
+release installer can choose currently idle NPUs, while the lower-level launcher deliberately
+fails instead of guessing.
+
+The loopback addresses and ports shown in `.env.example` are editable sample configuration, not
+values embedded in generated systemd units. To move the deployment, copy its secret material
+separately and generate a new `.env` for the destination host.
+
 ## Deployment Targets
 
 `quickstart.sh` is the single installer entry point, but it has separate targets for the two
 product shapes:
 
-- `hosted-web` is the default Linux/server browser deployment. Use this on hosts such as
-  `180-ascend-dev`. It explicitly sets `DIGITAL_TWIN_DEPLOYMENT_MODE=hosted`,
+- `hosted-web` is the default Linux/server browser deployment. It explicitly sets
+  `DIGITAL_TWIN_DEPLOYMENT_MODE=hosted`,
   `DIGITAL_TWIN_APP_PROFILE=faculty_twin`, `DIGITAL_TWIN_CODE_WORKBENCH_ENABLED=false`, and clears
   `DIGITAL_TWIN_CODE_WORKSPACE_ROOTS`.
 - `local-mac-app` is the default on macOS. It installs a user Sage Mate runtime, delegates to
@@ -46,7 +59,7 @@ Start the FastAPI app directly:
 ```bash
 cd /path/to/sage-mate
 PYTHONPATH="$PWD/src:$PWD/../SAGE/src:$PWD/../neuromem:$PWD/../sageVDB" \
-python -m uvicorn sage_faculty_twin.api:app --host 127.0.0.1 --port 55601
+python -m uvicorn sage_faculty_twin.api:app --host "$APP_HOST" --port "$APP_PORT"
 ```
 
 Or use the provided wrapper:
@@ -73,9 +86,10 @@ homepage compatibility route without writing into system-wide `/etc/nginx`.
 
 Relevant variables:
 
-- `APP_PORT`: upstream app port, default `55601`
-- `SITE_PORT`: local proxy port, default `8088`
-- `HOMEPAGE_REDIRECT_ORIGIN`: canonical public homepage origin, default `https://me.sage.org.ai`
+- `APP_HOST` / `APP_PORT`: upstream application listen address
+- `SITE_HOST` / `SITE_PORT`: local proxy listen address
+- `DIGITAL_TWIN_HOMEPAGE_PUBLIC_URL`: optional canonical public homepage URL
+- `TUNNEL_ORIGIN_HEALTH_URL`: local origin checked before cloudflared starts
 
 `/home` and `/home/` are compatibility paths at the site-proxy layer. They now redirect to the
 canonical public homepage origin, while local direct app access can still use the built-in FastAPI
@@ -126,14 +140,6 @@ install -m 600 /path/to/cloudflare-tunnel-token "$DIGITAL_TWIN_RUNTIME_DIR/cloud
 `TUNNEL_CONFIG_PATH`. The repository's `.runtime/cloudflared/config.yml`
 fallback is only for local scratch deployments.
 
-For the 180-ascend-bench hosted deployment, `twin.sage.org.ai` is served by the
-Cloudflare named tunnel `sage-local-235b`; the token is stored in the private
-runtime directory:
-
-```bash
-$DIGITAL_TWIN_RUNTIME_DIR/cloudflared/token
-```
-
 Do not commit Cloudflare tokens, origin certificates, or tunnel credentials.
 
 ## 5. Public Branding
@@ -143,8 +149,6 @@ Set the canonical public homepage URL for the web UI top-bar button with:
 ```bash
 export DIGITAL_TWIN_HOMEPAGE_PUBLIC_URL=https://faculty.example.edu/
 ```
-
-For this deployment, the canonical public homepage is `https://me.sage.org.ai/`.
 
 If the variable is empty, the top-bar homepage link falls back to the app-local `/home/` route.
 That fallback is useful for local development, but it should not be treated as the public-facing

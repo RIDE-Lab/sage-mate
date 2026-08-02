@@ -16,7 +16,7 @@
 - 如需自动注入密钥：把解密 key 放到目标机器，例如：
 
 ```bash
-/home/shuhao/.config/sage-mate/release-secrets.key
+$HOME/.config/sage-mate/release-secrets.key
 ```
 
 ## 2. 推荐：下载 Linux 安装器
@@ -129,21 +129,21 @@ FACULTY_TWIN_SECRETS_KEY_FILE=~/.config/sage-mate/release-secrets.key \
 ## 4. 服务器命令行一键安装
 
 ```bash
-curl -fsSL https://github.com/intellistream/sage-mate/releases/download/v4.6.1/hosted-web.sh \
+curl -fsSL https://github.com/SAGE-Research/sage-mate/releases/download/v4.6.1/hosted-web.sh \
   -o /tmp/hosted-web.sh
 
-FACULTY_TWIN_SECRETS_KEY_FILE=/home/shuhao/.config/sage-mate/release-secrets.key \
-  bash /tmp/hosted-web.sh --yes
+FACULTY_TWIN_SECRETS_KEY_FILE="$HOME/.config/sage-mate/release-secrets.key" \
+  bash /tmp/hosted-web.sh --no-tunnel --yes
 ```
 
 脚本会自动：
 
-- clone / 更新 `intellistream/sage-mate`
+- clone / 更新 `SAGE-Research/sage-mate`
 - 同步 pinned submodules
 - 只配置 hosted/web 模式
 - 自动识别 NVIDIA 或 Ascend
 - 安装依赖并启动 systemd 服务
-- 配置 Cloudflare tunnel 和 `twin.sage.org.ai`
+- 在显式提供域名时配置 Cloudflare tunnel
 - 运行 `verify-hosted-web`
 
 ## 5. 常用参数
@@ -152,8 +152,9 @@ FACULTY_TWIN_SECRETS_KEY_FILE=/home/shuhao/.config/sage-mate/release-secrets.key
 # 强制 NVIDIA
 bash /tmp/hosted-web.sh --accelerator nvidia --yes
 
-# 强制 Ascend
-bash /tmp/hosted-web.sh --accelerator ascend --yes
+# Ascend：模型位置必须显式给出；未给 --npu-devices 时按 TP 数自动选择空闲卡
+bash /tmp/hosted-web.sh --accelerator ascend \
+  --model /path/to/model --tensor-parallel-size 1 --no-tunnel --yes
 
 # 不启公网 tunnel，只部署本机服务
 bash /tmp/hosted-web.sh --no-tunnel --yes
@@ -165,6 +166,10 @@ bash /tmp/hosted-web.sh --accelerator nvidia --model-preset qwen3-next-80b-awq -
 bash /tmp/hosted-web.sh --public-hostname twin.example.com --tunnel-name faculty-twin-prod --yes
 ```
 
+机器相关的模型路径、NPU 编号、端口、runtime 目录和域名只写入目标机器未提交的 `.env`
+或通过上述参数传入。Ascend 底层启动脚本不会默认占用 `0,1,2,3`；设备数与 TP 不一致时
+会在创建引擎前退出。
+
 ## 6. 验收
 
 ```bash
@@ -173,12 +178,12 @@ cd ~/sage-mate
 ./manage.sh status --with-vllm-proxy --with-site-proxy --with-tunnel \
   --with-nvidia-vllm-engine
 
-env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
-  NO_PROXY=127.0.0.1,localhost \
-  ./manage.sh verify-hosted-web --public-url https://twin.sage.org.ai/
+./manage.sh verify-hosted-web \
+  --app-url "http://$APP_HEALTH_HOST:$APP_PORT" \
+  --public-url "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/"
 
-curl --noproxy '*' -fsS http://127.0.0.1:55601/healthz
-curl --noproxy '*' -fsS https://twin.sage.org.ai/healthz
+curl --noproxy '*' -fsS "http://$APP_HEALTH_HOST:$APP_PORT/healthz"
+curl --noproxy '*' -fsS "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/healthz"
 ```
 
 Ascend 机器验收状态命令把 `--with-nvidia-vllm-engine` 换成 `--with-vllm-engine`。

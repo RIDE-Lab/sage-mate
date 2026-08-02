@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# run_vllm_engine.sh — Faculty Twin compatibility wrapper for vLLM-HUST.
+# run_vllm_engine.sh — Sage Mate wrapper for vLLM-HUST.
 #
 # The real vLLM-HUST launch path lives in vllm-hust-dev-hub:
 #   host -> docker exec -> conda activation -> Ascend/CANN env -> vLLM-HUST.
-# Keep this file thin so the Faculty Twin systemd unit can stay stable without
+# Keep this file thin so the Sage Mate systemd unit can stay stable without
 # maintaining a second, drifting copy of the engine launcher.
 
 set -euo pipefail
@@ -33,23 +33,73 @@ load_dotenv() {
 
 load_dotenv "$repo_root/.env"
 
-# Map Faculty Twin's historical engine variables onto dev-hub's canonical
-# launcher variables. Existing env always wins so operators can override from
-# systemd without editing this repo.
-export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-faculty_twin_vllm_hust}"
-export VLLM_ENGINE_MODEL_PATH="${VLLM_ENGINE_MODEL_PATH:-/data/shared_models/modelscope_cache/Qwen/Qwen3-32B}"
-export VLLM_ENGINE_SERVED_MODEL_NAME="${VLLM_ENGINE_SERVED_MODEL_NAME:-${DIGITAL_TWIN_MODEL_NAME:-qwen3-32b}}"
+# Map Sage Mate's engine variables onto dev-hub's canonical launcher variables.
+# Machine-specific model/device values are mandatory: silently choosing a model
+# path or NPU IDs can disrupt unrelated workloads on a different host.
+if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" ]]; then
+    echo "ERROR: VLLM_ENGINE_MODEL_PATH is required. Set it in the machine-local .env." >&2
+    exit 2
+fi
+
+engine_devices="${VLLM_ENGINE_NPU_DEVICES:-${ASCEND_RT_VISIBLE_DEVICES:-}}"
+engine_devices="${engine_devices//[[:space:]]/}"
+if [[ -z "$engine_devices" ]]; then
+    echo "ERROR: VLLM_ENGINE_NPU_DEVICES (or ASCEND_RT_VISIBLE_DEVICES) is required." >&2
+    echo "Choose verified idle devices explicitly, or use the hosted installer to auto-select them." >&2
+    exit 2
+fi
+
+IFS=',' read -r -a engine_device_ids <<< "$engine_devices"
+declare -A seen_device_ids=()
+for device_id in "${engine_device_ids[@]}"; do
+    if [[ ! "$device_id" =~ ^[0-9]+$ ]]; then
+        echo "ERROR: invalid Ascend device ID in '$engine_devices': '$device_id'" >&2
+        exit 2
+    fi
+    if [[ -n "${seen_device_ids[$device_id]:-}" ]]; then
+        echo "ERROR: duplicate Ascend device ID in '$engine_devices': '$device_id'" >&2
+        exit 2
+    fi
+    seen_device_ids[$device_id]=1
+done
+
+device_count="${#engine_device_ids[@]}"
+engine_tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
+if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ || "$engine_tp_size" -ne "$device_count" ]]; then
+    echo "ERROR: VLLM_ENGINE_TP_SIZE=$engine_tp_size must equal the configured device count ($device_count)." >&2
+    exit 2
+fi
+
+npu_selector="$repo_root/tools/select_idle_npus.py"
+selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
+if [[ -z "$selector_python" || ! -x "$selector_python" ]]; then
+    echo "ERROR: Python is required to validate Ascend device ownership." >&2
+    exit 2
+fi
+if ! "$selector_python" "$npu_selector" --devices "$engine_devices" >/dev/null; then
+    echo "ERROR: configured Ascend devices are not all idle; refusing to launch." >&2
+    exit 2
+fi
+
+default_served_model="${VLLM_ENGINE_MODEL_PATH%/}"
+default_served_model="${default_served_model##*/}"
+container_suffix="${USER:-user}-$(basename "$repo_root")"
+container_suffix="$(printf '%s' "$container_suffix" | tr -cs '[:alnum:]_.-' '-')"
+
+export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-sage-mate-vllm-${container_suffix}}"
+export VLLM_ENGINE_MODEL_PATH
+export VLLM_ENGINE_SERVED_MODEL_NAME="${VLLM_ENGINE_SERVED_MODEL_NAME:-${DIGITAL_TWIN_MODEL_NAME:-$default_served_model}}"
 export VLLM_ENGINE_HOST="${VLLM_ENGINE_HOST:-0.0.0.0}"
 export VLLM_ENGINE_PORT="${VLLM_ENGINE_PORT:-8000}"
-export VLLM_ENGINE_TP_SIZE="${VLLM_ENGINE_TP_SIZE:-4}"
+export VLLM_ENGINE_TP_SIZE="$engine_tp_size"
 export VLLM_ENGINE_MAX_MODEL_LEN="${VLLM_ENGINE_MAX_MODEL_LEN:-32768}"
 export VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS="${VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS:-$VLLM_ENGINE_MAX_MODEL_LEN}"
 export VLLM_ENGINE_GPU_MEM_UTIL="${VLLM_ENGINE_GPU_MEM_UTIL:-0.9}"
 export VLLM_ENGINE_MAX_NUM_SEQS="${VLLM_ENGINE_MAX_NUM_SEQS:-16}"
 export VLLM_ENGINE_DTYPE="${VLLM_ENGINE_DTYPE:-bfloat16}"
-export VLLM_ENGINE_NPU_DEVICES="${VLLM_ENGINE_NPU_DEVICES:-${ASCEND_RT_VISIBLE_DEVICES:-0,1,2,3}}"
-export ASCEND_RT_VISIBLE_DEVICES="${ASCEND_RT_VISIBLE_DEVICES:-$VLLM_ENGINE_NPU_DEVICES}"
-export ASCEND_VISIBLE_DEVICES="${ASCEND_VISIBLE_DEVICES:-$VLLM_ENGINE_NPU_DEVICES}"
+export VLLM_ENGINE_NPU_DEVICES="$engine_devices"
+export ASCEND_RT_VISIBLE_DEVICES="$engine_devices"
+export ASCEND_VISIBLE_DEVICES="$engine_devices"
 export VLLM_ENGINE_CONDA_ENV="${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}"
 export VLLM_ENGINE_BIN="${VLLM_ENGINE_BIN:-vllm-hust}"
 export VLLM_ENGINE_BASE_PYTHONPATH="${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
@@ -61,7 +111,7 @@ export VLLM_ENGINE_AUTO_PREPARE_ENV="${VLLM_ENGINE_AUTO_PREPARE_ENV:-0}"
 export VLLM_ENGINE_LOAD_REPO_ENV=false
 export VLLM_HUST_AUTO_ENABLE_CONTAINER_SSH="${VLLM_HUST_AUTO_ENABLE_CONTAINER_SSH:-0}"
 
-# The vLLM-HUST runtime must use Faculty Twin's pinned submodules, not the
+# The vLLM-HUST runtime must use Sage Mate's pinned submodules, not an
 # operator's shared /home checkout. dev-hub's container launcher maps
 # HOST_WORKSPACE_ROOT to /workspace, so /workspace/vllm-hust resolves to this
 # repo's deps/vllm-hust.
@@ -79,7 +129,7 @@ prepare_host_model_mount() {
     [[ -e "$model_path" ]] || return 0
     [[ "$model_path" != "$HOST_WORKSPACE_ROOT"* ]] || return 0
 
-    local link_path="$HOST_WORKSPACE_ROOT/.faculty-twin-primary-model"
+    local link_path="$HOST_WORKSPACE_ROOT/.sage-mate-primary-model"
     if [[ -L "$link_path" || -e "$link_path" ]]; then
         local current_target
         current_target="$(readlink "$link_path" 2>/dev/null || true)"
@@ -98,5 +148,5 @@ if [[ -z "${VLLM_HUST_API_KEY:-}" && -n "${DIGITAL_TWIN_API_KEY:-}" ]]; then
     export VLLM_ENGINE_API_KEY="$DIGITAL_TWIN_API_KEY"
 fi
 
-echo "[faculty-twin] delegating vLLM-HUST launch to $launcher"
+echo "[sage-mate] delegating vLLM-HUST launch to $launcher"
 exec "$launcher"

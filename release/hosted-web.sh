@@ -8,8 +8,8 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-repo_url="${FACULTY_TWIN_REPO_URL:-git@github.com:intellistream/sage-mate.git}"
-https_repo_url="${FACULTY_TWIN_HTTPS_REPO_URL:-https://github.com/intellistream/sage-mate.git}"
+repo_url="${FACULTY_TWIN_REPO_URL:-git@github.com:SAGE-Research/sage-mate.git}"
+https_repo_url="${FACULTY_TWIN_HTTPS_REPO_URL:-https://github.com/SAGE-Research/sage-mate.git}"
 branch="${FACULTY_TWIN_BRANCH:-main}"
 parent_dir="${FACULTY_TWIN_PARENT_DIR:-$HOME}"
 repo_dir="${FACULTY_TWIN_DIR:-$parent_dir/sage-mate}"
@@ -18,8 +18,9 @@ model_override="${FACULTY_TWIN_MODEL:-}"
 served_model_override="${FACULTY_TWIN_SERVED_MODEL_NAME:-}"
 accelerator="${FACULTY_TWIN_ACCELERATOR:-auto}"
 tp_override="${FACULTY_TWIN_TENSOR_PARALLEL_SIZE:-${VLLM_NVIDIA_TENSOR_PARALLEL_SIZE:-${VLLM_ENGINE_TP_SIZE:-}}}"
-public_hostname="${FACULTY_TWIN_PUBLIC_HOSTNAME:-twin.sage.org.ai}"
-tunnel_name="${FACULTY_TWIN_TUNNEL_NAME:-sage-mate-$(hostname -s)-hosted-web}"
+npu_devices="${FACULTY_TWIN_NPU_DEVICES:-${VLLM_ENGINE_NPU_DEVICES:-${ASCEND_RT_VISIBLE_DEVICES:-}}}"
+public_hostname="${FACULTY_TWIN_PUBLIC_HOSTNAME:-}"
+tunnel_name="${FACULTY_TWIN_TUNNEL_NAME:-}"
 runtime_repo_url="${FACULTY_TWIN_RUNTIME_REPO_URL:-https://github.com/Qixin-Gaoke/sage-mate-runtime-private.git}"
 runtime_repo_branch="${FACULTY_TWIN_RUNTIME_REPO_BRANCH:-main}"
 encrypted_secrets_file="${FACULTY_TWIN_ENCRYPTED_SECRETS_FILE:-}"
@@ -43,7 +44,8 @@ Options:
   --model MODEL_OR_PATH       Explicit HF model id or local model path.
   --served-model-name NAME    Served OpenAI model name. Defaults to model value.
   --tensor-parallel-size N    Override tensor parallel size.
-  --public-hostname HOSTNAME  Public Cloudflare hostname. Defaults to twin.sage.org.ai.
+  --npu-devices CSV           Ascend device IDs. Defaults to auto-selecting verified idle devices.
+  --public-hostname HOSTNAME  Public Cloudflare hostname; required with --with-tunnel.
   --tunnel-name NAME          Cloudflare tunnel name to create/reuse.
   --runtime-repo-url URL      Private Faculty Twin runtime-data repository.
   --runtime-repo-branch NAME  Runtime-data branch. Defaults to main.
@@ -60,6 +62,7 @@ Environment:
   FACULTY_TWIN_PARENT_DIR, FACULTY_TWIN_DIR, FACULTY_TWIN_ACCELERATOR,
   FACULTY_TWIN_MODEL_PRESET,
   FACULTY_TWIN_MODEL, FACULTY_TWIN_SERVED_MODEL_NAME,
+  FACULTY_TWIN_NPU_DEVICES,
   FACULTY_TWIN_PUBLIC_HOSTNAME, FACULTY_TWIN_TUNNEL_NAME, HF_ENDPOINT,
   FACULTY_TWIN_PREDOWNLOAD_SOURCE=auto|huggingface|hf-direct|modelscope,
   FACULTY_TWIN_HF_DIRECT_USE_TOKEN=1 for private direct downloads,
@@ -112,6 +115,11 @@ while [[ $# -gt 0 ]]; do
         --tensor-parallel-size)
             [[ $# -ge 2 ]] || fail "--tensor-parallel-size requires a value"
             tp_override="$2"
+            shift 2
+            ;;
+        --npu-devices)
+            [[ $# -ge 2 ]] || fail "--npu-devices requires a value"
+            npu_devices="$2"
             shift 2
             ;;
         --public-hostname)
@@ -420,6 +428,7 @@ configure_cloudflare_tunnel() {
     [[ -n "$public_hostname" ]] || fail "--with-tunnel requires --public-hostname or FACULTY_TWIN_PUBLIC_HOSTNAME"
 
     local cf_bin tunnel_id config_path credentials_path
+    local tunnel_origin_url="${TUNNEL_ORIGIN_URL:-http://${APP_HEALTH_HOST:-${APP_HOST:-127.0.0.1}}:${APP_PORT:-55601}}"
     cf_bin=$(cloudflared_bin) || fail "cloudflared is required for --with-tunnel"
     [[ -f "${TUNNEL_ORIGIN_CERT:-$HOME/.cloudflared/cert.pem}" ]] || {
         fail "Cloudflare origin cert missing. Run cloudflared tunnel login, or use --no-tunnel."
@@ -447,7 +456,7 @@ credentials-file: $credentials_path
 
 ingress:
   - hostname: $public_hostname
-    service: http://127.0.0.1:55601
+    service: $tunnel_origin_url
   - service: http_status:404
 EOF
 
@@ -799,7 +808,11 @@ select_model() {
         model="$model_override"
         served_model="${served_model_override:-$model_override}"
         if [[ "$accelerator" == "ascend" ]]; then
-            tp="${tp_override:-4}"
+            local configured_device_count=1
+            if [[ -n "$npu_devices" ]]; then
+                configured_device_count="$(awk -F, '{print NF}' <<< "$npu_devices")"
+            fi
+            tp="${tp_override:-$configured_device_count}"
             max_model_len="${VLLM_ENGINE_MAX_MODEL_LEN:-32768}"
             max_num_seqs="${VLLM_ENGINE_MAX_NUM_SEQS:-16}"
         else
@@ -812,7 +825,7 @@ select_model() {
 
     if [[ "$model_preset" == "auto" ]]; then
         if [[ "$accelerator" == "ascend" ]]; then
-            model_preset="qwen3-32b"
+            fail "Ascend auto-detection cannot infer a safe model path; pass --model and optionally --tensor-parallel-size"
         elif [[ "$min_mem" -ge 70000 ]]; then
             model_preset="qwen3-32b-awq"
         else
@@ -849,8 +862,8 @@ select_model() {
             ;;
         qwen3-32b)
             if [[ "$accelerator" == "ascend" ]]; then
-                model="${FACULTY_TWIN_MODEL:-/data/shared-models/Qwen3-32B}"
-                served_model="${served_model_override:-Qwen3-32B}"
+                model="${FACULTY_TWIN_MODEL:-Qwen/Qwen3-32B}"
+                served_model="${served_model_override:-$model}"
                 tp="${tp_override:-4}"
                 max_model_len="${VLLM_ENGINE_MAX_MODEL_LEN:-32768}"
                 max_num_seqs="${VLLM_ENGINE_MAX_NUM_SEQS:-16}"
@@ -936,6 +949,39 @@ main() {
     fi
     apply_encrypted_release_secrets "$env_file"
 
+    if [[ -z "$public_hostname" ]]; then
+        public_hostname="$(env_file_get "$env_file" FACULTY_TWIN_PUBLIC_HOSTNAME || true)"
+    fi
+    if [[ -z "$tunnel_name" ]]; then
+        tunnel_name="$(env_file_get "$env_file" FACULTY_TWIN_TUNNEL_NAME || true)"
+    fi
+    tunnel_name="${tunnel_name:-sage-mate-$(hostname -s)-hosted-web}"
+
+    local app_host="${APP_HOST:-$(env_file_get "$env_file" APP_HOST || true)}"
+    local app_port="${APP_PORT:-$(env_file_get "$env_file" APP_PORT || true)}"
+    local app_health_host="${APP_HEALTH_HOST:-$(env_file_get "$env_file" APP_HEALTH_HOST || true)}"
+    local site_health_host="${SITE_HEALTH_HOST:-$(env_file_get "$env_file" SITE_HEALTH_HOST || true)}"
+    local site_port="${SITE_PORT:-$(env_file_get "$env_file" SITE_PORT || true)}"
+    local proxy_connect_host="${VLLM_PROXY_CONNECT_HOST:-$(env_file_get "$env_file" VLLM_PROXY_CONNECT_HOST || true)}"
+    local proxy_port="${VLLM_PROXY_PORT:-$(env_file_get "$env_file" VLLM_PROXY_PORT || true)}"
+    app_host="${app_host:-127.0.0.1}"
+    app_port="${app_port:-55601}"
+    app_health_host="${app_health_host:-127.0.0.1}"
+    site_health_host="${site_health_host:-127.0.0.1}"
+    site_port="${site_port:-8088}"
+    proxy_connect_host="${proxy_connect_host:-127.0.0.1}"
+    proxy_port="${proxy_port:-18001}"
+    export APP_HOST="$app_host" APP_PORT="$app_port" APP_HEALTH_HOST="$app_health_host"
+    export TUNNEL_ORIGIN_HEALTH_URL="${TUNNEL_ORIGIN_HEALTH_URL:-http://${site_health_host}:${site_port}/}"
+    set_env_kv "$env_file" APP_HOST "$app_host"
+    set_env_kv "$env_file" APP_PORT "$app_port"
+    set_env_kv "$env_file" APP_HEALTH_HOST "$app_health_host"
+    set_env_kv "$env_file" SITE_HEALTH_HOST "$site_health_host"
+    set_env_kv "$env_file" SITE_PORT "$site_port"
+    set_env_kv "$env_file" TUNNEL_ORIGIN_HEALTH_URL "$TUNNEL_ORIGIN_HEALTH_URL"
+    set_env_kv "$env_file" VLLM_PROXY_CONNECT_HOST "$proxy_connect_host"
+    set_env_kv "$env_file" VLLM_PROXY_PORT "$proxy_port"
+
     if [[ "$accelerator" == "nvidia" && ( "$model_preset" == "qwen3-32b-awq" || "$model_preset" == "qwen3-14b-awq" ) ]] && ! $hf_endpoint_explicit; then
         export HF_ENDPOINT="${FACULTY_TWIN_FALLBACK_HF_ENDPOINT:-https://huggingface.co}"
         log "using Hugging Face endpoint for Qwen3 AWQ preset: $HF_ENDPOINT"
@@ -954,13 +1000,15 @@ main() {
     set_env_kv "$env_file" DIGITAL_TWIN_APP_PROFILE faculty_twin
     set_env_kv "$env_file" DIGITAL_TWIN_CODE_WORKBENCH_ENABLED false
     set_env_kv "$env_file" DIGITAL_TWIN_CODE_WORKSPACE_ROOTS ""
-    set_env_kv "$env_file" DIGITAL_TWIN_LLM_BASE_URL "http://127.0.0.1:18001/v1"
+    set_env_kv "$env_file" DIGITAL_TWIN_LLM_BASE_URL "http://${proxy_connect_host}:${proxy_port}/v1"
     set_env_kv "$env_file" DIGITAL_TWIN_MODEL_NAME "$served_model"
     set_env_kv "$env_file" FACULTY_TWIN_RUNTIME_REPO_URL "$runtime_repo_url"
     set_env_kv "$env_file" FACULTY_TWIN_RUNTIME_REPO_BRANCH "$runtime_repo_branch"
     set_env_kv "$env_file" FACULTY_TWIN_RUNTIME_REPO_REQUIRED true
     if [[ "$accelerator" == "nvidia" ]]; then
-        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "http://127.0.0.1:18000/v1"
+        local nvidia_connect_host="${VLLM_NVIDIA_CONNECT_HOST:-127.0.0.1}"
+        local nvidia_port="${VLLM_NVIDIA_PORT:-18000}"
+        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "http://${nvidia_connect_host}:${nvidia_port}/v1"
         set_env_kv "$env_file" VLLM_NVIDIA_MODEL "$model"
         if [[ "$model" == /* && "$served_model" != /* ]]; then
             set_env_kv "$env_file" VLLM_NVIDIA_ACTUAL_MODEL_ID "$served_model"
@@ -968,8 +1016,8 @@ main() {
             set_env_kv "$env_file" VLLM_NVIDIA_ACTUAL_MODEL_ID ""
         fi
         set_env_kv "$env_file" VLLM_NVIDIA_SERVED_MODEL_NAME "$served_model"
-        set_env_kv "$env_file" VLLM_NVIDIA_HOST "127.0.0.1"
-        set_env_kv "$env_file" VLLM_NVIDIA_PORT "18000"
+        set_env_kv "$env_file" VLLM_NVIDIA_CONNECT_HOST "$nvidia_connect_host"
+        set_env_kv "$env_file" VLLM_NVIDIA_PORT "$nvidia_port"
         set_env_kv "$env_file" VLLM_NVIDIA_TENSOR_PARALLEL_SIZE "$tp"
         set_env_kv "$env_file" VLLM_NVIDIA_GPU_MEMORY_UTILIZATION "${VLLM_NVIDIA_GPU_MEMORY_UTILIZATION:-0.88}"
         set_env_kv "$env_file" VLLM_NVIDIA_MAX_MODEL_LEN "$max_model_len"
@@ -978,11 +1026,24 @@ main() {
         set_env_kv "$env_file" VLLM_ENGINE_ACTUAL_MODEL_ID ""
         set_env_kv "$env_file" VLLM_ENGINE_SERVED_MODEL_NAME ""
     elif [[ "$accelerator" == "ascend" ]]; then
-        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "http://127.0.0.1:8000/v1"
+        if [[ -z "$npu_devices" ]]; then
+            npu_devices="$(env_file_get "$env_file" VLLM_ENGINE_NPU_DEVICES || true)"
+        fi
+        if [[ -z "$npu_devices" ]]; then
+            log "auto-selecting $tp idle Ascend device(s)"
+            npu_devices="$($python_bin "$repo_dir/tools/select_idle_npus.py" --count "$tp")" \
+                || fail "could not select $tp idle Ascend device(s); pass --npu-devices explicitly"
+        fi
+        local engine_connect_host="${VLLM_ENGINE_CONNECT_HOST:-127.0.0.1}"
+        local engine_port="${VLLM_ENGINE_PORT:-8000}"
+        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "http://${engine_connect_host}:${engine_port}/v1"
         set_env_kv "$env_file" VLLM_ENGINE_MODEL_PATH "$model"
         set_env_kv "$env_file" VLLM_ENGINE_SERVED_MODEL_NAME "$served_model"
-        set_env_kv "$env_file" VLLM_ENGINE_PORT "8000"
+        set_env_kv "$env_file" VLLM_ENGINE_CONNECT_HOST "$engine_connect_host"
+        set_env_kv "$env_file" VLLM_ENGINE_PORT "$engine_port"
         set_env_kv "$env_file" VLLM_ENGINE_TP_SIZE "$tp"
+        set_env_kv "$env_file" VLLM_ENGINE_NPU_DEVICES "$npu_devices"
+        set_env_kv "$env_file" ASCEND_RT_VISIBLE_DEVICES "$npu_devices"
         set_env_kv "$env_file" VLLM_ENGINE_MAX_MODEL_LEN "$max_model_len"
         set_env_kv "$env_file" VLLM_ENGINE_MAX_NUM_SEQS "$max_num_seqs"
         set_env_kv "$env_file" VLLM_ENGINE_GPU_MEM_UTIL "${VLLM_ENGINE_GPU_MEM_UTIL:-0.85}"
@@ -991,7 +1052,9 @@ main() {
         set_env_kv "$env_file" VLLM_NVIDIA_ACTUAL_MODEL_ID ""
         set_env_kv "$env_file" VLLM_NVIDIA_SERVED_MODEL_NAME ""
     else
-        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "${VLLM_PROXY_UPSTREAM_BASE_URL:-http://127.0.0.1:8000/v1}"
+        local external_upstream="${VLLM_PROXY_UPSTREAM_BASE_URL:-$(env_file_get "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL || true)}"
+        [[ -n "$external_upstream" ]] || fail "--accelerator none requires VLLM_PROXY_UPSTREAM_BASE_URL"
+        set_env_kv "$env_file" VLLM_PROXY_UPSTREAM_BASE_URL "$external_upstream"
     fi
     set_env_kv "$env_file" HF_ENDPOINT "$HF_ENDPOINT"
     set_env_kv "$env_file" HF_HUB_DISABLE_XET "$HF_HUB_DISABLE_XET"
@@ -1101,9 +1164,10 @@ main() {
     if $with_tunnel; then
         log "web: https://$public_hostname/"
     else
-        log "web: http://127.0.0.1:55601/ or http://$(hostname -I | awk '{print $1}'):8088/home/"
+        log "web: http://${APP_HEALTH_HOST:-$app_host}:${app_port}/"
     fi
     log "accelerator: $accelerator"
+    [[ "$accelerator" != "ascend" ]] || log "npu devices: $npu_devices"
     log "model: $served_model"
 }
 

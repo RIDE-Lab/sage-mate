@@ -27,6 +27,13 @@ if [[ ! -f "$env_file" ]]; then
     exit 1
 fi
 
+selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
+if [[ -z "$selector_python" || ! -x "$selector_python" ]]; then
+    echo "ERROR: Python is required to validate Ascend device ownership." >&2
+    exit 1
+fi
+"$selector_python" "$repo_root/tools/select_idle_npus.py" --devices "$devices" >/dev/null
+
 "${PYTHON_BIN:-python3}" - "$env_file" "$devices" "$device_count" <<'PY'
 from __future__ import annotations
 
@@ -38,6 +45,7 @@ devices = sys.argv[2]
 device_count = sys.argv[3]
 updates = {
     "ASCEND_RT_VISIBLE_DEVICES": devices,
+    "VLLM_ENGINE_NPU_DEVICES": devices,
     "VLLM_ENGINE_TP_SIZE": device_count,
 }
 
@@ -64,5 +72,6 @@ env_path.write_text("\n".join(out) + "\n")
 PY
 
 echo "[reserve-vllm-devices] ASCEND_RT_VISIBLE_DEVICES=$devices"
+echo "[reserve-vllm-devices] VLLM_ENGINE_NPU_DEVICES=$devices"
 echo "[reserve-vllm-devices] VLLM_ENGINE_TP_SIZE=$device_count"
 echo "[reserve-vllm-devices] future vllm-hust restarts will be pinned to these Ascend devices"

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import ipaddress
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
@@ -32,6 +31,7 @@ class ProxySettings:
     api_key: str
     upstream_api_key: str
     timeout_seconds: float = 180.0
+    trust_env: bool = False
 
 
 def load_proxy_settings() -> ProxySettings:
@@ -41,11 +41,22 @@ def load_proxy_settings() -> ProxySettings:
             "DIGITAL_TWIN_API_KEY must be set to a real secret before starting the vLLM proxy."
         )
 
-    listen_port_text = os.environ.get("VLLM_PROXY_PORT", "18001")
-    upstream_base_url = os.environ.get("VLLM_PROXY_UPSTREAM_BASE_URL", "http://127.0.0.1:8000/v1")
+    listen_host = os.environ.get("VLLM_PROXY_HOST", "").strip()
+    listen_port_text = os.environ.get("VLLM_PROXY_PORT", "").strip()
+    upstream_base_url = os.environ.get("VLLM_PROXY_UPSTREAM_BASE_URL", "").strip()
     path_prefix = os.environ.get("VLLM_PROXY_PATH_PREFIX", "/v1")
     upstream_api_key = os.environ.get("VLLM_PROXY_UPSTREAM_API_KEY", "").strip()
+    trust_env = os.environ.get("VLLM_PROXY_TRUST_ENV", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
+    if not listen_host:
+        raise RuntimeError("VLLM_PROXY_HOST must be configured.")
+    if not listen_port_text:
+        raise RuntimeError("VLLM_PROXY_PORT must be configured.")
     if not path_prefix.startswith("/"):
         raise RuntimeError("VLLM_PROXY_PATH_PREFIX must start with '/'.")
     if not upstream_base_url.startswith(("http://", "https://")):
@@ -57,12 +68,13 @@ def load_proxy_settings() -> ProxySettings:
         raise RuntimeError("VLLM_PROXY_PORT must be an integer.") from exc
 
     return ProxySettings(
-        listen_host=os.environ.get("VLLM_PROXY_HOST", "127.0.0.1"),
+        listen_host=listen_host,
         listen_port=listen_port,
         upstream_base_url=upstream_base_url.rstrip("/"),
         path_prefix=path_prefix.rstrip("/"),
         api_key=api_key,
         upstream_api_key=upstream_api_key,
+        trust_env=trust_env,
     )
 
 
@@ -74,16 +86,6 @@ def _normalize_headers(headers: httpx.Headers | dict[str, str]) -> dict[str, str
             continue
         normalized[name] = value
     return normalized
-
-
-def _is_loopback_upstream(upstream_base_url: str) -> bool:
-    host = (httpx.URL(upstream_base_url).host or "").strip().lower()
-    if host == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        return False
 
 
 def _extract_client_key(request: Request) -> str:
@@ -157,7 +159,11 @@ def create_app(
     if client_factory is None:
 
         def client_factory(settings: ProxySettings) -> httpx.AsyncClient:
-            return httpx.AsyncClient(timeout=settings.timeout_seconds, follow_redirects=False)
+            return httpx.AsyncClient(
+                timeout=settings.timeout_seconds,
+                follow_redirects=False,
+                trust_env=settings.trust_env,
+            )
 
     if settings is not None:
         _validate_settings(settings)
@@ -229,9 +235,7 @@ def create_app(
         forward_headers["X-Forwarded-For"] = request.client.host if request.client else "127.0.0.1"
         forward_headers["X-Forwarded-Proto"] = request.url.scheme
         forward_headers["X-Forwarded-Host"] = request.headers.get("host", "")
-        if proxy_settings.upstream_api_key and not _is_loopback_upstream(
-            proxy_settings.upstream_base_url
-        ):
+        if proxy_settings.upstream_api_key:
             forward_headers["Authorization"] = f"Bearer {proxy_settings.upstream_api_key}"
 
         proxy_client = app.state.proxy_client

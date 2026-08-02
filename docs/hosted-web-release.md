@@ -11,13 +11,13 @@ From a fresh server:
 
 ```bash
 mkdir -p "$HOME"
-curl -fsSL https://raw.githubusercontent.com/intellistream/sage-mate/main/release/hosted-web.sh \
+curl -fsSL https://raw.githubusercontent.com/SAGE-Research/sage-mate/main/release/hosted-web.sh \
   -o /tmp/hosted-web.sh
-FACULTY_TWIN_SECRETS_KEY_FILE=/home/shuhao/.config/sage-mate/release-secrets.key \
-  bash /tmp/hosted-web.sh --yes
+FACULTY_TWIN_SECRETS_KEY_FILE="$HOME/.config/sage-mate/release-secrets.key" \
+  bash /tmp/hosted-web.sh --no-tunnel --yes
 ```
 
-The installer clones or fast-forwards `intellistream/sage-mate`, initializes submodules,
+The installer clones or fast-forwards `SAGE-Research/sage-mate`, initializes submodules,
 configures hosted/web safety defaults, installs pinned runtime dependencies for the selected
 accelerator, installs systemd user units, starts the stack, configures the Cloudflare tunnel when
 credentials are available, and runs `./manage.sh verify-hosted-web`.
@@ -36,13 +36,14 @@ Convenience wrappers are also published:
 
 ```bash
 bash /tmp/hosted-web.sh --accelerator nvidia --yes
-bash /tmp/hosted-web.sh --accelerator ascend --yes
+bash /tmp/hosted-web.sh --accelerator ascend --model /path/to/model \
+  --tensor-parallel-size 1 --no-tunnel --yes
 ```
 
 ## Model Presets
 
 ```bash
-# Auto: NVIDIA 80GB/Ascend default to Qwen3-32B, smaller NVIDIA hosts use Qwen2.5-14B AWQ.
+# Auto: NVIDIA selects a preset from detected capacity. Ascend requires --model.
 bash /tmp/hosted-web.sh --yes
 
 # Explicit large dual-A100 preset.
@@ -107,31 +108,26 @@ command execution. It chooses exactly one local inference path based on `--accel
     bash /tmp/hosted-web.sh --yes
   ```
 
-  On managed Sage servers, the expected key path is:
+  For example, a per-user key path can be:
 
   ```bash
-  /home/shuhao/.config/sage-mate/release-secrets.key
+  $HOME/.config/sage-mate/release-secrets.key
   ```
 
   The installer decrypts to a temporary `0600` file, merges values into `.env`, deletes the
   temporary file, and never prints secret values. A public release cannot safely contain both the
   ciphertext and the decrypt key; keep the key in server provisioning or CI secrets.
-- Cloudflare tunnel is enabled by default for `twin.sage.org.ai`. The installer creates or reuses a
+- Cloudflare tunnel mode requires `--public-hostname` (or the equivalent `.env` setting). The installer creates or reuses a
   CLI-managed named tunnel, writes a private runtime config file, routes DNS with
   `cloudflared tunnel route dns --overwrite-dns`, and verifies the public URL.
 - Use `--no-tunnel` for local-only installs, or `--public-hostname HOSTNAME --tunnel-name NAME` for
   another domain/tunnel.
 
-## Ports
+## Network topology
 
-- Faculty Twin app: `127.0.0.1:55601`
-- Site proxy: `0.0.0.0:8088`
-- NVIDIA vLLM engine: `127.0.0.1:18000`
-- Ascend vLLM-HUST engine: `127.0.0.1:8000`
-- OpenAI-compatible auth proxy: `127.0.0.1:18001`
-
-NVIDIA vLLM uses `18000` by default so it does not collide with common local static servers or
-older vLLM defaults on `8000`.
+Configure `APP_HOST`/`APP_PORT`, `SITE_HOST`/`SITE_PORT`, `VLLM_PROXY_HOST`/`VLLM_PROXY_PORT`,
+and the accelerator engine address in the destination machine's ignored `.env`. The tracked
+systemd units do not embed these values.
 
 ## Verification
 
@@ -140,11 +136,11 @@ After install:
 ```bash
 cd "$HOME/sage-mate"
 ./manage.sh status --with-vllm-proxy --with-site-proxy --with-nvidia-vllm-engine
-env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY -u http_proxy -u https_proxy -u all_proxy \
-  NO_PROXY=127.0.0.1,localhost \
-  ./manage.sh verify-hosted-web --public-url https://twin.sage.org.ai/
-curl --noproxy '*' -fsS http://127.0.0.1:55601/healthz
-curl --noproxy '*' -fsS https://twin.sage.org.ai/healthz
+./manage.sh verify-hosted-web \
+  --app-url "http://$APP_HEALTH_HOST:$APP_PORT" \
+  --public-url "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/"
+curl --noproxy '*' -fsS "http://$APP_HEALTH_HOST:$APP_PORT/healthz"
+curl --noproxy '*' -fsS "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/healthz"
 ```
 
 If a shell has `HTTP_PROXY`/`HTTPS_PROXY` set, use `--noproxy '*'` for local `curl` checks.

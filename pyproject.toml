@@ -24,6 +24,7 @@ classifiers = [
 dependencies = [
   "fastapi>=0.115.0,<1.0.0",
   "httpx>=0.28.0,<1.0.0",
+  "numpy>=1.24.0",
   "pydantic>=2.9.0,<3.0.0",
   "pydantic-settings>=2.5.0,<3.0.0",
   "pypdf>=5.5.0,<6.0.0",
@@ -63,10 +64,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/intellistream/sage-mate"
-Repository = "https://github.com/intellistream/sage-mate"
-Issues = "https://github.com/intellistream/sage-mate/issues"
-Documentation = "https://github.com/intellistream/sage-mate/tree/main/docs"
+Homepage = "https://github.com/SAGE-Research/sage-mate"
+Repository = "https://github.com/SAGE-Research/sage-mate"
+Issues = "https://github.com/SAGE-Research/sage-mate/issues"
+Documentation = "https://github.com/SAGE-Research/sage-mate/tree/main/docs"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

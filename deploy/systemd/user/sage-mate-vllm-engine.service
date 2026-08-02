@@ -1,5 +1,5 @@
 [Unit]
-Description=Sage Mate vLLM-HUST inference engine (Qwen3-32B)
+Description=Sage Mate vLLM-HUST inference engine
 After=network-online.target
 Wants=network-online.target
 
@@ -10,7 +10,7 @@ ExecStart=__REPO_ROOT__/tools/run_vllm_engine.sh
 ExecStopPost=__REPO_ROOT__/tools/cleanup_vllm_engine.sh
 Restart=on-failure
 RestartSec=10
-# Graph mode + 32B model loading needs generous startup time
+# Model loading can need generous startup time.
 TimeoutStartSec=600
 TimeoutStopSec=90
 KillMode=control-group

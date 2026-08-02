@@ -5,12 +5,13 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 source "$repo_root/tools/lib/runtime_env.sh"
-app_port="${APP_PORT:-55601}"
 
 # Load installer-written paths before applying shared runtime defaults.
 load_repo_env_if_unset "$repo_root"
 export_repo_runtime_env "$repo_root"
 python_exec="$PYTHON_BIN"
+app_host="$(require_runtime_setting APP_HOST)"
+app_port="$(require_runtime_setting APP_PORT)"
 
 # --- HuggingFace cache setup (always use writable local cache) ---
 hf_home="$HOME/.cache/hf-models"
@@ -49,4 +50,4 @@ fi
 # --- Start server ---
 cd "$repo_root"
 exec "$python_exec" -m uvicorn sage_faculty_twin.api:app \
-    --host 127.0.0.1 --port "$app_port"
+    --host "$app_host" --port "$app_port"

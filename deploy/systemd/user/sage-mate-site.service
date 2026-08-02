@@ -6,9 +6,7 @@ Wants=sage-mate-app.service
 [Service]
 Type=simple
 WorkingDirectory=__REPO_ROOT__
-Environment=APP_PORT=55601
-Environment=HOMEPAGE_REDIRECT_ORIGIN=https://me.sage.org.ai
-Environment=SITE_PORT=8088
+Environment=PYTHON_BIN=__PYTHON_BIN__
 ExecStart=__REPO_ROOT__/tools/run_local_proxy.sh
 ExecReload=__REPO_ROOT__/tools/reload_local_proxy.sh
 Restart=always
