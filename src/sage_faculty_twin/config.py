@@ -80,6 +80,22 @@ class AppSettings(BaseSettings):
         description="When True, run chat through FlowNetEnvironment DAG runtime. "
         "When False, use the in-process stage chain to avoid per-request runtime compilation.",
     )
+    post_answer_background: bool = Field(
+        default=True,
+        description="Run post-answer persistence outside the response critical path when a trace consumer is attached.",
+    )
+    prompt_soft_cap: int = Field(
+        default=24000,
+        ge=1,
+        le=1000000,
+        description="Maximum assembled chat prompt size in characters before deterministic truncation.",
+    )
+    chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
+    chat_sse_keepalive_seconds: float = Field(default=15.0, ge=1.0, le=90.0)
+    stream_chat_answer: bool = Field(
+        default=False,
+        description="Use upstream streaming transport internally; public delivery remains validated-answer-only.",
+    )
     warm_service_on_startup: bool = Field(
         default=True,
         description="When True, construct the DigitalTwinService during app startup "

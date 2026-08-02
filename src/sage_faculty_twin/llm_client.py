@@ -25,7 +25,11 @@ bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 from sage.serving.integrations import policy as serving_policy
 
 from .config import AppSettings
-from .interaction_policy import requires_faculty_review
+from .interaction_policy import (
+    asks_for_booking_information,
+    requires_faculty_review,
+    requires_human_handoff,
+)
 from .models import InteractionIntent
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
@@ -174,6 +178,8 @@ class _InteractionIntentPayload(BaseModel):
 
 
 class VllmChatClient:
+    supports_fast_intent_bypass = True
+
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
         self._client = httpx.Client(
@@ -2314,82 +2320,8 @@ def _looks_like_booking_request(lowered: str, question: str) -> bool:
 
 
 def _looks_like_booking_information_question(lowered: str, question: str) -> bool:
-    explicit_booking_markers = (
-        "请帮我预约",
-        "帮我预约",
-        "请预约",
-        "我要预约",
-        "我想预约",
-        "申请预约",
-        "提交预约",
-        "约在",
-        "约个会",
-        "book me",
-        "schedule a meeting",
-    )
-    if any(marker in lowered for marker in explicit_booking_markers) or any(
-        marker in question for marker in explicit_booking_markers
-    ):
-        return False
-
-    info_markers = (
-        "office hour",
-        "office hours",
-        "想了解",
-        "想知道",
-        "了解一下",
-        "告诉我",
-        "能否告诉我",
-        "可以告诉我",
-        "准备什么",
-        "先准备",
-        "提前准备",
-        "约时间前",
-        "预约前",
-        "什么时候",
-        "什么时间",
-        "哪几天",
-        "什么时候方便",
-        "哪些时候方便",
-        "这周",
-        "本周",
-        "开放时段",
-        "可预约时段",
-        "预约规则",
-        "如何预约",
-        "怎么预约",
-        "以便预约",
-        "方便预约",
-        "先发邮件",
-        "直接发邮件",
-        "发邮件",
-        "线下聊",
-        "当面聊",
-        "更合适",
-        "什么类型的问题",
-        "适合先邮件",
-        "等有更多内容再约",
-    )
-    booking_context_markers = (
-        "office hour",
-        "office hours",
-        "预约",
-        "约时间",
-        "约老师",
-        "时间安排",
-        "开放时段",
-        "找您",
-        "发邮件",
-        "线下聊",
-        "当面聊",
-    )
-    has_info_marker = any(marker in lowered for marker in info_markers) or any(
-        marker in question for marker in info_markers
-    )
-    has_booking_context = any(marker in lowered for marker in booking_context_markers) or any(
-        marker in question for marker in booking_context_markers
-    )
-    return has_info_marker and has_booking_context
+    del lowered
+    return asks_for_booking_information(question)
 
 
 def _looks_like_teaching_question(lowered: str, question: str) -> bool:
@@ -2535,25 +2467,8 @@ def _looks_like_review_queue_request(lowered: str, question: str) -> bool:
 
 
 def _looks_like_human_handoff_request(lowered: str, question: str) -> bool:
-    markers = (
-        "投诉",
-        "申诉",
-        "成绩",
-        "保密",
-        "隐私",
-        "紧急",
-        "马上联系",
-        "尽快联系",
-        "心理",
-        "危机",
-        "安全",
-        "举报",
-        "冲突",
-        "误会",
-    )
-    return any(marker in lowered for marker in markers) or any(
-        marker in question for marker in markers
-    )
+    del lowered
+    return requires_human_handoff(question)
 
 
 def _looks_like_research_question(lowered: str, question: str) -> bool:

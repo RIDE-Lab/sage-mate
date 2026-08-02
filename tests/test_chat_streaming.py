@@ -36,8 +36,10 @@ from typing import Iterable, Iterator
 import pytest
 
 from sage_faculty_twin import api as api_module
+from sage_faculty_twin.chat_delivery import ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.llm_client import VllmChatClient
+from sage_faculty_twin.models import ChatResponse
 
 
 @pytest.fixture
@@ -48,7 +50,7 @@ def short_keepalive(monkeypatch: pytest.MonkeyPatch) -> float:
     return 5.0
 
 
-def test_publish_answer_delta_then_done_emits_in_order(
+def test_publish_delivered_answer_then_done_emits_in_order(
     short_keepalive: float,
 ) -> None:
     """``answer_delta`` events must arrive in publish order, followed by
@@ -73,11 +75,15 @@ def test_publish_answer_delta_then_done_emits_in_order(
                 if request_id in broker._streams:  # type: ignore[attr-defined]
                     break
 
-        for delta in ("Hello", ", ", "world", "!"):
-            broker.publish_answer_chunk(request_id, delta)
-        # Empty deltas are dropped to avoid spamming the SSE stream.
-        broker.publish_answer_chunk(request_id, "")
-        broker.publish_answer_done(request_id, {"answer": "Hello, world!", "owner_name": "Twin"})
+        delivered = ChatDeliveryGate().deliver(
+            response=ChatResponse(
+                answer="Hello, world!",
+                owner_name="Twin",
+                used_model="test-model",
+            ),
+            original_question="Say hello",
+        )
+        broker.publish_answer_done(request_id, delivered)
         broker.publish_complete(request_id)
 
         events: list[dict] = [await first]
@@ -89,16 +95,19 @@ def test_publish_answer_delta_then_done_emits_in_order(
         return events
 
     events = asyncio.run(driver())
-    deltas = [e for e in events if e.get("type") == "answer_delta"]
     done = [e for e in events if e.get("type") == "answer_done"]
 
-    assert [e["text"] for e in deltas] == ["Hello", ", ", "world", "!"]
     assert len(done) == 1
-    assert done[0]["response"] == {"answer": "Hello, world!", "owner_name": "Twin"}
-    # answer_done arrives after the last answer_delta.
-    last_delta_index = max(i for i, e in enumerate(events) if e.get("type") == "answer_delta")
-    done_index = next(i for i, e in enumerate(events) if e.get("type") == "answer_done")
-    assert done_index > last_delta_index
+    assert done[0]["response"]["answer"] == "Hello, world!"
+    assert not any(e.get("type") == "answer_delta" for e in events)
+
+
+def test_broker_rejects_unvalidated_chat_response() -> None:
+    broker = api_module.WorkflowEventBroker()
+    response = ChatResponse(answer="raw", owner_name="Twin", used_model="test-model")
+
+    with pytest.raises(TypeError, match="DeliveredChatResponse"):
+        broker.publish_answer_done("req-unvalidated", response)  # type: ignore[arg-type]
 
 
 def test_public_chat_route_does_not_publish_unvalidated_answer_chunks() -> None:

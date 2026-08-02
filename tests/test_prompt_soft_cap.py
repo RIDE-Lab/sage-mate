@@ -17,11 +17,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sage_faculty_twin.chat_contracts import ChatIntake, InteractionDecision
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.memory_store import ConversationMemoryHit
 from sage_faculty_twin.models import (
     ChatAttachment,
     ChatRequest,
+    InteractionIntent,
     KnowledgeSearchHit,
 )
 from sage_faculty_twin.service import (
@@ -41,11 +43,22 @@ def _make_context(
     memory_hits: list[ConversationMemoryHit] | None = None,
     knowledge_hits: list[KnowledgeSearchHit] | None = None,
 ) -> ChatWorkflowContext:
+    conversation_id = request.conversation_id or "conv-prompt-cap"
     return ChatWorkflowContext(
         request=request,
-        conversation_id=request.conversation_id or "conv-prompt-cap",
+        conversation_id=conversation_id,
         owner_name=settings.owner_name,
         used_model=settings.model_name,
+        intake=ChatIntake.from_request(request, conversation_id=conversation_id),
+        interaction_decision=InteractionDecision(
+            intent=InteractionIntent(
+                action="answer",
+                domain="general",
+                decision_mode="direct_answer",
+                confidence=1.0,
+            ),
+            source="test",
+        ),
         memory_hits=memory_hits or [],
         knowledge_hits=knowledge_hits or [],
     )

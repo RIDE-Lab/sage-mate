@@ -256,7 +256,7 @@ def test_compact_general_answer_is_used_without_grounding(tmp_path: Path) -> Non
     compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
     assert "KV Cache" in compact_prompt
     assert "不要把训练优化写成推理优化" in compact_prompt
-    assert "NEVER fabricate or invent any academic reference" in compact_prompt
+    assert "不得编造论文" in compact_prompt
     assert "严格遵循用户指定的" in compact_prompt
     assert "三条简短依据" not in compact_prompt
     assert service._should_use_curated_technical_guidance(context.request.question)
@@ -275,7 +275,7 @@ def test_tensor_parallel_explanation_uses_safe_compact_prompt(tmp_path: Path) ->
     compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
     assert "提供简单具体的例子" in compact_prompt
     assert "内容、格式和长度" in compact_prompt
-    assert "When no source context is supplied" in compact_prompt
+    assert "没有来源证据时直接依据通用知识回答" in compact_prompt
     assert "推理阶段如何把同一层的矩阵计算切到多个设备" in compact_prompt
     assert "不要改写成训练或数据并行示例" in compact_prompt
 
@@ -541,7 +541,7 @@ def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     assert len(service._llm_client.calls) == 1
     system_prompt, user_prompt, kwargs = service._llm_client.calls[0]
     assert "严格遵循用户指定的" in system_prompt
-    assert "NEVER fabricate or invent any academic reference" in system_prompt
+    assert "不得编造论文" in system_prompt
     assert "先明确判断" not in system_prompt
     assert "背景：科研指导" in user_prompt
     assert kwargs["max_tokens"] == 768

@@ -26,6 +26,12 @@ CITATION_GROUNDING_RULES = (
     "simply omit the citation entirely. "
 )
 
+COMPACT_CITATION_GROUNDING_RULES = (
+    "不得编造论文、作者、机构、会议、期刊、DOI、链接或参考文献编号。"
+    "只有当准确标题或链接出现在提供的证据或用户问题中时才能引用；"
+    "没有来源证据时直接依据通用知识回答，不点名任何具体文献、作者、机构或链接。"
+)
+
 
 def _load_owner_style_profile(path: Path) -> str:
     if not path.exists() or not path.is_file():

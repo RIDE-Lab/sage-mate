@@ -39,6 +39,7 @@ from .auth import (
     set_user_session_cookie,
 )
 from .config import settings
+from .chat_delivery import DeliveredChatResponse
 from .models import (
     AdminLoginRequest,
     AdminSessionResponse,
@@ -192,23 +193,19 @@ MAX_CHAT_ATTACHMENT_TEXT_CHARS = 12000
 # trace progress before the proxy gives up. Tune via
 # ``DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`` if the upstream LLM is
 # consistently slower than this budget.
-CHAT_REQUEST_TIMEOUT_SECONDS = float(
-    os.environ.get("DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS", "80")
-)
+CHAT_REQUEST_TIMEOUT_SECONDS = settings.chat_request_timeout_seconds
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
 # Cloudflare's idle proxy timeout (~100s on the free plan) can drop the SSE
 # connection mid-answer. We emit a typed ``{"type": "keepalive"}`` event
 # every ``CHAT_SSE_KEEPALIVE_SECONDS`` seconds so the connection stays warm.
-CHAT_SSE_KEEPALIVE_SECONDS = float(os.environ.get("DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS", "15"))
+CHAT_SSE_KEEPALIVE_SECONDS = settings.chat_sse_keepalive_seconds
 # Legacy upstream-streaming switch. Even when explicitly enabled, /chat now
 # buffers generation chunks inside the request and emits only the validated
 # ``answer_done`` payload. The workflow may reject and regenerate an attempt,
 # so publishing raw chunks would expose internal or degenerate text.
-STREAM_CHAT_ANSWER = os.environ.get(
-    "DIGITAL_TWIN_STREAM_CHAT_ANSWER", "false"
-).strip().lower() not in {"0", "false", "no", "off"}
+STREAM_CHAT_ANSWER = settings.stream_chat_answer
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
 SLACK_TWIN_ALLOWED_USER_IDS = {
     user_id.strip()
@@ -294,22 +291,17 @@ class WorkflowEventBroker:
         }
         self._publish(request_id, payload)
 
-    def publish_answer_chunk(self, request_id: str, delta: str) -> None:
-        # Chat Latency Optimizations Task 5: surface streaming LLM tokens
-        # to the browser. The frontend appends ``delta`` to the pending
-        # assistant message body. Empty deltas are dropped so we don't
-        # spam the SSE stream with no-op events when the upstream emits
-        # heartbeat/keepalive lines without content tokens.
-        if not delta:
-            return
-        self._publish(request_id, {"type": "answer_delta", "text": delta})
-
-    def publish_answer_done(self, request_id: str, response_dict: dict[str, object]) -> None:
-        # Final structured payload — the browser replaces the streamed text
-        # with the rendered ChatResponse so it can show ``answer_basis``,
-        # ``follow_up_actions``, ``knowledge_hits`` and ``booking_result``
-        # consistently with non-streaming sessions.
-        self._publish(request_id, {"type": "answer_done", "response": response_dict})
+    def publish_answer_done(
+        self,
+        request_id: str,
+        response: DeliveredChatResponse,
+    ) -> None:
+        if not isinstance(response, DeliveredChatResponse):
+            raise TypeError("answer_done requires a DeliveredChatResponse")
+        self._publish(
+            request_id,
+            {"type": "answer_done", "response": response.model_dump(mode="json")},
+        )
 
     def publish_error(self, request_id: str, message: str) -> None:
         self._publish(request_id, {"type": "error", "message": message})
@@ -1725,7 +1717,7 @@ async def chat(
         # rendered fields (answer_basis, follow_up_actions, etc.) without
         # re-fetching anything.
         try:
-            workflow_event_broker.publish_answer_done(request_id, response.model_dump(mode="json"))
+            workflow_event_broker.publish_answer_done(request_id, response)
         except Exception:  # pragma: no cover - defensive
             pass
         finally:

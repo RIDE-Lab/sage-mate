@@ -812,8 +812,11 @@ def test_chat_emits_trace_steps_via_callback(
     # predates that change and asserts post-answer keys are received via the
     # callback before ``service.answer`` returns; pin the inline path so the
     # synchronous emission contract still holds.
-    monkeypatch.setattr("sage_faculty_twin.service._POST_ANSWER_BACKGROUND_DEFAULT", False)
-    settings = AppSettings(knowledge_base_dir=tmp_path)
+    del monkeypatch
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path,
+        post_answer_background=False,
+    )
     service = DigitalTwinService(settings)
     service._llm_client = FailingLLMClient()
     emitted_steps = []

@@ -64,6 +64,7 @@ def _run_quickstart_install(
             "XDG_CONFIG_HOME": str(xdg_config_home),
             "PATH": f"{fake_bin_dir}:{env['PATH']}",
             "SYSTEMCTL_LOG": str(systemctl_log),
+            "VLLM_NVIDIA_CONNECT_HOST": "127.0.0.1",
         }
     )
     if python_bin is not None:
@@ -218,7 +219,11 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
     # Set a non-empty value so the .env loader skips it (already set).
     # docker inspect will fail because this container doesn't exist.
     env["VLLM_ENGINE_CONTAINER"] = "nonexistent-test-container"
+    env["VLLM_ENGINE_AUTO_CREATE_CONTAINER"] = "false"
+    env["VLLM_ENGINE_REPLACE_EXISTING"] = "false"
     env["VLLM_HUST_API_KEY"] = "test-api-key"
+    idle_probe = _make_fake_python(tmp_path / "idle-probe", has_uvicorn=True)
+    env["PYTHON_BIN"] = str(idle_probe)
 
     result = subprocess.run(
         ["bash", str(ENGINE_SCRIPT)],
@@ -230,8 +235,10 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
     )
 
     assert result.returncode != 0
+    diagnostics = result.stdout + result.stderr
     assert (
-        "nonexistent-test-container" in result.stderr
-        or "docker not found on PATH" in result.stderr
-        or "vLLM-HUST dev-hub submodule launcher not found" in result.stderr
+        "nonexistent-test-container" in diagnostics
+        or "docker not found on PATH" in diagnostics
+        or "vLLM-HUST dev-hub submodule launcher not found" in diagnostics
+        or "not executable in the container" in diagnostics
     )

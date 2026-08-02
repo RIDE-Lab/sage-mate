@@ -5,7 +5,6 @@ import hashlib
 import inspect
 import json
 import logging
-import os
 import re
 import threading
 from collections.abc import Callable, Iterable
@@ -37,6 +36,19 @@ from .auth import (
     validate_admin_credentials,
 )
 from .calendar_bridge import CalendarBridgeClient
+from .chat_contracts import (
+    ChatIntake,
+    EvidenceBundle,
+    InteractionDecision,
+    PromptEnvelope,
+    PromptMode,
+)
+from .chat_delivery import (
+    AnswerConstraints,
+    AnswerOrigin,
+    ChatDeliveryGate,
+    DeliveredChatResponse,
+)
 from .code_agent_backends import (
     ClaudeHustCodeAgentBackend,
     CodeAgentBackend,
@@ -46,7 +58,12 @@ from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
 from .escalation_store import EscalationQueueStore
 from .follow_up_store import FollowUpQueueStore
-from .interaction_policy import requires_faculty_review
+from .interaction_policy import (
+    InteractionPolicyEngine,
+    asks_for_booking_information,
+    requires_faculty_review,
+    requires_human_handoff,
+)
 from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
@@ -155,7 +172,10 @@ from .notifications import BookingEmailNotifier, BookingNotificationError
 from .online_presence_store import OnlinePresenceStore
 from .operations_store import OperationsTaskStateStore
 from .runtime_feature_store import RuntimeFeatureFlagStore
-from .persona import CITATION_GROUNDING_RULES, build_system_prompt
+from .persona import (
+    COMPACT_CITATION_GROUNDING_RULES,
+    build_system_prompt,
+)
 from .planner_comparison_store import PlannerComparisonEntry, PlannerComparisonStore
 from .planner_metrics_store import PlannerMetricsStore
 from .service_runtime import ServiceRuntimeManager
@@ -626,10 +646,6 @@ _POST_ANSWER_TRACE_KEYS: tuple[str, ...] = (
 # Default-on so production /chat returns as soon as the LLM answer is rendered.
 # Set ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND=false`` to roll back to the
 # previous blocking semantics (post-answer stages run before /chat returns).
-_POST_ANSWER_BACKGROUND_DEFAULT: bool = os.environ.get(
-    "DIGITAL_TWIN_POST_ANSWER_BACKGROUND", "true"
-).strip().lower() not in {"0", "false", "no", "off"}
-
 # Chat Latency Optimizations Task 3 + V4.1 context compression:
 # soft cap on assembled prompt size.
 # When ``len(system_prompt) + len(user_prompt)`` exceeds this threshold the
@@ -641,7 +657,7 @@ _POST_ANSWER_BACKGROUND_DEFAULT: bool = os.environ.get(
 # Override via ``DIGITAL_TWIN_PROMPT_SOFT_CAP``. ~24000 chars roughly maps to
 # 6k tokens for typical Chinese/English mixed content, well below the model
 # context window but small enough to keep decode latency bounded.
-_PROMPT_SOFT_CAP: int = max(1, int(os.environ.get("DIGITAL_TWIN_PROMPT_SOFT_CAP", "24000")))
+_PROMPT_SOFT_CAP = 24000
 _PROMPT_MEMORY_HIT_KEEP: int = 3
 _KNOWLEDGE_HIT_BODY_CAP: int = 1200
 _ATTACHMENT_BODY_CAP: int = 4000
@@ -711,6 +727,10 @@ class ChatWorkflowContext:
     conversation_id: str
     owner_name: str
     used_model: str
+    intake: ChatIntake | None = None
+    interaction_decision: InteractionDecision | None = None
+    evidence_bundle: EvidenceBundle | None = None
+    prompt_envelope: PromptEnvelope | None = None
     is_admin_request: bool = False
     admin_username: str | None = None
     route: str = "answer"
@@ -828,6 +848,7 @@ class FacultyTwinWorkflowSupport:
         self._trace_callback = trace_callback
         self._answer_chunk_callback = answer_chunk_callback
         self._action_planner = LightweightActionPlanner()
+        self._interaction_policy = InteractionPolicyEngine()
         self._planner_decision = planner_decision
         self._shadow_planner_decision = shadow_planner_decision
         self._shadow_planner_status = shadow_planner_status
@@ -859,6 +880,10 @@ class FacultyTwinWorkflowSupport:
             shadow_planner_status=self._shadow_planner_status,
             shadow_planner_message=self._shadow_planner_message,
             planner_comparison=self._planner_comparison,
+        )
+        context.intake = ChatIntake.from_request(
+            request,
+            conversation_id=context.conversation_id,
         )
         context.recent_session_context = self._format_recent_session_context(request)
         self._append_trace(
@@ -904,6 +929,17 @@ class FacultyTwinWorkflowSupport:
         started_at = perf_counter()
         direct_session_answer = self._build_recent_session_meta_answer(context.request)
         if direct_session_answer is not None:
+            direct_intent = InteractionIntent(
+                action="answer",
+                domain="general",
+                decision_mode="direct_answer",
+                confidence=1.0,
+            )
+            context.interaction_intent = direct_intent
+            context.interaction_decision = InteractionDecision(
+                intent=direct_intent,
+                source="session_memory",
+            )
             context.workflow_action = "answer"
             context.answer = direct_session_answer
             context.route = "done"
@@ -919,6 +955,7 @@ class FacultyTwinWorkflowSupport:
 
         intent, source = self._resolve_interaction_intent(context)
         context.interaction_intent = intent
+        context.interaction_decision = InteractionDecision(intent=intent, source=source)
         context.decision_mode = intent.decision_mode
 
         if intent.action == "ask_followup" and intent.needs_clarification:
@@ -1574,6 +1611,13 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
+        if context.intake is None or context.interaction_decision is None:
+            raise RuntimeError("prompt stage requires intake and interaction decision contracts")
+        context.evidence_bundle = EvidenceBundle.build(
+            knowledge_hits=context.knowledge_hits,
+            web_hits=context.web_search_hits,
+            memory_hits=context.memory_hits,
+        )
         context.system_prompt = build_system_prompt(self._settings)
 
         # Chat Latency Optimizations Task 3 + V4.1 context compression:
@@ -1608,7 +1652,7 @@ class FacultyTwinWorkflowSupport:
             )
 
         user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
-        cap = _PROMPT_SOFT_CAP
+        cap = self._settings.prompt_soft_cap
 
         def _over_cap() -> bool:
             return len(context.system_prompt or "") + len(user_prompt) > cap
@@ -1680,6 +1724,13 @@ class FacultyTwinWorkflowSupport:
             user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
 
         context.user_prompt = user_prompt
+        context.prompt_envelope = PromptEnvelope(
+            original_question=context.intake.original_question,
+            system_prompt=context.system_prompt,
+            user_prompt=user_prompt,
+            mode=PromptMode.FULL,
+            evidence=context.evidence_bundle,
+        )
         context.prompt_truncated = bool(truncation_actions)
         prompt_size = len(context.system_prompt or "") + len(user_prompt)
 
@@ -2045,7 +2096,7 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
-        if context.system_prompt is None or context.user_prompt is None:
+        if context.prompt_envelope is None:
             raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
 
         relevance_question = self._build_answer_relevance_question(context)
@@ -2053,12 +2104,14 @@ class FacultyTwinWorkflowSupport:
             getattr(context.request, "deep_thinking_explicit", False)
             and getattr(context.request, "deep_thinking", True)
         )
-        if self._should_use_curated_technical_guidance(
+        output_constraints = AnswerConstraints.from_question(context.request.question)
+        use_curated_answer = self._should_use_curated_technical_guidance(
             relevance_question
         ) or (
             explicit_deep
             and self._should_use_curated_deep_guidance(context.request.question)
-        ):
+        )
+        if use_curated_answer and not output_constraints.has_limits:
             context.answer = self._build_deterministic_fallback_answer(context)
             context.workflow_action = "answer"
             self._append_trace(
@@ -2072,8 +2125,9 @@ class FacultyTwinWorkflowSupport:
             return context
 
         enable_thinking = self._should_enable_deep_thinking(context)
-        answer_system_prompt = context.system_prompt
-        answer_user_prompt = context.user_prompt
+        answer_prompt = context.prompt_envelope
+        answer_system_prompt = answer_prompt.system_prompt
+        answer_user_prompt = answer_prompt.user_prompt
         use_compact_general_answer = self._should_use_compact_general_answer(context)
         if use_compact_general_answer:
             answer_system_prompt = self._build_compact_answer_system_prompt(
@@ -2100,6 +2154,16 @@ class FacultyTwinWorkflowSupport:
                     f"背景：{context.request.course_context.strip()}\n\n"
                     f"问题：{answer_user_prompt}"
                 )
+            answer_prompt = PromptEnvelope(
+                original_question=context.prompt_envelope.original_question,
+                system_prompt=answer_system_prompt,
+                user_prompt=answer_user_prompt,
+                mode=PromptMode.COMPACT,
+                evidence=context.prompt_envelope.evidence,
+                invariants=context.prompt_envelope.invariants,
+            )
+            answer_system_prompt = answer_prompt.system_prompt
+            answer_user_prompt = answer_prompt.user_prompt
         try:
             if self._answer_chunk_callback is not None:
                 context.answer = self._call_answer_question_sync(
@@ -2221,7 +2285,7 @@ class FacultyTwinWorkflowSupport:
         prompt = (
             "你是一位严谨的科研导师。请直接、准确地回答用户问题，严格遵循用户指定的"
             "内容、格式和长度。概念解释应给出清晰定义，并在用户要求时提供简单具体的例子。"
-            f" {CITATION_GROUNDING_RULES}"
+            f" {COMPACT_CITATION_GROUNDING_RULES}"
         )
         lowered = question.lower()
         if any(marker in lowered for marker in ("ascend", "npu", "昇腾")):
@@ -2282,20 +2346,18 @@ class FacultyTwinWorkflowSupport:
         retry_id = uuid4().hex
         for attempt in range(2):
             try:
-                answer = self._llm_client.answer_question_sync(
-                    compact_system_prompt,
-                    compact_user_prompt,
-                    token_callback=None,
+                answer = self._call_compact_retry_sync(
+                    system_prompt=compact_system_prompt,
+                    user_prompt=compact_user_prompt,
                     temperature=0.2 if deep_recovery else 0.0,
-                    max_tokens=(768 if attempt == 0 else 640)
-                    if deep_recovery
-                    else (384 if attempt == 0 else 320),
-                    enable_thinking=False,
-                    use_reuse_hints=False,
-                    continue_on_length=False,
+                    max_tokens=(
+                        (768 if attempt == 0 else 640)
+                        if deep_recovery
+                        else (384 if attempt == 0 else 320)
+                    ),
                     cache_namespace=(
-                        f"{context.conversation_id or 'compact'}:"
-                        f"compact-retry:{retry_id}:{attempt}"
+                        f"{context.conversation_id or 'compact'}:compact-retry:"
+                        f"{retry_id}:{attempt}"
                     ),
                 )
             except RuntimeError as exc:
@@ -2324,6 +2386,39 @@ class FacultyTwinWorkflowSupport:
             errors.append("degenerate compact retry")
         _logger.error("LLM compact retry failed; using deterministic fallback answer")
         return self._build_deterministic_fallback_answer(context)
+
+    def _call_compact_retry_sync(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float,
+        max_tokens: int,
+        cache_namespace: str,
+    ) -> str:
+        answer_fn = self._llm_client.answer_question_sync
+        parameters = inspect.signature(answer_fn).parameters
+        optional_kwargs: dict[str, object] = {
+            "token_callback": None,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "enable_thinking": False,
+            "use_reuse_hints": False,
+            "continue_on_length": False,
+            "cache_namespace": cache_namespace,
+        }
+        accepts_var_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in parameters.values()
+        )
+        supported_kwargs = (
+            optional_kwargs
+            if accepts_var_kwargs
+            else {
+                key: value for key, value in optional_kwargs.items() if key in parameters
+            }
+        )
+        return answer_fn(system_prompt, user_prompt, **supported_kwargs)
 
     @staticmethod
     def _build_deterministic_fallback_answer(context: ChatWorkflowContext) -> str:
@@ -4858,7 +4953,9 @@ class FacultyTwinWorkflowSupport:
             )
 
         fast_intent = self._build_fast_path_interaction_intent(context)
-        if fast_intent is not None:
+        if fast_intent is not None and bool(
+            getattr(self._llm_client, "supports_fast_intent_bypass", False)
+        ):
             guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)
             return guarded_intent, "heuristic-fast+policy" if guarded else "heuristic-fast"
 
@@ -4882,6 +4979,10 @@ class FacultyTwinWorkflowSupport:
             except Exception:
                 pass
 
+        if fast_intent is not None:
+            guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)
+            return guarded_intent, "heuristic-fast+policy" if guarded else "heuristic-fast"
+
         intent = self._build_fallback_interaction_intent(context.request)
         guarded_intent, guarded = self._apply_policy_guardrails(context.request, intent)
         return guarded_intent, "heuristic+policy" if guarded else "heuristic"
@@ -4892,7 +4993,6 @@ class FacultyTwinWorkflowSupport:
     ) -> InteractionIntent | None:
         if not self._settings.fast_intent_classifier_enabled:
             return None
-
         request = context.request
         question = request.question
         if self._is_benchmark_request(request):
@@ -5041,97 +5141,8 @@ class FacultyTwinWorkflowSupport:
         request: ChatRequest,
         intent: InteractionIntent,
     ) -> tuple[InteractionIntent, bool]:
-        if request.attachments and intent.action == "ask_followup":
-            clarification_message = (intent.clarification_message or "").lower()
-            if any(
-                marker in clarification_message
-                for marker in (
-                    "附件",
-                    "上传",
-                    "材料",
-                    "文件",
-                    "pdf",
-                    "document",
-                    "upload",
-                    "attach",
-                )
-            ):
-                return (
-                    intent.model_copy(
-                        update={
-                            "action": "answer",
-                            "domain": intent.domain if intent.domain != "general" else "advising",
-                            "needs_clarification": False,
-                            "clarification_message": None,
-                            "decision_mode": "advise_only"
-                            if intent.decision_mode == "direct_answer"
-                            else intent.decision_mode,
-                        }
-                    ),
-                    True,
-                )
-
-        if self._should_force_human_handoff(request.question):
-            return (
-                InteractionIntent(
-                    action="human_handoff",
-                    domain="advising",
-                    decision_mode="human_handoff",
-                    escalation_reason="涉及敏感、紧急或必须由老师本人直接处理的事项。",
-                    confidence=max(intent.confidence, 0.95),
-                ),
-                True,
-            )
-
-        if self._should_queue_for_review(request.question):
-            return (
-                InteractionIntent(
-                    action="review_queue",
-                    domain="advising",
-                    retrieval_scopes=["meeting_policy", "profile"],
-                    exclude_scopes=["courseware"],
-                    decision_mode="review_queue",
-                    escalation_reason="这是需要老师审核后才能正式答复的请求。",
-                    confidence=max(intent.confidence, 0.9),
-                ),
-                True,
-            )
-
-        if intent.action == "book_meeting" and self._looks_like_booking_information_request(
-            request.question
-        ):
-            return (
-                InteractionIntent(
-                    action="answer",
-                    domain="advising",
-                    retrieval_scopes=["meeting_policy", "profile"],
-                    exclude_scopes=["courseware"],
-                    decision_mode="direct_answer",
-                    confidence=max(intent.confidence, 0.9),
-                ),
-                True,
-            )
-
-        if intent.action == "book_meeting" and intent.decision_mode != "review_queue":
-            return intent.model_copy(update={"decision_mode": "review_queue"}), True
-
-        if intent.action == "answer" and intent.decision_mode == "direct_answer":
-            if any(
-                marker in request.question
-                for marker in (
-                    "准备什么",
-                    "提前准备",
-                    "怎么准备",
-                    "帮我决定",
-                    "替我决定",
-                    "该不该",
-                    "怎么选",
-                    "选哪个",
-                )
-            ):
-                return intent.model_copy(update={"decision_mode": "advise_only"}), True
-
-        return intent, False
+        result = self._interaction_policy.apply(request, intent)
+        return result.intent, result.changed
 
     def _build_interaction_context(
         self, request: ChatRequest, recent_session_context: str
@@ -5977,62 +5988,7 @@ class FacultyTwinWorkflowSupport:
         return max(0, int(round((perf_counter() - started_at) * 1000)))
 
     def _looks_like_booking_information_request(self, question: str) -> bool:
-        lowered = question.lower()
-        explicit_booking_markers = (
-            "请帮我预约",
-            "帮我预约",
-            "请预约",
-            "我要预约",
-            "我想预约",
-            "申请预约",
-            "提交预约",
-            "约在",
-            "约个会",
-            "book me",
-            "schedule a meeting",
-        )
-        if any(marker in lowered for marker in explicit_booking_markers) or any(
-            marker in question for marker in explicit_booking_markers
-        ):
-            return False
-
-        info_markers = (
-            "office hour",
-            "office hours",
-            "想了解",
-            "想知道",
-            "了解一下",
-            "告诉我",
-            "能否告诉我",
-            "可以告诉我",
-            "什么时候",
-            "什么时间",
-            "这周",
-            "本周",
-            "开放时段",
-            "可预约时段",
-            "预约规则",
-            "如何预约",
-            "怎么预约",
-            "以便预约",
-            "方便预约",
-        )
-        booking_context_markers = (
-            "office hour",
-            "office hours",
-            "预约",
-            "约时间",
-            "约老师",
-            "时间安排",
-            "开放时段",
-        )
-        has_info_marker = any(marker in lowered for marker in info_markers) or any(
-            marker in question for marker in info_markers
-        )
-        has_booking_context = any(marker in lowered for marker in booking_context_markers) or any(
-            marker in question for marker in booking_context_markers
-        )
-        return has_info_marker and has_booking_context
+        return asks_for_booking_information(question)
 
     def _needs_booking_intent_classification(self, question: str) -> bool:
         if self._looks_like_booking_information_request(question):
@@ -6051,22 +6007,7 @@ class FacultyTwinWorkflowSupport:
         return any(keyword in lowered for keyword in keywords)
 
     def _should_force_human_handoff(self, question: str) -> bool:
-        markers = (
-            "投诉",
-            "申诉",
-            "成绩",
-            "隐私",
-            "保密",
-            "紧急",
-            "心理",
-            "危机",
-            "安全",
-            "举报",
-        )
-        lowered = question.lower()
-        return any(marker in lowered for marker in markers) or any(
-            marker in question for marker in markers
-        )
+        return requires_human_handoff(question)
 
     def _should_queue_for_review(self, question: str) -> bool:
         return requires_faculty_review(question)
@@ -6990,8 +6931,14 @@ class _ChatContextMerge4(ChatContextMergeFunction):
 
 
 class DigitalTwinService:
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        *,
+        delivery_gate: ChatDeliveryGate | None = None,
+    ) -> None:
         self._settings = settings
+        self._delivery_gate = delivery_gate or ChatDeliveryGate()
         self._llm_client = VllmChatClient(settings)
         self._knowledge_store = LocalKnowledgeStore(settings)
         self._conversation_store = NeuroMemConversationStore(settings)
@@ -7087,8 +7034,8 @@ class DigitalTwinService:
         trace_callback: WorkflowTraceCallback | None = None,
         on_post_answer_complete: Callable[[], None] | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
-    ) -> ChatResponse:
-        return await self._answer_with_execution_mode(
+    ) -> DeliveredChatResponse:
+        response = await self._answer_with_execution_mode(
             request,
             admin_session_token=admin_session_token,
             trace_callback=trace_callback,
@@ -7096,6 +7043,7 @@ class DigitalTwinService:
             on_post_answer_complete=on_post_answer_complete,
             answer_chunk_callback=answer_chunk_callback,
         )
+        return self._deliver_chat_response(request, response)
 
     async def answer_in_process(
         self,
@@ -7104,14 +7052,32 @@ class DigitalTwinService:
         trace_callback: WorkflowTraceCallback | None = None,
         on_post_answer_complete: Callable[[], None] | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
-    ) -> ChatResponse:
-        return await self._answer_with_execution_mode(
+    ) -> DeliveredChatResponse:
+        response = await self._answer_with_execution_mode(
             request,
             admin_session_token=admin_session_token,
             trace_callback=trace_callback,
             use_runtime_pipeline=False,
             on_post_answer_complete=on_post_answer_complete,
             answer_chunk_callback=answer_chunk_callback,
+        )
+        return self._deliver_chat_response(request, response)
+
+    def _deliver_chat_response(
+        self,
+        request: ChatRequest,
+        response: ChatResponse,
+    ) -> DeliveredChatResponse:
+        origin_by_action = {
+            "invitation_code_detected": AnswerOrigin.INVITATION,
+            "skill_answer": AnswerOrigin.SKILL,
+            "code_assist": AnswerOrigin.CODE_WORKBENCH,
+            "auto_scientist": AnswerOrigin.AUTO_SCIENTIST,
+        }
+        return self._delivery_gate.deliver(
+            response=response,
+            original_question=request.question,
+            origin=origin_by_action.get(response.workflow_action, AnswerOrigin.PIPELINE),
         )
 
     async def _answer_with_execution_mode(
@@ -7230,21 +7196,6 @@ class DigitalTwinService:
             shadow_planner_message=shadow_message,
             planner_comparison=planner_comparison,
         )
-        stages = [
-            (BootstrapChatContextStage, support),
-            (InteractionUnderstandingStage, support),
-            (BookingPreparationStage, support),
-            (BookingExecutionStage, support),
-            (MemoryRetrievalStage, support),
-            (KnowledgeRetrievalStage, support),
-            (PromptBuildStage, support),
-            (LlmAnswerStage, support),
-            (MemoryPersistStage, support),
-            (MemoryProfileConsolidationStage, support),
-            (FollowUpPlanningStage, support),
-            (MemoryUsefulnessScoringStage, support),
-            (ChatResponseRenderStage, support),
-        ]
         if use_runtime_pipeline:
             response, context = await asyncio.to_thread(
                 self._run_chat_dag_pipeline,
@@ -7252,17 +7203,13 @@ class DigitalTwinService:
                 support,
             )
         else:
-            # Linear path: existing 13-stage chain still runs post-answer
-            # stages BEFORE response_render, so the response naturally
-            # carries the canonical 14-step trace + populated
-            # ``follow_up_actions`` / ``exchange_id``. No background split.
-            response = await asyncio.to_thread(self._run_stage_chain, request, stages)
-            self._persist_planner_comparison_result(request, response)
-            if on_post_answer_complete is not None:
-                on_post_answer_complete()
-            return response
+            response, context = await asyncio.to_thread(
+                self._run_chat_in_process,
+                request,
+                support,
+            )
 
-        should_background = _POST_ANSWER_BACKGROUND_DEFAULT and trace_callback is not None
+        should_background = self._settings.post_answer_background and trace_callback is not None
 
         if should_background:
             # Production fast path: ship the rendered response immediately,
@@ -9318,17 +9265,12 @@ class DigitalTwinService:
         request: ChatRequest,
         support: FacultyTwinWorkflowSupport,
     ) -> tuple[ChatResponse, ChatWorkflowContext]:
-        """Run the chat critical-path DAG and return both the rendered
+        """Run the chat application stages in FlowNet and return both the rendered
         :class:`ChatResponse` and the underlying :class:`ChatWorkflowContext`.
 
-        Critical-path topology (Task 2 of the Chat Latency Optimizations
-        plan)::
-
-            bootstrap -> understand -> booking_prep -> booking_exec
-                |
-                +--> memory_retrieve  ----+
-                |                         +--> merge2 -> prompt_build -> llm_answer -> render -> sink
-                +--> knowledge_retrieve --+
+        Runtime and in-process execution share the same critical-stage registry.
+        Retrieval is deliberately sequential until each branch returns immutable
+        stage output; the previous fan-out mutated one context from two branches.
 
         The four post-answer fan-out stages (``memory_persist``,
         ``memory_profile_consolidate``, ``follow_up_plan``,
@@ -9337,35 +9279,16 @@ class DigitalTwinService:
         or as a fire-and-forget ``asyncio.create_task`` (production path).
         See :meth:`_run_post_answer_inline_blocking`.
 
-        The retrieval branches still share the same mutable
-        ``ChatWorkflowContext`` instance — SAGE's in-memory router delivers
-        the same packet to each downstream branch by reference.
         """
         env = FlowNetEnvironment("faculty-twin-chat")
         responses: list[ChatResponse] = []
         contexts: list[ChatWorkflowContext] = []
 
-        head = (
-            env.from_batch([request])
-            .map(BootstrapChatContextStage, support)
-            .map(InteractionUnderstandingStage, support)
-            .map(BookingPreparationStage, support)
-            .map(BookingExecutionStage, support)
-        )
-
-        # Fan-out 1: memory + knowledge retrieval run in parallel.
-        after_retrieval = (
-            head.map(MemoryRetrievalStage, support)
-            .connect(head.map(KnowledgeRetrievalStage, support))
-            .comap(_ChatContextMerge2)
-        )
-
-        # Linear: prompt build -> LLM answer -> response render.
-        after_render = (
-            after_retrieval.map(PromptBuildStage, support)
-            .map(LlmAnswerStage, support)
-            .map(_CaptureContextStage, contexts)
-            .map(ChatResponseRenderStage, support)
+        stream = env.from_batch([request])
+        for stage_class in self._chat_critical_stage_types():
+            stream = stream.map(stage_class, support)
+        after_render = stream.map(_CaptureContextStage, contexts).map(
+            ChatResponseRenderStage, support
         )
         after_render.sink(ResultCollector, responses)
 
@@ -9378,6 +9301,31 @@ class DigitalTwinService:
                 "SAGE runtime completed without capturing the chat workflow context."
             )
         return responses[-1], contexts[-1]
+
+    def _run_chat_in_process(
+        self,
+        request: ChatRequest,
+        support: FacultyTwinWorkflowSupport,
+    ) -> tuple[ChatResponse, ChatWorkflowContext]:
+        current: ChatRequest | ChatWorkflowContext = request
+        for stage_class in self._chat_critical_stage_types():
+            current = stage_class(support).execute(current)  # type: ignore[arg-type]
+        if not isinstance(current, ChatWorkflowContext):
+            raise RuntimeError("chat application did not produce a workflow context")
+        return support.render_chat_response(current), current
+
+    @staticmethod
+    def _chat_critical_stage_types() -> tuple[type[MapFunction], ...]:
+        return (
+            BootstrapChatContextStage,
+            InteractionUnderstandingStage,
+            BookingPreparationStage,
+            BookingExecutionStage,
+            MemoryRetrievalStage,
+            KnowledgeRetrievalStage,
+            PromptBuildStage,
+            LlmAnswerStage,
+        )
 
     def _run_post_answer_inline_blocking(
         self,
