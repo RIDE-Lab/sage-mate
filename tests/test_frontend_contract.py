@@ -199,3 +199,24 @@ def test_active_onboarding_uses_left_column_even_after_chat_starts() -> None:
     assert block_match, f"Missing CSS block for {selector}"
     assert "grid-column: 1;" in block_match.group(1)
     assert "grid-row: 1 / 3;" in block_match.group(1)
+
+
+def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    responsive_start = css.index(
+        "/* Keep guided onboarding inside tablet and phone visual viewports. */"
+    )
+    responsive_end = css.index("/* --- Onboarding guided question card --- */")
+    responsive_css = css[responsive_start:responsive_end]
+
+    assert "@media (max-width: 920px)" in responsive_css
+    assert "display: flex;" in responsive_css
+    assert "flex-direction: column;" in responsive_css
+    assert "flex: 0 0 auto;" in responsive_css
+    assert "width: min(100%, 720px);" in responsive_css
+    assert "overflow-x: hidden;" in responsive_css
+    assert "position: relative;" in responsive_css
+    assert "left: auto;" in responsive_css
+    assert "right: auto;" in responsive_css
+    assert "bottom: auto;" in responsive_css
+    assert "minmax(280px" not in responsive_css
