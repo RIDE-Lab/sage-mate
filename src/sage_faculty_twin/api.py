@@ -1123,6 +1123,11 @@ async def app_js() -> FileResponse:
     return frontend_asset("app.js")
 
 
+@llm_app.api_route("/companion.js", methods=["GET", "HEAD"], include_in_schema=False)
+async def companion_js() -> FileResponse:
+    return frontend_asset("companion.js")
+
+
 @llm_app.get("/auth/session", response_model=AdminSessionResponse)
 async def auth_session(request: Request) -> AdminSessionResponse:
     return service.get_admin_session(request.cookies.get(ADMIN_COOKIE_NAME))

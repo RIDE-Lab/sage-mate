@@ -212,6 +212,12 @@ function setChatSubmitLoading(isLoading) {
     chatSubmitButton.setAttribute("aria-label", loading ? "正在发送问题" : "发送问题");
 }
 
+const sageCompanionController = globalThis.SageCompanion?.create({
+    chatForm,
+    chatShell,
+    chatQuestion,
+}) || null;
+
 let deepThinkingExplicitlyEnabled = Boolean(deepThinkingCheckbox?.checked);
 let lastFailedQuestion = null;
 let codeAssistantWorkspaces = [];
@@ -2592,6 +2598,8 @@ chatForm.addEventListener("submit", async (event) => {
     clearPendingChatAttachments();
     autoResizeTextarea();
     setChatSubmitLoading(true);
+    sageCompanionController?.setRequestActive(true);
+    sageCompanionController?.setState("thinking", "收到问题啦，我正在认真想一想。");
     let workflowRequestIdActive = workflowRequestId;
     await openWorkflowTraceStream(workflowRequestIdActive);
 
@@ -2633,6 +2641,8 @@ chatForm.addEventListener("submit", async (event) => {
                 persistActiveConversationSnapshot();
             }
             void syncConversationHistoryFromServer();
+            sageCompanionController?.setRequestActive(false);
+            sageCompanionController?.setState("happy", "回答准备好啦！要不要继续追问一层？", { resetAfterMs: 3600 });
             break;
         } catch (error) {
             // Retry on transient failures: gateway timeout (504) or network
@@ -2654,6 +2664,7 @@ chatForm.addEventListener("submit", async (event) => {
                     retryLabel,
                     []
                 );
+                sageCompanionController?.setState("thinking", retryLabel);
                 await new Promise((resolve) => globalThis.setTimeout(resolve, 2000));
                 await openWorkflowTraceStream(workflowRequestIdActive);
                 continue;
@@ -2664,6 +2675,8 @@ chatForm.addEventListener("submit", async (event) => {
             renderAssistantMessage(pendingMessage, error.message, [], [], [], null, true, null, activeWorkflowSteps);
             noteConversationAnswerPreview(error.message);
             persistActiveConversationSnapshot();
+            sageCompanionController?.setRequestActive(false);
+            sageCompanionController?.setState("worried", "连接有点打结了。你可以稍后重试，我会在这里等你。", { resetAfterMs: 4800 });
             break;
         }
     }
@@ -6992,6 +7005,8 @@ function startFreshConversation() {
     syncConversationMode();
     renderWorkflowTrace([], latestWorkflowMeta);
     setChatSubmitLoading(false);
+    sageCompanionController?.setRequestActive(false);
+    sageCompanionController?.setState("idle", "新对话准备好了，我们从哪里开始？");
     chatQuestion?.focus();
 }
 
@@ -8962,6 +8977,7 @@ function handleWorkflowStreamEvent(payload) {
             shadowPlannerPreview: latestWorkflowMeta.shadowPlannerPreview,
             plannerComparison: latestWorkflowMeta.plannerComparison,
         });
+        sageCompanionController?.setState("thinking", `正在进行：${payload.step.title || "处理问题"}`);
         return;
     }
 
@@ -9001,12 +9017,16 @@ function handleWorkflowStreamEvent(payload) {
             updateTokenUsageBadge(response.token_usage || null);
             persistActiveConversationSnapshot();
         }
+        sageCompanionController?.setRequestActive(false);
+        sageCompanionController?.setState("happy", "回答准备好啦！要不要继续追问一层？", { resetAfterMs: 3600 });
         streamingAnswerBuffer = "";
         streamingThinkBuffer = "";
         return;
     }
 
     if (payload.type === "error") {
+        sageCompanionController?.setRequestActive(false);
+        sageCompanionController?.setState("worried", "处理时遇到了一点问题。别担心，我们可以重试。", { resetAfterMs: 4800 });
         stopWorkflowTraceStream();
         renderWorkflowTraceError(payload.message || "处理失败。请稍后重试。");
         return;
@@ -10476,6 +10496,7 @@ function initVoiceInput() {
 async function initializePage() {
     initFooterToggle();
     initVoiceInput();
+    sageCompanionController?.init();
     const localCodeConfigPromise = maybeOpenSageMateSetup();
     renderConversationHistoryList();
     applyStoredVisitorProfile();

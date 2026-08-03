@@ -36,6 +36,10 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "app.js", "text/javascript; charset=utf-8");
     return;
   }
+  if (pathname === "/companion.js") {
+    sendFile(response, "companion.js", "text/javascript; charset=utf-8");
+    return;
+  }
   response.writeHead(200, {
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
@@ -106,5 +110,38 @@ for (const viewport of VIEWPORTS) {
       );
       expect(columns.trim().split(/\s+/)).toHaveLength(2);
     }
+  });
+}
+
+for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
+  test(`Sage companion is interactive at ${viewport.name}`, async ({ page }) => {
+    await openOnboarding(page, viewport);
+    await page.getByRole("button", { name: "跳过引导" }).click();
+
+    const companion = page.locator("#sage-companion");
+    const toggle = page.locator("#sage-companion-toggle");
+    await expect(companion).toBeVisible();
+    const toggleBox = await toggle.boundingBox();
+    const composerBox = await page.locator("#chat-form").boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(composerBox.y + 0.5);
+    await toggle.click();
+    await expect(page.locator("#sage-companion-panel")).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    const panelBox = await page.locator("#sage-companion-panel").boundingBox();
+    expect(panelBox).not.toBeNull();
+    expect(panelBox.x).toBeGreaterThanOrEqual(0);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(panelBox.y).toBeGreaterThanOrEqual(0);
+    expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+
+    await page.getByRole("button", { name: "摸摸它" }).click();
+    await expect(companion).toHaveAttribute("data-state", "happy");
+    await expect(page.locator("#sage-companion-bond-value")).toHaveText("24%");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#sage-companion-panel")).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 }

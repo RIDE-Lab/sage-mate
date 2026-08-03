@@ -53,6 +53,15 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'identityModal.classList.contains("hidden") &&' not in script
 
 
+def test_companion_module_is_served_without_cache() -> None:
+    response = client.get("/companion.js")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert "globalThis.SageCompanion = Object.freeze" in response.text
+
+
 def test_general_visitor_onboarding_preserves_the_typed_question() -> None:
     response = client.get("/app.js")
 

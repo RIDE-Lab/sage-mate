@@ -256,6 +256,53 @@
                     </div>
                 </div>
 
+                <aside id="sage-companion" class="sage-companion" data-state="idle"
+                    aria-label="Sage Mate 电子伙伴">
+                    <button type="button" id="sage-companion-toggle" class="sage-companion-toggle"
+                        aria-expanded="false" aria-controls="sage-companion-panel"
+                        aria-label="打开 Sage Mate 电子伙伴">
+                        <span class="sage-companion-character" aria-hidden="true">
+                            <span class="sage-companion-ear sage-companion-ear-left"></span>
+                            <span class="sage-companion-ear sage-companion-ear-right"></span>
+                            <span class="sage-companion-face">
+                                <span class="sage-companion-eye sage-companion-eye-left"></span>
+                                <span class="sage-companion-eye sage-companion-eye-right"></span>
+                                <span class="sage-companion-mouth"></span>
+                                <span class="sage-companion-cheek sage-companion-cheek-left"></span>
+                                <span class="sage-companion-cheek sage-companion-cheek-right"></span>
+                            </span>
+                        </span>
+                        <span class="sage-companion-state-dot" aria-hidden="true"></span>
+                    </button>
+                    <section id="sage-companion-panel" class="sage-companion-panel" hidden>
+                        <div class="sage-companion-panel-head">
+                            <div>
+                                <p class="sage-companion-kicker">Sage Companion</p>
+                                <h2>小 Sage</h2>
+                            </div>
+                            <button type="button" id="sage-companion-close" class="sage-companion-close"
+                                aria-label="关闭电子伙伴面板">×</button>
+                        </div>
+                        <p id="sage-companion-message" class="sage-companion-message" aria-live="polite">
+                            我在这里陪你，随时可以开始一个新问题。
+                        </p>
+                        <div class="sage-companion-bond" aria-label="伙伴默契度">
+                            <div class="sage-companion-bond-copy">
+                                <span>默契</span>
+                                <strong id="sage-companion-bond-value">20%</strong>
+                            </div>
+                            <div class="sage-companion-bond-track" aria-hidden="true">
+                                <span id="sage-companion-bond-bar"></span>
+                            </div>
+                        </div>
+                        <div class="sage-companion-actions" aria-label="伙伴互动">
+                            <button type="button" data-companion-action="pet">摸摸它</button>
+                            <button type="button" data-companion-action="inspire">喂颗灵感豆</button>
+                        </div>
+                        <p class="sage-companion-privacy">互动进度仅保存在当前浏览器，不会发送到服务器。</p>
+                    </section>
+                </aside>
+
                 <form id="chat-form" class="composer-shell">
                     <input id="chat-file-input" type="file" name="files" multiple hidden
                         accept=".pdf,.txt,.md,.csv,.json,.py,.yaml,.yml,.log,text/plain,text/markdown,text/csv,application/json,application/pdf" />
@@ -1223,6 +1270,7 @@
         </div>
     </section>
 
+    <script src="./companion.js" defer></script>
     <script src="./app.4219.js" defer></script>
 </body>
 

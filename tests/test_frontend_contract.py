@@ -130,6 +130,35 @@ def test_send_button_uses_animation_state() -> None:
     assert "@keyframes send-button-pulse" in css
 
 
+def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    companion_js = (WEB_DIR / "companion.js").read_text(encoding="utf-8")
+
+    assert 'id="sage-companion"' in html
+    assert 'id="sage-companion-toggle"' in html
+    assert 'aria-controls="sage-companion-panel"' in html
+    assert 'id="sage-companion-message"' in html
+    assert 'aria-live="polite"' in html
+    assert "互动进度仅保存在当前浏览器" in html
+
+    assert '<script src="./companion.js" defer></script>' in html
+    assert 'const STORAGE_KEY = "sageMateCompanion:v1";' in companion_js
+    assert "localStorage.setItem(STORAGE_KEY" in companion_js
+    assert "globalThis.SageCompanion = Object.freeze" in companion_js
+    assert 'sageCompanionController?.setState("thinking"' in js
+    assert 'sageCompanionController?.setState("happy"' in js
+    assert 'sageCompanionController?.setState("worried"' in js
+    persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("renderBond() {")]
+    assert "question:" not in persist_block
+
+    assert "body.onboarding-active .sage-companion" in css
+    assert ".chat-shell.view-active .sage-companion" in css
+    assert '@media (prefers-reduced-motion: reduce)' in css
+    assert ".sage-companion-character" in css
+
+
 def test_local_code_setup_does_not_block_or_auto_open_profile_modal() -> None:
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     setup_fn = js[js.index("function shouldShowSageMateSetup"):js.index("async function maybeOpenSageMateSetup")]
