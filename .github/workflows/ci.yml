@@ -15,7 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install via quickstart.sh
-        run: ./quickstart.sh --no-systemd --no-siblings --yes
+        run: bash ./quickstart.sh --no-systemd --no-siblings --yes
       - name: Install dev extras (ruff)
         run: pip install -e '.[dev]'
       - name: Ruff lint
@@ -33,7 +33,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install via quickstart.sh
-        run: ./quickstart.sh --no-systemd --no-siblings --yes
+        run: bash ./quickstart.sh --no-systemd --no-siblings --yes
       - name: Install dev extras (pytest)
         run: pip install -e '.[dev]'
       - name: Install frontend browser dependencies
@@ -57,7 +57,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install via quickstart.sh
-        run: ./quickstart.sh --no-systemd --no-siblings --yes
+        run: bash ./quickstart.sh --no-systemd --no-siblings --yes
       - name: Install dev extras (pytest, pytest-asyncio)
         run: pip install -e '.[dev]'
       - name: Run test suite
@@ -86,7 +86,7 @@ jobs:
           FACULTY_TWIN_VENV: ${{ runner.temp }}/sage-cpu-venv
           PIP_INSTALL_TIMEOUT_SECONDS: "300"
         run: |
-          ./quickstart.sh \
+          bash ./quickstart.sh \
             --target hosted-web \
             --no-systemd \
             --no-siblings \
@@ -109,7 +109,7 @@ jobs:
           FACULTY_TWIN_VENV: ${{ runner.temp }}/sage-ascend-venv
           PIP_INSTALL_TIMEOUT_SECONDS: "300"
         run: |
-          ./quickstart.sh \
+          bash ./quickstart.sh \
             --target hosted-web \
             --with-vllm-engine \
             --with-vllm-proxy \
