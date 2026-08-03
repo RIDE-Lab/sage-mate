@@ -173,7 +173,7 @@ def test_empty_chat_onboarding_sits_before_chat_stream() -> None:
     assert all("align-items: center;" not in block for block in empty_chat_blocks)
     assert ".chat-shell.chat-empty .onboarding-card" in css
     assert ".chat-shell.chat-empty .composer-shell" in css
-    assert "width: min(100%, 720px);" in css
+    assert "width: min(100%, var(--content-column-max));" in css
 
 
 def test_active_onboarding_keeps_chat_stream_visible() -> None:
@@ -213,7 +213,8 @@ def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:
     assert "display: flex;" in responsive_css
     assert "flex-direction: column;" in responsive_css
     assert "flex: 0 0 auto;" in responsive_css
-    assert "width: min(100%, 720px);" in responsive_css
+    assert "width: min(100%, var(--content-column-max));" in responsive_css
+    assert "padding: var(--mobile-panel-padding);" in responsive_css
     assert "overflow-x: hidden;" in responsive_css
     assert "position: relative;" in responsive_css
     assert "left: auto;" in responsive_css

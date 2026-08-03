@@ -13,6 +13,9 @@ logs/
 htmlcov/
 .coverage
 coverage.xml
+playwright-report/
+test-results/
+node_modules/
 # Production runtime data lives in the separate private runtime repository
 # (DIGITAL_TWIN_RUNTIME_DIR, normally ../sage-mate-runtime-private).
 # Keep this code repository limited to source, tests, tooling, and examples.
