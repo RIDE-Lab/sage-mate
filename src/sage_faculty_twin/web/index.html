@@ -291,56 +291,79 @@
                             <i></i><i></i><i></i>
                         </span>
                     </button>
-                    <section id="sage-companion-panel" class="sage-companion-panel" hidden>
+                    <section id="sage-companion-panel" class="sage-companion-panel" role="dialog"
+                        aria-labelledby="sage-companion-name" hidden>
                         <div class="sage-companion-panel-head">
                             <div>
                                 <p class="sage-companion-kicker">Sage Companion</p>
-                                <h2 id="sage-companion-name">小 Sage</h2>
+                                <span class="sage-companion-title-row">
+                                    <h2 id="sage-companion-name">小 Sage</h2>
+                                    <span id="sage-companion-stage-chip" class="sage-companion-stage-chip">初识</span>
+                                </span>
                             </div>
                             <button type="button" id="sage-companion-close" class="sage-companion-close"
                                 aria-label="关闭电子伙伴面板">×</button>
                         </div>
-                        <p id="sage-companion-message" class="sage-companion-message" aria-live="polite">
-                            我在这里陪你，随时可以开始一个新问题。
-                        </p>
-                        <div class="sage-companion-bond" aria-label="伙伴默契度">
-                            <div class="sage-companion-bond-copy">
-                                <span>默契 · <strong id="sage-companion-stage">初识</strong></span>
-                                <strong id="sage-companion-bond-value">20%</strong>
-                            </div>
-                            <div class="sage-companion-bond-track" aria-hidden="true">
-                                <span id="sage-companion-bond-bar"></span>
-                            </div>
-                            <p id="sage-companion-stage-hint" class="sage-companion-stage-hint">再积累 10% 默契，就会成为熟悉伙伴。</p>
+                        <div class="sage-companion-tabs" role="tablist" aria-label="伙伴面板">
+                            <button type="button" id="sage-companion-tab-companion" role="tab"
+                                aria-selected="true" aria-controls="sage-companion-panel-companion"
+                                data-companion-tab="companion">陪伴</button>
+                            <button type="button" id="sage-companion-tab-customize" role="tab" tabindex="-1"
+                                aria-selected="false" aria-controls="sage-companion-panel-customize"
+                                data-companion-tab="customize">装扮</button>
+                            <span class="sage-companion-tab-indicator" aria-hidden="true"></span>
                         </div>
-                        <div class="sage-companion-footprint" aria-label="共同学习足迹">
-                            <div>
-                                <strong id="sage-companion-answers">0</strong>
-                                <span>完成问题</span>
+                        <div id="sage-companion-scroll-area" class="sage-companion-scroll-area">
+                        <div id="sage-companion-panel-companion" class="sage-companion-tab-panel"
+                            role="tabpanel" aria-labelledby="sage-companion-tab-companion"
+                            data-companion-panel="companion">
+                            <p id="sage-companion-message" class="sage-companion-message" aria-live="polite">
+                                我在这里陪你，随时可以开始一个新问题。
+                            </p>
+                            <div class="sage-companion-bond" aria-label="伙伴默契度">
+                                <div class="sage-companion-bond-copy">
+                                    <span>今日默契 <strong id="sage-companion-stage" class="sr-only">初识</strong></span>
+                                    <strong id="sage-companion-bond-value">20%</strong>
+                                </div>
+                                <div class="sage-companion-bond-track" aria-hidden="true">
+                                    <span id="sage-companion-bond-bar"></span>
+                                </div>
+                                <p id="sage-companion-stage-hint" class="sage-companion-stage-hint">再积累 10% 默契，就会成为熟悉伙伴。</p>
                             </div>
-                            <div>
-                                <strong id="sage-companion-streak">0 天</strong>
-                                <span>连续探索</span>
+                            <div class="sage-companion-footprint" aria-label="共同学习足迹">
+                                <div>
+                                    <strong id="sage-companion-answers">0</strong>
+                                    <span>完成问题</span>
+                                </div>
+                                <div>
+                                    <strong id="sage-companion-streak">0 天</strong>
+                                    <span>连续探索</span>
+                                </div>
+                            </div>
+                            <section class="sage-companion-quest" aria-labelledby="sage-companion-quest-title">
+                                <div class="sage-companion-quest-head">
+                                    <strong id="sage-companion-quest-title">今日灵感签</strong>
+                                    <span id="sage-companion-quest-status">待完成</span>
+                                </div>
+                                <p id="sage-companion-quest-text">把一个复杂问题改写成一句更清晰的问题。</p>
+                                <div class="sage-companion-quest-actions">
+                                    <button type="button" data-companion-action="reroll-quest">换一张</button>
+                                    <button type="button" data-companion-action="complete-quest">完成啦</button>
+                                </div>
+                            </section>
+                            <div class="sage-companion-actions" aria-label="伙伴互动">
+                                <button type="button" data-companion-action="pet"><span aria-hidden="true">✦</span>摸摸它</button>
+                                <button type="button" data-companion-action="inspire"><span aria-hidden="true">●</span>喂颗灵感豆</button>
                             </div>
                         </div>
-                        <section class="sage-companion-quest" aria-labelledby="sage-companion-quest-title">
-                            <div class="sage-companion-quest-head">
-                                <strong id="sage-companion-quest-title">今日灵感签</strong>
-                                <span id="sage-companion-quest-status">待完成</span>
-                            </div>
-                            <p id="sage-companion-quest-text">把一个复杂问题改写成一句更清晰的问题。</p>
-                            <div class="sage-companion-quest-actions">
-                                <button type="button" data-companion-action="reroll-quest">换一张</button>
-                                <button type="button" data-companion-action="complete-quest">完成啦</button>
-                            </div>
-                        </section>
-                        <div class="sage-companion-actions" aria-label="伙伴互动">
-                            <button type="button" data-companion-action="pet">摸摸它</button>
-                            <button type="button" data-companion-action="inspire">喂颗灵感豆</button>
-                        </div>
-                        <details class="sage-companion-settings">
-                            <summary>个性设置</summary>
+                        <div id="sage-companion-panel-customize" class="sage-companion-tab-panel"
+                            role="tabpanel" aria-labelledby="sage-companion-tab-customize"
+                            data-companion-panel="customize" hidden>
                             <div class="sage-companion-settings-body">
+                                <div class="sage-companion-customize-intro">
+                                    <strong>打造你的学习搭子</strong>
+                                    <span>这些选择只会留在当前浏览器。</span>
+                                </div>
                                 <label class="sage-companion-field" for="sage-companion-name-input">
                                     <span>名字</span>
                                     <span class="sage-companion-name-row">
@@ -370,8 +393,12 @@
                                 <button type="button" class="sage-companion-hide-button"
                                     data-companion-action="hide">隐藏伙伴</button>
                             </div>
-                        </details>
-                        <p class="sage-companion-privacy">名字、外观与互动进度仅保存在当前浏览器，不会发送到服务器。</p>
+                            <p class="sage-companion-privacy">名字、外观与互动进度仅保存在当前浏览器，不会发送到服务器。</p>
+                        </div>
+                        </div>
+                        <div id="sage-companion-scroll-cue" class="sage-companion-scroll-cue" aria-hidden="true" hidden>
+                            <span>向下查看更多</span><i></i>
+                        </div>
                     </section>
                 </aside>
 

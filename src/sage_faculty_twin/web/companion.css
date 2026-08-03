@@ -9,6 +9,7 @@
     --companion-face-start: #eef2ff;
     --companion-face-end: #c7d2fe;
     --companion-ear: #dbe4ff;
+    --sage-companion-panel-width: min(346px, calc(100vw - 24px));
     position: absolute;
     right: clamp(14px, 2vw, 28px);
     bottom: var(--sage-companion-bottom-offset, 148px);
@@ -67,11 +68,12 @@ body.onboarding-active .sage-companion,
 .sage-companion-toggle:focus-visible,
 .sage-companion-panel button:focus-visible,
 .sage-companion-panel input:focus-visible,
-.sage-companion-panel select:focus-visible,
-.sage-companion-panel summary:focus-visible {
+.sage-companion-panel select:focus-visible {
     outline: 3px solid color-mix(in srgb, var(--companion-accent) 28%, transparent);
     outline-offset: 3px;
 }
+
+.sage-companion-toggle:active { transform: translateY(0) scale(0.94); }
 
 .sage-companion-character {
     position: relative;
@@ -137,6 +139,7 @@ body.onboarding-active .sage-companion,
     .sage-companion-accessory-scarf,
 .sage-companion[data-stage="confidant"] .sage-companion-accessory-crown {
     display: block;
+    animation: sage-companion-accessory-arrive 520ms cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
 }
 
 .sage-companion[data-temperament="lively"] .sage-companion-character {
@@ -283,6 +286,8 @@ body.onboarding-active .sage-companion,
 
 .sage-companion[data-state="happy"] .sage-companion-state-dot { background: #f59e0b; }
 .sage-companion[data-state="happy"] .sage-companion-mouth { width: 12px; height: 7px; }
+.sage-companion[data-state="happy"] .sage-companion-ear-left { animation: sage-companion-ear-left 520ms ease both; }
+.sage-companion[data-state="happy"] .sage-companion-ear-right { animation: sage-companion-ear-right 520ms ease both; }
 .sage-companion[data-state="worried"] .sage-companion-state-dot { background: #ef4444; }
 
 .sage-companion[data-state="worried"] .sage-companion-mouth {
@@ -296,20 +301,27 @@ body.onboarding-active .sage-companion,
     position: absolute;
     right: 0;
     bottom: calc(100% + 12px);
-    width: min(330px, calc(100vw - 32px));
+    width: var(--sage-companion-panel-width);
     max-height: var(--sage-companion-panel-max-height, min(560px, calc(100dvh - 32px)));
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
     padding: 16px;
-    border: 1px solid color-mix(in srgb, var(--companion-accent) 16%, transparent);
-    border-radius: 20px;
-    background: rgba(255, 255, 255, 0.98);
-    box-shadow: 0 22px 48px rgba(30, 41, 59, 0.18);
+    border: 1px solid color-mix(in srgb, var(--companion-accent) 17%, transparent);
+    border-radius: 24px;
+    background:
+        radial-gradient(circle at 88% 3%, color-mix(in srgb, var(--companion-face-end) 42%, transparent), transparent 30%),
+        rgba(255, 255, 255, 0.985);
+    box-shadow: 0 24px 58px rgba(30, 41, 59, 0.2), 0 4px 14px rgba(30, 41, 59, 0.06);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    scrollbar-width: thin;
 }
 
 .sage-companion-panel[hidden] { display: none; }
+.sage-companion-panel.is-opening {
+    animation: sage-companion-panel-enter 320ms cubic-bezier(0.2, 0.85, 0.25, 1) both;
+    transform-origin: right bottom;
+}
 
 .sage-companion-panel-head,
 .sage-companion-bond-copy,
@@ -324,6 +336,12 @@ body.onboarding-active .sage-companion,
     gap: 14px;
 }
 
+.sage-companion-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .sage-companion-kicker {
     margin: 0 0 2px;
     color: var(--companion-accent);
@@ -334,7 +352,20 @@ body.onboarding-active .sage-companion,
     text-transform: uppercase;
 }
 
-.sage-companion-panel h2 { margin: 0; font-size: 1rem; }
+.sage-companion-panel h2 { margin: 0; font-size: 1.04rem; letter-spacing: -0.01em; }
+
+.sage-companion-stage-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 22px;
+    padding: 2px 8px;
+    border: 1px solid color-mix(in srgb, var(--companion-accent) 16%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--companion-face-start) 72%, white);
+    color: var(--companion-accent-strong);
+    font-size: 0.64rem;
+    font-weight: 700;
+}
 
 .sage-companion-close {
     display: grid;
@@ -344,19 +375,102 @@ body.onboarding-active .sage-companion,
     padding: 0;
     border: 0;
     border-radius: 10px;
-    background: var(--surface-soft);
+    border: 1px solid rgba(100, 116, 139, 0.1);
+    background: rgba(248, 250, 252, 0.86);
     color: var(--muted);
     font: inherit;
     font-size: 1.25rem;
     cursor: pointer;
+    transition: background 160ms ease, color 160ms ease, transform 160ms ease;
+}
+
+.sage-companion-close:hover { background: #fff; color: var(--ink); transform: rotate(4deg); }
+
+.sage-companion-tabs {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+    margin-top: 14px;
+    padding: 4px;
+    border: 1px solid rgba(100, 116, 139, 0.1);
+    border-radius: 14px;
+    background: rgba(241, 245, 249, 0.76);
+}
+
+.sage-companion-tabs button {
+    position: relative;
+    z-index: 2;
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.76rem;
+    font-weight: 650;
+    cursor: pointer;
+    transition: color 180ms ease, transform 120ms ease;
+}
+
+.sage-companion-tabs button[aria-selected="true"] { color: var(--companion-accent-strong); }
+.sage-companion-tabs button:active { transform: scale(0.96); }
+
+.sage-companion-tab-indicator {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    left: 4px;
+    width: calc(50% - 6px);
+    border: 1px solid color-mix(in srgb, var(--companion-accent) 12%, transparent);
+    border-radius: 10px;
+    background: #fff;
+    box-shadow: 0 3px 10px rgba(30, 41, 59, 0.08);
+    transition: transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.sage-companion[data-active-tab="customize"] .sage-companion-tab-indicator { transform: translateX(calc(100% + 4px)); }
+
+.sage-companion-tab-panel[hidden] { display: none; }
+.sage-companion-tab-panel.is-entering { animation: sage-companion-tab-enter 220ms ease both; }
+
+.sage-companion-scroll-area {
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
 }
 
 .sage-companion-message {
-    min-height: 42px;
-    margin: 13px 0 14px;
-    color: rgba(32, 33, 35, 0.74);
+    position: relative;
+    min-height: 48px;
+    margin: 12px 0;
+    padding: 11px 12px 11px 14px;
+    border: 1px solid color-mix(in srgb, var(--companion-accent) 11%, transparent);
+    border-radius: 13px;
+    background: color-mix(in srgb, var(--companion-face-start) 48%, white);
+    color: rgba(32, 33, 35, 0.76);
     font-size: 0.86rem;
     line-height: 1.55;
+}
+
+.sage-companion-message::before {
+    position: absolute;
+    top: 12px;
+    bottom: 12px;
+    left: 0;
+    width: 3px;
+    border-radius: 0 99px 99px 0;
+    background: linear-gradient(var(--companion-accent), #ec4899);
+    content: "";
+}
+
+.sage-companion-bond {
+    padding: 10px 11px;
+    border: 1px solid rgba(100, 116, 139, 0.1);
+    border-radius: 13px;
+    background: rgba(255, 255, 255, 0.66);
 }
 
 .sage-companion-bond-copy {
@@ -381,7 +495,25 @@ body.onboarding-active .sage-companion,
     height: 100%;
     border-radius: inherit;
     background: linear-gradient(90deg, var(--companion-accent), #ec4899);
-    transition: width 300ms ease;
+    position: relative;
+    transition: width 420ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.sage-companion-bond-track span::after {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.68), transparent);
+    content: "";
+    opacity: 0;
+    transform: translateX(-100%);
+}
+
+.sage-companion-panel.is-bond-updating .sage-companion-bond-track span::after {
+    animation: sage-companion-bond-shine 580ms ease-out both;
+}
+
+.sage-companion-panel.is-bond-updating .sage-companion-bond-copy > strong {
+    animation: sage-companion-number-pop 480ms cubic-bezier(0.2, 0.9, 0.3, 1.3) both;
 }
 
 .sage-companion-stage-hint {
@@ -404,8 +536,11 @@ body.onboarding-active .sage-companion,
     padding: 9px 10px;
     border: 1px solid color-mix(in srgb, var(--companion-accent) 13%, transparent);
     border-radius: 12px;
-    background: color-mix(in srgb, var(--companion-face-start) 55%, white);
+    background: linear-gradient(145deg, color-mix(in srgb, var(--companion-face-start) 64%, white), #fff);
+    transition: border-color 160ms ease, transform 160ms ease;
 }
+
+.sage-companion-footprint > div:hover { border-color: color-mix(in srgb, var(--companion-accent) 26%, transparent); transform: translateY(-1px); }
 
 .sage-companion-footprint strong {
     color: var(--companion-accent-strong);
@@ -422,7 +557,9 @@ body.onboarding-active .sage-companion,
     padding: 11px;
     border: 1px dashed color-mix(in srgb, var(--companion-accent) 28%, transparent);
     border-radius: 14px;
-    background: linear-gradient(145deg, color-mix(in srgb, var(--companion-face-start) 65%, white), #fff);
+    background:
+        radial-gradient(circle at 100% 0, color-mix(in srgb, var(--companion-face-end) 45%, transparent), transparent 42%),
+        linear-gradient(145deg, color-mix(in srgb, var(--companion-face-start) 65%, white), #fff);
 }
 
 .sage-companion-quest-head,
@@ -466,7 +603,11 @@ body.onboarding-active .sage-companion,
     font-size: 0.7rem;
     font-weight: 600;
     cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease, transform 120ms ease;
 }
+
+.sage-companion-quest-actions button:hover { border-color: color-mix(in srgb, var(--companion-accent) 35%, transparent); background: color-mix(in srgb, var(--companion-face-start) 52%, white); }
+.sage-companion-quest-actions button:active { transform: scale(0.96); }
 
 .sage-companion-quest-actions button:disabled {
     cursor: default;
@@ -488,29 +629,37 @@ body.onboarding-active .sage-companion,
     font-weight: 600;
     cursor: pointer;
     touch-action: manipulation;
+    transition: filter 160ms ease, transform 120ms ease, box-shadow 160ms ease;
 }
 
 .sage-companion-actions button { flex: 1 1 0; }
+.sage-companion-actions button span { display: inline-block; margin-right: 5px; color: var(--companion-accent); }
 .sage-companion-actions button:hover,
-.sage-companion-name-row button:hover { filter: saturate(1.2) brightness(0.98); }
-
-.sage-companion-settings {
-    margin-top: 13px;
-    border-top: 1px solid rgba(100, 116, 139, 0.14);
-}
-
-.sage-companion-settings summary {
-    padding: 12px 2px 2px;
-    color: var(--companion-accent-strong);
-    font-size: 0.76rem;
-    font-weight: 600;
-    cursor: pointer;
-}
+.sage-companion-name-row button:hover { filter: saturate(1.2) brightness(0.98); box-shadow: 0 6px 14px color-mix(in srgb, var(--companion-accent) 12%, transparent); transform: translateY(-1px); }
+.sage-companion-actions button:active,
+.sage-companion-name-row button:active { transform: scale(0.96); }
 
 .sage-companion-settings-body {
     display: grid;
     gap: 11px;
     padding-top: 12px;
+}
+
+.sage-companion-customize-intro {
+    display: grid;
+    gap: 3px;
+    padding: 11px 12px;
+    border: 1px solid color-mix(in srgb, var(--companion-accent) 12%, transparent);
+    border-radius: 13px;
+    background: color-mix(in srgb, var(--companion-face-start) 52%, white);
+    color: var(--companion-accent-strong);
+    font-size: 0.78rem;
+}
+
+.sage-companion-customize-intro span {
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 400;
 }
 
 .sage-companion-field {
@@ -557,11 +706,42 @@ body.onboarding-active .sage-companion,
     justify-content: center;
     gap: 4px;
     min-height: 36px;
+    padding: 6px;
     border: 1px solid rgba(100, 116, 139, 0.16);
     border-radius: 10px;
     background: var(--surface-soft);
     cursor: pointer;
+    font-size: 0.7rem;
+    transition: border-color 160ms ease, background 160ms ease, transform 120ms ease;
 }
+
+.sage-companion-appearance-options input {
+    appearance: none;
+    flex: 0 0 16px;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 0 1px rgba(100, 116, 139, 0.32);
+    cursor: pointer;
+}
+
+.sage-companion-appearance-options input[value="aurora"] { background: linear-gradient(135deg, #818cf8, #6366f1); }
+.sage-companion-appearance-options input[value="mint"] { background: linear-gradient(135deg, #5eead4, #0d9488); }
+.sage-companion-appearance-options input[value="sunset"] { background: linear-gradient(135deg, #fdba74, #ea580c); }
+.sage-companion-appearance-options input:checked {
+    box-shadow: 0 0 0 2px var(--companion-accent), 0 0 0 4px #fff;
+}
+
+.sage-companion-appearance-options label:has(input:checked) {
+    border-color: color-mix(in srgb, var(--companion-accent) 38%, transparent);
+    background: color-mix(in srgb, var(--companion-face-start) 68%, white);
+    color: var(--companion-accent-strong);
+    font-weight: 650;
+}
+
+.sage-companion-appearance-options label:active { transform: scale(0.96); }
 
 .sage-companion-appearance-options input,
 .sage-companion-switch input { accent-color: var(--companion-accent); }
@@ -584,13 +764,47 @@ body.onboarding-active .sage-companion,
     font: inherit;
     font-size: 0.72rem;
     cursor: pointer;
+    transition: border-color 160ms ease, color 160ms ease, background 160ms ease;
 }
+
+.sage-companion-hide-button:hover { border-color: rgba(239, 68, 68, 0.24); background: rgba(254, 242, 242, 0.7); color: #b91c1c; }
 
 .sage-companion-privacy {
     margin: 12px 0 0;
     color: rgba(32, 33, 35, 0.42);
     font-size: 0.68rem;
     line-height: 1.45;
+}
+
+.sage-companion-scroll-cue {
+    z-index: 3;
+    flex: 0 0 auto;
+    align-self: center;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 24px;
+    padding: 4px 9px;
+    border: 1px solid rgba(100, 116, 139, 0.12);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: 0 4px 12px rgba(30, 41, 59, 0.1);
+    color: var(--muted);
+    font-size: 0.62rem;
+    margin-top: 8px;
+    white-space: nowrap;
+    pointer-events: none;
+    animation: sage-companion-cue-enter 200ms ease both;
+}
+
+.sage-companion-scroll-cue[hidden] { display: none; }
+.sage-companion-scroll-cue i {
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-1px) rotate(45deg);
+    animation: sage-companion-cue-bob 1.2s ease-in-out infinite;
 }
 
 @keyframes sage-companion-float {
@@ -612,6 +826,52 @@ body.onboarding-active .sage-companion,
     0%, 100% { transform: translateY(0) scale(1); }
     38% { transform: translateY(-9px) scale(1.06); }
     68% { transform: translateY(1px) scale(0.98); }
+}
+
+@keyframes sage-companion-panel-enter {
+    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes sage-companion-tab-enter {
+    from { opacity: 0; transform: translateY(5px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes sage-companion-bond-shine {
+    0% { opacity: 0; transform: translateX(-100%); }
+    34% { opacity: 1; }
+    100% { opacity: 0; transform: translateX(130%); }
+}
+
+@keyframes sage-companion-number-pop {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.16); }
+}
+
+@keyframes sage-companion-accessory-arrive {
+    from { opacity: 0; transform: translateY(-4px) scale(0.4) rotate(-12deg); }
+    to { opacity: 1; }
+}
+
+@keyframes sage-companion-ear-left {
+    0%, 100% { transform: rotate(45deg); }
+    45% { transform: rotate(30deg) translate(-1px, -1px); }
+}
+
+@keyframes sage-companion-ear-right {
+    0%, 100% { transform: rotate(45deg); }
+    45% { transform: rotate(60deg) translate(-1px, -1px); }
+}
+
+@keyframes sage-companion-cue-enter {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes sage-companion-cue-bob {
+    0%, 100% { transform: translateY(-2px) rotate(45deg); }
+    50% { transform: translateY(2px) rotate(45deg); }
 }
 
 @keyframes sage-companion-pulse {
@@ -643,7 +903,7 @@ body.onboarding-active .sage-companion,
     .sage-companion { position: fixed; right: 12px; }
     .sage-companion-toggle { width: 56px; height: 56px; border-radius: 20px; }
     .sage-companion-character { transform: scale(0.9); }
-    .sage-companion-panel { right: 0; width: min(316px, calc(100vw - 24px)); }
+    .sage-companion-panel { right: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -652,7 +912,14 @@ body.onboarding-active .sage-companion,
     .sage-companion-eye,
     .sage-companion-state-dot,
     .sage-companion-sparkles i,
-    .sage-companion-bond-track span {
+    .sage-companion-bond-track span,
+    .sage-companion-panel,
+    .sage-companion-tab-panel,
+    .sage-companion-tab-indicator,
+    .sage-companion-accessory,
+    .sage-companion-scroll-cue,
+    .sage-companion-scroll-cue i,
+    .sage-companion-ear {
         animation: none !important;
         transition: none !important;
     }

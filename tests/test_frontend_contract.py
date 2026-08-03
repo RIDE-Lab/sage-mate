@@ -152,6 +152,10 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'id="sage-companion-quest-text"' in html
     assert 'data-companion-action="complete-quest"' in html
     assert "sage-companion-accessory-crown" in html
+    assert 'role="tablist"' in html
+    assert 'data-companion-tab="companion"' in html
+    assert 'data-companion-tab="customize"' in html
+    assert 'id="sage-companion-scroll-cue"' in html
 
     assert '<script src="./companion.js" defer></script>' in html
     assert '<link rel="stylesheet" href="./companion.css" />' in html
@@ -176,7 +180,11 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert ".chat-shell.view-active .sage-companion" in companion_css
     assert '@media (prefers-reduced-motion: reduce)' in companion_css
     assert '.sage-companion[data-appearance="mint"]' in companion_css
-    assert ".sage-companion-settings" in companion_css
+    assert ".sage-companion-tabs" in companion_css
+    assert "handleTabKeydown(event)" in companion_js
+    assert "prefers-reduced-motion: reduce" in companion_css
+    assert "sage-companion-panel-enter" in companion_css
+    assert "sage-companion-bond-shine" in companion_css
     assert '.sage-companion[data-stage="confidant"]' in companion_css
     assert "@keyframes sage-companion-spark" in companion_css
     assert ".sage-companion-footprint" in companion_css

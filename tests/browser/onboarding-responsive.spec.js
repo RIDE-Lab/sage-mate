@@ -96,6 +96,28 @@ test.afterAll(async () => {
 async function openOnboarding(page, viewport) {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   await page.route("https://fonts.**", (route) => route.abort());
+  await page.route("**/chat/workflow-events**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream; charset=utf-8",
+    headers: { "cache-control": "no-store" },
+    body: [
+      `data: ${JSON.stringify({ type: "answer_done", response: { answer: "这是测试回答。" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "complete" })}\n\n`,
+    ].join(""),
+  }));
+  await page.route("**/chat?**", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json; charset=utf-8",
+    headers: { "cache-control": "no-store" },
+    body: JSON.stringify({
+      answer: "这是测试回答。",
+      conversation_id: "fixture-conversation",
+      workflow_trace: [],
+      answer_basis: [],
+      follow_up_actions: [],
+      knowledge_hits: [],
+    }),
+  }));
   await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
   await page.evaluate(() => localStorage.clear());
   await page.reload({ waitUntil: "domcontentloaded" });
@@ -167,14 +189,21 @@ for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
     expect(panelBox.y).toBeGreaterThanOrEqual(0);
     expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
 
-    await page.locator(".sage-companion-settings summary").click();
+    if (viewport.width === 320) {
+      await expect(page.locator("#sage-companion-scroll-cue")).toBeVisible();
+      await page.locator("#sage-companion-scroll-area").evaluate((element) => element.scrollTo(0, element.scrollHeight));
+      await expect(page.locator("#sage-companion-scroll-cue")).toBeHidden();
+    }
+
+    await page.getByRole("tab", { name: "装扮" }).click();
+    await expect(page.locator("#sage-companion-panel-customize")).toBeVisible();
     const settingsPanelBox = await page.locator("#sage-companion-panel").boundingBox();
     expect(settingsPanelBox).not.toBeNull();
     expect(settingsPanelBox.x).toBeGreaterThanOrEqual(0);
     expect(settingsPanelBox.x + settingsPanelBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
     expect(settingsPanelBox.y).toBeGreaterThanOrEqual(0);
     expect(settingsPanelBox.y + settingsPanelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
-    await page.locator(".sage-companion-settings summary").click();
+    await page.getByRole("tab", { name: "陪伴" }).click();
 
     await page.getByRole("button", { name: "摸摸它" }).click();
     await expect(companion).toHaveAttribute("data-state", "happy");
@@ -201,7 +230,7 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await expect(page.locator("#sage-companion-stage")).toHaveText("熟悉伙伴");
   await expect(page.locator(".sage-companion-accessory-star")).toBeVisible();
   await toggle.click();
-  await page.locator(".sage-companion-settings summary").click();
+  await page.getByRole("tab", { name: "装扮" }).click();
   await page.locator("#sage-companion-name-input").fill("小火花");
   await page.getByRole("button", { name: "保存" }).click();
   await page.getByLabel("薄荷").check();
@@ -211,6 +240,7 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await expect(companion).toHaveAttribute("data-temperament", "lively");
   await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
 
+  await page.getByRole("tab", { name: "陪伴" }).click();
   await page.getByRole("button", { name: "喂颗灵感豆" }).click();
   await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
   await expect(page.locator("#sage-companion-stage")).toHaveText("默契搭档");
@@ -230,7 +260,7 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
   await expect(page.locator("#sage-companion-bond-value")).toHaveText("70%");
   await toggle.click();
-  await page.locator(".sage-companion-settings summary").click();
+  await page.getByRole("tab", { name: "装扮" }).click();
   await page.getByRole("button", { name: "隐藏伙伴" }).click();
   await expect(companion).toBeHidden();
 
@@ -238,7 +268,8 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await page.getByRole("button", { name: "恢复电子伙伴小火花" }).click();
   await expect(companion).toBeVisible();
   await expect(page.locator("#sage-companion-panel")).toBeVisible();
-  await expect.poll(() => page.locator("#sage-companion-panel").evaluate((element) => element.scrollTop)).toBe(0);
+  await expect(page.getByRole("tab", { name: "装扮" })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => page.locator("#sage-companion-scroll-area").evaluate((element) => element.scrollTop)).toBe(0);
 
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
   expect(stored).toMatchObject({
@@ -284,4 +315,30 @@ test("Sage companion records one learning footprint per completed request", asyn
   });
   expect(stored).not.toHaveProperty("question");
   expect(stored).not.toHaveProperty("answer");
+});
+
+test("Sage companion tabs support keyboard navigation and reduced motion", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.locator("#sage-companion-toggle").click();
+
+  const companionTab = page.getByRole("tab", { name: "陪伴" });
+  const customizeTab = page.getByRole("tab", { name: "装扮" });
+  await expect(companionTab).toHaveAttribute("aria-selected", "true");
+  await companionTab.press("End");
+  await expect(customizeTab).toBeFocused();
+  await expect(customizeTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#sage-companion-panel-customize")).toBeVisible();
+  await customizeTab.press("Home");
+  await expect(companionTab).toBeFocused();
+  await expect(page.locator("#sage-companion-panel-companion")).toBeVisible();
+
+  const reducedMotion = await page.locator("#sage-companion-panel").evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    indicatorTransition: getComputedStyle(element.querySelector(".sage-companion-tab-indicator")).transitionDuration,
+  }));
+  expect(reducedMotion.animationName).toBe("none");
+  expect(reducedMotion.indicatorTransition).toBe("0s");
 });

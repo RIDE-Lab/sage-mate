@@ -66,6 +66,7 @@
             this.nameLabel = document.getElementById("sage-companion-name");
             this.nameInput = document.getElementById("sage-companion-name-input");
             this.stageLabel = document.getElementById("sage-companion-stage");
+            this.stageChip = document.getElementById("sage-companion-stage-chip");
             this.stageHint = document.getElementById("sage-companion-stage-hint");
             this.bondValue = document.getElementById("sage-companion-bond-value");
             this.bondBar = document.getElementById("sage-companion-bond-bar");
@@ -77,6 +78,10 @@
             this.temperamentSelect = document.getElementById("sage-companion-temperament");
             this.soundToggle = document.getElementById("sage-companion-sound");
             this.settingsTrigger = document.getElementById("open-companion-settings");
+            this.tabs = Array.from(this.panel?.querySelectorAll("[data-companion-tab]") || []);
+            this.tabPanels = Array.from(this.panel?.querySelectorAll("[data-companion-panel]") || []);
+            this.scrollArea = document.getElementById("sage-companion-scroll-area");
+            this.scrollCue = document.getElementById("sage-companion-scroll-cue");
             this.chatForm = chatForm;
             this.chatShell = chatShell;
             this.chatQuestion = chatQuestion;
@@ -85,6 +90,11 @@
             this.completionRecordedForActiveRequest = false;
             this.resetTimer = null;
             this.celebrationTimer = null;
+            this.panelAnimationTimer = null;
+            this.tabAnimationTimer = null;
+            this.bondAnimationTimer = null;
+            this.lastRenderedBond = null;
+            this.activeTab = "companion";
             this.resizeObserver = null;
             this.classObserver = null;
             this.initialized = false;
@@ -214,6 +224,9 @@
             if (this.stageLabel) {
                 this.stageLabel.textContent = stage.name;
             }
+            if (this.stageChip) {
+                this.stageChip.textContent = stage.name;
+            }
             if (this.root) {
                 this.root.dataset.stage = stage.key;
             }
@@ -222,6 +235,19 @@
                     ? `再积累 ${nextStage.minimum - this.profile.bond}% 默契，就会成为${nextStage.name}。`
                     : "默契已经满格，继续一起探索吧。";
             }
+            if (this.lastRenderedBond !== null && this.lastRenderedBond !== this.profile.bond) {
+                if (this.bondAnimationTimer) {
+                    globalThis.clearTimeout(this.bondAnimationTimer);
+                }
+                this.panel?.classList.remove("is-bond-updating");
+                void this.panel?.offsetWidth;
+                this.panel?.classList.add("is-bond-updating");
+                this.bondAnimationTimer = globalThis.setTimeout(() => {
+                    this.panel?.classList.remove("is-bond-updating");
+                    this.bondAnimationTimer = null;
+                }, 620);
+            }
+            this.lastRenderedBond = this.profile.bond;
         }
 
         renderFootprint() {
@@ -421,7 +447,76 @@
             }
         }
 
-        setPanelOpen(open, { returnFocus = true } = {}) {
+        selectTab(tabName, { focus = false, animate = true } = {}) {
+            const requestedTab = String(tabName || "companion");
+            const selectedTab = this.tabs.find((tab) => tab.dataset.companionTab === requestedTab)
+                ? requestedTab
+                : "companion";
+            this.activeTab = selectedTab;
+            this.root.dataset.activeTab = selectedTab;
+            this.tabs.forEach((tab) => {
+                const selected = tab.dataset.companionTab === selectedTab;
+                tab.setAttribute("aria-selected", String(selected));
+                tab.tabIndex = selected ? 0 : -1;
+                if (selected && focus) {
+                    tab.focus();
+                }
+            });
+            this.tabPanels.forEach((tabPanel) => {
+                const selected = tabPanel.dataset.companionPanel === selectedTab;
+                tabPanel.hidden = !selected;
+                tabPanel.classList.remove("is-entering");
+                if (selected && animate) {
+                    void tabPanel.offsetWidth;
+                    tabPanel.classList.add("is-entering");
+                }
+            });
+            if (this.tabAnimationTimer) {
+                globalThis.clearTimeout(this.tabAnimationTimer);
+            }
+            this.tabAnimationTimer = globalThis.setTimeout(() => {
+                this.tabPanels.forEach((tabPanel) => tabPanel.classList.remove("is-entering"));
+                this.tabAnimationTimer = null;
+            }, 260);
+            if (this.scrollArea) {
+                this.scrollArea.scrollTop = 0;
+            }
+            globalThis.requestAnimationFrame(() => {
+                this.syncPlacement();
+                this.syncScrollCue();
+            });
+        }
+
+        handleTabKeydown(event) {
+            const currentIndex = this.tabs.indexOf(event.currentTarget);
+            if (currentIndex < 0) {
+                return;
+            }
+            let nextIndex = currentIndex;
+            if (event.key === "ArrowRight") {
+                nextIndex = (currentIndex + 1) % this.tabs.length;
+            } else if (event.key === "ArrowLeft") {
+                nextIndex = (currentIndex - 1 + this.tabs.length) % this.tabs.length;
+            } else if (event.key === "Home") {
+                nextIndex = 0;
+            } else if (event.key === "End") {
+                nextIndex = this.tabs.length - 1;
+            } else {
+                return;
+            }
+            event.preventDefault();
+            this.selectTab(this.tabs[nextIndex].dataset.companionTab, { focus: true });
+        }
+
+        syncScrollCue() {
+            if (!this.scrollArea || !this.scrollCue || this.panel.hidden) {
+                return;
+            }
+            const remaining = this.scrollArea.scrollHeight - this.scrollArea.clientHeight - this.scrollArea.scrollTop;
+            this.scrollCue.hidden = !(this.scrollArea.scrollHeight > this.scrollArea.clientHeight + 8 && remaining > 10);
+        }
+
+        setPanelOpen(open, { returnFocus = true, tab = null } = {}) {
             if (!this.panel || !this.toggle || this.profile.hidden) {
                 return;
             }
@@ -430,10 +525,23 @@
             this.toggle.setAttribute("aria-expanded", String(nextOpen));
             this.syncToggleLabel();
             if (nextOpen) {
-                this.panel.scrollTop = 0;
-                this.closeButton?.focus();
-                globalThis.requestAnimationFrame(() => this.syncPlacement());
+                this.panel.classList.remove("is-opening");
+                void this.panel.offsetWidth;
+                this.panel.classList.add("is-opening");
+                if (this.panelAnimationTimer) {
+                    globalThis.clearTimeout(this.panelAnimationTimer);
+                }
+                this.panelAnimationTimer = globalThis.setTimeout(() => {
+                    this.panel?.classList.remove("is-opening");
+                    this.panelAnimationTimer = null;
+                }, 340);
+                this.selectTab(tab || this.activeTab, { focus: true, animate: false });
+                globalThis.requestAnimationFrame(() => {
+                    this.syncPlacement();
+                    this.syncScrollCue();
+                });
             } else if (returnFocus) {
+                this.scrollCue.hidden = true;
                 this.toggle.focus();
             }
         }
@@ -462,12 +570,12 @@
             this.settingsTrigger?.focus();
         }
 
-        restore() {
+        restore(tab = "customize") {
             this.profile.hidden = false;
             this.persist();
             this.renderProfile();
             this.setState("happy", `${this.profile.name}回来啦！我们继续一起探索吧。`, { resetAfterMs: 2200 });
-            this.setPanelOpen(true);
+            this.setPanelOpen(true, { tab });
         }
 
         handleAction(action) {
@@ -537,6 +645,7 @@
             );
             this.root.style.setProperty("--sage-companion-bottom-offset", `${bottomOffset}px`);
             this.root.style.setProperty("--sage-companion-panel-max-height", `${panelMaxHeight}px`);
+            globalThis.requestAnimationFrame(() => this.syncScrollCue());
         }
 
         bindSettings() {
@@ -571,9 +680,6 @@
                     this.saveName();
                 }
             });
-            this.panel?.querySelector(".sage-companion-settings")?.addEventListener("toggle", () => {
-                globalThis.requestAnimationFrame(() => this.syncPlacement());
-            });
         }
 
         init() {
@@ -597,15 +703,20 @@
                 this.classObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
                 this.classObserver.observe(this.chatShell, { attributes: true, attributeFilter: ["class"] });
             }
-            this.toggle.addEventListener("click", () => this.setPanelOpen(this.panel.hidden));
+            this.toggle.addEventListener("click", () => this.setPanelOpen(this.panel.hidden, { tab: "companion" }));
             this.closeButton?.addEventListener("click", () => this.setPanelOpen(false));
             this.settingsTrigger?.addEventListener("click", () => {
                 if (this.profile.hidden) {
-                    this.restore();
+                    this.restore("customize");
                 } else {
-                    this.setPanelOpen(true);
+                    this.setPanelOpen(true, { tab: "customize" });
                 }
             });
+            this.tabs.forEach((tab) => {
+                tab.addEventListener("click", () => this.selectTab(tab.dataset.companionTab));
+                tab.addEventListener("keydown", (event) => this.handleTabKeydown(event));
+            });
+            this.scrollArea?.addEventListener("scroll", () => this.syncScrollCue(), { passive: true });
             this.panel.addEventListener("click", (event) => {
                 const actionButton = event.target.closest("[data-companion-action]");
                 if (actionButton) {
