@@ -66,7 +66,7 @@
             }
             const message = this.message?.textContent?.trim() || IDLE_MESSAGE;
             const action = this.toggle.getAttribute("aria-expanded") === "true" ? "关闭" : "打开";
-            this.toggle.setAttribute("aria-label", `小 Sage，当前状态：${message}。点击${action}伙伴面板`);
+            this.toggle.setAttribute("aria-label", `小 Sage，当前状态：${message} 点击${action}伙伴面板`);
         }
 
         setRequestActive(active) {

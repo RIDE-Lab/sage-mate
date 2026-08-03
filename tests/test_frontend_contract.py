@@ -147,6 +147,8 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'const STORAGE_KEY = "sageMateCompanion:v1";' in companion_js
     assert "localStorage.setItem(STORAGE_KEY" in companion_js
     assert "globalThis.SageCompanion = Object.freeze" in companion_js
+    assert "${message}。点击" not in companion_js
+    assert "${message} 点击${action}伙伴面板" in companion_js
     assert 'sageCompanionController?.setState("thinking"' in js
     assert 'sageCompanionController?.setState("happy"' in js
     assert 'sageCompanionController?.setState("worried"' in js
