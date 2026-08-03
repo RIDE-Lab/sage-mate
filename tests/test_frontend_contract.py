@@ -147,22 +147,29 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'id="sage-companion-name-input"' in html
     assert 'id="sage-companion-temperament"' in html
     assert 'id="sage-companion-sound"' in html
+    assert 'id="sage-companion-answers"' in html
+    assert 'id="sage-companion-streak"' in html
+    assert 'id="sage-companion-quest-text"' in html
+    assert 'data-companion-action="complete-quest"' in html
+    assert "sage-companion-accessory-crown" in html
 
     assert '<script src="./companion.js" defer></script>' in html
     assert '<link rel="stylesheet" href="./companion.css" />' in html
-    assert 'const STORAGE_KEY = "sageMateCompanion:v2";' in companion_js
-    assert 'const LEGACY_STORAGE_KEY = "sageMateCompanion:v1";' in companion_js
+    assert 'const STORAGE_KEY = "sageMateCompanion:v3";' in companion_js
+    assert 'Object.freeze(["sageMateCompanion:v2", "sageMateCompanion:v1"])' in companion_js
     assert "localStorage.setItem(STORAGE_KEY" in companion_js
     assert "globalThis.SageCompanion = Object.freeze" in companion_js
     assert "${message}。点击" not in companion_js
     assert "${message} 点击${action}伙伴面板" in companion_js
     assert 'sageCompanionController?.setState("thinking"' in js
-    assert 'sageCompanionController?.setState("happy"' in js
+    assert js.count("sageCompanionController?.recordAnswerCompleted();") == 2
     assert 'sageCompanionController?.setState("worried"' in js
     persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("idleMessage() {")]
     assert "question:" not in persist_block
     assert "fetch(" not in companion_js
     assert "XMLHttpRequest" not in companion_js
+    assert "question:" not in companion_js
+    assert "answer:" not in companion_js
 
     assert ".sage-companion-toggle" not in css
     assert "body.onboarding-active .sage-companion" in companion_css
@@ -170,6 +177,10 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert '@media (prefers-reduced-motion: reduce)' in companion_css
     assert '.sage-companion[data-appearance="mint"]' in companion_css
     assert ".sage-companion-settings" in companion_css
+    assert '.sage-companion[data-stage="confidant"]' in companion_css
+    assert "@keyframes sage-companion-spark" in companion_css
+    assert ".sage-companion-footprint" in companion_css
+    assert ".sage-companion-quest" in companion_css
 
 
 def test_local_code_setup_does_not_block_or_auto_open_profile_modal() -> None:

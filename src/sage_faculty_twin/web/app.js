@@ -2641,8 +2641,7 @@ chatForm.addEventListener("submit", async (event) => {
                 persistActiveConversationSnapshot();
             }
             void syncConversationHistoryFromServer();
-            sageCompanionController?.setRequestActive(false);
-            sageCompanionController?.setState("happy", "回答准备好啦！要不要继续追问一层？", { resetAfterMs: 3600 });
+            sageCompanionController?.recordAnswerCompleted();
             break;
         } catch (error) {
             // Retry on transient failures: gateway timeout (504) or network
@@ -9017,8 +9016,7 @@ function handleWorkflowStreamEvent(payload) {
             updateTokenUsageBadge(response.token_usage || null);
             persistActiveConversationSnapshot();
         }
-        sageCompanionController?.setRequestActive(false);
-        sageCompanionController?.setState("happy", "回答准备好啦！要不要继续追问一层？", { resetAfterMs: 3600 });
+        sageCompanionController?.recordAnswerCompleted();
         streamingAnswerBuffer = "";
         streamingThinkBuffer = "";
         return;

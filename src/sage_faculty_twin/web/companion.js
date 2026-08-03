@@ -1,16 +1,23 @@
 (() => {
     "use strict";
 
-    const STORAGE_KEY = "sageMateCompanion:v2";
-    const LEGACY_STORAGE_KEY = "sageMateCompanion:v1";
+    const STORAGE_KEY = "sageMateCompanion:v3";
+    const LEGACY_STORAGE_KEYS = Object.freeze(["sageMateCompanion:v2", "sageMateCompanion:v1"]);
     const DEFAULT_PROFILE = Object.freeze({
-        version: 2,
+        version: 3,
         name: "小 Sage",
         appearance: "aurora",
         temperament: "calm",
         soundEnabled: false,
         hidden: false,
         bond: 20,
+        answersCompleted: 0,
+        streakDays: 0,
+        lastAnswerDate: "",
+        dailyQuestDate: "",
+        dailyQuestIndex: 0,
+        dailyQuestCompleted: false,
+        interactionCount: 0,
     });
     const VALID_STATES = new Set(["idle", "thinking", "happy", "worried"]);
     const VALID_APPEARANCES = new Set(["aurora", "mint", "sunset"]);
@@ -21,11 +28,33 @@
         lively: "来吧！把最想解决的问题交给我，我们一起出发。",
     });
     const GROWTH_STAGES = Object.freeze([
-        Object.freeze({ minimum: 0, name: "初识" }),
-        Object.freeze({ minimum: 30, name: "熟悉伙伴" }),
-        Object.freeze({ minimum: 60, name: "默契搭档" }),
-        Object.freeze({ minimum: 85, name: "灵感知己" }),
+        Object.freeze({ minimum: 0, key: "newcomer", name: "初识" }),
+        Object.freeze({ minimum: 30, key: "familiar", name: "熟悉伙伴" }),
+        Object.freeze({ minimum: 60, key: "partner", name: "默契搭档" }),
+        Object.freeze({ minimum: 85, key: "confidant", name: "灵感知己" }),
     ]);
+    const DAILY_QUESTS = Object.freeze([
+        "把一个复杂问题改写成一句更清晰的问题。",
+        "追问一次：这个结论的边界条件是什么？",
+        "请伙伴给出一个反例，检查理解是否稳固。",
+        "用三句话总结刚刚学到的内容。",
+        "把今天的问题拆成“已知、未知、下一步”。",
+        "尝试向完全不了解这个主题的人解释一次。",
+    ]);
+    const REACTIONS = Object.freeze({
+        calm: Object.freeze({
+            pet: Object.freeze(["呼噜……收到你的鼓励了。", "这样安静地陪着也很好。", "我会稳稳地陪你想清楚。"]),
+            inspire: Object.freeze(["灵感豆收好啦，我们慢慢把问题拆开。", "补充完能量，下一步从最关键的问题开始。"]),
+        }),
+        curious: Object.freeze({
+            pet: Object.freeze(["嘿，我又想到一个可以追问的角度！", "摸摸收到，要不要一起找个反例？", "好奇心正在升温。"]),
+            inspire: Object.freeze(["灵感豆启动！今天想探索哪个未知？", "能量满格，我想看看问题的另一面。"]),
+        }),
+        lively: Object.freeze({
+            pet: Object.freeze(["击掌！今天也一起向前冲。", "好耶，陪伴能量加满！", "转个圈！下一个问题交给我。"]),
+            inspire: Object.freeze(["灵感豆爆发！马上开启新挑战。", "叮——新的点子已经上线！"]),
+        }),
+    });
 
     class SageCompanionController {
         constructor({ chatForm, chatShell, chatQuestion }) {
@@ -40,6 +69,11 @@
             this.stageHint = document.getElementById("sage-companion-stage-hint");
             this.bondValue = document.getElementById("sage-companion-bond-value");
             this.bondBar = document.getElementById("sage-companion-bond-bar");
+            this.answersValue = document.getElementById("sage-companion-answers");
+            this.streakValue = document.getElementById("sage-companion-streak");
+            this.questText = document.getElementById("sage-companion-quest-text");
+            this.questStatus = document.getElementById("sage-companion-quest-status");
+            this.questCompleteButton = this.panel?.querySelector('[data-companion-action="complete-quest"]');
             this.temperamentSelect = document.getElementById("sage-companion-temperament");
             this.soundToggle = document.getElementById("sage-companion-sound");
             this.settingsTrigger = document.getElementById("open-companion-settings");
@@ -48,7 +82,9 @@
             this.chatQuestion = chatQuestion;
             this.profile = { ...DEFAULT_PROFILE };
             this.requestActive = false;
+            this.completionRecordedForActiveRequest = false;
             this.resetTimer = null;
+            this.celebrationTimer = null;
             this.resizeObserver = null;
             this.classObserver = null;
             this.initialized = false;
@@ -60,6 +96,32 @@
                 return DEFAULT_PROFILE.bond;
             }
             return Math.min(100, Math.max(0, Math.round(parsed)));
+        }
+
+        boundedCount(value, maximum = 9999) {
+            const parsed = Number(value);
+            if (!Number.isFinite(parsed)) {
+                return 0;
+            }
+            return Math.min(maximum, Math.max(0, Math.round(parsed)));
+        }
+
+        normalizeDate(value) {
+            const normalized = String(value || "");
+            return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+        }
+
+        todayKey() {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, "0");
+            const day = String(today.getDate()).padStart(2, "0");
+            return `${year}-${month}-${day}`;
+        }
+
+        initialQuestIndex(dateKey) {
+            const seed = Array.from(dateKey).reduce((total, character) => total + character.charCodeAt(0), 0);
+            return seed % DAILY_QUESTS.length;
         }
 
         sanitizeName(value) {
@@ -83,15 +145,36 @@
                 soundEnabled: stored.soundEnabled === true,
                 hidden: stored.hidden === true,
                 bond: this.clampBond(stored.bond),
+                answersCompleted: this.boundedCount(stored.answersCompleted),
+                streakDays: this.boundedCount(stored.streakDays, 3650),
+                lastAnswerDate: this.normalizeDate(stored.lastAnswerDate),
+                dailyQuestDate: this.normalizeDate(stored.dailyQuestDate),
+                dailyQuestIndex: this.boundedCount(stored.dailyQuestIndex, DAILY_QUESTS.length - 1),
+                dailyQuestCompleted: stored.dailyQuestCompleted === true,
+                interactionCount: this.boundedCount(stored.interactionCount, 999999),
             };
+        }
+
+        ensureDailyQuest() {
+            const today = this.todayKey();
+            if (this.profile.dailyQuestDate === today) {
+                return false;
+            }
+            this.profile.dailyQuestDate = today;
+            this.profile.dailyQuestIndex = this.initialQuestIndex(today);
+            this.profile.dailyQuestCompleted = false;
+            return true;
         }
 
         load() {
             try {
                 const current = localStorage.getItem(STORAGE_KEY);
-                const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+                const legacy = LEGACY_STORAGE_KEYS
+                    .map((key) => localStorage.getItem(key))
+                    .find((value) => Boolean(value));
                 this.profile = this.normalizeProfile(JSON.parse(current || legacy || "{}"));
-                if (!current && legacy) {
+                const questChanged = this.ensureDailyQuest();
+                if (!current || questChanged) {
                     this.persist();
                 }
             } catch {
@@ -131,10 +214,38 @@
             if (this.stageLabel) {
                 this.stageLabel.textContent = stage.name;
             }
+            if (this.root) {
+                this.root.dataset.stage = stage.key;
+            }
             if (this.stageHint) {
                 this.stageHint.textContent = nextStage
                     ? `再积累 ${nextStage.minimum - this.profile.bond}% 默契，就会成为${nextStage.name}。`
                     : "默契已经满格，继续一起探索吧。";
+            }
+        }
+
+        renderFootprint() {
+            if (this.answersValue) {
+                this.answersValue.textContent = String(this.profile.answersCompleted);
+            }
+            if (this.streakValue) {
+                this.streakValue.textContent = `${this.profile.streakDays} 天`;
+            }
+        }
+
+        renderQuest() {
+            if (this.ensureDailyQuest()) {
+                this.persist();
+            }
+            if (this.questText) {
+                this.questText.textContent = DAILY_QUESTS[this.profile.dailyQuestIndex];
+            }
+            if (this.questStatus) {
+                this.questStatus.textContent = this.profile.dailyQuestCompleted ? "今日完成" : "待完成";
+            }
+            if (this.questCompleteButton) {
+                this.questCompleteButton.disabled = this.profile.dailyQuestCompleted;
+                this.questCompleteButton.textContent = this.profile.dailyQuestCompleted ? "已完成" : "完成啦";
             }
         }
 
@@ -168,6 +279,8 @@
                 this.settingsTrigger.title = this.profile.hidden ? "恢复电子伙伴" : "电子伙伴";
             }
             this.renderBond();
+            this.renderFootprint();
+            this.renderQuest();
             this.syncToggleLabel();
         }
 
@@ -211,8 +324,72 @@
             }
         }
 
+        celebrate() {
+            if (!this.root) {
+                return;
+            }
+            if (this.celebrationTimer) {
+                globalThis.clearTimeout(this.celebrationTimer);
+            }
+            this.root.classList.remove("is-celebrating");
+            void this.root.offsetWidth;
+            this.root.classList.add("is-celebrating");
+            this.celebrationTimer = globalThis.setTimeout(() => {
+                this.root?.classList.remove("is-celebrating");
+                this.celebrationTimer = null;
+            }, 900);
+        }
+
+        nextReaction(action) {
+            const temperament = REACTIONS[this.profile.temperament] || REACTIONS.calm;
+            const choices = temperament[action] || temperament.pet;
+            const message = choices[this.profile.interactionCount % choices.length];
+            this.profile.interactionCount = this.boundedCount(this.profile.interactionCount + 1, 999999);
+            return message;
+        }
+
+        updateLearningStreak(today) {
+            if (this.profile.lastAnswerDate === today) {
+                return;
+            }
+            const previous = this.profile.lastAnswerDate
+                ? Date.parse(`${this.profile.lastAnswerDate}T00:00:00Z`)
+                : Number.NaN;
+            const current = Date.parse(`${today}T00:00:00Z`);
+            this.profile.streakDays = Number.isFinite(previous) && current - previous === 86400000
+                ? this.boundedCount(this.profile.streakDays + 1, 3650)
+                : 1;
+            this.profile.lastAnswerDate = today;
+        }
+
+        recordAnswerCompleted() {
+            if (this.completionRecordedForActiveRequest) {
+                this.requestActive = false;
+                return false;
+            }
+            this.completionRecordedForActiveRequest = true;
+            this.requestActive = false;
+            this.ensureDailyQuest();
+            this.updateLearningStreak(this.todayKey());
+            this.profile.answersCompleted = this.boundedCount(this.profile.answersCompleted + 1);
+            const milestone = this.adjustBond(3);
+            this.renderFootprint();
+            this.renderQuest();
+            this.persist();
+            this.celebrate();
+            const message = milestone
+                ? `解锁${milestone.name}装扮！我们已经一起完成 ${this.profile.answersCompleted} 个问题。`
+                : `一起完成第 ${this.profile.answersCompleted} 个问题，连续探索 ${this.profile.streakDays} 天！`;
+            this.setState("happy", message, { resetAfterMs: 4200 });
+            return true;
+        }
+
         setRequestActive(active) {
-            this.requestActive = Boolean(active);
+            const nextActive = Boolean(active);
+            if (nextActive && !this.requestActive) {
+                this.completionRecordedForActiveRequest = false;
+            }
+            this.requestActive = nextActive;
         }
 
         setState(state, message, { resetAfterMs = 0 } = {}) {
@@ -296,12 +473,35 @@
             const normalizedAction = String(action || "");
             let milestone = null;
             if (normalizedAction === "pet") {
+                const reaction = this.nextReaction("pet");
                 milestone = this.adjustBond(4);
-                this.setState("happy", "呼噜呼噜，谢谢你！我会继续认真陪你。", { resetAfterMs: 2200 });
+                this.setState("happy", reaction, { resetAfterMs: 2400 });
+                this.celebrate();
             } else if (normalizedAction === "inspire") {
+                const reaction = this.nextReaction("inspire");
                 milestone = this.adjustBond(7);
-                this.setState("happy", "灵感充满啦！试着把现在最想解决的问题告诉我吧。", { resetAfterMs: 2600 });
+                this.setState("happy", reaction, { resetAfterMs: 2800 });
+                this.celebrate();
                 this.chatQuestion?.focus();
+            } else if (normalizedAction === "reroll-quest") {
+                if (this.profile.dailyQuestCompleted) {
+                    this.setState("idle", "今天的灵感签已经完成啦，明天再来抽一张。", { resetAfterMs: 2200 });
+                    return;
+                }
+                this.profile.dailyQuestIndex = (this.profile.dailyQuestIndex + 1) % DAILY_QUESTS.length;
+                this.persist();
+                this.renderQuest();
+                this.setState("idle", "换好啦，挑一个让你有点好奇的小挑战吧。", { resetAfterMs: 2200 });
+            } else if (normalizedAction === "complete-quest") {
+                if (this.profile.dailyQuestCompleted) {
+                    return;
+                }
+                this.profile.dailyQuestCompleted = true;
+                milestone = this.adjustBond(5);
+                this.renderQuest();
+                this.persist();
+                this.celebrate();
+                this.setState("happy", "今日灵感签完成，奖励 5% 默契！", { resetAfterMs: 3200 });
             } else if (normalizedAction === "save-name") {
                 this.saveName();
             } else if (normalizedAction === "hide") {
@@ -310,9 +510,10 @@
                 return;
             }
             if (milestone) {
+                this.celebrate();
                 this.setState(
                     "happy",
-                    `新的成长阶段：${milestone.name}！我们的默契又向前了一步。`,
+                    `新的成长阶段：${milestone.name}！解锁了一件新装扮。`,
                     { resetAfterMs: 3200 }
                 );
             }

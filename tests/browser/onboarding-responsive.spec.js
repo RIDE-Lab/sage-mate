@@ -44,6 +44,32 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "companion.css", "text/css; charset=utf-8");
     return;
   }
+  if (pathname === "/chat/workflow-events") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.end([
+      `data: ${JSON.stringify({ type: "answer_done", response: { answer: "这是测试回答。" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "complete" })}\n\n`,
+    ].join(""));
+    return;
+  }
+  if (pathname === "/chat" && request.method === "POST") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({
+      answer: "这是测试回答。",
+      conversation_id: "fixture-conversation",
+      workflow_trace: [],
+      answer_basis: [],
+      follow_up_actions: [],
+      knowledge_hits: [],
+    }));
+    return;
+  }
   response.writeHead(200, {
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
@@ -164,8 +190,8 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await openOnboarding(page, viewport);
   await page.getByRole("button", { name: "跳过引导" }).click();
   await page.evaluate(() => {
-    localStorage.removeItem("sageMateCompanion:v2");
-    localStorage.setItem("sageMateCompanion:v1", JSON.stringify({ bond: 58 }));
+    localStorage.removeItem("sageMateCompanion:v3");
+    localStorage.setItem("sageMateCompanion:v2", JSON.stringify({ bond: 58 }));
   });
   await page.reload({ waitUntil: "domcontentloaded" });
 
@@ -173,6 +199,7 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   const toggle = page.locator("#sage-companion-toggle");
   await expect(page.locator("#sage-companion-bond-value")).toHaveText("58%");
   await expect(page.locator("#sage-companion-stage")).toHaveText("熟悉伙伴");
+  await expect(page.locator(".sage-companion-accessory-star")).toBeVisible();
   await toggle.click();
   await page.locator(".sage-companion-settings summary").click();
   await page.locator("#sage-companion-name-input").fill("小火花");
@@ -187,13 +214,21 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await page.getByRole("button", { name: "喂颗灵感豆" }).click();
   await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
   await expect(page.locator("#sage-companion-stage")).toHaveText("默契搭档");
+  await expect(page.locator(".sage-companion-accessory-scarf")).toBeVisible();
   await expect(page.locator("#sage-companion-message")).toContainText("新的成长阶段");
+
+  const firstQuest = await page.locator("#sage-companion-quest-text").textContent();
+  await page.getByRole("button", { name: "换一张" }).click();
+  await expect(page.locator("#sage-companion-quest-text")).not.toHaveText(firstQuest);
+  await page.getByRole("button", { name: "完成啦" }).click();
+  await expect(page.locator("#sage-companion-quest-status")).toHaveText("今日完成");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("70%");
 
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(companion).toHaveAttribute("data-appearance", "mint");
   await expect(companion).toHaveAttribute("data-temperament", "lively");
   await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
-  await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("70%");
   await toggle.click();
   await page.locator(".sage-companion-settings summary").click();
   await page.getByRole("button", { name: "隐藏伙伴" }).click();
@@ -204,15 +239,48 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await expect(companion).toBeVisible();
   await expect(page.locator("#sage-companion-panel")).toBeVisible();
 
-  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v2")));
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
   expect(stored).toMatchObject({
-    version: 2,
+    version: 3,
     name: "小火花",
     appearance: "mint",
     temperament: "lively",
     soundEnabled: true,
     hidden: false,
-    bond: 65,
+    bond: 70,
+    dailyQuestCompleted: true,
   });
   expect(stored).not.toHaveProperty("question");
+});
+
+test("Sage companion records one learning footprint per completed request", async ({ page }) => {
+  const viewport = VIEWPORTS[3];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+
+  await page.locator("#chat-question").fill("用一句话解释测试驱动开发");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await page.locator("#sage-companion-toggle").click();
+  await expect(page.locator("#sage-companion-answers")).toHaveText("1");
+  await expect(page.locator("#sage-companion-streak")).toHaveText("1 天");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("23%");
+  await expect(page.locator("#sage-companion-message")).toContainText("第 1 个问题");
+  await expect(page.getByRole("button", { name: "发送问题" })).toBeEnabled();
+
+  await page.keyboard.press("Escape");
+  await page.locator("#chat-question").fill("再解释一次测试驱动开发");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await page.locator("#sage-companion-toggle").click();
+  await expect(page.locator("#sage-companion-answers")).toHaveText("2");
+  await expect(page.locator("#sage-companion-streak")).toHaveText("1 天");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("26%");
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
+  expect(stored).toMatchObject({
+    answersCompleted: 2,
+    streakDays: 1,
+    bond: 26,
+  });
+  expect(stored).not.toHaveProperty("question");
+  expect(stored).not.toHaveProperty("answer");
 });
