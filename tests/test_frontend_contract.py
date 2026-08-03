@@ -133,6 +133,7 @@ def test_send_button_uses_animation_state() -> None:
 def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    companion_css = (WEB_DIR / "companion.css").read_text(encoding="utf-8")
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     companion_js = (WEB_DIR / "companion.js").read_text(encoding="utf-8")
 
@@ -141,10 +142,16 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'aria-controls="sage-companion-panel"' in html
     assert 'id="sage-companion-message"' in html
     assert 'aria-live="polite"' in html
-    assert "互动进度仅保存在当前浏览器" in html
+    assert "名字、外观与互动进度仅保存在当前浏览器" in html
+    assert 'id="open-companion-settings"' in html
+    assert 'id="sage-companion-name-input"' in html
+    assert 'id="sage-companion-temperament"' in html
+    assert 'id="sage-companion-sound"' in html
 
     assert '<script src="./companion.js" defer></script>' in html
-    assert 'const STORAGE_KEY = "sageMateCompanion:v1";' in companion_js
+    assert '<link rel="stylesheet" href="./companion.css" />' in html
+    assert 'const STORAGE_KEY = "sageMateCompanion:v2";' in companion_js
+    assert 'const LEGACY_STORAGE_KEY = "sageMateCompanion:v1";' in companion_js
     assert "localStorage.setItem(STORAGE_KEY" in companion_js
     assert "globalThis.SageCompanion = Object.freeze" in companion_js
     assert "${message}。点击" not in companion_js
@@ -152,13 +159,17 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'sageCompanionController?.setState("thinking"' in js
     assert 'sageCompanionController?.setState("happy"' in js
     assert 'sageCompanionController?.setState("worried"' in js
-    persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("renderBond() {")]
+    persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("idleMessage() {")]
     assert "question:" not in persist_block
+    assert "fetch(" not in companion_js
+    assert "XMLHttpRequest" not in companion_js
 
-    assert "body.onboarding-active .sage-companion" in css
-    assert ".chat-shell.view-active .sage-companion" in css
-    assert '@media (prefers-reduced-motion: reduce)' in css
-    assert ".sage-companion-character" in css
+    assert ".sage-companion-toggle" not in css
+    assert "body.onboarding-active .sage-companion" in companion_css
+    assert ".chat-shell.view-active .sage-companion" in companion_css
+    assert '@media (prefers-reduced-motion: reduce)' in companion_css
+    assert '.sage-companion[data-appearance="mint"]' in companion_css
+    assert ".sage-companion-settings" in companion_css
 
 
 def test_local_code_setup_does_not_block_or_auto_open_profile_modal() -> None:

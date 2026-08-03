@@ -61,6 +61,12 @@ def test_companion_module_is_served_without_cache() -> None:
     assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
     assert "globalThis.SageCompanion = Object.freeze" in response.text
 
+    stylesheet = client.get("/companion.css")
+    assert stylesheet.status_code == 200
+    assert stylesheet.headers["content-type"].startswith("text/css")
+    assert stylesheet.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert ".sage-companion-settings" in stylesheet.text
+
 
 def test_general_visitor_onboarding_preserves_the_typed_question() -> None:
     response = client.get("/app.js")

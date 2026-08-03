@@ -40,6 +40,10 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "companion.js", "text/javascript; charset=utf-8");
     return;
   }
+  if (pathname === "/companion.css") {
+    sendFile(response, "companion.css", "text/css; charset=utf-8");
+    return;
+  }
   response.writeHead(200, {
     "cache-control": "no-store",
     "content-type": "application/json; charset=utf-8",
@@ -137,6 +141,15 @@ for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
     expect(panelBox.y).toBeGreaterThanOrEqual(0);
     expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
 
+    await page.locator(".sage-companion-settings summary").click();
+    const settingsPanelBox = await page.locator("#sage-companion-panel").boundingBox();
+    expect(settingsPanelBox).not.toBeNull();
+    expect(settingsPanelBox.x).toBeGreaterThanOrEqual(0);
+    expect(settingsPanelBox.x + settingsPanelBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(settingsPanelBox.y).toBeGreaterThanOrEqual(0);
+    expect(settingsPanelBox.y + settingsPanelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+    await page.locator(".sage-companion-settings summary").click();
+
     await page.getByRole("button", { name: "摸摸它" }).click();
     await expect(companion).toHaveAttribute("data-state", "happy");
     await expect(page.locator("#sage-companion-bond-value")).toHaveText("24%");
@@ -145,3 +158,61 @@ for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
   });
 }
+
+test("Sage companion customizes, grows, persists, hides, and restores", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.evaluate(() => {
+    localStorage.removeItem("sageMateCompanion:v2");
+    localStorage.setItem("sageMateCompanion:v1", JSON.stringify({ bond: 58 }));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  const companion = page.locator("#sage-companion");
+  const toggle = page.locator("#sage-companion-toggle");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("58%");
+  await expect(page.locator("#sage-companion-stage")).toHaveText("熟悉伙伴");
+  await toggle.click();
+  await page.locator(".sage-companion-settings summary").click();
+  await page.locator("#sage-companion-name-input").fill("小火花");
+  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByLabel("薄荷").check();
+  await page.locator("#sage-companion-temperament").selectOption("lively");
+  await page.locator("#sage-companion-sound").check();
+  await expect(companion).toHaveAttribute("data-appearance", "mint");
+  await expect(companion).toHaveAttribute("data-temperament", "lively");
+  await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
+
+  await page.getByRole("button", { name: "喂颗灵感豆" }).click();
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
+  await expect(page.locator("#sage-companion-stage")).toHaveText("默契搭档");
+  await expect(page.locator("#sage-companion-message")).toContainText("新的成长阶段");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(companion).toHaveAttribute("data-appearance", "mint");
+  await expect(companion).toHaveAttribute("data-temperament", "lively");
+  await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
+  await toggle.click();
+  await page.locator(".sage-companion-settings summary").click();
+  await page.getByRole("button", { name: "隐藏伙伴" }).click();
+  await expect(companion).toBeHidden();
+
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await page.getByRole("button", { name: "恢复电子伙伴小火花" }).click();
+  await expect(companion).toBeVisible();
+  await expect(page.locator("#sage-companion-panel")).toBeVisible();
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v2")));
+  expect(stored).toMatchObject({
+    version: 2,
+    name: "小火花",
+    appearance: "mint",
+    temperament: "lively",
+    soundEnabled: true,
+    hidden: false,
+    bond: 65,
+  });
+  expect(stored).not.toHaveProperty("question");
+});

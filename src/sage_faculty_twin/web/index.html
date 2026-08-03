@@ -11,6 +11,7 @@
         href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
         rel="stylesheet" media="print" onload="this.media='all'" />
     <link rel="stylesheet" href="./styles.4219.css" />
+    <link rel="stylesheet" href="./companion.css" />
     <style>
         html {
             opacity: 0;
@@ -68,6 +69,16 @@
                         <button type="button" id="open-onboarding-help" class="rail-btn" title="新手引导">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
                             <span class="rail-label">新手引导</span>
+                        </button>
+                        <button type="button" id="open-companion-settings" class="rail-btn" title="电子伙伴"
+                            aria-label="打开电子伙伴">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                <path d="M7 9 5 5l5 2h4l5-2-2 4"/>
+                                <rect x="5" y="8" width="14" height="11" rx="6"/>
+                                <path d="M9 13h.01M15 13h.01M10 16c1.2.8 2.8.8 4 0"/>
+                            </svg>
+                            <span class="rail-label">电子伙伴</span>
                         </button>
                         <button type="button" id="open-status-drawer" class="rail-btn" title="系统状态">
                             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
@@ -278,7 +289,7 @@
                         <div class="sage-companion-panel-head">
                             <div>
                                 <p class="sage-companion-kicker">Sage Companion</p>
-                                <h2>小 Sage</h2>
+                                <h2 id="sage-companion-name">小 Sage</h2>
                             </div>
                             <button type="button" id="sage-companion-close" class="sage-companion-close"
                                 aria-label="关闭电子伙伴面板">×</button>
@@ -288,18 +299,52 @@
                         </p>
                         <div class="sage-companion-bond" aria-label="伙伴默契度">
                             <div class="sage-companion-bond-copy">
-                                <span>默契</span>
+                                <span>默契 · <strong id="sage-companion-stage">初识</strong></span>
                                 <strong id="sage-companion-bond-value">20%</strong>
                             </div>
                             <div class="sage-companion-bond-track" aria-hidden="true">
                                 <span id="sage-companion-bond-bar"></span>
                             </div>
+                            <p id="sage-companion-stage-hint" class="sage-companion-stage-hint">再积累 10% 默契，就会成为熟悉伙伴。</p>
                         </div>
                         <div class="sage-companion-actions" aria-label="伙伴互动">
                             <button type="button" data-companion-action="pet">摸摸它</button>
                             <button type="button" data-companion-action="inspire">喂颗灵感豆</button>
                         </div>
-                        <p class="sage-companion-privacy">互动进度仅保存在当前浏览器，不会发送到服务器。</p>
+                        <details class="sage-companion-settings">
+                            <summary>个性设置</summary>
+                            <div class="sage-companion-settings-body">
+                                <label class="sage-companion-field" for="sage-companion-name-input">
+                                    <span>名字</span>
+                                    <span class="sage-companion-name-row">
+                                        <input id="sage-companion-name-input" type="text" maxlength="12"
+                                            autocomplete="off" value="小 Sage" />
+                                        <button type="button" data-companion-action="save-name">保存</button>
+                                    </span>
+                                </label>
+                                <fieldset class="sage-companion-field sage-companion-appearance-options">
+                                    <legend>外观</legend>
+                                    <label><input type="radio" name="sage_companion_appearance" value="aurora" checked />星云</label>
+                                    <label><input type="radio" name="sage_companion_appearance" value="mint" />薄荷</label>
+                                    <label><input type="radio" name="sage_companion_appearance" value="sunset" />落日</label>
+                                </fieldset>
+                                <label class="sage-companion-field" for="sage-companion-temperament">
+                                    <span>性格</span>
+                                    <select id="sage-companion-temperament">
+                                        <option value="calm">沉稳陪伴</option>
+                                        <option value="curious">好奇探索</option>
+                                        <option value="lively">活泼鼓励</option>
+                                    </select>
+                                </label>
+                                <label class="sage-companion-switch">
+                                    <input id="sage-companion-sound" type="checkbox" />
+                                    <span>互动音效（默认关闭）</span>
+                                </label>
+                                <button type="button" class="sage-companion-hide-button"
+                                    data-companion-action="hide">隐藏伙伴</button>
+                            </div>
+                        </details>
+                        <p class="sage-companion-privacy">名字、外观与互动进度仅保存在当前浏览器，不会发送到服务器。</p>
                     </section>
                 </aside>
 
