@@ -430,6 +430,7 @@
             this.toggle.setAttribute("aria-expanded", String(nextOpen));
             this.syncToggleLabel();
             if (nextOpen) {
+                this.panel.scrollTop = 0;
                 this.closeButton?.focus();
                 globalThis.requestAnimationFrame(() => this.syncPlacement());
             } else if (returnFocus) {

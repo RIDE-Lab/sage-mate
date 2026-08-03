@@ -238,6 +238,7 @@ test("Sage companion customizes, grows, persists, hides, and restores", async ({
   await page.getByRole("button", { name: "恢复电子伙伴小火花" }).click();
   await expect(companion).toBeVisible();
   await expect(page.locator("#sage-companion-panel")).toBeVisible();
+  await expect.poll(() => page.locator("#sage-companion-panel").evaluate((element) => element.scrollTop)).toBe(0);
 
   const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
   expect(stored).toMatchObject({
