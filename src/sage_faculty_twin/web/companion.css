@@ -17,6 +17,22 @@
     display: flex;
     align-items: flex-end;
     justify-content: flex-end;
+    will-change: left, top;
+}
+
+.sage-companion.is-walking {
+    transition:
+        left var(--sage-companion-travel-ms, 3200ms) cubic-bezier(0.42, 0, 0.58, 1),
+        top var(--sage-companion-travel-ms, 3200ms) cubic-bezier(0.42, 0, 0.58, 1);
+}
+
+.sage-companion.is-positioning,
+.sage-companion.is-dragging {
+    transition: none;
+}
+
+.sage-companion.is-dragging {
+    z-index: 60;
 }
 
 .sage-companion[data-appearance="mint"] {
@@ -53,8 +69,10 @@ body.onboarding-active .sage-companion,
     background: linear-gradient(145deg, rgba(255, 255, 255, 0.98), var(--companion-face-start));
     color: var(--ink);
     box-shadow: 0 12px 30px color-mix(in srgb, var(--companion-accent-strong) 16%, transparent);
-    cursor: pointer;
-    touch-action: manipulation;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
     transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
 }
 
@@ -75,12 +93,49 @@ body.onboarding-active .sage-companion,
 
 .sage-companion-toggle:active { transform: translateY(0) scale(0.94); }
 
+.sage-companion.is-dragging .sage-companion-toggle {
+    cursor: grabbing;
+    transform: scale(1.06);
+    border-color: color-mix(in srgb, var(--companion-accent) 46%, transparent);
+    box-shadow:
+        0 20px 44px color-mix(in srgb, var(--companion-accent-strong) 28%, transparent),
+        0 0 0 7px color-mix(in srgb, var(--companion-accent) 10%, transparent);
+}
+
 .sage-companion-character {
     position: relative;
     display: block;
     width: 42px;
     height: 40px;
     animation: sage-companion-float 3.2s ease-in-out infinite;
+}
+
+.sage-companion-character::before,
+.sage-companion-character::after {
+    position: absolute;
+    bottom: -2px;
+    z-index: 1;
+    width: 13px;
+    height: 7px;
+    border-radius: 55% 55% 48% 48%;
+    background: var(--companion-accent-strong);
+    box-shadow: inset 0 2px 2px rgba(255, 255, 255, 0.28);
+    content: "";
+}
+
+.sage-companion-character::before { left: 6px; }
+.sage-companion-character::after { right: 6px; }
+
+.sage-companion.is-walking .sage-companion-character {
+    animation: sage-companion-walk 460ms ease-in-out infinite;
+}
+
+.sage-companion.is-walking .sage-companion-character::before {
+    animation: sage-companion-step-left 460ms ease-in-out infinite;
+}
+
+.sage-companion.is-walking .sage-companion-character::after {
+    animation: sage-companion-step-right 460ms ease-in-out infinite;
 }
 
 .sage-companion-accessory {
@@ -321,6 +376,15 @@ body.onboarding-active .sage-companion,
 .sage-companion-panel.is-opening {
     animation: sage-companion-panel-enter 320ms cubic-bezier(0.2, 0.85, 0.25, 1) both;
     transform-origin: right bottom;
+}
+
+.sage-companion[data-panel-side="below"] .sage-companion-panel {
+    top: calc(100% + 12px);
+    bottom: auto;
+}
+
+.sage-companion[data-panel-side="below"] .sage-companion-panel.is-opening {
+    transform-origin: right top;
 }
 
 .sage-companion-panel-head,
@@ -812,6 +876,21 @@ body.onboarding-active .sage-companion,
     50% { transform: translateY(-3px); }
 }
 
+@keyframes sage-companion-walk {
+    0%, 100% { transform: translateY(0) rotate(-2deg); }
+    50% { transform: translateY(-5px) rotate(2deg); }
+}
+
+@keyframes sage-companion-step-left {
+    0%, 100% { transform: translate(-2px, 1px) rotate(8deg); }
+    50% { transform: translate(3px, -1px) rotate(-8deg); }
+}
+
+@keyframes sage-companion-step-right {
+    0%, 100% { transform: translate(2px, -1px) rotate(-8deg); }
+    50% { transform: translate(-3px, 1px) rotate(8deg); }
+}
+
 @keyframes sage-companion-blink {
     0%, 45%, 50%, 100% { transform: scaleY(1); }
     47.5% { transform: scaleY(0.12); }
@@ -903,10 +982,10 @@ body.onboarding-active .sage-companion,
     .sage-companion { position: fixed; right: 12px; }
     .sage-companion-toggle { width: 56px; height: 56px; border-radius: 20px; }
     .sage-companion-character { transform: scale(0.9); }
-    .sage-companion-panel { right: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+    .sage-companion,
     .sage-companion-toggle,
     .sage-companion-character,
     .sage-companion-eye,

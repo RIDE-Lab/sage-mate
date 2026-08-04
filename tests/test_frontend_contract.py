@@ -165,6 +165,8 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert 'id="sage-companion"' in html
     assert 'id="sage-companion-toggle"' in html
     assert 'aria-controls="sage-companion-panel"' in html
+    assert 'aria-grabbed="false"' in html
+    assert "拖动小 Sage 移动" in html
     assert 'id="sage-companion-message"' in html
     assert 'aria-live="polite"' in html
     assert "名字、外观与互动进度仅保存在当前浏览器" in html
@@ -207,6 +209,11 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert '.sage-companion[data-appearance="mint"]' in companion_css
     assert ".sage-companion-tabs" in companion_css
     assert "handleTabKeydown(event)" in companion_js
+    assert "setPointerCapture" in companion_js
+    assert "saveManualPosition()" in companion_js
+    assert "positionX: null" in companion_js
+    assert "canWander()" in companion_js
+    assert "this.motionQuery?.matches" in companion_js
     assert "prefers-reduced-motion: reduce" in companion_css
     assert "sage-companion-panel-enter" in companion_css
     assert "sage-companion-bond-shine" in companion_css
@@ -214,6 +221,11 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert "@keyframes sage-companion-spark" in companion_css
     assert ".sage-companion-footprint" in companion_css
     assert ".sage-companion-quest" in companion_css
+    assert ".sage-companion.is-dragging" in companion_css
+    assert ".sage-companion.is-walking" in companion_css
+    assert "touch-action: none" in companion_css
+    assert "@keyframes sage-companion-walk" in companion_css
+    assert 'data-panel-side="below"' in companion_css
 
 
 def test_local_code_setup_does_not_block_or_auto_open_profile_modal() -> None:

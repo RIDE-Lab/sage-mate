@@ -18,7 +18,15 @@
         dailyQuestIndex: 0,
         dailyQuestCompleted: false,
         interactionCount: 0,
+        positionX: null,
+        positionY: null,
     });
+    const DRAG_THRESHOLD_PX = 6;
+    const MANUAL_WANDER_PAUSE_MS = 12000;
+    const WANDER_DELAY_MIN_MS = 4200;
+    const WANDER_DELAY_MAX_MS = 8200;
+    const WANDER_DURATION_MIN_MS = 2600;
+    const WANDER_DURATION_MAX_MS = 4600;
     const VALID_STATES = new Set(["idle", "thinking", "happy", "worried"]);
     const VALID_APPEARANCES = new Set(["aurora", "mint", "sunset"]);
     const VALID_TEMPERAMENTS = new Set(["calm", "curious", "lively"]);
@@ -97,6 +105,15 @@
             this.activeTab = "companion";
             this.resizeObserver = null;
             this.classObserver = null;
+            this.motionQuery = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)") || null;
+            this.wanderTimer = null;
+            this.walkFinishTimer = null;
+            this.manualWanderPauseUntil = 0;
+            this.dragPointerId = null;
+            this.dragStart = null;
+            this.isDragging = false;
+            this.suppressNextClick = false;
+            this.hasFreePosition = false;
             this.initialized = false;
         }
 
@@ -119,6 +136,14 @@
         normalizeDate(value) {
             const normalized = String(value || "");
             return /^\d{4}-\d{2}-\d{2}$/.test(normalized) ? normalized : "";
+        }
+
+        normalizeUnitPosition(value) {
+            if (value === null || value === undefined || value === "") {
+                return null;
+            }
+            const parsed = Number(value);
+            return Number.isFinite(parsed) ? Math.min(1, Math.max(0, parsed)) : null;
         }
 
         todayKey() {
@@ -162,6 +187,8 @@
                 dailyQuestIndex: this.boundedCount(stored.dailyQuestIndex, DAILY_QUESTS.length - 1),
                 dailyQuestCompleted: stored.dailyQuestCompleted === true,
                 interactionCount: this.boundedCount(stored.interactionCount, 999999),
+                positionX: this.normalizeUnitPosition(stored.positionX),
+                positionY: this.normalizeUnitPosition(stored.positionY),
             };
         }
 
@@ -318,7 +345,7 @@
             const action = this.toggle.getAttribute("aria-expanded") === "true" ? "关闭" : "打开";
             this.toggle.setAttribute(
                 "aria-label",
-                `${this.profile.name}，当前状态：${message} 点击${action}伙伴面板`
+                `${this.profile.name}，当前状态：${message} 点击${action}伙伴面板，也可以拖动位置`
             );
         }
 
@@ -416,6 +443,11 @@
                 this.completionRecordedForActiveRequest = false;
             }
             this.requestActive = nextActive;
+            if (nextActive) {
+                this.pauseWandering(1200);
+            } else {
+                this.scheduleWander(2400);
+            }
         }
 
         setState(state, message, { resetAfterMs = 0 } = {}) {
@@ -516,11 +548,267 @@
             this.scrollCue.hidden = !(this.scrollArea.scrollHeight > this.scrollArea.clientHeight + 8 && remaining > 10);
         }
 
+        movementBounds() {
+            const shellRect = this.chatShell?.getBoundingClientRect();
+            const toggleRect = this.toggle?.getBoundingClientRect();
+            const formRect = this.chatForm?.getBoundingClientRect();
+            const margin = 12;
+            const left = Math.max(margin, shellRect?.left || margin);
+            const right = Math.min(globalThis.innerWidth - margin, shellRect?.right || globalThis.innerWidth - margin);
+            const top = Math.max(margin, shellRect?.top || margin);
+            const bottom = Math.min(
+                globalThis.innerHeight - margin,
+                (formRect?.top || globalThis.innerHeight) - margin
+            );
+            const width = toggleRect?.width || 64;
+            const height = toggleRect?.height || 64;
+            const maxX = Math.max(left, right - width);
+            const maxY = Math.max(top, bottom - height);
+            return { minX: left, maxX, minY: top, maxY, width, height };
+        }
+
+        clampPosition(left, top) {
+            const bounds = this.movementBounds();
+            return {
+                left: Math.min(bounds.maxX, Math.max(bounds.minX, left)),
+                top: Math.min(bounds.maxY, Math.max(bounds.minY, top)),
+                bounds,
+            };
+        }
+
+        setViewportPosition(left, top, { duration = 0 } = {}) {
+            if (!this.root) {
+                return;
+            }
+            const clamped = this.clampPosition(left, top);
+            const fixedPosition = globalThis.matchMedia?.("(max-width: 720px)").matches;
+            const shellRect = this.chatShell?.getBoundingClientRect();
+            const localLeft = fixedPosition ? clamped.left : clamped.left - (shellRect?.left || 0);
+            const localTop = fixedPosition ? clamped.top : clamped.top - (shellRect?.top || 0);
+            this.root.style.setProperty("--sage-companion-travel-ms", `${Math.max(0, Math.round(duration))}ms`);
+            this.root.style.left = `${Math.round(localLeft)}px`;
+            this.root.style.top = `${Math.round(localTop)}px`;
+            this.root.style.right = "auto";
+            this.root.style.bottom = "auto";
+            this.hasFreePosition = true;
+            return clamped;
+        }
+
+        freezeCurrentPosition() {
+            if (!this.root || !this.root.getClientRects().length) {
+                return null;
+            }
+            const rect = this.root.getBoundingClientRect();
+            this.root.classList.add("is-positioning");
+            const position = this.setViewportPosition(rect.left, rect.top);
+            void this.root.offsetWidth;
+            this.root.classList.remove("is-positioning");
+            return position;
+        }
+
+        saveManualPosition() {
+            if (!this.root) {
+                return;
+            }
+            const rect = this.root.getBoundingClientRect();
+            const bounds = this.movementBounds();
+            const widthRange = Math.max(1, bounds.maxX - bounds.minX);
+            const heightRange = Math.max(1, bounds.maxY - bounds.minY);
+            this.profile.positionX = this.normalizeUnitPosition((rect.left - bounds.minX) / widthRange);
+            this.profile.positionY = this.normalizeUnitPosition((rect.top - bounds.minY) / heightRange);
+            this.persist();
+        }
+
+        restoreManualPosition() {
+            if (this.profile.positionX === null || this.profile.positionY === null) {
+                return false;
+            }
+            const bounds = this.movementBounds();
+            this.setViewportPosition(
+                bounds.minX + (bounds.maxX - bounds.minX) * this.profile.positionX,
+                bounds.minY + (bounds.maxY - bounds.minY) * this.profile.positionY
+            );
+            return true;
+        }
+
+        randomBetween(minimum, maximum) {
+            return minimum + Math.random() * Math.max(0, maximum - minimum);
+        }
+
+        canWander() {
+            return Boolean(
+                this.root
+                && this.panel?.hidden
+                && !this.profile.hidden
+                && !this.requestActive
+                && !this.isDragging
+                && !this.motionQuery?.matches
+                && document.visibilityState === "visible"
+                && Date.now() >= this.manualWanderPauseUntil
+                && this.root.getClientRects().length
+                && !this.root.matches(":hover")
+                && !this.root.contains(document.activeElement)
+            );
+        }
+
+        clearWanderTimers() {
+            if (this.wanderTimer) {
+                globalThis.clearTimeout(this.wanderTimer);
+                this.wanderTimer = null;
+            }
+            if (this.walkFinishTimer) {
+                globalThis.clearTimeout(this.walkFinishTimer);
+                this.walkFinishTimer = null;
+            }
+        }
+
+        pauseWandering(duration = 0) {
+            this.clearWanderTimers();
+            if (this.root?.classList.contains("is-walking")) {
+                this.freezeCurrentPosition();
+                this.root.classList.remove("is-walking");
+            }
+            this.manualWanderPauseUntil = Math.max(this.manualWanderPauseUntil, Date.now() + duration);
+        }
+
+        scheduleWander(delay = null) {
+            if (this.wanderTimer || this.walkFinishTimer || this.motionQuery?.matches) {
+                return;
+            }
+            const wait = delay ?? this.randomBetween(WANDER_DELAY_MIN_MS, WANDER_DELAY_MAX_MS);
+            this.wanderTimer = globalThis.setTimeout(() => {
+                this.wanderTimer = null;
+                if (this.canWander()) {
+                    this.beginWander();
+                } else {
+                    this.scheduleWander(1800);
+                }
+            }, Math.max(250, wait));
+        }
+
+        beginWander() {
+            if (!this.canWander()) {
+                this.scheduleWander();
+                return;
+            }
+            const current = this.freezeCurrentPosition();
+            if (!current) {
+                this.scheduleWander();
+                return;
+            }
+            const bounds = current.bounds;
+            const walkingBand = Math.min(110, Math.max(24, (bounds.maxY - bounds.minY) * 0.3));
+            let targetLeft = this.randomBetween(bounds.minX, bounds.maxX);
+            if (Math.abs(targetLeft - current.left) < 48) {
+                targetLeft = current.left < (bounds.minX + bounds.maxX) / 2 ? bounds.maxX : bounds.minX;
+            }
+            const targetTop = this.randomBetween(Math.max(bounds.minY, bounds.maxY - walkingBand), bounds.maxY);
+            const duration = this.randomBetween(WANDER_DURATION_MIN_MS, WANDER_DURATION_MAX_MS);
+            this.root.dataset.facing = targetLeft < current.left ? "left" : "right";
+            this.root.classList.add("is-walking");
+            globalThis.requestAnimationFrame(() => {
+                this.setViewportPosition(targetLeft, targetTop, { duration });
+            });
+            this.walkFinishTimer = globalThis.setTimeout(() => {
+                this.walkFinishTimer = null;
+                this.root?.classList.remove("is-walking");
+                this.syncPanelPlacement();
+                this.scheduleWander();
+            }, duration + 80);
+        }
+
+        handlePointerDown(event) {
+            if (!event.isPrimary || event.button !== 0 || !this.panel?.hidden) {
+                return;
+            }
+            this.pauseWandering();
+            const rect = this.root.getBoundingClientRect();
+            this.dragPointerId = event.pointerId;
+            this.dragStart = {
+                clientX: event.clientX,
+                clientY: event.clientY,
+                left: rect.left,
+                top: rect.top,
+            };
+            this.toggle.setPointerCapture?.(event.pointerId);
+        }
+
+        handlePointerMove(event) {
+            if (event.pointerId !== this.dragPointerId || !this.dragStart) {
+                return;
+            }
+            const deltaX = event.clientX - this.dragStart.clientX;
+            const deltaY = event.clientY - this.dragStart.clientY;
+            if (!this.isDragging && Math.hypot(deltaX, deltaY) < DRAG_THRESHOLD_PX) {
+                return;
+            }
+            if (!this.isDragging) {
+                this.isDragging = true;
+                this.root.classList.add("is-dragging");
+                this.toggle.setAttribute("aria-grabbed", "true");
+            }
+            event.preventDefault();
+            this.root.dataset.facing = deltaX < 0 ? "left" : "right";
+            this.setViewportPosition(this.dragStart.left + deltaX, this.dragStart.top + deltaY);
+            this.syncPanelPlacement();
+        }
+
+        handlePointerEnd(event) {
+            if (event.pointerId !== this.dragPointerId) {
+                return;
+            }
+            this.toggle.releasePointerCapture?.(event.pointerId);
+            const dragged = this.isDragging;
+            this.dragPointerId = null;
+            this.dragStart = null;
+            this.isDragging = false;
+            this.root.classList.remove("is-dragging");
+            this.toggle.setAttribute("aria-grabbed", "false");
+            if (dragged) {
+                this.suppressNextClick = true;
+                this.saveManualPosition();
+                this.setState("happy", "这里视野不错，我先待在这儿。", { resetAfterMs: 2200 });
+                this.manualWanderPauseUntil = Date.now() + MANUAL_WANDER_PAUSE_MS;
+            }
+            this.scheduleWander(dragged ? MANUAL_WANDER_PAUSE_MS : 1800);
+        }
+
+        syncPanelPlacement() {
+            if (!this.root || !this.toggle || !this.panel || this.panel.hidden) {
+                return;
+            }
+            const toggleRect = this.toggle.getBoundingClientRect();
+            const rootRect = this.root.getBoundingClientRect();
+            const shellRect = this.chatShell?.getBoundingClientRect();
+            const formRect = this.chatForm?.getBoundingClientRect();
+            const margin = 12;
+            const panelWidth = Math.min(346, globalThis.innerWidth - margin * 2);
+            const panelLeft = Math.min(
+                globalThis.innerWidth - margin - panelWidth,
+                Math.max(margin, toggleRect.right - panelWidth)
+            );
+            this.panel.style.left = `${Math.round(panelLeft - rootRect.left)}px`;
+            this.panel.style.right = "auto";
+            const layoutTop = Math.max(margin, shellRect?.top || margin);
+            const layoutBottom = Math.min(globalThis.innerHeight - margin, formRect?.top || globalThis.innerHeight - margin);
+            const spaceAbove = Math.max(0, toggleRect.top - layoutTop - margin);
+            const spaceBelow = Math.max(0, layoutBottom - toggleRect.bottom - margin);
+            const openBelow = spaceAbove < 220 && spaceBelow > spaceAbove;
+            this.root.dataset.panelSide = openBelow ? "below" : "above";
+            this.root.style.setProperty(
+                "--sage-companion-panel-max-height",
+                `${Math.max(160, Math.floor(openBelow ? spaceBelow : spaceAbove))}px`
+            );
+        }
+
         setPanelOpen(open, { returnFocus = true, tab = null } = {}) {
             if (!this.panel || !this.toggle || this.profile.hidden) {
                 return;
             }
             const nextOpen = Boolean(open);
+            if (nextOpen) {
+                this.pauseWandering(1600);
+            }
             this.panel.hidden = !nextOpen;
             this.toggle.setAttribute("aria-expanded", String(nextOpen));
             this.syncToggleLabel();
@@ -538,11 +826,15 @@
                 this.selectTab(tab || this.activeTab, { focus: true, animate: false });
                 globalThis.requestAnimationFrame(() => {
                     this.syncPlacement();
+                    this.syncPanelPlacement();
                     this.syncScrollCue();
                 });
             } else if (returnFocus) {
                 this.scrollCue.hidden = true;
                 this.toggle.focus();
+            }
+            if (!nextOpen) {
+                this.scheduleWander(2200);
             }
         }
 
@@ -563,6 +855,7 @@
         }
 
         hide() {
+            this.pauseWandering();
             this.setPanelOpen(false, { returnFocus: false });
             this.profile.hidden = true;
             this.persist();
@@ -645,7 +938,17 @@
             );
             this.root.style.setProperty("--sage-companion-bottom-offset", `${bottomOffset}px`);
             this.root.style.setProperty("--sage-companion-panel-max-height", `${panelMaxHeight}px`);
-            globalThis.requestAnimationFrame(() => this.syncScrollCue());
+            if (this.hasFreePosition) {
+                const rect = this.root.getBoundingClientRect();
+                this.root.classList.add("is-positioning");
+                this.setViewportPosition(rect.left, rect.top);
+                void this.root.offsetWidth;
+                this.root.classList.remove("is-positioning");
+            }
+            globalThis.requestAnimationFrame(() => {
+                this.syncPanelPlacement();
+                this.syncScrollCue();
+            });
         }
 
         bindSettings() {
@@ -691,7 +994,16 @@
             this.renderProfile();
             this.setState("idle", this.idleMessage());
             this.syncPlacement();
-            globalThis.addEventListener("resize", () => this.syncPlacement());
+            globalThis.requestAnimationFrame(() => {
+                this.restoreManualPosition();
+                this.syncPlacement();
+                this.scheduleWander(2600);
+            });
+            globalThis.addEventListener("resize", () => {
+                this.pauseWandering(900);
+                this.syncPlacement();
+                this.scheduleWander(1200);
+            });
             if (typeof ResizeObserver === "function") {
                 this.resizeObserver = new ResizeObserver(() => this.syncPlacement());
                 this.resizeObserver.observe(this.chatForm);
@@ -703,7 +1015,22 @@
                 this.classObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
                 this.classObserver.observe(this.chatShell, { attributes: true, attributeFilter: ["class"] });
             }
-            this.toggle.addEventListener("click", () => this.setPanelOpen(this.panel.hidden, { tab: "companion" }));
+            this.toggle.addEventListener("pointerdown", (event) => this.handlePointerDown(event));
+            this.toggle.addEventListener("pointermove", (event) => this.handlePointerMove(event));
+            this.toggle.addEventListener("pointerup", (event) => this.handlePointerEnd(event));
+            this.toggle.addEventListener("pointercancel", (event) => this.handlePointerEnd(event));
+            this.toggle.addEventListener("dragstart", (event) => event.preventDefault());
+            this.toggle.addEventListener("click", () => {
+                if (this.suppressNextClick) {
+                    this.suppressNextClick = false;
+                    return;
+                }
+                this.setPanelOpen(this.panel.hidden, { tab: "companion" });
+            });
+            this.root.addEventListener("pointerenter", () => this.pauseWandering(1400));
+            this.root.addEventListener("pointerleave", () => this.scheduleWander(1400));
+            this.root.addEventListener("focusin", () => this.pauseWandering(1600));
+            this.root.addEventListener("focusout", () => this.scheduleWander(1800));
             this.closeButton?.addEventListener("click", () => this.setPanelOpen(false));
             this.settingsTrigger?.addEventListener("click", () => {
                 if (this.profile.hidden) {
@@ -729,7 +1056,20 @@
                     this.setPanelOpen(false);
                 }
             });
-            globalThis.requestAnimationFrame(() => this.syncPlacement());
+            document.addEventListener("visibilitychange", () => {
+                if (document.visibilityState === "visible") {
+                    this.scheduleWander(1800);
+                } else {
+                    this.pauseWandering();
+                }
+            });
+            this.motionQuery?.addEventListener?.("change", () => {
+                if (this.motionQuery.matches) {
+                    this.pauseWandering();
+                } else {
+                    this.scheduleWander(1800);
+                }
+            });
         }
     }
 
