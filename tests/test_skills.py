@@ -557,6 +557,40 @@ class TestSkillRunner:
         assert result.tool_calls_made == 0
         mock_llm.answer_question_sync.assert_not_called()
 
+    def test_compatible_transport_retries_non_substantive_answer(
+        self, skill_context: SkillContext
+    ) -> None:
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = False
+        mock_llm.answer_question_sync.side_effect = [
+            "![](https://example.test/empty.png)",
+            "A complete meeting agenda with decisions and next actions.",
+        ]
+        runner = SkillRunner(mock_llm, SkillToolRegistry())
+        skill = SkillDefinition(
+            skill_id="retry_tool_skill",
+            name="Retry Tool Skill",
+            system_prompt="Prepare a meeting.",
+            user_prompt_template="Question: {question}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="schedule_tool",
+                    name="get_schedule",
+                    description="Get the schedule",
+                    parameters={},
+                    handler="get_team_schedule",
+                )
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is True
+        assert result.turns_used == 2
+        assert result.answer.startswith("A complete meeting agenda")
+        assert mock_llm.answer_question_sync.call_count == 2
+
     def test_run_max_turns_reached(self, skill_context: SkillContext) -> None:
         mock_llm = MagicMock()
         # Always return tool calls, never a final answer

@@ -58,6 +58,16 @@ _INTERNAL_SCAFFOLD_MARKERS = (
 )
 
 
+def answer_has_substantive_content(text: str) -> bool:
+    """Return False for link-, image-, markup-, or punctuation-only output."""
+    without_markdown_links = re.sub(r"!?\[[^\]]*\]\([^)]*\)", "", text)
+    without_html_images = re.sub(
+        r"<img\b[^>]*>", "", without_markdown_links, flags=re.IGNORECASE
+    )
+    without_urls = re.sub(r"https?://\S+", "", without_html_images)
+    return bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", without_urls))
+
+
 @dataclass(frozen=True, slots=True)
 class AnswerConstraints:
     """User-visible output limits parsed once and enforced at delivery."""
@@ -109,6 +119,8 @@ class ChatDeliveryGate:
             issues.append("missing_original_question")
         if not normalized:
             issues.append("empty_answer")
+        elif not answer_has_substantive_content(normalized):
+            issues.append("non_substantive_answer")
         lowered = normalized.lower()
         scaffold_marker_count = sum(
             marker in lowered for marker in _INTERNAL_SCAFFOLD_MARKERS

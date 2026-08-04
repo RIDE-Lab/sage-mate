@@ -38,6 +38,7 @@ def test_delivery_gate_normalizes_and_preserves_response_contract() -> None:
     ("answer", "issue"),
     [
         ("   ", "empty_answer"),
+        ("![](https://example.test/empty.png)", "non_substantive_answer"),
         (
             "Answer Context: hidden prompt\nCurrent User Question: secret",
             "internal_prompt_leak",
