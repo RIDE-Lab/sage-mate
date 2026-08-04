@@ -214,6 +214,37 @@ for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
   });
 }
 
+test("shared icons render from valid symbols on phone and desktop", async ({ page }) => {
+  for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
+    await openOnboarding(page, viewport);
+    await page.getByRole("button", { name: "跳过引导" }).click();
+
+    const iconAudit = await page.locator("svg.ui-icon use").evaluateAll((uses) => uses.map((use) => {
+      const icon = use.closest("svg");
+      const reference = use.getAttribute("href") || "";
+      const bounds = icon.getBoundingClientRect();
+      return {
+        reference,
+        symbolExists: reference.startsWith("#") && Boolean(document.querySelector(reference)),
+        hasSize: bounds.width > 0 && bounds.height > 0,
+        width: bounds.width,
+        height: bounds.height,
+      };
+    }));
+
+    expect(iconAudit.length).toBeGreaterThan(15);
+    expect(iconAudit.every((icon) => icon.symbolExists)).toBe(true);
+    const renderedIcons = iconAudit.filter((icon) => icon.hasSize);
+    expect(renderedIcons.length).toBeGreaterThan(8);
+    expect(renderedIcons.every((icon) => (
+      icon.width >= 12 && icon.width <= 24 && icon.height >= 12 && icon.height <= 24
+    ))).toBe(true);
+    await expect(page.locator('.pill-toggle-label use[href="#icon-brain"]')).toBeVisible();
+    await expect(page.locator('.pill-toggle-label use[href="#icon-globe-search"]')).toBeVisible();
+    await expect(page.locator('.send-button use[href="#icon-send"]')).toBeVisible();
+  }
+});
+
 test("Sage companion customizes, grows, persists, hides, and restores", async ({ page }) => {
   const viewport = VIEWPORTS[1];
   await openOnboarding(page, viewport);

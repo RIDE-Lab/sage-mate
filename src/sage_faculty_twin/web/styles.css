@@ -34,6 +34,74 @@
     box-sizing: border-box;
 }
 
+/* Shared line-icon system: one optical grid, one stroke language, no font glyphs. */
+.ui-icon-sprite {
+    position: absolute;
+    width: 0;
+    height: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.ui-icon {
+    width: 20px;
+    height: 20px;
+    display: block;
+    flex: 0 0 auto;
+    overflow: visible;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    shape-rendering: geometricPrecision;
+    transition: transform 160ms cubic-bezier(.2, .8, .2, 1), filter 160ms ease;
+}
+
+.ui-icon-sm {
+    width: 16px;
+    height: 16px;
+}
+
+.ui-icon-lg {
+    width: 22px;
+    height: 22px;
+}
+
+.ui-icon-dot {
+    fill: currentColor;
+    stroke: none;
+}
+
+:is(button, a, label):hover .ui-icon {
+    filter: drop-shadow(0 3px 5px color-mix(in srgb, currentColor 20%, transparent));
+}
+
+:is(button, a, label):active .ui-icon {
+    transform: scale(.92);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ui-icon {
+        transition: none !important;
+    }
+
+    :is(button, a, label):hover .ui-icon,
+    :is(button, a, label):active .ui-icon {
+        transform: none !important;
+    }
+
+    .footer-toggle-btn:hover .footer-toggle-icon,
+    .footer-toggle-btn:active .footer-toggle-icon {
+        transform: rotate(180deg) !important;
+    }
+
+    .footer-collapsed .footer-toggle-btn:hover .footer-toggle-icon,
+    .footer-collapsed .footer-toggle-btn:active .footer-toggle-icon {
+        transform: rotate(0deg) !important;
+    }
+}
+
 .sr-only {
     position: absolute;
     width: 1px;
@@ -381,6 +449,12 @@ body.mobile-topbar-actions-open .topbar-actions {
     font-weight: 700;
     font-size: 0.85rem;
     flex-shrink: 0;
+}
+
+.topbar-user-badge-avatar .ui-icon {
+    width: 17px;
+    height: 17px;
+    stroke-width: 1.9;
 }
 
 .topbar-user-badge-copy {
@@ -848,14 +922,24 @@ body.drawer-pinned .history-rail {
     color: var(--ink);
 }
 
-.footer-toggle-icon::before {
-    content: "▲";
-    font-size: 0.6rem;
-    transition: transform 0.2s ease;
+.footer-toggle-icon {
+    width: 13px;
+    height: 13px;
+    transform: rotate(180deg);
 }
 
-.footer-collapsed .footer-toggle-icon::before {
-    content: "▼";
+.footer-collapsed .footer-toggle-icon {
+    transform: rotate(0deg);
+}
+
+.footer-toggle-btn:hover .footer-toggle-icon,
+.footer-toggle-btn:active .footer-toggle-icon {
+    transform: rotate(180deg);
+}
+
+.footer-collapsed .footer-toggle-btn:hover .footer-toggle-icon,
+.footer-collapsed .footer-toggle-btn:active .footer-toggle-icon {
+    transform: rotate(0deg);
 }
 
 /* Collapsed state - only show toggle button */
@@ -1448,6 +1532,10 @@ body.drawer-pinned .history-rail {
     padding: 6px 9px;
     border-radius: 8px;
     font-size: 0.8rem;
+}
+
+.workflow-zoom-button .ui-icon {
+    margin: auto;
 }
 
 #workflow-zoom-reset {
@@ -3742,6 +3830,12 @@ body.sidebar-expanded .rail-btn {
     flex-shrink: 0;
 }
 
+.rail-btn .ui-icon {
+    width: 20px;
+    height: 20px;
+    stroke-width: 1.7;
+}
+
 .rail-label {
     display: none;
     font-size: 0.85rem;
@@ -3799,6 +3893,10 @@ body.sidebar-expanded .rail-sublabel {
 .rail-btn:hover {
     background: rgba(0, 0, 0, 0.06);
     color: rgba(0, 0, 0, 0.8);
+}
+
+.rail-btn:hover .ui-icon {
+    transform: translateY(-1px) scale(1.04);
 }
 
 .rail-btn:active {
@@ -4103,6 +4201,12 @@ body.sidebar-expanded .rail-user {
     color: var(--ink);
 }
 
+.composer-icon-button:hover .ui-icon,
+.composer-plus-button:hover .ui-icon,
+.composer-mic-button:hover .ui-icon {
+    transform: translateY(-1px) scale(1.05);
+}
+
 .composer-icon-button svg {
     width: 15px;
     height: 15px;
@@ -4294,8 +4398,21 @@ body.sidebar-expanded .rail-user {
 }
 
 .pill-toggle-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
     white-space: nowrap;
     font-weight: 500;
+}
+
+.composer-pill-toggle .ui-icon {
+    opacity: .82;
+    stroke-width: 1.8;
+}
+
+.composer-pill-toggle:has(input:checked) .ui-icon {
+    opacity: 1;
+    filter: drop-shadow(0 2px 4px rgba(255, 255, 255, .28));
 }
 
 /* Composer + upload button */

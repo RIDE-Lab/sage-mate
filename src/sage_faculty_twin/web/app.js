@@ -1207,6 +1207,17 @@ const SEED_CHIP_POOL = {
 };
 
 const SEED_CHIP_COUNT = 3;
+const UI_ICON_NAMES = new Set([
+    "branch", "check", "checklist", "close", "copy", "inbox", "message-spark",
+    "retry", "search", "send", "user",
+]);
+
+function uiIconSvg(name, className = "") {
+    const safeName = UI_ICON_NAMES.has(name) ? name : "message-spark";
+    const safeClassName = String(className).replace(/[^a-zA-Z0-9 _-]/g, "").trim();
+    const classes = safeClassName ? `ui-icon ${safeClassName}` : "ui-icon";
+    return `<svg class="${classes}" aria-hidden="true" focusable="false"><use href="#icon-${safeName}"></use></svg>`;
+}
 
 function renderSeedChips(profile) {
     const container = document.getElementById("seed-chips-list");
@@ -1217,7 +1228,7 @@ function renderSeedChips(profile) {
     const picked = shuffled.slice(0, SEED_CHIP_COUNT);
     container.innerHTML = picked.map((item) => `
         <button type="button" class="seed-chip" data-seed-question="${item.question}" data-seed-context="${item.context}">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            ${uiIconSvg("search", "ui-icon-sm")}
             <span>${item.label}</span>
         </button>
     `).join("");
@@ -1238,7 +1249,7 @@ function renderSeedChips(profile) {
 }
 
 // --- Beginner-friendly example research questions for onboarding step 1 ---
-// Shown when the user clicks 🎲 in the onboarding card (first step).
+// Shown when the user clicks the random example button in onboarding step 1.
 const ONBOARDING_RESEARCH_EXAMPLES = {
     code_assistant: [
         "帮我解释这个项目的核心结构，并指出我应该先看哪些文件。",
@@ -1314,7 +1325,7 @@ const ONBOARDING_STEPS = {
             question: "我想研究的问题是：______。请帮我检验这个问题是否清晰、是否有研究价值。",
             hints: [
                 "把“我要做 X 系统”转化为“我想解决 Y 问题”。用因果问句代替愿景陈述。",
-                "没有想法？点 🎲 随机生成一个示例，直接用或改一改再提交。",
+                "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
                 "好问题有三个特征：边界清晰、可验证、有增量。",
             ],
             context: "七步提问法 · 问题定义",
@@ -1390,7 +1401,7 @@ const ONBOARDING_STEPS = {
             question: "我目前在学______课程，实验进度到了______。请帮我梳理这门课的核心知识点和当前实验重点。",
             hints: [
                 "例如“大模型推理引擎 Tutorial 5”或“数据库实验 3”。",
-                "没有想法？点 🎲 随机生成一个示例，直接用或改一改再提交。",
+                "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
             ],
             context: "本科课程答疑",
             canRandomFill: true,
@@ -1423,7 +1434,7 @@ const ONBOARDING_STEPS = {
             question: "我目前在论文写作的______阶段，遇到的问题是______。请结合课程内容帮我梳理下一步该怎么做。",
             hints: [
                 "可以是选题、提纲、某章节写作、修改、投稿等阶段。",
-                "没有想法？点 🎲 随机生成一个示例，直接用或改一改再提交。",
+                "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
                 "尽量带上你写的内容或草稿片段，反馈会更具体。",
             ],
             context: "论文写作课 · 定位卡点",
@@ -1499,7 +1510,7 @@ const ONBOARDING_STEPS = {
             question: "我最初想了解的是______。请帮我快速梳理这个方向的核心概念和关键资源。",
             hints: [
                 "可以是研究方向、课程信息、合作机会等。",
-                "没有想法？点 🎲 随机生成一个示例，直接用或改一改再提交。",
+                "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
             ],
             context: "初次来访",
             canRandomFill: true,
@@ -2753,7 +2764,7 @@ function renderComposerAttachmentList() {
                     <strong>${escapeHtml(file.name)}</strong>
                     <small>${escapeHtml(formatAttachmentSize(file.size))}</small>
                 </span>
-                <button type="button" class="attachment-chip-remove" data-remove-chat-file="${escapeHtml(getChatAttachmentKey(file))}" aria-label="移除 ${escapeHtml(file.name)}">×</button>
+                <button type="button" class="attachment-chip-remove" data-remove-chat-file="${escapeHtml(getChatAttachmentKey(file))}" aria-label="移除 ${escapeHtml(file.name)}">${uiIconSvg("close", "ui-icon-sm")}</button>
             </span>
         `)
         .join("");
@@ -3867,7 +3878,7 @@ function applyUserSession(session) {
             }
             const avatarEl = topbarUserBadge.querySelector(".topbar-user-badge-avatar");
             if (avatarEl) {
-                const initial = (account.name || "?").trim().charAt(0).toUpperCase() || "U";
+                const initial = (account.name || "U").trim().charAt(0).toUpperCase() || "U";
                 avatarEl.textContent = initial;
             }
         }
@@ -3906,7 +3917,7 @@ function applyUserSession(session) {
         topbarUserBadge.setAttribute("aria-label", "注册 / 登录");
         const avatarEl = topbarUserBadge.querySelector(".topbar-user-badge-avatar");
         if (avatarEl) {
-            avatarEl.textContent = "?";
+            avatarEl.innerHTML = uiIconSvg("user", "ui-icon-sm");
         }
     }
     if (topbarUserBadgeName) {
@@ -6374,7 +6385,7 @@ function updateWelcomeGreeting() {
                 greetingText.textContent = "你好";
             }
         }
-        const initial = (name || "?").trim().charAt(0).toUpperCase() || "U";
+        const initial = (name || "U").trim().charAt(0).toUpperCase() || "U";
         // Update rail avatar
         if (railUserAvatar) {
             railUserAvatar.textContent = initial;
@@ -6385,7 +6396,7 @@ function updateWelcomeGreeting() {
     } else {
         if (greetingText) greetingText.textContent = "你好";
         if (railUserAvatar) {
-            railUserAvatar.textContent = "👤";
+            railUserAvatar.innerHTML = uiIconSvg("user");
             railUserAvatar.style.background = "rgba(0, 0, 0, 0.08)";
             railUserAvatar.style.color = "rgba(0, 0, 0, 0.4)";
         }
@@ -7173,7 +7184,7 @@ function renderAssistantMessage(
                             <span class="message-section-kicker">Reply</span>
                             <div class="${bodyClass}">${formatMessageContent(cleanedText)}</div>
                             <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                                ${uiIconSvg("copy", "ui-icon-sm")}
                             </button>
                         </div>
                         ${thinkSectionHtml}
@@ -7260,46 +7271,15 @@ function buildWorkflowPhaseRailHtml({ currentStage = "", workflowSteps = [], com
 }
 
 function buildWorkflowPhaseIconSvg(iconName) {
-    const iconMap = {
-        inbox: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <path d="M4.5 8.4 7.1 5.5h9.8l2.6 2.9v9.1H4.5Z" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M8.4 12.3h7.2" stroke="currentColor" stroke-width="1.7"/>
-                <path d="m12 8.1 2 2-2 2" stroke="currentColor" stroke-width="1.7"/>
-            </svg>`,
-        branch: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <circle cx="7" cy="6.5" r="2.1" stroke="currentColor" stroke-width="1.7"/>
-                <circle cx="17" cy="6.5" r="2.1" stroke="currentColor" stroke-width="1.7"/>
-                <circle cx="12" cy="17.2" r="2.1" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M9 7.6c1.3 1 2.1 2.3 3 5.3M15 7.6c-1.3 1-2.1 2.3-3 5.3" stroke="currentColor" stroke-width="1.7"/>
-            </svg>`,
-        search: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <circle cx="10.4" cy="10.4" r="4.6" stroke="currentColor" stroke-width="1.7"/>
-                <path d="m14 14 4.1 4.1" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M8.3 10.4h4.2" stroke="currentColor" stroke-width="1.7"/>
-            </svg>`,
-        message: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <path d="M5 6.6h14v8.5h-7l-3.7 3.3v-3.3H5z" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M8.3 10.1h7.2M8.3 12.8h4.8" stroke="currentColor" stroke-width="1.7"/>
-                <path d="m16.8 5.1.5 1.3 1.3.5-1.3.5-.5 1.3-.5-1.3-1.3-.5 1.3-.5z" stroke="currentColor" stroke-width="1.4"/>
-            </svg>`,
-        checklist: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <rect x="5" y="4.8" width="14" height="14.5" rx="3.2" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M9.4 9.1h5.8M9.4 12.3h5.8M9.4 15.5h4.1" stroke="currentColor" stroke-width="1.7"/>
-                <path d="m7.2 9.3.7.7 1.3-1.5M7.2 15.7l.7.7 1.3-1.5" stroke="currentColor" stroke-width="1.6"/>
-            </svg>`,
-        send: `
-            <svg viewBox="0 0 24 24" fill="none" focusable="false">
-                <path d="M4.8 12 19 5.6l-4.3 12.8-3.1-5.2-6.8-.1Z" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M11.7 13 18.8 5.8" stroke="currentColor" stroke-width="1.7"/>
-                <path d="M9.5 18.2h5.3" stroke="currentColor" stroke-width="1.5" opacity="0.7"/>
-            </svg>`,
-    };
-    return iconMap[iconName] || iconMap.message;
+    const symbolName = {
+        inbox: "inbox",
+        branch: "branch",
+        search: "search",
+        message: "message-spark",
+        checklist: "checklist",
+        send: "send",
+    }[iconName] || "message-spark";
+    return uiIconSvg(symbolName);
 }
 
 function deriveWorkflowPhaseStates({ currentStage = "", workflowSteps = [], complete = false } = {}) {
@@ -9099,10 +9079,10 @@ function handleCopyAnswerClick(event) {
     const text = body.innerText || body.textContent || "";
     navigator.clipboard.writeText(text).then(() => {
         button.classList.add("copied");
-        button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
+        button.innerHTML = uiIconSvg("check", "ui-icon-sm");
         globalThis.setTimeout(() => {
             button.classList.remove("copied");
-            button.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+            button.innerHTML = uiIconSvg("copy", "ui-icon-sm");
         }, 2000);
     }).catch(() => { });
 }
@@ -9127,7 +9107,7 @@ function buildRetryButtonHtml(isError) {
     if (!isError || !lastFailedQuestion) return "";
     return `
         <button type="button" class="message-retry-button" data-retry-request>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            ${uiIconSvg("retry", "ui-icon-sm")}
             重试
         </button>
     `;

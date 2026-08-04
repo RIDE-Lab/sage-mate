@@ -633,7 +633,7 @@ body.onboarding-active .sage-companion,
 }
 
 .sage-companion-actions button { flex: 1 1 0; }
-.sage-companion-actions button span { display: inline-block; margin-right: 5px; color: var(--companion-accent); }
+.sage-companion-actions button .ui-icon { margin-right: 5px; color: var(--companion-accent); stroke-width: 1.8; }
 .sage-companion-actions button:hover,
 .sage-companion-name-row button:hover { filter: saturate(1.2) brightness(0.98); box-shadow: 0 6px 14px color-mix(in srgb, var(--companion-accent) 12%, transparent); transform: translateY(-1px); }
 .sage-companion-actions button:active,

@@ -60,8 +60,8 @@ def test_status_and_workflow_buttons_use_distinct_icons() -> None:
         "</button>", 1
     )[0]
 
-    assert '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"' in status_button
-    assert '<rect x="3" y="3" width="8" height="8" rx="2"' in workflow_button
+    assert 'href="#icon-activity"' in status_button
+    assert 'href="#icon-workflow"' in workflow_button
     assert status_button != workflow_button
 
 

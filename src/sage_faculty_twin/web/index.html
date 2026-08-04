@@ -22,10 +22,49 @@
 </head>
 
 <body class="workflow-shell-collapsed">
+    <svg class="ui-icon-sprite" aria-hidden="true" focusable="false">
+        <defs>
+            <symbol id="icon-menu" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></symbol>
+            <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+            <symbol id="icon-minus" viewBox="0 0 24 24"><path d="M5 12h14"/></symbol>
+            <symbol id="icon-grid-plus" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="6.5" height="6.5" rx="2"/><rect x="14" y="3.5" width="6.5" height="6.5" rx="2"/><rect x="3.5" y="14" width="6.5" height="6.5" rx="2"/><path d="M17.25 14v6.5M14 17.25h6.5"/></symbol>
+            <symbol id="icon-help" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M9.8 9.4a2.35 2.35 0 0 1 4.55.8c0 1.65-2.35 2.05-2.35 3.45M12 17.25h.01"/></symbol>
+            <symbol id="icon-companion" viewBox="0 0 24 24"><path d="m7.3 8.4-2-3.5 4.8 1.8h3.8l4.8-1.8-2 3.5"/><rect x="4.8" y="7.7" width="14.4" height="11.5" rx="6"/><path d="M9 12.6h.01M15 12.6h.01M9.8 15.7c1.25.9 3.15.9 4.4 0"/></symbol>
+            <symbol id="icon-activity" viewBox="0 0 24 24"><path d="M3 12h4l2.2-6 4.1 12 2.2-6H21"/></symbol>
+            <symbol id="icon-mail" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="3"/><path d="m5 7 7 5 7-5"/></symbol>
+            <symbol id="icon-home" viewBox="0 0 24 24"><path d="m3.5 10 8.5-7 8.5 7v9a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2Z"/><path d="M9 21v-7h6v7"/></symbol>
+            <symbol id="icon-dice" viewBox="0 0 24 24"><rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><circle cx="8.2" cy="8.2" r=".9" class="ui-icon-dot"/><circle cx="15.8" cy="8.2" r=".9" class="ui-icon-dot"/><circle cx="12" cy="12" r=".9" class="ui-icon-dot"/><circle cx="8.2" cy="15.8" r=".9" class="ui-icon-dot"/><circle cx="15.8" cy="15.8" r=".9" class="ui-icon-dot"/></symbol>
+            <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="m14.5 6.5-5.5 5.5 5.5 5.5"/></symbol>
+            <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6.5 6.5 11 11m0-11-11 11"/></symbol>
+            <symbol id="icon-shield-alert" viewBox="0 0 24 24"><path d="M12 3 5 6v5.4c0 4.5 2.8 7.8 7 9.6 4.2-1.8 7-5.1 7-9.6V6Z"/><path d="M12 8v4M12 15.7h.01"/></symbol>
+            <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m7 9.5 5 5 5-5"/></symbol>
+            <symbol id="icon-hand" viewBox="0 0 24 24"><path d="M17.5 10.8V6.5a2.4 2.4 0 0 0-4.8 0v4M12.8 10V5.5a2.4 2.4 0 0 0-4.8 0v6.2M8 11V8a2.4 2.4 0 0 0-4.8 0v6.6A6.4 6.4 0 0 0 9.6 21h1.7a6.5 6.5 0 0 0 6.5-6.5v-3.7"/></symbol>
+            <symbol id="icon-shield-check" viewBox="0 0 24 24"><path d="M12 3 5 6v5.4c0 4.5 2.8 7.8 7 9.6 4.2-1.8 7-5.1 7-9.6V6Z"/><path d="m9 12 2 2 4.3-4.3"/></symbol>
+            <symbol id="icon-command" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8m0-12.8L5.6 18.4"/></symbol>
+            <symbol id="icon-check" viewBox="0 0 24 24"><path d="m5 12.5 4.2 4.2L19 7"/></symbol>
+            <symbol id="icon-mic" viewBox="0 0 24 24"><rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M18.5 11.5a6.5 6.5 0 0 1-13 0M12 18v3M8.5 21h7"/></symbol>
+            <symbol id="icon-send" viewBox="0 0 24 24"><path d="m4 4 16 8-16 8 2.7-6.2L14 12l-7.3-1.8Z"/></symbol>
+            <symbol id="icon-brain" viewBox="0 0 24 24"><path d="M9.2 5.2a3.2 3.2 0 0 0-5.1 2.6c0 .7.2 1.3.6 1.8A3.8 3.8 0 0 0 6.5 17a3.2 3.2 0 0 0 5.5 2.2V5.8a3.2 3.2 0 0 0-2.8-.6ZM14.8 5.2a3.2 3.2 0 0 1 5.1 2.6c0 .7-.2 1.3-.6 1.8a3.8 3.8 0 0 1-1.8 7.4 3.2 3.2 0 0 1-5.5 2.2V5.8a3.2 3.2 0 0 1 2.8-.6Z"/><path d="M7.5 9.5h2M14.5 9.5h2M8 14h2M14 14h2"/></symbol>
+            <symbol id="icon-globe-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="7.2"/><path d="M3.5 10.5h14M10.5 3.3c2.2 2 3.2 4.4 3.2 7.2M10.5 3.3c-2.2 2-3.2 4.4-3.2 7.2M15.8 15.8 21 21"/></symbol>
+            <symbol id="icon-chart" viewBox="0 0 24 24"><path d="M5 20v-5M12 20V9M19 20V4"/></symbol>
+            <symbol id="icon-compress" viewBox="0 0 24 24"><path d="M4 14h6v6M20 10h-6V4M10 14l-7 7M14 10l7-7"/></symbol>
+            <symbol id="icon-workflow" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/><path d="M6.5 10v4a3.5 3.5 0 0 0 3.5 3.5h4"/></symbol>
+            <symbol id="icon-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></symbol>
+            <symbol id="icon-search" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m15.4 15.4 4.1 4.1"/></symbol>
+            <symbol id="icon-copy" viewBox="0 0 24 24"><rect x="8" y="8" width="11" height="11" rx="2.5"/><path d="M16 8V6.5A2.5 2.5 0 0 0 13.5 4h-7A2.5 2.5 0 0 0 4 6.5v7A2.5 2.5 0 0 0 6.5 16H8"/></symbol>
+            <symbol id="icon-retry" viewBox="0 0 24 24"><path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 5v6h-6"/></symbol>
+            <symbol id="icon-inbox" viewBox="0 0 24 24"><path d="m4.5 8 2.8-3h9.4l2.8 3v10.5h-15Z"/><path d="M4.5 13h4l1.5 2h4l1.5-2h4"/></symbol>
+            <symbol id="icon-branch" viewBox="0 0 24 24"><circle cx="7" cy="6" r="2"/><circle cx="17" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M8.7 7.1c1.8 1.2 2.8 3.3 3.3 8.9M15.3 7.1c-1.8 1.2-2.8 3.3-3.3 8.9"/></symbol>
+            <symbol id="icon-message-spark" viewBox="0 0 24 24"><path d="M4 5.5h16v11H10l-4 3v-3H4Z"/><path d="M8 9h6M8 12h4M17.5 3.5v4M15.5 5.5h4"/></symbol>
+            <symbol id="icon-checklist" viewBox="0 0 24 24"><rect x="4.5" y="3.5" width="15" height="17" rx="3"/><path d="m7.5 8 1.2 1.2L11 6.8M12.5 8h4M7.5 14h1M11 14h5.5M7.5 17h1M11 17h5.5"/></symbol>
+            <symbol id="icon-sparkle" viewBox="0 0 24 24"><path d="M12 3.5c.7 4.8 3.2 7.3 8 8-4.8.7-7.3 3.2-8 8-.7-4.8-3.2-7.3-8-8 4.8-.7 7.3-3.2 8-8Z"/><path d="M19 3v3M17.5 4.5h3M5 18v2.5M3.75 19.25h2.5"/></symbol>
+            <symbol id="icon-bean" viewBox="0 0 24 24"><path d="M17.8 4.8c3.1 3.1 2.6 8.8-1 12.4s-9.3 4.1-12.4 1c-2.1-2.1-.9-4.9 1.4-6.1 2.4-1.3 3.1-1.2 4.4-3.9 1.2-2.3 5.4-5.6 7.6-3.4Z"/><path d="M9.2 16.1c2.8-.5 5.1-2.2 6.6-5"/></symbol>
+        </defs>
+    </svg>
     <div class="app-shell">
         <header class="topbar">
             <button type="button" id="mobile-sidebar-toggle" class="mobile-sidebar-btn" title="菜单" aria-label="打开菜单">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                <svg class="ui-icon ui-icon-lg" aria-hidden="true"><use href="#icon-menu"></use></svg>
             </button>
             <div class="topbar-brand" aria-label="学术分身介绍">
                 <div class="topbar-brand-mark" aria-hidden="true">S</div>
@@ -53,43 +92,38 @@
                     <div class="rail-top">
                         <button type="button" id="sidebar-toggle" class="rail-brand-btn" title="展开/收起菜单" aria-label="切换侧边栏">
                             <img src="/static/icon.png" alt="SAGE" class="brand-icon" width="32" height="32" />
-                            <svg class="brand-hover-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <svg class="ui-icon brand-hover-icon" aria-hidden="true"><use href="#icon-menu"></use></svg>
                         </button>
                         <button type="button" id="history-new-chat" class="rail-btn" title="新对话">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
                             <span class="rail-label">新对话</span>
                         </button>
                         <button type="button" id="open-profile-switcher" class="rail-btn profile-switcher-btn hidden" title="切换 Profile" aria-label="切换 Profile">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="7" height="7" rx="1.5"/><rect x="14" y="4" width="7" height="7" rx="1.5"/><rect x="3" y="15" width="7" height="7" rx="1.5"/><path d="M14 18h7"/><path d="M17.5 14.5v7"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-grid-plus"></use></svg>
                             <span class="rail-label">切换 Profile</span>
                             <span id="profile-switcher-current" class="rail-sublabel">Faculty Twin</span>
                         </button>
                     </div>
                     <div class="rail-utils">
                         <button type="button" id="open-onboarding-help" class="rail-btn" title="新手引导">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-help"></use></svg>
                             <span class="rail-label">新手引导</span>
                         </button>
                         <button type="button" id="open-companion-settings" class="rail-btn" title="电子伙伴"
                             aria-label="打开电子伙伴">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                                <path d="M7 9 5 5l5 2h4l5-2-2 4"/>
-                                <rect x="5" y="8" width="14" height="11" rx="6"/>
-                                <path d="M9 13h.01M15 13h.01M10 16c1.2.8 2.8.8 4 0"/>
-                            </svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-companion"></use></svg>
                             <span class="rail-label">电子伙伴</span>
                         </button>
                         <button type="button" id="open-status-drawer" class="rail-btn" title="系统状态">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-activity"></use></svg>
                             <span class="rail-label">系统状态</span>
                         </button>
                         <button type="button" id="open-suggestions" class="rail-btn" title="匿名留言">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-mail"></use></svg>
                             <span class="rail-label">匿名留言</span>
                         </button>
                         <a id="homepage-link" href="/home/" target="_blank" rel="noreferrer" class="rail-btn" title="个人主页">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+                            <svg class="ui-icon" aria-hidden="true"><use href="#icon-home"></use></svg>
                             <span class="rail-label">个人主页</span>
                         </a>
                     </div>
@@ -102,7 +136,7 @@
                     </div>
                     <div class="rail-bottom">
                         <button type="button" id="sidebar-user-icon" class="rail-user rail-btn" title="账号设置">
-                            <div class="rail-user-avatar">?</div>
+                            <div class="rail-user-avatar"><svg class="ui-icon" aria-hidden="true"><use href="#icon-user"></use></svg></div>
                             <span class="rail-label" id="sidebar-user-name">用户</span>
                         </button>
                     </div>
@@ -126,13 +160,14 @@
                             <p class="onboarding-question-hint" id="onboarding-question-hint"></p>
                         </div>
                         <button type="button" class="onboarding-random-btn hidden" id="onboarding-random-btn">
-                            <span aria-hidden="true">🎲</span> 随机生成一个示例问题
+                            <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-dice"></use></svg>
+                            随机生成一个示例问题
                         </button>
                         <p class="onboarding-cta" id="onboarding-cta">在下方输入框写下你的回答，提交后会获得反馈 ↓</p>
                     </div>
                     <div class="onboarding-nav">
                         <button type="button" class="ghost-button onboarding-back-btn hidden" id="onboarding-back-btn">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                            <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-arrow-left"></use></svg>
                             上一步
                         </button>
                         <button type="button" class="ghost-button onboarding-next-btn" id="onboarding-next-btn">下一步</button>
@@ -234,7 +269,7 @@
                     <div class="chat-view-head">
                         <h2 class="chat-view-title">账号管理</h2>
                         <button type="button" class="chat-view-close" id="close-account-view" title="关闭" aria-label="关闭账号管理">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                            <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-close"></use></svg>
                         </button>
                         <p class="chat-view-desc">登录后，当前聊天和预约会自动绑定到你的账号。</p>
                     </div>
@@ -302,7 +337,7 @@
                                 </span>
                             </div>
                             <button type="button" id="sage-companion-close" class="sage-companion-close"
-                                aria-label="关闭电子伙伴面板">×</button>
+                                aria-label="关闭电子伙伴面板"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-close"></use></svg></button>
                         </div>
                         <div class="sage-companion-tabs" role="tablist" aria-label="伙伴面板">
                             <button type="button" id="sage-companion-tab-companion" role="tab"
@@ -352,8 +387,8 @@
                                 </div>
                             </section>
                             <div class="sage-companion-actions" aria-label="伙伴互动">
-                                <button type="button" data-companion-action="pet"><span aria-hidden="true">✦</span>摸摸它</button>
-                                <button type="button" data-companion-action="inspire"><span aria-hidden="true">●</span>喂颗灵感豆</button>
+                                <button type="button" data-companion-action="pet"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-sparkle"></use></svg>摸摸它</button>
+                                <button type="button" data-companion-action="inspire"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-bean"></use></svg>喂颗灵感豆</button>
                             </div>
                         </div>
                         <div id="sage-companion-panel-customize" class="sage-companion-tab-panel"
@@ -409,18 +444,14 @@
                         <div class="composer-row">
                             <button type="button" id="composer-upload-button"
                                 class="composer-plus-button" aria-label="上传材料" title="上传材料">
-                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                                <svg class="ui-icon" aria-hidden="true"><use href="#icon-plus"></use></svg>
                             </button>
                             <div id="code-approval-menu" class="code-approval-menu hidden">
                                 <button type="button" id="code-approval-toggle" class="code-approval-toggle"
                                     aria-haspopup="menu" aria-expanded="false" aria-label="代码操作审批模式">
-                                    <svg class="code-approval-icon" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                                        aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+                                    <svg class="ui-icon ui-icon-sm code-approval-icon" aria-hidden="true"><use href="#icon-shield-alert"></use></svg>
                                     <span id="code-approval-current">请求批准</span>
-                                    <svg class="code-approval-chevron" width="16" height="16" viewBox="0 0 24 24" fill="none"
-                                        stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
-                                        aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                                    <svg class="ui-icon ui-icon-sm code-approval-chevron" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
                                 </button>
                                 <div id="code-approval-popover" class="code-approval-popover" role="menu" hidden>
                                     <div class="code-approval-popover-head">
@@ -429,60 +460,43 @@
                                     </div>
                                     <button type="button" class="code-approval-option" role="menuitemradio"
                                         aria-checked="true" data-code-approval-mode="ask">
-                                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 11V6a3 3 0 0 0-6 0v5"/><path d="M14 10V5a3 3 0 0 0-6 0v7"/><path d="M10 12.5V7a3 3 0 0 0-6 0v8a7 7 0 0 0 7 7h1a7 7 0 0 0 7-7v-4"/></svg>
+                                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-hand"></use></svg>
                                         <span>
                                             <strong>请求批准</strong>
                                             <small>写入本地项目或联网前始终要求确认</small>
                                         </span>
-                                        <svg class="code-approval-check" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
-                                            aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
+                                        <svg class="ui-icon ui-icon-sm code-approval-check" aria-hidden="true"><use href="#icon-check"></use></svg>
                                     </button>
                                     <button type="button" class="code-approval-option" role="menuitemradio"
                                         aria-checked="false" data-code-approval-mode="auto">
-                                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+                                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-shield-check"></use></svg>
                                         <span>
                                             <strong>替我审批</strong>
                                             <small>仅对检测到的风险操作要求确认</small>
                                         </span>
-                                        <svg class="code-approval-check" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
-                                            aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
+                                        <svg class="ui-icon ui-icon-sm code-approval-check" aria-hidden="true"><use href="#icon-check"></use></svg>
                                     </button>
                                     <button type="button" class="code-approval-option" role="menuitemradio"
                                         aria-checked="false" data-code-approval-mode="full">
-                                        <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                                            stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20"/><path d="M2 12h20"/><path d="m5 5 14 14"/><path d="m19 5-14 14"/></svg>
+                                        <svg class="ui-icon" aria-hidden="true"><use href="#icon-command"></use></svg>
                                         <span>
                                             <strong>完全访问权限</strong>
                                             <small>允许受控命令写入已授权的本地项目</small>
                                         </span>
-                                        <svg class="code-approval-check" width="18" height="18" viewBox="0 0 24 24" fill="none"
-                                            stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"
-                                            aria-hidden="true"><path d="m20 6-11 11-5-5"/></svg>
+                                        <svg class="ui-icon ui-icon-sm code-approval-check" aria-hidden="true"><use href="#icon-check"></use></svg>
                                     </button>
                                 </div>
                             </div>
                             <textarea id="chat-question" name="question" rows="1" required placeholder="请写下你的问题..."></textarea>
                             <button type="button" id="voice-input-button"
                                 class="composer-mic-button" aria-label="语音输入" title="点击开始语音输入">
-                                <svg class="mic-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-                                    <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-                                    <line x1="12" y1="19" x2="12" y2="23"/>
-                                    <line x1="8" y1="23" x2="16" y2="23"/>
-                                </svg>
+                                <svg class="ui-icon ui-icon-sm mic-icon" aria-hidden="true"><use href="#icon-mic"></use></svg>
                                 <span class="mic-recording-indicator" aria-hidden="true"></span>
                             </button>
                             <button type="submit" class="send-button" aria-label="发送问题">
                                 <span class="send-button-label sr-only">发送</span>
                                 <span class="send-button-icon" aria-hidden="true">
-                                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round">
-                                        <path d="M20 4v7a4 4 0 0 1-4 4H5"/>
-                                        <path d="m10 10-5 5 5 5"/>
-                                    </svg>
+                                    <svg class="ui-icon" aria-hidden="true"><use href="#icon-send"></use></svg>
                                 </span>
                                 <span class="send-button-spinner" aria-hidden="true"></span>
                             </button>
@@ -491,23 +505,23 @@
                             <div class="composer-tools-left">
                                 <label class="composer-pill-toggle" title="开启后模型会先推理再回答，质量更高但更慢">
                                     <input type="checkbox" id="deep-thinking-checkbox" />
-                                    <span class="pill-toggle-label">🧠 深度思考</span>
+                                    <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-brain"></use></svg>深度思考</span>
                                 </label>
                                 <label class="composer-pill-toggle web-search-pill" title="开启后会先做联网检索，再结合本地知识回答">
                                     <input type="checkbox" id="web-search-checkbox" />
-                                    <span class="pill-toggle-label">🌐 联网检索</span>
+                                    <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-globe-search"></use></svg>联网检索</span>
                                 </label>
                             </div>
                             <div class="composer-tools-right">
                                 <button type="button" id="lucky-question-button"
                                     class="composer-icon-button" aria-label="随机生成一个可直接提问的问题"
                                     title="随便问一个随机问题">
-                                    <span aria-hidden="true">🎲</span>
+                                    <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-dice"></use></svg>
                                     <span class="sr-only">随机生成一个可直接提问的问题</span>
                                 </button>
                                 <div id="token-usage-badge" class="token-usage-inline" aria-label="Token 使用量">
                                     <button type="button" class="token-usage-toggle" title="查看 Token 使用详情">
-                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V10"/><path d="M18 20V4"/><path d="M6 20v-4"/></svg>
+                                        <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-chart"></use></svg>
                                         <span id="token-usage-summary" class="token-usage-summary">0</span>
                                     </button>
                                     <div id="token-usage-detail" class="token-usage-detail" hidden>
@@ -518,7 +532,7 @@
                                         <div class="token-usage-row token-usage-limit"><span>上下文窗口</span><span id="token-max-context">--</span></div>
                                         <div class="token-usage-compress">
                                             <button type="button" id="context-compress-btn" class="context-compress-btn" title="压缩当前对话上下文，释放上下文空间">
-                                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 14 10 14 10 20"/><polyline points="20 10 14 10 14 4"/><line x1="14" y1="10" x2="21" y2="3"/><line x1="3" y1="21" x2="10" y2="14"/></svg>
+                                                <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-compress"></use></svg>
                                                 <span id="context-compress-label">压缩上下文</span>
                                             </button>
                                         </div>
@@ -527,7 +541,7 @@
                                 <button type="button" id="mobile-workflow-trigger"
                                     class="composer-icon-button" aria-expanded="false"
                                     aria-label="打开推理路径" title="查看推理路径">
-                                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/></svg>
+                                    <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-workflow"></use></svg>
                                 </button>
                             </div>
                         </div>
@@ -551,13 +565,13 @@
                     <div class="workflow-shell-actions">
                         <div class="workflow-zoom-controls" aria-label="DAG 缩放控制">
                             <button type="button" id="workflow-zoom-out"
-                                class="workflow-shell-button workflow-zoom-button" aria-label="缩小 DAG">-</button>
+                                class="workflow-shell-button workflow-zoom-button" aria-label="缩小 DAG"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-minus"></use></svg></button>
                             <button type="button" id="workflow-zoom-reset"
                                 class="workflow-shell-button workflow-zoom-button" aria-label="重置缩放">
                                 <span id="workflow-zoom-value">100%</span>
                             </button>
                             <button type="button" id="workflow-zoom-in"
-                                class="workflow-shell-button workflow-zoom-button" aria-label="放大 DAG">+</button>
+                                class="workflow-shell-button workflow-zoom-button" aria-label="放大 DAG"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-plus"></use></svg></button>
                             <button type="button" id="workflow-zoom-fit"
                                 class="workflow-shell-button workflow-zoom-button" aria-label="适配宽度">适配</button>
                         </div>
@@ -598,7 +612,7 @@
 
         <footer class="app-stack-banner footer-collapsed" aria-label="技术栈">
             <button type="button" class="footer-toggle-btn" aria-label="展开技术栈信息">
-                <span class="footer-toggle-icon" aria-hidden="true"></span>
+                <svg class="ui-icon ui-icon-sm footer-toggle-icon" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
                 <span class="footer-toggle-text">技术栈</span>
             </button>
             <div class="stack-row-runtime">

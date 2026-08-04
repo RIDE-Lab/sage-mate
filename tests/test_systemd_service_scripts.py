@@ -12,6 +12,7 @@ QUICKSTART_SCRIPT = REPO_ROOT / "quickstart.sh"
 HOSTED_WEB_INSTALLER = REPO_ROOT / "release" / "hosted-web.sh"
 PROXY_SCRIPT = REPO_ROOT / "tools" / "run_vllm_openai_proxy.sh"
 ENGINE_SCRIPT = REPO_ROOT / "tools" / "run_vllm_engine.sh"
+APP_SCRIPT = REPO_ROOT / "tools" / "run_app_server.sh"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -211,6 +212,18 @@ def test_run_vllm_openai_proxy_fails_fast_when_port_is_occupied(tmp_path: Path) 
     assert result.returncode == 1
     assert "already in use" in result.stderr
     assert "VLLM_PROXY_PORT" in result.stderr
+
+
+def test_app_runtime_auto_installs_enabled_sage_anns_backend() -> None:
+    script = APP_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'missing+=("isage-vdb>=0.2.0.9")' in script
+    assert 'missing+=("isage-anns>=0.2.0")' in script
+    assert '"$py" -m pip install --quiet "${missing[@]}"' in script
+    assert 'DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem' in script
+    assert 'DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE:-segment' in script
+    assert '"$conversation_index" == "sage_vdb_ann"' in script
+    assert '"$conversation_index" == "sagedb_ann"' in script
 
 
 def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None:

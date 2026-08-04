@@ -43,7 +43,10 @@ _ensure_knowledge_deps() {
         echo "[runtime] Knowledge deps installed." >&2
     fi
 }
-if [[ "${DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem}" == "sagevdb" ]]; then
+conversation_index="${DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE:-segment}"
+if [[ "${DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem}" == "sagevdb" \
+    || "$conversation_index" == "sage_vdb_ann" \
+    || "$conversation_index" == "sagedb_ann" ]]; then
     _ensure_knowledge_deps "$python_exec"
 fi
 

@@ -130,6 +130,31 @@ def test_send_button_uses_animation_state() -> None:
     assert "@keyframes send-button-pulse" in css
 
 
+def test_interface_icons_share_one_accessible_svg_system() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'class="ui-icon-sprite"' in html
+    for symbol in (
+        "menu", "companion", "dice", "brain", "globe-search", "mic",
+        "send", "workflow", "copy", "retry", "sparkle", "bean",
+    ):
+        assert f'id="icon-{symbol}"' in html
+    assert 'href="#icon-brain"' in html
+    assert 'href="#icon-globe-search"' in html
+    assert 'href="#icon-dice"' in html
+    assert "function uiIconSvg(name, className = \"\")" in js
+    assert 'return uiIconSvg(symbolName);' in js
+    assert ".ui-icon {" in css
+    assert ".ui-icon-dot {" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "🧠 深度思考" not in html
+    assert "🌐 联网检索" not in html
+    assert "🎲" not in html
+    assert "👤" not in js
+
+
 def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
