@@ -1218,3 +1218,13 @@ def test_model_supports_thinking_budget_only_for_qwen3_by_default() -> None:
     client.model_name = "Qwen/Qwen3-32B"
 
     assert client._model_supports_thinking_budget() is True
+
+
+def test_native_tool_calling_capability_is_explicit() -> None:
+    client = object.__new__(VllmChatClient)
+
+    client._settings = AppSettings(_env_file=None)
+    assert client.supports_native_tool_calling is False
+
+    client._settings = AppSettings(llm_tool_calling_mode="native", _env_file=None)
+    assert client.supports_native_tool_calling is True

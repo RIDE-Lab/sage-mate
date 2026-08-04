@@ -28,27 +28,42 @@ class SkillToolRegistry:
         memory_store: ConversationMemoryStore | None = None,
     ) -> None:
         self._handlers: dict[str, Callable[..., str]] = {}
+        self._auto_invoke_safe_handlers: set[str] = set()
         self._knowledge_store = knowledge_store
         self._memory_store = memory_store
         self._register_builtins()
 
     def _register_builtins(self) -> None:
         """Register built-in tool handlers."""
-        self.register("knowledge_search", self._knowledge_search)
-        self.register("memory_search", self._memory_search)
-        self.register("get_team_schedule", self._get_team_schedule)
-        self.register("get_blockers", self._get_blockers)
-        self.register("get_paper_digest", self._get_paper_digest)
-        self.register("get_courseware", self._get_courseware)
-        self.register("get_writing_rubric", self._get_writing_rubric)
+        self.register("knowledge_search", self._knowledge_search, auto_invoke_safe=True)
+        self.register("memory_search", self._memory_search, auto_invoke_safe=True)
+        self.register("get_team_schedule", self._get_team_schedule, auto_invoke_safe=True)
+        self.register("get_blockers", self._get_blockers, auto_invoke_safe=True)
+        self.register("get_paper_digest", self._get_paper_digest, auto_invoke_safe=True)
+        self.register("get_courseware", self._get_courseware, auto_invoke_safe=True)
+        self.register("get_writing_rubric", self._get_writing_rubric, auto_invoke_safe=True)
 
-    def register(self, handler_name: str, handler: Callable[..., str]) -> None:
+    def register(
+        self,
+        handler_name: str,
+        handler: Callable[..., str],
+        *,
+        auto_invoke_safe: bool = False,
+    ) -> None:
         """Register a tool handler."""
         self._handlers[handler_name] = handler
+        if auto_invoke_safe:
+            self._auto_invoke_safe_handlers.add(handler_name)
+        else:
+            self._auto_invoke_safe_handlers.discard(handler_name)
 
     def has_handler(self, handler_name: str) -> bool:
         """Check if a handler is registered."""
         return handler_name in self._handlers
+
+    def is_auto_invoke_safe(self, handler_name: str) -> bool:
+        """Whether deterministic compatibility mode may call this handler."""
+        return handler_name in self._auto_invoke_safe_handlers
 
     def execute(self, handler_name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool handler with the given arguments.

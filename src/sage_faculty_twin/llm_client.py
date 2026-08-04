@@ -260,6 +260,11 @@ class VllmChatClient:
         self._session_kv_anchors: dict[str, dict[str, Any]] = {}
         self._last_vllm_start_time_s: float = 0.0
 
+    @property
+    def supports_native_tool_calling(self) -> bool:
+        """Whether tool schemas may be sent directly to the upstream server."""
+        return self._settings.llm_tool_calling_mode == "native"
+
     def _detect_model_name(self) -> str:
         """Query the connected LLM's /models endpoint to discover the served model name."""
         try:

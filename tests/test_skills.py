@@ -348,8 +348,14 @@ class TestSkillToolRegistry:
         registry = SkillToolRegistry()
         registry.register("custom_tool", lambda x: f"Result: {x}")
         assert registry.has_handler("custom_tool") is True
+        assert registry.is_auto_invoke_safe("custom_tool") is False
         result = registry.execute("custom_tool", {"x": "test"})
         assert result == "Result: test"
+
+    def test_builtin_read_only_handlers_are_auto_invoke_safe(self) -> None:
+        registry = SkillToolRegistry()
+        assert registry.is_auto_invoke_safe("knowledge_search") is True
+        assert registry.is_auto_invoke_safe("get_team_schedule") is True
 
     def test_execute_unknown_handler(self) -> None:
         registry = SkillToolRegistry()
@@ -472,6 +478,84 @@ class TestSkillRunner:
         assert result.answer == "Final answer based on search results."
         assert result.tool_calls_made == 1
         assert result.turns_used == 2
+
+    def test_run_with_compatible_tool_transport(self, skill_context: SkillContext) -> None:
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = False
+        mock_llm.answer_question_sync.return_value = (
+            "Meeting agenda based on validated progress."
+        )
+
+        mock_store = MagicMock()
+        mock_store.search.return_value = []
+        runner = SkillRunner(mock_llm, SkillToolRegistry(knowledge_store=mock_store))
+        skill = SkillDefinition(
+            skill_id="portable_tool_skill",
+            name="Portable Tool Skill",
+            system_prompt="Prepare a meeting.",
+            user_prompt_template="Question: {question}\nContext: {retrieved_context}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="search_tool",
+                    name="search_knowledge",
+                    description="Search progress",
+                    parameters={
+                        "query": SkillToolParameter(
+                            type="string", description="Search query", required=True
+                        )
+                    },
+                    handler="knowledge_search",
+                )
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is True
+        assert result.answer == "Meeting agenda based on validated progress."
+        assert result.tool_calls_made == 1
+        assert result.turns_used == 1
+        mock_llm.chat_with_tools_sync.assert_not_called()
+        mock_store.search.assert_called_once_with(
+            query=skill_context.question,
+            top_k=5,
+        )
+
+    def test_compatible_transport_rejects_unresolved_required_arguments(
+        self, skill_context: SkillContext
+    ) -> None:
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = False
+        mock_llm.answer_question_sync.return_value = "must not be called"
+        runner = SkillRunner(mock_llm, SkillToolRegistry())
+        skill = SkillDefinition(
+            skill_id="validated_tool_skill",
+            name="Validated Tool Skill",
+            system_prompt="Test",
+            user_prompt_template="Question: {question}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="search_tool",
+                    name="search_knowledge",
+                    description="Search progress",
+                    parameters={
+                        "shell": SkillToolParameter(
+                            type="string", description="Unsupported input", required=True
+                        )
+                    },
+                    handler="knowledge_search",
+                )
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is False
+        assert result.error == "No manifest tools have compatible request inputs"
+        assert result.tool_calls_made == 0
+        mock_llm.answer_question_sync.assert_not_called()
 
     def test_run_max_turns_reached(self, skill_context: SkillContext) -> None:
         mock_llm = MagicMock()

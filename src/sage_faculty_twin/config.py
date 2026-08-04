@@ -38,6 +38,13 @@ class AppSettings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=1, le=300)
     llm_retry_attempts: int = Field(default=2, ge=0, le=5)
     llm_retry_backoff_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    llm_tool_calling_mode: str = Field(
+        default="compat",
+        pattern="^(compat|native)$",
+        description="Tool execution transport. 'compat' runs approved read-only manifest tools "
+        "and uses an ordinary chat completion for synthesis; 'native' requires the upstream "
+        "OpenAI-compatible server to be launched with tool-call parsing enabled.",
+    )
     llm_policy_enabled: bool = Field(default=True)
     llm_policy_variant_kind: str = Field(default="ablation")
     llm_policy_variant_name: str = Field(default="adaptive-controller")
