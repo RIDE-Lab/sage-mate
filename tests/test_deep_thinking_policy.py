@@ -52,8 +52,22 @@ def test_explicit_deep_thinking_adds_deep_answer_guidance() -> None:
 
     guidance = FacultyTwinWorkflowSupport._build_deep_answer_guidance(context.request)
 
-    assert "deeper analysis" in guidance
+    assert "Deep analysis mode is active" in guidance
     assert "<think>" in guidance
+    assert "核心判断" in guidance
+    assert "权衡与风险" in guidance
+    assert "建议行动" in guidance
+
+
+def test_explicit_deep_thinking_bypasses_compact_general_answer(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+
+    regular_context = _build_context(deep_thinking=True, deep_thinking_explicit=False)
+    deep_context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
+
+    assert service._should_use_compact_general_answer(regular_context) is True
+    assert service._should_use_compact_general_answer(deep_context) is False
 
 
 def test_strip_internal_thinking_content_removes_think_blocks() -> None:
@@ -378,14 +392,14 @@ def test_general_question_ignores_incidental_knowledge_hits(tmp_path: Path) -> N
     assert service._should_use_compact_general_answer(context)
 
 
-def test_general_question_ignores_incidental_memory_hits(tmp_path: Path) -> None:
+def test_explicit_deep_question_keeps_full_path_with_incidental_memory_hits(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
     context.request.question = "如何判断哪个系统方向更适合作为研究主线？"
     context.memory_hits = [object()]  # type: ignore[list-item]
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
 def test_faculty_specific_question_keeps_knowledge_hits_on_full_path(tmp_path: Path) -> None:
@@ -407,13 +421,13 @@ def test_ungrounded_general_answer_uses_compact_path(tmp_path: Path) -> None:
     assert service._should_use_compact_general_answer(context)
 
 
-def test_explicit_deep_thinking_uses_compact_path_without_grounding(tmp_path: Path) -> None:
+def test_explicit_deep_thinking_uses_full_path_without_grounding(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
     context.request.question = "请深入比较两个常见方法的优缺点。"
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
 def test_explicit_deep_thinking_keeps_grounded_answer_on_full_path(tmp_path: Path) -> None:

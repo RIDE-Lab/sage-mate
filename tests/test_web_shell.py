@@ -40,7 +40,9 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'apiRequest("/knowledge/reviews/summary")' in script
     assert "data-feedback-web-review" in script
     assert "/knowledge/${encodeURIComponent(documentId)}/review" in script
-    assert "const luckyEntries = RANDOM_CHAT_QUESTION_BANKS[profile] || RANDOM_CHAT_QUESTION_BANKS.general_visitor;" in script
+    assert "const luckyEntries = buildLuckyQuestionCandidates(profile);" in script
+    assert "const LUCKY_QUESTION_TEMPLATES = [" in script
+    assert "const LUCKY_QUESTION_BLUEPRINTS = {" in script
     assert "const overlayModals = [" in script
     assert "].filter(Boolean);" in script
     assert "function hasVisibleOverlayModal()" in script

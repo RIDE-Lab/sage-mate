@@ -246,9 +246,26 @@ const CODE_APPROVAL_MODES = {
 };
 let currentCodeApprovalMode = restoreCodeApprovalMode();
 
-deepThinkingCheckbox?.addEventListener("change", () => {
-    deepThinkingExplicitlyEnabled = Boolean(deepThinkingCheckbox.checked);
-});
+function syncDeepThinkingPresentation() {
+    if (!deepThinkingCheckbox) return;
+    const active = Boolean(deepThinkingCheckbox.checked);
+    const toggle = deepThinkingCheckbox.closest(".composer-pill-toggle");
+    deepThinkingExplicitlyEnabled = active;
+    toggle?.classList.toggle("is-active", active);
+    toggle?.setAttribute(
+        "title",
+        active
+            ? "已开启：使用完整上下文、更高回答预算和结构化权衡分析"
+            : "开启完整上下文、结构化权衡分析和更高回答预算"
+    );
+    deepThinkingCheckbox.setAttribute(
+        "aria-label",
+        active ? "深度思考已开启" : "深度思考未开启"
+    );
+}
+
+deepThinkingCheckbox?.addEventListener("change", syncDeepThinkingPresentation);
+syncDeepThinkingPresentation();
 
 const WEB_SEARCH_TOGGLE_KEY = "myTwinWebSearchEnabled";
 if (webSearchCheckbox) {
@@ -1134,37 +1151,126 @@ function applyAppProfilePresentation(data = {}) {
     }
 }
 
-const RANDOM_CHAT_QUESTION_BANKS = {
-    general_visitor: [
-        { question: "张老师主要研究什么方向？", context: "初次来访" },
-        { question: "有没有适合先看的公开资料？", context: "初次来访" },
-        { question: "如果想预约一次讨论，我需要先准备什么？", context: "初次来访" },
-        { question: "如果我对推理系统方向感兴趣，建议先从哪些关键词或系统开始了解？", context: "初次来访", deepThinking: true },
-        { question: "如果我想快速了解张老师的研究路线，最值得先问哪三个问题？", context: "初次来访", deepThinking: true },
-        { question: "如果我想进一步交流研究问题，第一次联系时最好附上哪些信息？", context: "初次来访" },
-    ],
-    hust_undergraduate: [
-        { question: "大模型推理引擎 Tutorial 7 主要讲了什么，我应该先看哪部分？", context: "大模型推理引擎课程答疑" },
-        { question: "数据库实验课开始前，我应该先准备哪些环境和材料？", context: "数据库实验课答疑" },
-        { question: "如果我要准备下一次 office hour，最值得先整理哪些实验现象？", context: "本科课程答疑", deepThinking: true },
-        { question: "如果我的实验结果不稳定，提问时最好带哪些日志或截图？", context: "大模型推理引擎课程答疑", deepThinking: true },
-        { question: "如果我想更快跟上课程节奏，最应该先补哪几块基础？", context: "本科课程答疑" },
-    ],
-    paper_writing_student: [
-        { question: "论文写作课第 7 讲主要讲什么？", context: "论文写作课" },
-        { question: "如果我现在只有一个粗略想法，应该怎么把它整理成论文提纲？", context: "论文写作课", deepThinking: true },
-        { question: "写 introduction 时，最常见的结构性问题有哪些？", context: "论文写作课" },
-        { question: "如果 related work 写得很散，我应该先从哪里开始重构？", context: "论文写作课", deepThinking: true },
-        { question: "投稿前自查时，最值得优先检查的三件事是什么？", context: "论文写作课" },
-    ],
-    lab_member: [
-        { question: "我上次提到的研究主题和 blocker 是什么？", context: "科研指导" },
-        { question: "我准备下次组会时，汇报结构最好怎么排？", context: "组会准备", deepThinking: true },
-        { question: "如果实验结果一般，怎么组织分析才更有说服力？", context: "科研指导", deepThinking: true },
-        { question: "这周如果想提高推进效率，我最该补哪块背景或工具链？", context: "科研指导" },
-        { question: "如果我这周只能推进一件事，最应该优先解决哪个 blocker？", context: "科研指导", deepThinking: true },
-    ],
+const LUCKY_QUESTION_TEMPLATES = [
+    "围绕“{topic}”，请从{lens}展开分析，并给我{outcome}。",
+    "如果目标是“{topic}”，最容易忽略什么？请结合{lens}分析，最后给出{outcome}。",
+    "把“{topic}”变成一个可行动的问题：先梳理{lens}，再形成{outcome}。",
+    "我想更具体地理解“{topic}”。请避免泛泛介绍，围绕{lens}给出{outcome}。",
+];
+
+const LUCKY_QUESTION_BLUEPRINTS = {
+    general_visitor: {
+        context: "初次来访",
+        topics: [
+            "张老师当前关注的推理系统研究",
+            "加入课题组前的能力准备",
+            "一次有效的科研交流或合作",
+            "从课程学习过渡到系统研究",
+        ],
+        lenses: [
+            "研究问题、已有基础和开放挑战",
+            "学习成本、实践路径和验证方式",
+            "匹配程度、准备材料和沟通效率",
+            "短期入门价值与长期成长空间",
+        ],
+        outcomes: [
+            "三个由浅入深的追问",
+            "一份一周内可执行的探索清单",
+            "判断是否值得继续投入的标准",
+            "一个最小可验证的下一步",
+        ],
+    },
+    hust_undergraduate: {
+        context: "本科课程答疑",
+        topics: [
+            "大模型推理实验中的性能瓶颈",
+            "数据库实验从报错到定位根因",
+            "下一次 office hour 的准备",
+            "从会做作业到理解系统原理",
+        ],
+        lenses: [
+            "前置知识、实验现象和关键日志",
+            "概念理解、动手验证和复盘方法",
+            "时间投入、常见误区和验收标准",
+            "问题描述、最小复现和排查顺序",
+        ],
+        outcomes: [
+            "一份按优先级排列的排查步骤",
+            "三个适合向老师追问的问题",
+            "一个本周能完成的小实验",
+            "判断自己是否真正掌握的检查表",
+        ],
+    },
+    paper_writing_student: {
+        context: "论文写作课",
+        topics: [
+            "把粗略想法变成清晰论文主线",
+            "重构松散的 related work",
+            "让 introduction 的论证更有张力",
+            "投稿前发现最危险的表达漏洞",
+        ],
+        lenses: [
+            "问题重要性、已有缺口和核心贡献",
+            "读者预期、论证顺序和证据强度",
+            "结构完整性、术语一致性和可验证性",
+            "审稿人可能质疑的假设、对比和边界",
+        ],
+        outcomes: [
+            "一个可直接改写的段落提纲",
+            "三条按影响排序的修改建议",
+            "一份投稿前自查清单",
+            "一个能检验叙事是否成立的反向问题",
+        ],
+    },
+    lab_member: {
+        context: "科研指导",
+        topics: [
+            "本周最值得优先解决的研究 blocker",
+            "波动很大的实验结果",
+            "下一次组会的核心叙事",
+            "一个候选研究方向是否值得继续",
+        ],
+        lenses: [
+            "研究假设、可复现证据和最大不确定性",
+            "影响范围、验证成本和失败收益",
+            "baseline、公平对比和关键消融",
+            "短期里程碑、长期贡献和止损条件",
+        ],
+        outcomes: [
+            "一个两天内可执行的最小实验",
+            "三项按收益风险排序的行动",
+            "一页组会汇报的逻辑骨架",
+            "明确的继续、转向或停止判据",
+        ],
+    },
 };
+
+const LUCKY_QUESTION_RECENT_LIMIT = 24;
+
+function fillLuckyQuestionTemplate(template, values) {
+    return Object.entries(values).reduce(
+        (result, [key, value]) => result.replaceAll(`{${key}}`, value),
+        template
+    );
+}
+
+function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
+    const blueprint = LUCKY_QUESTION_BLUEPRINTS[profile] || LUCKY_QUESTION_BLUEPRINTS.general_visitor;
+    const candidates = [];
+    for (const template of LUCKY_QUESTION_TEMPLATES) {
+        for (const topic of blueprint.topics) {
+            for (const lens of blueprint.lenses) {
+                for (const outcome of blueprint.outcomes) {
+                    candidates.push({
+                        question: fillLuckyQuestionTemplate(template, { topic, lens, outcome }),
+                        context: blueprint.context,
+                    });
+                }
+            }
+        }
+    }
+    return candidates;
+}
 
 // --- Seed chip pool: random starter questions per profile ---
 // 3 are randomly picked on each page load to give variety.
@@ -1899,7 +2005,7 @@ function applyLuckyQuestionPreferences(selection) {
 
 function getLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
     const config = getVisitorProfileConfig(profile);
-    const luckyEntries = RANDOM_CHAT_QUESTION_BANKS[profile] || RANDOM_CHAT_QUESTION_BANKS.general_visitor;
+    const luckyEntries = buildLuckyQuestionCandidates(profile);
     const entries = luckyEntries.length > 0
         ? luckyEntries
         : [
@@ -1924,16 +2030,13 @@ function pickLuckyQuestion(profile = visitorProfileInput?.value) {
     if (candidates.length === 0) {
         return null;
     }
-    // Filter out recently shown questions. Only reset the history once
-    // every question in the pool has been shown, so users see the full
-    // set before any repeats.
+    // Avoid recently generated combinations without persisting the complete
+    // Cartesian product. The bounded history stays small across long-lived
+    // browser sessions while still preventing immediate repetition.
     const unseenCandidates = candidates.filter(
         (entry) => !luckyQuestionHistory.includes(entry.question)
     );
     const pool = unseenCandidates.length > 0 ? unseenCandidates : candidates;
-    if (unseenCandidates.length === 0) {
-        luckyQuestionHistory = [];
-    }
     return pool[Math.floor(Math.random() * pool.length)] || null;
 }
 
@@ -1942,7 +2045,7 @@ async function handleLuckyQuestionClick() {
         return;
     }
     const originalHtml = luckyQuestionButton.innerHTML;
-    const originalLabel = luckyQuestionButton.getAttribute("aria-label") || "随机生成一个可直接提问的问题";
+    const originalLabel = luckyQuestionButton.getAttribute("aria-label") || "用模板随机组合一个新问题";
     luckyQuestionButton.disabled = true;
     luckyQuestionButton.classList.add("is-loading");
     luckyQuestionButton.setAttribute("aria-label", "正在生成问题");
@@ -1955,11 +2058,7 @@ async function handleLuckyQuestionClick() {
         }
         lastLuckyQuestion = selected.question;
         luckyQuestionHistory.push(selected.question);
-        // Keep history bounded to the current pool size so it resets naturally.
-        const poolSize = getLuckyQuestionCandidates(profile).length;
-        if (poolSize > 1 && luckyQuestionHistory.length >= poolSize) {
-            luckyQuestionHistory = luckyQuestionHistory.slice(-1);
-        }
+        luckyQuestionHistory = luckyQuestionHistory.slice(-LUCKY_QUESTION_RECENT_LIMIT);
         saveLuckyQuestionHistory();
         applyLuckyQuestionPreferences(selected);
         seedChatQuestion(selected.question, selected.context || "");
@@ -2602,7 +2701,10 @@ chatForm.addEventListener("submit", async (event) => {
     const pendingMessage = appendMessage("assistant", assistantLabel, "正在整理问题、检索资料并准备回复", {
         state: "pending",
     });
-    renderPendingAssistantMessage(pendingMessage, "理解问题", []);
+    const explicitDeepMode = payload.deep_thinking && payload.deep_thinking_explicit;
+    renderPendingAssistantMessage(pendingMessage, "理解问题", [], {
+        deepThinking: explicitDeepMode,
+    });
     persistActiveConversationSnapshot();
     const requestBody = buildChatRequestBody(payload, submittedFiles);
     document.getElementById("chat-question").value = "";
@@ -2672,7 +2774,8 @@ chatForm.addEventListener("submit", async (event) => {
                 renderPendingAssistantMessage(
                     pendingMessage,
                     retryLabel,
-                    []
+                    [],
+                    { deepThinking: explicitDeepMode }
                 );
                 sageCompanionController?.setState("thinking", retryLabel);
                 await new Promise((resolve) => globalThis.setTimeout(resolve, 2000));
@@ -7028,7 +7131,13 @@ function syncConversationMode() {
     document.body.classList.toggle("conversation-active", hasConversation);
 }
 
-function renderPendingAssistantMessage(container, currentStage = "理解问题", workflowSteps = []) {
+function renderPendingAssistantMessage(
+    container,
+    currentStage = "理解问题",
+    workflowSteps = [],
+    { deepThinking = false } = {}
+) {
+    const processingLabel = deepThinking ? "正在深度分析" : "正在处理";
     container.innerHTML = `
         <div class="message-bubble-row">
             <div class="message-avatar" aria-hidden="true">S</div>
@@ -7040,11 +7149,11 @@ function renderPendingAssistantMessage(container, currentStage = "理解问题",
                         <span class="dot"></span>
                         <span class="dot"></span>
                     </div>
-                    <div class="thinking-panel">
+                    <div class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}">
                         <div class="thinking-panel-head">
                             <span class="thinking-orb" aria-hidden="true"></span>
                             <div>
-                                <strong>正在处理</strong>
+                                <strong>${processingLabel}</strong>
                                 <p id="pending-stage-label" class="thinking-stage-label">${escapeHtml(currentStage)}</p>
                             </div>
                         </div>

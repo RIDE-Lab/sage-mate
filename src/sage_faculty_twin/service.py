@@ -2100,10 +2100,7 @@ class FacultyTwinWorkflowSupport:
             raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
 
         relevance_question = self._build_answer_relevance_question(context)
-        explicit_deep = bool(
-            getattr(context.request, "deep_thinking_explicit", False)
-            and getattr(context.request, "deep_thinking", True)
-        )
+        explicit_deep = self._is_explicit_deep_request(context.request)
         output_constraints = AnswerConstraints.from_question(context.request.question)
         use_curated_answer = self._should_use_curated_technical_guidance(
             relevance_question
@@ -2221,14 +2218,22 @@ class FacultyTwinWorkflowSupport:
             key="llm_answer",
             title="生成回答",
             summary=(
-                "已生成建议型回复。"
-                if context.decision_mode == "advise_only"
-                else "已生成最终回复。"
+                "已完成深度分析并生成结构化回复。"
+                if explicit_deep
+                else (
+                    "已生成建议型回复。"
+                    if context.decision_mode == "advise_only"
+                    else "已生成最终回复。"
+                )
             ),
             detail=(
-                "已根据角色设定和上下文生成建议，但不替用户或老师做最终决定。"
-                if context.decision_mode == "advise_only"
-                else "已根据角色设定和上下文生成最终回复。"
+                "已使用完整上下文分析核心判断、关键依据、权衡风险与下一步行动。"
+                if explicit_deep
+                else (
+                    "已根据角色设定和上下文生成建议，但不替用户或老师做最终决定。"
+                    if context.decision_mode == "advise_only"
+                    else "已根据角色设定和上下文生成最终回复。"
+                )
             ),
             duration_ms=self._elapsed_ms(started_at),
         )
@@ -2302,13 +2307,15 @@ class FacultyTwinWorkflowSupport:
         return prompt
 
     def _retry_answer_with_compact_prompt(self, context: ChatWorkflowContext) -> str:
-        deep_recovery = bool(
-            getattr(context.request, "deep_thinking_explicit", False)
-            and getattr(context.request, "deep_thinking", True)
-        )
+        deep_recovery = self._is_explicit_deep_request(context.request)
         compact_system_prompt = self._build_compact_answer_system_prompt(
             context.request.question
         )
+        if deep_recovery:
+            compact_system_prompt = (
+                f"{compact_system_prompt}\n"
+                f"{self._build_deep_answer_guidance(context.request)}"
+            )
         compact_user_prompt = context.request.question.strip()
         compact_user_prompt = re.sub(r"^请?深入分析[：:，,、\\s]*", "", compact_user_prompt)
         owner_fact_grounding = self._build_owner_fact_grounding_guidance(
@@ -2824,6 +2831,11 @@ class FacultyTwinWorkflowSupport:
     def _should_use_compact_general_answer(self, context: ChatWorkflowContext) -> bool:
         if self._is_benchmark_request(context.request):
             return False
+        # Explicit deep mode must retain the fully prepared prompt. The compact
+        # path intentionally replaces that prompt, which would otherwise drop
+        # deep-analysis guidance and make the user-facing toggle ineffective.
+        if self._is_explicit_deep_request(context.request):
+            return False
         if context.web_search_hits or getattr(context.request, "attachments", None):
             return False
         question = context.request.question
@@ -2894,7 +2906,7 @@ class FacultyTwinWorkflowSupport:
         if not getattr(context.request, "deep_thinking", True):
             return False
 
-        if getattr(context.request, "deep_thinking_explicit", False):
+        if self._is_explicit_deep_request(context.request):
             return True
 
         # B3: Auto-disable thinking for simple intents (e.g. general, booking)
@@ -4041,17 +4053,25 @@ class FacultyTwinWorkflowSupport:
         return "\n".join(lines) + "\n"
 
     @staticmethod
-    def _build_deep_answer_guidance(request: ChatRequest) -> str:
-        if not (
+    def _is_explicit_deep_request(request: ChatRequest) -> bool:
+        """Return whether the user deliberately selected deep analysis."""
+        return bool(
             getattr(request, "deep_thinking_explicit", False)
             and getattr(request, "deep_thinking", True)
-        ):
+        )
+
+    @classmethod
+    def _build_deep_answer_guidance(cls, request: ChatRequest) -> str:
+        if not cls._is_explicit_deep_request(request):
             return ""
         return (
-            "Deep-answer guidance: The user explicitly requested deeper analysis. "
-            "Do not expose hidden chain-of-thought or <think> tags. Provide a structured final answer "
-            "with: (1) the core trade-off or thesis, (2) 3-5 concrete factors, "
-            "(3) practical next steps or evaluation criteria. Keep it concise but substantive.\n"
+            "Deep analysis mode is active because the user explicitly selected it. "
+            "Do not expose hidden chain-of-thought or <think> tags. The final answer must be "
+            "materially more analytical than a fast answer and use four clearly labeled parts: "
+            "(1) 核心判断, (2) 关键依据 with 3-5 concrete factors, "
+            "(3) 权衡与风险 including assumptions or uncertainty, and "
+            "(4) 建议行动 with practical next steps or evaluation criteria. "
+            "Prioritize depth and decision usefulness over brevity while avoiding filler.\n"
         )
 
     def _build_fast_answer_guidance(
@@ -4061,9 +4081,7 @@ class FacultyTwinWorkflowSupport:
     ) -> str:
         if not self._settings.fast_answer_concise_guidance_enabled:
             return ""
-        if getattr(request, "deep_thinking_explicit", False) and getattr(
-            request, "deep_thinking", True
-        ):
+        if self._is_explicit_deep_request(request):
             return ""
 
         question = request.question
