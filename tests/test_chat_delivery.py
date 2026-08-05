@@ -40,6 +40,15 @@ def test_delivery_gate_normalizes_and_preserves_response_contract() -> None:
         ("   ", "empty_answer"),
         ("![](https://example.test/empty.png)", "non_substantive_answer"),
         (
+            "Action-Oriented Answer in User's Language: omit generic introductions.",
+            "internal_prompt_leak",
+        ),
+        (
+            "This is a long English-only answer that ignores the requested Chinese language.",
+            "answer_language_mismatch",
+        ),
+        (r"\\u4f60\\u597d\\u4e16\\u754c", "decode_artifacts"),
+        (
             "Answer Context: hidden prompt\nCurrent User Question: secret",
             "internal_prompt_leak",
         ),
@@ -65,6 +74,8 @@ def test_delivery_gate_rejects_structurally_unsafe_candidates(
                 if "sentence" in issue
                 else "请控制在5字以内"
                 if "char_limit" in issue
+                else "请用中文回答这个问题"
+                if issue == "answer_language_mismatch"
                 else "A real question"
             ),
         )

@@ -8,6 +8,7 @@ filtered by compatibility and enabled status.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 
 from .skills import (
@@ -17,6 +18,12 @@ from .skills import (
 )
 
 logger = logging.getLogger(__name__)
+
+_NEGATED_TRIGGER_PREFIX = re.compile(
+    r"(?:不是来|不是|并非|不要|不想|无需|无意|没打算|not|do not|don't)"
+    r"[^，。；;,.!?]{0,8}$",
+    re.IGNORECASE,
+)
 
 
 class SkillRouter:
@@ -77,7 +84,7 @@ class SkillRouter:
         q = question.lower()
         for skill in self._enabled_skills:
             for pattern in skill.trigger_patterns:
-                if pattern.lower() in q:
+                if self._matches_non_negated_pattern(q, pattern):
                     logger.debug(
                         "Skill %s matched question via pattern '%s'",
                         skill.skill_id,
@@ -116,7 +123,20 @@ class SkillRouter:
         matches = []
         for skill in self._enabled_skills:
             for pattern in skill.trigger_patterns:
-                if pattern.lower() in q:
+                if self._matches_non_negated_pattern(q, pattern):
                     matches.append(skill)
                     break  # Only add each skill once
         return matches
+
+    @staticmethod
+    def _matches_non_negated_pattern(question: str, pattern: str) -> bool:
+        normalized_pattern = pattern.lower()
+        search_from = 0
+        while True:
+            index = question.find(normalized_pattern, search_from)
+            if index < 0:
+                return False
+            prefix = question[max(0, index - 12) : index]
+            if not _NEGATED_TRIGGER_PREFIX.search(prefix):
+                return True
+            search_from = index + len(normalized_pattern)

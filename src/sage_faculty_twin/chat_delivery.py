@@ -57,6 +57,32 @@ _INTERNAL_SCAFFOLD_MARKERS = (
     "final answer",
 )
 
+_PROMPT_LEAK_MARKERS = (
+    "response instructions",
+    "expert response instructions",
+    "fast-answer guidance",
+    "deep-answer guidance",
+    "request context:",
+    "student name:",
+    "visitor profile:",
+    "specific instruction details are not disclosed",
+    "my apologies for the roundabout question",
+    "my name is zhang, and i am a digital assistant",
+    "questions about my operational limits",
+    "please allow me to assist you further",
+    "based on the current conversation context",
+    "there is no new specific request",
+    "action-oriented answer in the user's language",
+    "action-oriented answer in user's language",
+    "omit generic introductions and repeated background",
+    "700 个汉字以内",
+    "基于课题组公开资料和知识库为您提供学术答疑",
+    "我的回答基于课题组公开资料和知识库，具体指令细节不便透露",
+    "这类内部信息不便在此讨论",
+    "用户已开启深度思考",
+    "只展示结论，不展示思维链",
+)
+
 
 def answer_has_substantive_content(text: str) -> bool:
     """Return False for link-, image-, markup-, or punctuation-only output."""
@@ -66,6 +92,60 @@ def answer_has_substantive_content(text: str) -> bool:
     )
     without_urls = re.sub(r"https?://\S+", "", without_html_images)
     return bool(re.search(r"[A-Za-z0-9\u4e00-\u9fff]", without_urls))
+
+
+def answer_contains_prompt_leak(text: str | None) -> bool:
+    if not text:
+        return False
+    head = text.strip()[:900].lower()
+    return any(marker in head for marker in _PROMPT_LEAK_MARKERS)
+
+
+def answer_language_mismatches_question(question: str, answer: str | None) -> bool:
+    """Reject long English boilerplate for a substantive Chinese question."""
+    if not answer:
+        return False
+    question_cjk = len(re.findall(r"[\u4e00-\u9fff]", question))
+    answer_text = answer.strip()
+    if question_cjk < 4:
+        return False
+    answer_cjk = len(re.findall(r"[\u4e00-\u9fff]", answer_text))
+    if (
+        answer_cjk == 0
+        and answer_text.upper() != "OK"
+        and sum(character.isalpha() for character in answer_text) >= 2
+    ):
+        return True
+    if len(answer_text) < 80:
+        return False
+    answer_letters = len(re.findall(r"[A-Za-z]", answer_text))
+    return answer_letters >= 40 and (answer_cjk < 8 or answer_letters > answer_cjk * 2)
+
+
+def answer_has_decode_artifacts(text: str | None) -> bool:
+    if not text:
+        return False
+    head = text[:1200]
+    escaped_unicode_count = len(re.findall(r"\\u[0-9a-fA-F]{4}", head))
+    backslash_count = head.count("\\")
+    return escaped_unicode_count >= 2 or backslash_count >= max(12, len(head) // 8)
+
+
+def answer_quality_issues(question: str, answer: str | None) -> tuple[str, ...]:
+    normalized = (answer or "").strip()
+    issues: list[str] = []
+    if not normalized:
+        issues.append("empty_answer")
+        return tuple(issues)
+    if not answer_has_substantive_content(normalized):
+        issues.append("non_substantive_answer")
+    if answer_contains_prompt_leak(normalized):
+        issues.append("internal_prompt_leak")
+    if answer_language_mismatches_question(question, normalized):
+        issues.append("answer_language_mismatch")
+    if answer_has_decode_artifacts(normalized):
+        issues.append("decode_artifacts")
+    return tuple(issues)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,10 +197,7 @@ class ChatDeliveryGate:
         issues: list[str] = []
         if not candidate.original_question.strip():
             issues.append("missing_original_question")
-        if not normalized:
-            issues.append("empty_answer")
-        elif not answer_has_substantive_content(normalized):
-            issues.append("non_substantive_answer")
+        issues.extend(answer_quality_issues(candidate.original_question, normalized))
         lowered = normalized.lower()
         scaffold_marker_count = sum(
             marker in lowered for marker in _INTERNAL_SCAFFOLD_MARKERS
@@ -129,7 +206,9 @@ class ChatDeliveryGate:
             line.strip().startswith(("system prompt:", "developer message:"))
             for line in lowered.splitlines()
         )
-        if scaffold_marker_count >= 2 or exposes_privileged_message:
+        if (
+            scaffold_marker_count >= 2 or exposes_privileged_message
+        ) and "internal_prompt_leak" not in issues:
             issues.append("internal_prompt_leak")
         constraints = AnswerConstraints.from_question(candidate.original_question)
         if constraints.max_chars is not None and len(normalized) > constraints.max_chars:

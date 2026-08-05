@@ -29,19 +29,63 @@ class SkillToolRegistry:
     ) -> None:
         self._handlers: dict[str, Callable[..., str]] = {}
         self._auto_invoke_safe_handlers: set[str] = set()
+        self._parallel_safe_handlers: set[str] = set()
+        self._context_parameters: dict[str, frozenset[str]] = {}
         self._knowledge_store = knowledge_store
         self._memory_store = memory_store
         self._register_builtins()
 
     def _register_builtins(self) -> None:
         """Register built-in tool handlers."""
-        self.register("knowledge_search", self._knowledge_search, auto_invoke_safe=True)
-        self.register("memory_search", self._memory_search, auto_invoke_safe=True)
-        self.register("get_team_schedule", self._get_team_schedule, auto_invoke_safe=True)
-        self.register("get_blockers", self._get_blockers, auto_invoke_safe=True)
-        self.register("get_paper_digest", self._get_paper_digest, auto_invoke_safe=True)
-        self.register("get_courseware", self._get_courseware, auto_invoke_safe=True)
-        self.register("get_writing_rubric", self._get_writing_rubric, auto_invoke_safe=True)
+        self.register(
+            "knowledge_search",
+            self._knowledge_search,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("visitor_profile",),
+        )
+        self.register(
+            "memory_search",
+            self._memory_search,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("conversation_id",),
+        )
+        self.register(
+            "get_team_schedule",
+            self._get_team_schedule,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("visitor_profile",),
+        )
+        self.register(
+            "get_blockers",
+            self._get_blockers,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("conversation_id", "visitor_profile"),
+        )
+        self.register(
+            "get_paper_digest",
+            self._get_paper_digest,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("visitor_profile",),
+        )
+        self.register(
+            "get_courseware",
+            self._get_courseware,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("visitor_profile",),
+        )
+        self.register(
+            "get_writing_rubric",
+            self._get_writing_rubric,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+            context_parameters=("visitor_profile",),
+        )
 
     def register(
         self,
@@ -49,6 +93,8 @@ class SkillToolRegistry:
         handler: Callable[..., str],
         *,
         auto_invoke_safe: bool = False,
+        parallel_safe: bool = False,
+        context_parameters: tuple[str, ...] = (),
     ) -> None:
         """Register a tool handler."""
         self._handlers[handler_name] = handler
@@ -56,6 +102,11 @@ class SkillToolRegistry:
             self._auto_invoke_safe_handlers.add(handler_name)
         else:
             self._auto_invoke_safe_handlers.discard(handler_name)
+        if parallel_safe:
+            self._parallel_safe_handlers.add(handler_name)
+        else:
+            self._parallel_safe_handlers.discard(handler_name)
+        self._context_parameters[handler_name] = frozenset(context_parameters)
 
     def has_handler(self, handler_name: str) -> bool:
         """Check if a handler is registered."""
@@ -65,7 +116,17 @@ class SkillToolRegistry:
         """Whether deterministic compatibility mode may call this handler."""
         return handler_name in self._auto_invoke_safe_handlers
 
-    def execute(self, handler_name: str, arguments: dict[str, Any]) -> str:
+    def is_parallel_safe(self, handler_name: str) -> bool:
+        """Whether independent calls to this handler may overlap."""
+        return handler_name in self._parallel_safe_handlers
+
+    def execute(
+        self,
+        handler_name: str,
+        arguments: dict[str, Any],
+        *,
+        context_values: dict[str, Any] | None = None,
+    ) -> str:
         """Execute a tool handler with the given arguments.
 
         Returns a JSON string with the result or error.
@@ -74,7 +135,15 @@ class SkillToolRegistry:
         if handler is None:
             return json.dumps({"error": f"Unknown tool: {handler_name}"})
         try:
-            result = handler(**arguments)
+            execution_arguments = dict(arguments)
+            if context_values:
+                for name in self._context_parameters.get(handler_name, ()):
+                    value = context_values.get(name)
+                    if value is None:
+                        execution_arguments.pop(name, None)
+                    else:
+                        execution_arguments[name] = value
+            result = handler(**execution_arguments)
             return result if isinstance(result, str) else json.dumps(result)
         except Exception as exc:
             logger.warning("Tool %s failed: %s", handler_name, exc)
@@ -91,6 +160,7 @@ class SkillToolRegistry:
         query: str,
         limit: int = 5,
         tags: str | None = None,
+        visitor_profile: str | None = None,
     ) -> str:
         """Search the knowledge base for relevant documents.
 
@@ -103,12 +173,15 @@ class SkillToolRegistry:
             JSON string with search results.
         """
         if self._knowledge_store is None:
-            return json.dumps({"results": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"results": [], "message": "Knowledge store not available"}
+            )
 
         try:
             hits = self._knowledge_store.search(
                 query=query,
                 top_k=limit,
+                visitor_profile=visitor_profile,
             )
             results = []
             for hit in hits[:limit]:
@@ -145,12 +218,33 @@ class SkillToolRegistry:
         """
         if self._memory_store is None:
             return json.dumps({"results": [], "message": "Memory store not available"})
+        normalized_conversation_id = (conversation_id or "").strip()
+        if not normalized_conversation_id or normalized_conversation_id == "anonymous":
+            return json.dumps(
+                {"results": [], "message": "Conversation scope not available"}
+            )
 
-        # Memory search requires a ChatRequest - return empty for now
-        # In production, the skill runner would pass context
-        return json.dumps({"results": [], "message": "Memory search requires conversation context"})
+        bounded_limit = max(1, min(int(limit), 10))
+        records = self._memory_store.list_recent_conversation_records(
+            normalized_conversation_id,
+            limit=bounded_limit,
+        )
+        results = [
+            {
+                "question": record.question[:500],
+                "answer": record.answer[:800],
+                "course_context": record.course_context,
+                "created_at": record.created_at.isoformat(),
+            }
+            for record in records
+        ]
+        return json.dumps({"results": results, "total": len(results)})
 
-    def _get_team_schedule(self, days_ahead: int = 7) -> str:
+    def _get_team_schedule(
+        self,
+        days_ahead: int = 7,
+        visitor_profile: str | None = None,
+    ) -> str:
         """Get team schedule and meeting availability.
 
         Args:
@@ -161,27 +255,36 @@ class SkillToolRegistry:
         """
         # Search knowledge base for schedule-related documents
         if self._knowledge_store is None:
-            return json.dumps({"schedule": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"schedule": [], "message": "Knowledge store not available"}
+            )
 
         try:
             hits = self._knowledge_store.search(
                 query="团队工作安排 周会 会议 schedule",
                 top_k=5,
+                visitor_profile=visitor_profile,
             )
             schedule_items = []
             for hit in hits:
                 if hit.tags and any(
                     t in hit.tags for t in ["team-management", "schedule", "meeting"]
                 ):
-                    schedule_items.append({
-                        "title": hit.title,
-                        "excerpt": (hit.excerpt or "")[:300],
-                    })
+                    schedule_items.append(
+                        {
+                            "title": hit.title,
+                            "excerpt": (hit.excerpt or "")[:300],
+                        }
+                    )
             return json.dumps({"schedule": schedule_items[:3]})
         except Exception as exc:
             return json.dumps({"schedule": [], "error": str(exc)})
 
-    def _get_blockers(self, conversation_id: str | None = None) -> str:
+    def _get_blockers(
+        self,
+        conversation_id: str | None = None,
+        visitor_profile: str | None = None,
+    ) -> str:
         """Get blockers and unresolved items from previous sessions.
 
         Args:
@@ -191,24 +294,34 @@ class SkillToolRegistry:
             JSON string with blocker information.
         """
         if self._knowledge_store is None:
-            return json.dumps({"blockers": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"blockers": [], "message": "Knowledge store not available"}
+            )
 
         try:
             hits = self._knowledge_store.search(
                 query="blocker 待解决 问题 issue",
                 top_k=5,
+                visitor_profile=visitor_profile,
             )
             blockers = []
             for hit in hits:
-                blockers.append({
-                    "title": hit.title,
-                    "excerpt": (hit.excerpt or "")[:300],
-                })
+                blockers.append(
+                    {
+                        "title": hit.title,
+                        "excerpt": (hit.excerpt or "")[:300],
+                    }
+                )
             return json.dumps({"blockers": blockers[:5]})
         except Exception as exc:
             return json.dumps({"blockers": [], "error": str(exc)})
 
-    def _get_paper_digest(self, query: str, limit: int = 5) -> str:
+    def _get_paper_digest(
+        self,
+        query: str,
+        limit: int = 5,
+        visitor_profile: str | None = None,
+    ) -> str:
         """Get paper digests/summaries from the knowledge base.
 
         Args:
@@ -219,28 +332,38 @@ class SkillToolRegistry:
             JSON string with paper digest results.
         """
         if self._knowledge_store is None:
-            return json.dumps({"papers": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"papers": [], "message": "Knowledge store not available"}
+            )
 
         try:
             hits = self._knowledge_store.search(
                 query=query,
                 top_k=limit * 2,  # Get more to filter by tag
+                visitor_profile=visitor_profile,
             )
             papers = []
             for hit in hits:
                 if hit.tags and "paper-digest" in hit.tags:
-                    papers.append({
-                        "title": hit.title,
-                        "score": hit.score,
-                        "excerpt": (hit.excerpt or "")[:500],
-                    })
+                    papers.append(
+                        {
+                            "title": hit.title,
+                            "score": hit.score,
+                            "excerpt": (hit.excerpt or "")[:500],
+                        }
+                    )
                     if len(papers) >= limit:
                         break
             return json.dumps({"papers": papers})
         except Exception as exc:
             return json.dumps({"papers": [], "error": str(exc)})
 
-    def _get_courseware(self, course_name: str | None = None, limit: int = 5) -> str:
+    def _get_courseware(
+        self,
+        course_name: str | None = None,
+        limit: int = 5,
+        visitor_profile: str | None = None,
+    ) -> str:
         """Get course materials and resources.
 
         Args:
@@ -251,28 +374,40 @@ class SkillToolRegistry:
             JSON string with courseware results.
         """
         if self._knowledge_store is None:
-            return json.dumps({"courseware": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"courseware": [], "message": "Knowledge store not available"}
+            )
 
         query = f"课程 {course_name}" if course_name else "课程 讲义 实验"
         try:
-            hits = self._knowledge_store.search(query=query, top_k=limit * 2)
+            hits = self._knowledge_store.search(
+                query=query,
+                top_k=limit * 2,
+                visitor_profile=visitor_profile,
+            )
             courseware = []
             for hit in hits:
                 if hit.tags and any(
                     t in hit.tags for t in ["teaching", "courseware", "material"]
                 ):
-                    courseware.append({
-                        "title": hit.title,
-                        "score": hit.score,
-                        "excerpt": (hit.excerpt or "")[:400],
-                    })
+                    courseware.append(
+                        {
+                            "title": hit.title,
+                            "score": hit.score,
+                            "excerpt": (hit.excerpt or "")[:400],
+                        }
+                    )
                     if len(courseware) >= limit:
                         break
             return json.dumps({"courseware": courseware})
         except Exception as exc:
             return json.dumps({"courseware": [], "error": str(exc)})
 
-    def _get_writing_rubric(self, paper_type: str | None = None) -> str:
+    def _get_writing_rubric(
+        self,
+        paper_type: str | None = None,
+        visitor_profile: str | None = None,
+    ) -> str:
         """Get writing rubrics and evaluation criteria.
 
         Args:
@@ -282,17 +417,27 @@ class SkillToolRegistry:
             JSON string with rubric information.
         """
         if self._knowledge_store is None:
-            return json.dumps({"rubrics": [], "message": "Knowledge store not available"})
+            return json.dumps(
+                {"rubrics": [], "message": "Knowledge store not available"}
+            )
 
-        query = f"评分标准 rubric {paper_type}" if paper_type else "评分标准 rubric 写作"
+        query = (
+            f"评分标准 rubric {paper_type}" if paper_type else "评分标准 rubric 写作"
+        )
         try:
-            hits = self._knowledge_store.search(query=query, top_k=5)
+            hits = self._knowledge_store.search(
+                query=query,
+                top_k=5,
+                visitor_profile=visitor_profile,
+            )
             rubrics = []
             for hit in hits:
-                rubrics.append({
-                    "title": hit.title,
-                    "excerpt": (hit.excerpt or "")[:500],
-                })
+                rubrics.append(
+                    {
+                        "title": hit.title,
+                        "excerpt": (hit.excerpt or "")[:500],
+                    }
+                )
             return json.dumps({"rubrics": rubrics[:3]})
         except Exception as exc:
             return json.dumps({"rubrics": [], "error": str(exc)})

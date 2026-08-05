@@ -45,6 +45,18 @@ class AppSettings(BaseSettings):
         "and uses an ordinary chat completion for synthesis; 'native' requires the upstream "
         "OpenAI-compatible server to be launched with tool-call parsing enabled.",
     )
+    skill_tool_parallelism: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Maximum parallel read-only tool calls within one agent skill.",
+    )
+    skill_answer_max_tokens: int = Field(
+        default=768,
+        ge=128,
+        le=2048,
+        description="Maximum completion tokens for one agent-skill answer.",
+    )
     llm_policy_enabled: bool = Field(default=True)
     llm_policy_variant_kind: str = Field(default="ablation")
     llm_policy_variant_name: str = Field(default="adaptive-controller")

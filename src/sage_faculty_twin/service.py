@@ -48,6 +48,8 @@ from .chat_delivery import (
     AnswerOrigin,
     ChatDeliveryGate,
     DeliveredChatResponse,
+    answer_contains_prompt_leak as _contains_internal_prompt_leak,
+    answer_language_mismatches_question as _answer_language_mismatches_question,
 )
 from .code_agent_backends import (
     ClaudeHustCodeAgentBackend,
@@ -406,31 +408,6 @@ def build_hardware_payload() -> dict[str, str]:
 _FLOWNET_TICK = "__flownet_tick__"
 _THINK_BLOCK_RE = re.compile(r"<think>.*?</think>", re.IGNORECASE | re.DOTALL)
 _THINK_OPEN_RE = re.compile(r"<think>.*", re.IGNORECASE | re.DOTALL)
-_INTERNAL_PROMPT_LEAK_MARKERS = (
-    "response instructions",
-    "expert response instructions",
-    "fast-answer guidance",
-    "deep-answer guidance",
-    "request context:",
-    "student name:",
-    "visitor profile:",
-    "specific instruction details are not disclosed",
-    "specific instruction details are not disclosed here",
-    "my apologies for the roundabout question",
-    "my name is zhang, and i am a digital assistant",
-    "questions about my operational limits",
-    "please allow me to assist you further",
-    "based on the current conversation context",
-    "there is no new specific request",
-    "700 个汉字以内",
-    "基于课题组公开资料和知识库为您提供学术答疑",
-    "我的回答基于课题组公开资料和知识库，具体指令细节不便透露",
-    "这类内部信息不便在此讨论",
-    "用户已开启深度思考",
-    "只展示结论，不展示思维链",
-)
-
-
 def _strip_internal_thinking_content(answer: str | None) -> str:
     if not answer:
         return ""
@@ -438,34 +415,6 @@ def _strip_internal_thinking_content(answer: str | None) -> str:
     stripped = _THINK_OPEN_RE.sub("", stripped)
     stripped = re.sub(r"\n{3,}", "\n\n", stripped)
     return stripped.strip()
-
-
-def _contains_internal_prompt_leak(answer: str | None) -> bool:
-    if not answer:
-        return False
-    head = answer.strip()[:900].lower()
-    return any(marker in head for marker in _INTERNAL_PROMPT_LEAK_MARKERS)
-
-
-def _answer_language_mismatches_question(question: str, answer: str | None) -> bool:
-    """Reject long English boilerplate for a substantive Chinese question."""
-    if not answer:
-        return False
-    question_cjk = len(re.findall(r"[\u4e00-\u9fff]", question))
-    answer_text = answer.strip()
-    if question_cjk < 4:
-        return False
-    answer_cjk = len(re.findall(r"[\u4e00-\u9fff]", answer_text))
-    if (
-        answer_cjk == 0
-        and answer_text.upper() != "OK"
-        and sum(character.isalpha() for character in answer_text) >= 2
-    ):
-        return True
-    if len(answer_text) < 80:
-        return False
-    answer_letters = len(re.findall(r"[A-Za-z]", answer_text))
-    return answer_letters >= 40 and (answer_cjk < 8 or answer_letters > answer_cjk * 2)
 
 
 def _answer_does_not_complete_requested_task(question: str, answer: str | None) -> bool:
@@ -6994,6 +6943,8 @@ class DigitalTwinService:
         self._skill_runner = SkillRunner(
             llm_client=self._llm_client,
             tool_registry=self._skill_tool_registry,
+            max_parallel_tools=settings.skill_tool_parallelism,
+            answer_max_tokens=settings.skill_answer_max_tokens,
         )
         self._sage_runtime_class = FlowNetEnvironment
         self._booking_workflows: dict[str, BookingWorkflowState] = {}

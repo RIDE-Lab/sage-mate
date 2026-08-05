@@ -7,6 +7,8 @@ and service integration.
 from __future__ import annotations
 
 import json
+import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -246,22 +248,52 @@ class TestManifestLoading:
 
 
 class TestSkillRouter:
-    def test_match_found(
-        self, skill_dir: Path, sample_skill_data: dict
-    ) -> None:
+    def test_match_found(self, skill_dir: Path, sample_skill_data: dict) -> None:
         _write_skill(skill_dir, "test", sample_skill_data)
         router = SkillRouter(skill_dir, "4.0.0")
         result = router.match("What is the test keyword about?")
         assert result is not None
         assert result.skill_id == "test_skill"
 
-    def test_match_not_found(
-        self, skill_dir: Path, sample_skill_data: dict
-    ) -> None:
+    def test_match_not_found(self, skill_dir: Path, sample_skill_data: dict) -> None:
         _write_skill(skill_dir, "test", sample_skill_data)
         router = SkillRouter(skill_dir, "4.0.0")
         result = router.match("Something completely unrelated")
         assert result is None
+
+    @pytest.mark.parametrize(
+        "question",
+        [
+            "I do not need test keyword help.",
+            "I don't want test keyword guidance.",
+            "我不是来问选题，只想先理解课程概念。",
+            "我不想讨论选题。",
+        ],
+    )
+    def test_negated_trigger_does_not_match(
+        self,
+        skill_dir: Path,
+        sample_skill_data: dict,
+        question: str,
+    ) -> None:
+        sample_skill_data["trigger_patterns"] = ["test keyword", "选题"]
+        _write_skill(skill_dir, "test", sample_skill_data)
+        router = SkillRouter(skill_dir, "4.0.0")
+
+        assert router.match(question) is None
+        assert router.match_all(question) == []
+
+    def test_later_positive_trigger_still_matches(
+        self, skill_dir: Path, sample_skill_data: dict
+    ) -> None:
+        sample_skill_data["trigger_patterns"] = ["选题"]
+        _write_skill(skill_dir, "test", sample_skill_data)
+        router = SkillRouter(skill_dir, "4.0.0")
+
+        result = router.match("我不是来问旧选题，而是想讨论新的选题方向。")
+
+        assert result is not None
+        assert result.skill_id == "test_skill"
 
     def test_disabled_skill_not_matched(
         self, skill_dir: Path, sample_skill_data: dict
@@ -293,9 +325,7 @@ class TestSkillRouter:
         results = router.match_all("What is the test keyword about?")
         assert len(results) == 2
 
-    def test_get_skill_by_id(
-        self, skill_dir: Path, sample_skill_data: dict
-    ) -> None:
+    def test_get_skill_by_id(self, skill_dir: Path, sample_skill_data: dict) -> None:
         _write_skill(skill_dir, "test", sample_skill_data)
         router = SkillRouter(skill_dir, "4.0.0")
         skill = router.get_skill_by_id("test_skill")
@@ -310,9 +340,7 @@ class TestSkillRouter:
         skill = router.get_skill_by_id("nonexistent")
         assert skill is None
 
-    def test_get_enabled_skills(
-        self, skill_dir: Path, sample_skill_data: dict
-    ) -> None:
+    def test_get_enabled_skills(self, skill_dir: Path, sample_skill_data: dict) -> None:
         _write_skill(skill_dir, "enabled", sample_skill_data)
         disabled = sample_skill_data.copy()
         disabled["skill_id"] = "disabled_skill"
@@ -393,6 +421,48 @@ class TestSkillToolRegistry:
         assert "error" in result
         assert "Test error" in result
 
+    def test_memory_search_uses_exact_conversation_scope(self) -> None:
+        record = MagicMock()
+        record.question = "What did we decide last time?"
+        record.answer = "Measure TTFT before changing the scheduler."
+        record.course_context = "Research meeting"
+        record.created_at = datetime(2026, 8, 5, tzinfo=UTC)
+        memory_store = MagicMock()
+        memory_store.list_recent_conversation_records.return_value = [record]
+        registry = SkillToolRegistry(memory_store=memory_store)
+
+        result = json.loads(
+            registry.execute(
+                "memory_search",
+                {
+                    "query": "scheduler decision",
+                    "conversation_id": "conversation-123",
+                    "limit": 3,
+                },
+            )
+        )
+
+        memory_store.list_recent_conversation_records.assert_called_once_with(
+            "conversation-123",
+            limit=3,
+        )
+        assert result["total"] == 1
+        assert result["results"][0]["answer"].startswith("Measure TTFT")
+
+    def test_memory_search_refuses_anonymous_scope(self) -> None:
+        memory_store = MagicMock()
+        registry = SkillToolRegistry(memory_store=memory_store)
+
+        result = json.loads(
+            registry.execute(
+                "memory_search",
+                {"query": "previous discussion", "conversation_id": "anonymous"},
+            )
+        )
+
+        assert result["results"] == []
+        memory_store.list_recent_conversation_records.assert_not_called()
+
 
 # ── Skill Runner Tests ──────────────────────────────────────────────────────
 
@@ -419,6 +489,7 @@ class TestSkillRunner:
         assert result.answer == "Test answer"
         assert result.tool_calls_made == 0
         assert result.turns_used == 1
+        assert mock_llm.answer_question_sync.call_args.kwargs["max_tokens"] == 768
 
     def test_run_with_tool_calls(self, skill_context: SkillContext) -> None:
         mock_llm = MagicMock()
@@ -479,7 +550,9 @@ class TestSkillRunner:
         assert result.tool_calls_made == 1
         assert result.turns_used == 2
 
-    def test_run_with_compatible_tool_transport(self, skill_context: SkillContext) -> None:
+    def test_run_with_compatible_tool_transport(
+        self, skill_context: SkillContext
+    ) -> None:
         mock_llm = MagicMock()
         mock_llm.supports_native_tool_calling = False
         mock_llm.answer_question_sync.return_value = (
@@ -517,10 +590,241 @@ class TestSkillRunner:
         assert result.tool_calls_made == 1
         assert result.turns_used == 1
         mock_llm.chat_with_tools_sync.assert_not_called()
+        synthesis_call = mock_llm.answer_question_sync.call_args.kwargs
+        assert synthesis_call["max_tokens"] == 768
+        assert synthesis_call["continue_on_length"] is False
         mock_store.search.assert_called_once_with(
             query=skill_context.question,
             top_k=5,
+            visitor_profile=skill_context.visitor_profile,
         )
+
+    def test_skill_language_contract_tracks_question_language(self) -> None:
+        assert "必须全程使用" in SkillRunner._language_contract("请帮我规划研究路线")
+        assert "natural language" in SkillRunner._language_contract(
+            "Please draft a research plan"
+        )
+
+    def test_compatible_transport_injects_declared_context_values(
+        self, skill_context: SkillContext
+    ) -> None:
+        context = skill_context.model_copy(
+            update={"course_context": "Inference Systems"}
+        )
+        course_tool = SkillToolDefinition(
+            tool_id="course_tool",
+            name="search_courseware",
+            description="Search courseware",
+            parameters={
+                "course_name": SkillToolParameter(
+                    type="string", description="Course", required=False
+                )
+            },
+            handler="get_courseware",
+        )
+        memory_tool = SkillToolDefinition(
+            tool_id="memory_tool",
+            name="search_memory",
+            description="Search memory",
+            parameters={
+                "query": SkillToolParameter(
+                    type="string", description="Query", required=True
+                ),
+                "conversation_id": SkillToolParameter(
+                    type="string", description="Conversation", required=False
+                ),
+            },
+            handler="memory_search",
+        )
+
+        assert SkillRunner._resolved_arguments(course_tool, {}, context) == {
+            "course_name": "Inference Systems"
+        }
+        assert SkillRunner._resolved_arguments(memory_tool, {}, context) == {
+            "query": context.question,
+            "conversation_id": "test_session",
+        }
+        assert SkillRunner._resolved_arguments(
+            memory_tool,
+            {"query": "progress", "conversation_id": "spoofed-session"},
+            context,
+        ) == {
+            "query": "progress",
+            "conversation_id": "test_session",
+        }
+
+    def test_compatible_transport_injects_hidden_memory_scope(
+        self, skill_context: SkillContext
+    ) -> None:
+        memory_store = MagicMock()
+        memory_store.list_recent_conversation_records.return_value = []
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = False
+        mock_llm.answer_question_sync.return_value = "Scoped memory answer."
+        runner = SkillRunner(
+            mock_llm,
+            SkillToolRegistry(memory_store=memory_store),
+        )
+        skill = SkillDefinition(
+            skill_id="memory_skill",
+            name="Memory Skill",
+            system_prompt="Use scoped history.",
+            user_prompt_template="Question: {question}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="memory",
+                    name="search_memory",
+                    description="Search prior turns",
+                    parameters={
+                        "query": SkillToolParameter(
+                            type="string", description="Query", required=True
+                        )
+                    },
+                    handler="memory_search",
+                )
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is True
+        memory_store.list_recent_conversation_records.assert_called_once_with(
+            skill_context.session_identity,
+            limit=3,
+        )
+        synthesis_prompt = mock_llm.answer_question_sync.call_args.kwargs["user_prompt"]
+        assert skill_context.session_identity not in synthesis_prompt
+
+    def test_compatible_transport_parallelizes_opted_in_read_only_tools(
+        self, skill_context: SkillContext
+    ) -> None:
+        barrier = threading.Barrier(2)
+
+        def first_handler() -> str:
+            barrier.wait(timeout=1.0)
+            return "first-ok"
+
+        def second_handler() -> str:
+            barrier.wait(timeout=1.0)
+            return "second-ok"
+
+        registry = SkillToolRegistry()
+        registry.register(
+            "parallel_first",
+            first_handler,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+        )
+        registry.register(
+            "parallel_second",
+            second_handler,
+            auto_invoke_safe=True,
+            parallel_safe=True,
+        )
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = False
+        mock_llm.answer_question_sync.return_value = "Combined answer."
+        runner = SkillRunner(mock_llm, registry, max_parallel_tools=2)
+        skill = SkillDefinition(
+            skill_id="parallel_skill",
+            name="Parallel Skill",
+            system_prompt="Combine results.",
+            user_prompt_template="Question: {question}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="first",
+                    name="first",
+                    description="First read",
+                    parameters={},
+                    handler="parallel_first",
+                ),
+                SkillToolDefinition(
+                    tool_id="second",
+                    name="second",
+                    description="Second read",
+                    parameters={},
+                    handler="parallel_second",
+                ),
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is True
+        synthesis_prompt = mock_llm.answer_question_sync.call_args.kwargs["user_prompt"]
+        assert synthesis_prompt.index("first-ok") < synthesis_prompt.index("second-ok")
+        assert mock_llm.answer_question_sync.call_args.kwargs["max_tokens"] == 768
+
+    def test_native_transport_validates_arguments_and_groups_calls(
+        self, skill_context: SkillContext
+    ) -> None:
+        mock_llm = MagicMock()
+        mock_llm.supports_native_tool_calling = True
+        mock_llm.chat_with_tools_sync.side_effect = [
+            {
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "valid",
+                        "name": "search_knowledge",
+                        "arguments": {"query": "progress"},
+                    },
+                    {
+                        "id": "invalid",
+                        "name": "search_knowledge",
+                        "arguments": {"query": "progress", "shell": "denied"},
+                    },
+                ],
+            },
+            {"content": "Validated final answer.", "tool_calls": []},
+        ]
+        knowledge_store = MagicMock()
+        knowledge_store.search.return_value = []
+        runner = SkillRunner(
+            mock_llm,
+            SkillToolRegistry(knowledge_store=knowledge_store),
+        )
+        skill = SkillDefinition(
+            skill_id="native_skill",
+            name="Native Skill",
+            system_prompt="Use tools.",
+            user_prompt_template="Question: {question}",
+            tools=[
+                SkillToolDefinition(
+                    tool_id="search",
+                    name="search_knowledge",
+                    description="Search",
+                    parameters={
+                        "query": SkillToolParameter(
+                            type="string", description="Query", required=True
+                        )
+                    },
+                    handler="knowledge_search",
+                )
+            ],
+            enabled=True,
+        )
+
+        result = runner.run(skill, skill_context)
+
+        assert result.success is True
+        knowledge_store.search.assert_called_once_with(
+            query="progress",
+            top_k=5,
+            visitor_profile=skill_context.visitor_profile,
+        )
+        second_messages = mock_llm.chat_with_tools_sync.call_args_list[1].kwargs[
+            "messages"
+        ]
+        assistant_messages = [m for m in second_messages if m["role"] == "assistant"]
+        tool_messages = [m for m in second_messages if m["role"] == "tool"]
+        assert len(assistant_messages) == 1
+        assert len(assistant_messages[0]["tool_calls"]) == 2
+        assert len(tool_messages) == 2
+        assert "Invalid arguments" in tool_messages[1]["content"]
+        assert mock_llm.chat_with_tools_sync.call_args_list[0].kwargs["max_tokens"] == 768
 
     def test_compatible_transport_rejects_unresolved_required_arguments(
         self, skill_context: SkillContext
@@ -541,7 +845,9 @@ class TestSkillRunner:
                     description="Search progress",
                     parameters={
                         "shell": SkillToolParameter(
-                            type="string", description="Unsupported input", required=True
+                            type="string",
+                            description="Unsupported input",
+                            required=True,
                         )
                     },
                     handler="knowledge_search",
@@ -760,11 +1066,11 @@ class TestProductionSkillManifests:
             pytest.skip("data/skills directory not found")
         router = SkillRouter(production_skill_dir, "4.0.0")
         enabled = router.get_enabled_skills()
-        assert len(enabled) >= 5, f"Expected at least 5 enabled skills, got {len(enabled)}"
+        assert len(enabled) >= 5, (
+            f"Expected at least 5 enabled skills, got {len(enabled)}"
+        )
 
-    def test_router_matches_chinese_question(
-        self, production_skill_dir: Path
-    ) -> None:
+    def test_router_matches_chinese_question(self, production_skill_dir: Path) -> None:
         if not production_skill_dir.exists():
             pytest.skip("data/skills directory not found")
         router = SkillRouter(production_skill_dir, "4.0.0")
@@ -772,9 +1078,7 @@ class TestProductionSkillManifests:
         assert skill is not None
         assert skill.skill_id == "research_mentoring"
 
-    def test_router_matches_english_question(
-        self, production_skill_dir: Path
-    ) -> None:
+    def test_router_matches_english_question(self, production_skill_dir: Path) -> None:
         if not production_skill_dir.exists():
             pytest.skip("data/skills directory not found")
         router = SkillRouter(production_skill_dir, "4.0.0")
@@ -782,9 +1086,7 @@ class TestProductionSkillManifests:
         assert skill is not None
         assert skill.skill_id == "research_mentoring"
 
-    def test_router_no_match_for_unrelated(
-        self, production_skill_dir: Path
-    ) -> None:
+    def test_router_no_match_for_unrelated(self, production_skill_dir: Path) -> None:
         if not production_skill_dir.exists():
             pytest.skip("data/skills directory not found")
         router = SkillRouter(production_skill_dir, "4.0.0")
