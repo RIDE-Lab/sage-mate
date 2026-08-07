@@ -32,20 +32,62 @@ load_dotenv() {
 }
 
 load_dotenv "$repo_root/.env"
+selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
 
 # Map Sage Mate's engine variables onto dev-hub's canonical launcher variables.
 # Machine-specific model/device values are mandatory: silently choosing a model
 # path or NPU IDs can disrupt unrelated workloads on a different host.
+resolve_engine_model() {
+    local resolver_script="$repo_root/tools/resolve_vllm_hust_model.py"
+    local resolve_output
+    local resolve_err
+    local resolve_exit=0
+
+    if [[ ! -x "$resolver_script" ]]; then
+        echo "ERROR: model resolver script is not executable: $resolver_script" >&2
+        exit 2
+    fi
+    resolve_err="$(mktemp)"
+    if ! resolve_output="$("$selector_python" "$resolver_script" 2> "$resolve_err")"; then
+        resolve_exit=$?
+        sed "s/^/[sage-mate] /" "$resolve_err" >&2 || true
+        rm -f "$resolve_err"
+        echo "ERROR: automatic model resolver failed. Set VLLM_ENGINE_MODEL_PATH in .env to continue." >&2
+        exit "$resolve_exit"
+    fi
+    if [[ -n "$resolve_output" ]]; then
+        sed "s/^/[sage-mate] /" "$resolve_err" >&2 || true
+        # shellcheck disable=SC2086
+        eval "$resolve_output"
+    fi
+    rm -f "$resolve_err"
+}
+
+auto_resolve_model="${VLLM_ENGINE_AUTO_RESOLVE_MODEL:-true}"
+auto_resolve_model="${auto_resolve_model,,}"
+if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" || "$auto_resolve_model" == "true" || "$auto_resolve_model" == "1" || "$auto_resolve_model" == "yes" ]]; then
+    resolve_engine_model
+fi
+
 if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" ]]; then
     echo "ERROR: VLLM_ENGINE_MODEL_PATH is required. Set it in the machine-local .env." >&2
     exit 2
 fi
 
 engine_devices="${VLLM_ENGINE_NPU_DEVICES:-${ASCEND_RT_VISIBLE_DEVICES:-}}"
+allowed_devices="${VLLM_ENGINE_ALLOWED_NPU_IDS:-}"
+if [[ -z "$engine_devices" && -n "$allowed_devices" ]]; then
+    engine_devices="$allowed_devices"
+    echo "[sage-mate] VLLM_ENGINE_NPU_DEVICES not set; using VLLM_ENGINE_ALLOWED_NPU_IDS=$engine_devices"
+fi
 engine_devices="${engine_devices//[[:space:]]/}"
 if [[ -z "$engine_devices" ]]; then
     echo "ERROR: VLLM_ENGINE_NPU_DEVICES (or ASCEND_RT_VISIBLE_DEVICES) is required." >&2
-    echo "Choose verified idle devices explicitly, or use the hosted installer to auto-select them." >&2
+    if [[ -n "$allowed_devices" ]]; then
+        echo "Set it explicitly, or set VLLM_ENGINE_ALLOWED_NPU_IDS to a specific pool first." >&2
+    else
+        echo "Choose verified idle devices explicitly, or set VLLM_ENGINE_ALLOWED_NPU_IDS." >&2
+    fi
     exit 2
 fi
 
@@ -63,6 +105,16 @@ for device_id in "${engine_device_ids[@]}"; do
     seen_device_ids[$device_id]=1
 done
 
+if [[ -n "${allowed_devices:-}" ]]; then
+    allowed_devices_csv=",${allowed_devices//[[:space:]]/},"
+    for device_id in "${engine_device_ids[@]}"; do
+        if [[ "$allowed_devices_csv" != *",${device_id},"* ]]; then
+            echo "ERROR: device $device_id is not in VLLM_ENGINE_ALLOWED_NPU_IDS=$allowed_devices" >&2
+            exit 2
+        fi
+    done
+fi
+
 device_count="${#engine_device_ids[@]}"
 engine_tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
 if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ || "$engine_tp_size" -ne "$device_count" ]]; then
@@ -71,7 +123,6 @@ if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ || "$engine_tp_size" -ne "$device_cou
 fi
 
 npu_selector="$repo_root/tools/select_idle_npus.py"
-selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
 if [[ -z "$selector_python" || ! -x "$selector_python" ]]; then
     echo "ERROR: Python is required to validate Ascend device ownership." >&2
     exit 2
@@ -82,13 +133,23 @@ if ! "$selector_python" "$npu_selector" --devices "$engine_devices" >/dev/null; 
 fi
 
 default_served_model="${VLLM_ENGINE_MODEL_PATH%/}"
-default_served_model="${default_served_model##*/}"
+if [[ -n "${VLLM_ENGINE_ACTUAL_MODEL_ID:-}" ]]; then
+    default_served_model="${VLLM_ENGINE_ACTUAL_MODEL_ID%/}"
+elif [[ -n "${VLLM_ENGINE_MODEL_FAMILY:-}" ]]; then
+    default_served_model="${VLLM_ENGINE_MODEL_FAMILY}/$default_served_model"
+else
+    default_served_model="${default_served_model##*/}"
+fi
 container_suffix="${USER:-user}-$(basename "$repo_root")"
 container_suffix="$(printf '%s' "$container_suffix" | tr -cs '[:alnum:]_.-' '-')"
 
 export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-sage-mate-vllm-${container_suffix}}"
 export VLLM_ENGINE_MODEL_PATH
-export VLLM_ENGINE_SERVED_MODEL_NAME="${VLLM_ENGINE_SERVED_MODEL_NAME:-${DIGITAL_TWIN_MODEL_NAME:-$default_served_model}}"
+resolved_served_name="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-$default_served_model}}"
+export VLLM_ENGINE_SERVED_MODEL_NAME="$resolved_served_name"
+export DIGITAL_TWIN_MODEL_NAME="$resolved_served_name"
+export VLLM_ENGINE_MODEL_SOURCE="${VLLM_ENGINE_MODEL_SOURCE:-auto}"
+export VLLM_ENGINE_MODEL_FAMILY="${VLLM_ENGINE_MODEL_FAMILY:-unknown}"
 export VLLM_ENGINE_HOST="${VLLM_ENGINE_HOST:-0.0.0.0}"
 export VLLM_ENGINE_PORT="${VLLM_ENGINE_PORT:-8000}"
 export VLLM_ENGINE_TP_SIZE="$engine_tp_size"
