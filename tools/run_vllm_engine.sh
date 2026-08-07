@@ -186,11 +186,24 @@ export CONTAINER_WORKDIR="${CONTAINER_WORKDIR:-/workspace/vllm-hust-dev-hub}"
 
 prepare_host_model_mount() {
     local model_path="${VLLM_ENGINE_MODEL_PATH:-}"
+    local workspace_root="${HOST_WORKSPACE_ROOT%/}"
+    local container_root="${CONTAINER_WORKSPACE_ROOT%/}"
+
+    # 1) Keep container-visible model paths in sync with workspace mapping.
+    if [[ "$model_path" == "$workspace_root/"* || "$model_path" == "$workspace_root" ]]; then
+        local relative_path="${model_path#"$workspace_root"}"
+        VLLM_ENGINE_MODEL_PATH="$container_root${relative_path}"
+        return 0
+    fi
+
+    # 2) For models outside the workspace root, create a sibling symlink under
+    #    HOST_WORKSPACE_ROOT so the container runtime can mirror the mount into
+    #    the same absolute path.
     [[ "$model_path" == /* ]] || return 0
     [[ -e "$model_path" ]] || return 0
-    [[ "$model_path" != "$HOST_WORKSPACE_ROOT"* ]] || return 0
+    [[ "$model_path" != "$workspace_root"* ]] || return 0
 
-    local link_path="$HOST_WORKSPACE_ROOT/.sage-mate-primary-model"
+    local link_path="$workspace_root/.sage-mate-primary-model"
     if [[ -L "$link_path" || -e "$link_path" ]]; then
         local current_target
         current_target="$(readlink "$link_path" 2>/dev/null || true)"
@@ -203,11 +216,65 @@ prepare_host_model_mount() {
     fi
 }
 
+resolve_docker_cmd() {
+    local -a cmd=(docker)
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        printf '%s\n' "docker"
+        return 0
+    fi
+    if command -v docker >/dev/null 2>&1 && command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+        printf '%s\n' "sudo -n docker"
+        return 0
+    fi
+    return 1
+}
+
+container_is_running() {
+    local -a cmd=("${docker_cmd[@]}")
+    local container_name="${VLLM_ENGINE_CONTAINER:?}"
+    [[ "$("${cmd[@]}" inspect -f '{{.State.Running}}' "$container_name" 2>/dev/null || true)" == "true" ]]
+}
+
+model_dir_visible_in_container() {
+    local model_path="$1"
+    local -a cmd=("${docker_cmd[@]}")
+    local container_name="${VLLM_ENGINE_CONTAINER:?}"
+    "${cmd[@]}" exec "$container_name" test -e "$model_path"
+}
+
+ensure_container_model_visibility() {
+    local container_name="${VLLM_ENGINE_CONTAINER:?}"
+    local model_path="${VLLM_ENGINE_MODEL_PATH}"
+    local -a cmd=("${docker_cmd[@]}")
+
+    [[ -n "$model_path" ]] || return 0
+    [[ "$model_path" == /* ]] || return 0
+
+    if ! container_is_running; then
+        return 0
+    fi
+
+    if model_dir_visible_in_container "$model_path"; then
+        return 0
+    fi
+
+    echo "[sage-mate] container '$container_name' is running but cannot see model path '$model_path'; recreating."
+    "${cmd[@]}" stop "$container_name" >/dev/null 2>&1 || true
+    "${cmd[@]}" rm -f "$container_name" >/dev/null 2>&1 || true
+}
+
 prepare_host_model_mount
 
 if [[ -z "${VLLM_HUST_API_KEY:-}" && -n "${DIGITAL_TWIN_API_KEY:-}" ]]; then
     export VLLM_ENGINE_API_KEY="$DIGITAL_TWIN_API_KEY"
 fi
+
+if ! docker_cmd="$(resolve_docker_cmd)"; then
+    echo "ERROR: docker is unavailable. Start Docker or configure passwordless sudo access." >&2
+    exit 1
+fi
+read -r -a docker_cmd <<< "$docker_cmd"
+ensure_container_model_visibility
 
 echo "[sage-mate] delegating vLLM-HUST launch to $launcher"
 exec "$launcher"

@@ -316,16 +316,30 @@ def main() -> int:
             _collect_candidates_for_family(family, family_rank_map[family], roots)
         )
 
-    selected = _pick_best(local_candidates)
+    preferred_families = [family for family in families if family.strip().lower() != "qwen"]
+    preferred_set = {family.strip().lower() for family in preferred_families}
+    preferred_candidates = [item for item in local_candidates if item.family.strip().lower() in preferred_set]
+
+    selected: Candidate | None = None
+    if preferred_candidates:
+        selected = _pick_best(preferred_candidates)
+    if selected is None:
+        selected = _pick_best(local_candidates)
 
     if selected is None:
-        for family in families:
+        fallback_families = preferred_families if preferred_families else families
+        for family in fallback_families:
             family = family.strip()
             if not family:
                 continue
             selected = _download_family_model(family, family_rank_map[family])
             if selected:
                 break
+
+        if selected is None and "qwen" in {item.strip().lower() for item in families}:
+            qwen_family = next(item for item in families if item.strip().lower() == "qwen")
+            selected = _download_family_model(qwen_family, family_rank_map[qwen_family])
+
 
     if selected is None:
         print("[resolver] no local model found and auto-download did not produce a candidate.", file=sys.stderr)
