@@ -63,9 +63,70 @@ resolve_engine_model() {
     rm -f "$resolve_err"
 }
 
+is_port_free() {
+    local host="$1"
+    local port="$2"
+    "$selector_python" - "$host" "$port" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+port = int(sys.argv[2])
+sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock.bind((host, port))
+except OSError:
+    raise SystemExit(1)
+else:
+    raise SystemExit(0)
+finally:
+    try:
+        sock.close()
+    except OSError:
+        pass
+PY
+}
+
+resolve_engine_port() {
+    local requested_port="$1"
+    local host="$2"
+    local max_retries="${3:-64}"
+    local candidate="$requested_port"
+    local tries=0
+    local remap="${VLLM_ENGINE_AUTO_REMAP_PORT:-1}"
+
+    if ! [[ "$requested_port" =~ ^[0-9]+$ ]] || ((requested_port < 1 || requested_port > 65535)); then
+        echo "ERROR: invalid VLLM_ENGINE_PORT=$requested_port" >&2
+        return 1
+    fi
+
+    if is_port_free "$host" "$candidate"; then
+        echo "$candidate"
+        return 0
+    fi
+
+    if [[ "$remap" == "0" || "$remap" == "false" ]]; then
+        echo "ERROR: ${host}:${candidate} is already in use and auto-remap is disabled." >&2
+        return 1
+    fi
+
+    echo "[sage-mate] ${host}:${candidate} is in use, auto-searching for a free port." >&2
+    while ((tries < max_retries)) && ((candidate < 65535)); do
+        ((candidate += 1))
+        if is_port_free "$host" "$candidate"; then
+            echo "$candidate"
+            return 0
+        fi
+        ((tries += 1))
+    done
+    echo "ERROR: unable to find a free port near ${requested_port}." >&2
+    return 1
+}
+
 auto_resolve_model="${VLLM_ENGINE_AUTO_RESOLVE_MODEL:-true}"
 auto_resolve_model="${auto_resolve_model,,}"
-if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" || "$auto_resolve_model" == "true" || "$auto_resolve_model" == "1" || "$auto_resolve_model" == "yes" ]]; then
+if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" && ("$auto_resolve_model" == "true" || "$auto_resolve_model" == "1" || "$auto_resolve_model" == "yes") ]]; then
     resolve_engine_model
 fi
 
@@ -151,7 +212,12 @@ export DIGITAL_TWIN_MODEL_NAME="$resolved_served_name"
 export VLLM_ENGINE_MODEL_SOURCE="${VLLM_ENGINE_MODEL_SOURCE:-auto}"
 export VLLM_ENGINE_MODEL_FAMILY="${VLLM_ENGINE_MODEL_FAMILY:-unknown}"
 export VLLM_ENGINE_HOST="${VLLM_ENGINE_HOST:-0.0.0.0}"
-export VLLM_ENGINE_PORT="${VLLM_ENGINE_PORT:-8000}"
+export VLLM_ENGINE_CONNECT_HOST="${VLLM_ENGINE_CONNECT_HOST:-${VLLM_ENGINE_HOST:-127.0.0.1}}"
+resolved_engine_port="$(resolve_engine_port "${VLLM_ENGINE_PORT:-8000}" "$VLLM_ENGINE_CONNECT_HOST")" || exit 1
+export VLLM_ENGINE_PORT="$resolved_engine_port"
+export VLLM_ENGINE_CONNECT_PORT="${VLLM_ENGINE_CONNECT_PORT:-$VLLM_ENGINE_PORT}"
+export VLLM_PROXY_UPSTREAM_BASE_URL="${VLLM_PROXY_UPSTREAM_BASE_URL:-http://$VLLM_ENGINE_CONNECT_HOST:$VLLM_ENGINE_CONNECT_PORT/v1}"
+unset resolved_engine_port
 export VLLM_ENGINE_TP_SIZE="$engine_tp_size"
 export VLLM_ENGINE_MAX_MODEL_LEN="${VLLM_ENGINE_MAX_MODEL_LEN:-32768}"
 export VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS="${VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS:-$VLLM_ENGINE_MAX_MODEL_LEN}"
@@ -228,6 +294,7 @@ resolve_docker_cmd() {
     fi
     return 1
 }
+
 
 container_is_running() {
     local -a cmd=("${docker_cmd[@]}")
