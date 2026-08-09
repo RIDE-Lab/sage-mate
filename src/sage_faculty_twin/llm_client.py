@@ -207,8 +207,18 @@ class VllmChatClient:
         if not self.model_name:
             self.model_name = self._detect_model_name()
         else:
-            # Even with a configured name, try to discover max context length.
-            self._probe_model_max_len()
+            # The served model is runtime state, not a portable application
+            # constant.  A machine-local model preference can become stale
+            # after the deployment lock resolves a different compatible
+            # backend, so reconcile it with /models before sending requests.
+            detected_model = self._detect_model_name()
+            if detected_model and detected_model != self.model_name:
+                logger.warning(
+                    "Configured model %s is not served; using runtime model %s",
+                    self.model_name,
+                    detected_model,
+                )
+                self.model_name = detected_model
         self._intent_model_name = self._settings.intent_model_name or self.model_name
         self._cache_lock = threading.Lock()
         self._response_cache: OrderedDict[str, tuple[float, str, str]] = OrderedDict()
