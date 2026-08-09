@@ -32,6 +32,9 @@ load_dotenv() {
 }
 
 load_dotenv "$repo_root/.env"
+# Older Ascend images have an unstable V1 worker path for several model
+# families; keep the engine mode explicit and configurable per machine.
+export VLLM_USE_V1="${VLLM_USE_V1:-0}"
 selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
 
 # Map Sage Mate's engine variables onto dev-hub's canonical launcher variables.

@@ -558,7 +558,7 @@ def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     assert "不得编造论文" in system_prompt
     assert "先明确判断" not in system_prompt
     assert "背景：科研指导" in user_prompt
-    assert kwargs["max_tokens"] == 768
+    assert kwargs["max_tokens"] == 256
     assert kwargs["temperature"] == 0.2
     assert kwargs["enable_thinking"] is False
 

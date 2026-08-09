@@ -194,7 +194,19 @@ def main() -> None:
 
     listen_host = os.environ.get("VLLM_PROXY_HOST", "127.0.0.1")
     listen_port = int(os.environ.get("VLLM_PROXY_PORT", "18001"))
-    upstream_base_url = os.environ.get("VLLM_PROXY_UPSTREAM_BASE_URL", "http://127.0.0.1:8000/v1")
+    upstream_base_url = os.environ.get("VLLM_PROXY_UPSTREAM_BASE_URL", "").strip()
+    if not upstream_base_url:
+        connect_host = (
+            os.environ.get("VLLM_ENGINE_CONNECT_HOST", "").strip()
+            or os.environ.get("VLLM_PROXY_CONNECT_HOST", "").strip()
+            or "127.0.0.1"
+        )
+        connect_port = (
+            os.environ.get("VLLM_ENGINE_CONNECT_PORT", "").strip()
+            or os.environ.get("VLLM_ENGINE_PORT", "").strip()
+            or "8000"
+        )
+        upstream_base_url = f"http://{connect_host}:{connect_port}/v1"
     parsed = urlsplit(upstream_base_url)
     if parsed.scheme not in {"http", ""}:
         raise SystemExit("VLLM_PROXY_UPSTREAM_BASE_URL must be an http URL.")
