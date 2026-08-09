@@ -32,6 +32,20 @@ changes that came out of it.
   engine container mounts this repository's `deps/` directory at `/workspace`,
   so `/workspace/vllm-hust`, `/workspace/vllm-ascend-hust`, and
   `/workspace/vllm-hust-dev-hub` are always the pinned Faculty Twin submodules.
+- `tools/lock_sage_mate_deployment.sh` is the only supported operator entrypoint
+  for applying the Ascend deployment contract. It reads `.env` as the source of
+  truth, clears stale systemd-user overrides, keeps physical NPU IDs separate
+  from the container's logical `0..N-1` IDs, enforces graph mode
+  (`VLLM_ENGINE_ENFORCE_EAGER=0`), and restarts the service.
+- `tools/verify_sage_mate_deployment.sh` is the corresponding read-only check.
+  The historical `retry_deploy_vllm_ascend_until_success.sh` now delegates to
+  the canonical lock script; its old mutating strategy loop is available only
+  with the explicit `SAGE_MATE_ALLOW_LEGACY_RETRY=1` escape hatch.
+  The lock also serializes concurrent deployment runs and reconciles orphaned
+  legacy retry loops before applying the contract.
+- It also removes the managed container before the idle-NPU check when a
+  previous user-service stop leaves worker processes behind, and forces
+  `COMPILE_CUSTOM_KERNELS=1` for the Ascend runtime.
 - The vLLM-HUST runtime dependencies are pinned through repository submodules:
   `deps/vllm-hust-dev-hub`, `deps/vllm-hust`, `deps/vllm-ascend-hust`, and
   `deps/ascend-runtime-manager`.

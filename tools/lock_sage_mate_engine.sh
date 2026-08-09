@@ -1,0 +1,137 @@
+#!/usr/bin/env bash
+# Canonical Sage Mate Ascend deployment lock.
+#
+# This is the only supported entrypoint for applying the machine-local engine
+# contract. It deliberately reads .env as the source of truth, clears stale
+# systemd-user values left by older retry scripts, validates physical NPU
+# ownership, and then restarts the managed service.
+
+set -euo pipefail
+
+repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+env_file="$repo_root/.env"
+unit="${SAGE_MATE_ENGINE_UNIT:-sage-mate-vllm-engine.service}"
+runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
+python_bin="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
+
+[[ -f "$env_file" ]] || { echo "ERROR: missing machine-local $env_file" >&2; exit 2; }
+[[ -n "$python_bin" && -x "$python_bin" ]] || { echo "ERROR: python3 is required" >&2; exit 2; }
+
+# .env is an operator-owned shell-compatible file. Load it explicitly so a
+# stale caller environment cannot override the machine contract.
+while IFS= read -r line || [[ -n "$line" ]]; do
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# || "$line" != *=* ]] && continue
+  key="${line%%=*}"; key="${key// /}"
+  [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+  export "$line"
+done < "$env_file"
+
+runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
+lock_file="$runtime_root/engine-deployment.lock.env"
+mkdir -p "$runtime_root"
+exec 9>"$runtime_root/deployment.lock"
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+  echo "ERROR: another Sage Mate deployment lock is already running: $runtime_root/deployment.lock" >&2
+  exit 4
+fi
+
+# Reconcile orphaned legacy retry loops before applying the contract. These are
+# operator scripts from this repository, never arbitrary processes.
+if [[ "${SAGE_MATE_AUTOKILL_LEGACY_RETRY:-1}" == "1" ]]; then
+  while read -r pid args; do
+    [[ -n "${pid:-}" && "$pid" != "$$" ]] || continue
+    [[ "$args" == *"retry_deploy_vllm_ascend_until_success.sh"* ]] || continue
+    echo "[sage-mate-lock] stopping orphaned legacy retry pid=$pid"
+    kill "$pid" 2>/dev/null || true
+  done < <(ps -eo pid=,args=)
+fi
+
+physical_devices="${VLLM_ENGINE_NPU_DEVICES:-${VLLM_ENGINE_ALLOWED_NPU_IDS:-}}"
+physical_devices="${physical_devices//[[:space:]]/}"
+[[ -n "$physical_devices" ]] || { echo "ERROR: set VLLM_ENGINE_NPU_DEVICES in $env_file" >&2; exit 2; }
+
+IFS=',' read -r -a device_ids <<< "$physical_devices"
+device_count="${#device_ids[@]}"
+[[ "$device_count" -gt 0 ]] || { echo "ERROR: invalid NPU device set: $physical_devices" >&2; exit 2; }
+for id in "${device_ids[@]}"; do
+  [[ "$id" =~ ^[0-9]+$ ]] || { echo "ERROR: invalid NPU id '$id'" >&2; exit 2; }
+done
+tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
+[[ "$tp_size" =~ ^[1-9][0-9]*$ && "$tp_size" -eq "$device_count" ]] || {
+  echo "ERROR: VLLM_ENGINE_TP_SIZE=$tp_size must equal physical NPU count=$device_count" >&2; exit 2;
+}
+
+# The lock contract is graph mode. Clear both the explicit flag and the JSON
+# escape hatch so no stale retry strategy can silently re-enable eager mode.
+VLLM_ENGINE_ENFORCE_EAGER=0
+VLLM_ENGINE_EXTRA_ARGS_JSON=""
+COMPILE_CUSTOM_KERNELS=1
+export VLLM_ENGINE_ENFORCE_EAGER VLLM_ENGINE_EXTRA_ARGS_JSON COMPILE_CUSTOM_KERNELS
+
+cleanup_managed_container() {
+  local container_name="${VLLM_ENGINE_CONTAINER:-}"
+  [[ -n "$container_name" ]] || return 0
+  local docker_bin=""
+  if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+    docker_bin="docker"
+  elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    docker_bin="sudo -n docker"
+  else
+    return 0
+  fi
+  read -r -a docker_cmd <<< "$docker_bin"
+  if "${docker_cmd[@]}" inspect "$container_name" >/dev/null 2>&1; then
+    echo "[sage-mate-lock] removing managed container '$container_name' to release NPUs"
+    "${docker_cmd[@]}" rm -f "$container_name" >/dev/null 2>&1 || true
+  fi
+}
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user stop "$unit" >/dev/null 2>&1 || true
+  systemctl --user unset-environment \
+    VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES ASCEND_RT_VISIBLE_DEVICES ASCEND_VISIBLE_DEVICES \
+    VLLM_ENGINE_ENFORCE_EAGER VLLM_ENGINE_EXTRA_ARGS_JSON \
+    VLLM_ENGINE_COMPILATION_CONFIG VLLM_ENGINE_REQUIRED_FAMILIES \
+    COMPILE_CUSTOM_KERNELS \
+    VLLM_ENGINE_MODEL_PATH VLLM_ENGINE_SERVED_MODEL_NAME VLLM_ENGINE_ACTUAL_MODEL_ID \
+    VLLM_ENGINE_MODEL_SOURCE VLLM_ENGINE_MODEL_FAMILY VLLM_ENGINE_AUTO_RESOLVE_MODEL \
+    VLLM_ENGINE_AUTO_DOWNLOAD VLLM_USE_V1 >/dev/null 2>&1 || true
+  # Keep physical IDs in the manager; run_vllm_engine.sh derives 0..N-1 for
+  # the container and exports the physical IDs only for host ownership checks.
+  systemctl --user set-environment \
+    VLLM_ENGINE_NPU_DEVICES="$physical_devices" \
+    VLLM_ENGINE_TP_SIZE="$tp_size" \
+    VLLM_ENGINE_ENFORCE_EAGER=0 \
+    VLLM_ENGINE_EXTRA_ARGS_JSON="" \
+    COMPILE_CUSTOM_KERNELS=1 \
+    VLLM_ENGINE_AUTO_RESOLVE_MODEL="${VLLM_ENGINE_AUTO_RESOLVE_MODEL:-true}" \
+    VLLM_ENGINE_AUTO_DOWNLOAD="${VLLM_ENGINE_AUTO_DOWNLOAD:-1}" \
+    >/dev/null
+fi
+
+cleanup_managed_container
+
+# Validate ownership after stopping the old service; this catches accidental
+# overlap with another workload before any container is recreated.
+if ! "$python_bin" "$repo_root/tools/select_idle_npus.py" --devices "$physical_devices" >/dev/null; then
+  echo "ERROR: configured NPU devices are not idle: $physical_devices" >&2
+  exit 3
+fi
+
+umask 077
+{
+  printf 'SAGE_MATE_ENGINE_UNIT=%q\n' "$unit"
+  printf 'VLLM_ENGINE_NPU_DEVICES=%q\n' "$physical_devices"
+  printf 'VLLM_ENGINE_TP_SIZE=%q\n' "$tp_size"
+  printf 'VLLM_ENGINE_ENFORCE_EAGER=0\n'
+  printf 'VLLM_ENGINE_EXTRA_ARGS_JSON=\n'
+  printf 'COMPILE_CUSTOM_KERNELS=1\n'
+  printf 'REPO_ROOT=%q\n' "$repo_root"
+  printf 'LOCKED_AT_UTC=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$lock_file"
+
+echo "[sage-mate-lock] physical NPU=$physical_devices tp=$tp_size graph_mode=ON"
+echo "[sage-mate-lock] restarting $unit via tools/run_vllm_engine.sh"
+systemctl --user restart "$unit"
+
+echo "[sage-mate-lock] service restart requested; run tools/verify_sage_mate_engine.sh for verification"

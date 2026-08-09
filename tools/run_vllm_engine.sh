@@ -26,8 +26,12 @@ load_dotenv() {
         [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
         local key="${line%%=*}"
         key="${key// /}"
-        [[ -z "$key" || -n "${!key:-}" ]] && continue
-        export "$line"
+        [[ -z "$key" ]] && continue
+        # If a variable is already present in the current environment (including
+        # explicitly exported empty values), keep it as the source of truth.
+        if [[ "${!key+x}" != "x" ]]; then
+            export "$line"
+        fi
     done < "$env_file"
 }
 
@@ -40,6 +44,22 @@ selector_python="${PYTHON_BIN:-$(command -v python3 2>/dev/null || true)}"
 # Map Sage Mate's engine variables onto dev-hub's canonical launcher variables.
 # Machine-specific model/device values are mandatory: silently choosing a model
 # path or NPU IDs can disrupt unrelated workloads on a different host.
+# Some quantized Ascend checkpoints include explicit artifacts (for example
+# quant_model_description.json). If this marker is absent, we avoid forcing
+# --quantization=ascend by default to prevent startup crashes.
+has_model_ascend_quant_assets() {
+    local model_path="$1"
+    [[ -d "$model_path" ]] || return 1
+    shopt -s nullglob
+    local quant_files=(
+        "$model_path"/quant_model_description.json
+        "$model_path"/quant_model_weight_*.safetensors
+        "$model_path"/quant_model_weight_*.safetensors.index.json
+    )
+    shopt -u nullglob
+    (( ${#quant_files[@]} > 0 ))
+}
+
 resolve_engine_model() {
     local resolver_script="$repo_root/tools/resolve_vllm_hust_model.py"
     local resolve_output
@@ -64,6 +84,29 @@ resolve_engine_model() {
         eval "$resolve_output"
     fi
     rm -f "$resolve_err"
+}
+
+build_runtime_device_csv() {
+    local device_count
+    local -a device_ids
+    local out=""
+    local i
+
+    local input_csv="$1"
+    input_csv="${input_csv//[[:space:]]/}"
+    IFS=',' read -r -a device_ids <<< "$input_csv"
+    device_count="${#device_ids[@]}"
+    if [[ "$device_count" -le 0 ]]; then
+        return 1
+    fi
+
+    for ((i = 0; i < device_count; i++)); do
+        if [[ -n "$out" ]]; then
+            out+=","
+        fi
+        out+="$i"
+    done
+    echo "$out"
 }
 
 is_port_free() {
@@ -138,13 +181,31 @@ if [[ -z "${VLLM_ENGINE_MODEL_PATH:-}" ]]; then
     exit 2
 fi
 
+requested_quantization="${VLLM_ENGINE_QUANTIZATION:-}"
+requested_quantization="${requested_quantization,,}"
+auto_disable_quantization="${VLLM_ENGINE_AUTO_DISABLE_QUANTIZATION_ON_MISSING:-1}"
+if [[ "$requested_quantization" == "ascend" ]]; then
+    if ! has_model_ascend_quant_assets "${VLLM_ENGINE_MODEL_PATH}"; then
+        if [[ "$auto_disable_quantization" == "1" || "$auto_disable_quantization" == "true" ]]; then
+            echo "[sage-mate] model does not expose Ascend quantization metadata; auto-disable VLLM_ENGINE_QUANTIZATION for stability."
+            export VLLM_ENGINE_QUANTIZATION=""
+        else
+            echo "ERROR: requested VLLM_ENGINE_QUANTIZATION=ascend but model has no quantized checkpoints under ${VLLM_ENGINE_MODEL_PATH}." >&2
+            echo "Set VLLM_ENGINE_AUTO_DISABLE_QUANTIZATION_ON_MISSING=1 to auto-fallback, or switch to a compatible model." >&2
+            exit 2
+        fi
+    fi
+fi
+
 engine_devices="${VLLM_ENGINE_NPU_DEVICES:-${ASCEND_RT_VISIBLE_DEVICES:-}}"
+runtime_visible_devices="${VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES:-}"
 allowed_devices="${VLLM_ENGINE_ALLOWED_NPU_IDS:-}"
 if [[ -z "$engine_devices" && -n "$allowed_devices" ]]; then
     engine_devices="$allowed_devices"
     echo "[sage-mate] VLLM_ENGINE_NPU_DEVICES not set; using VLLM_ENGINE_ALLOWED_NPU_IDS=$engine_devices"
 fi
 engine_devices="${engine_devices//[[:space:]]/}"
+runtime_visible_devices="${runtime_visible_devices//[[:space:]]/}"
 if [[ -z "$engine_devices" ]]; then
     echo "ERROR: VLLM_ENGINE_NPU_DEVICES (or ASCEND_RT_VISIBLE_DEVICES) is required." >&2
     if [[ -n "$allowed_devices" ]]; then
@@ -156,6 +217,7 @@ if [[ -z "$engine_devices" ]]; then
 fi
 
 IFS=',' read -r -a engine_device_ids <<< "$engine_devices"
+IFS=',' read -r -a runtime_device_ids <<< "$runtime_visible_devices"
 declare -A seen_device_ids=()
 for device_id in "${engine_device_ids[@]}"; do
     if [[ ! "$device_id" =~ ^[0-9]+$ ]]; then
@@ -169,6 +231,21 @@ for device_id in "${engine_device_ids[@]}"; do
     seen_device_ids[$device_id]=1
 done
 
+if [[ -z "$runtime_visible_devices" ]]; then
+    runtime_visible_devices="$(build_runtime_device_csv "$engine_devices")"
+else
+    if (( ${#runtime_device_ids[@]} != ${#engine_device_ids[@]} )); then
+        echo "ERROR: VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES=$runtime_visible_devices device count (${#runtime_device_ids[@]}) must match VLLM_ENGINE_NPU_DEVICES=$engine_devices device count (${#engine_device_ids[@]})." >&2
+        exit 2
+    fi
+    for device_id in "${runtime_device_ids[@]}"; do
+        if [[ ! "$device_id" =~ ^[0-9]+$ ]]; then
+            echo "ERROR: invalid runtime Ascend index in '$runtime_visible_devices': '$device_id'" >&2
+            exit 2
+        fi
+    done
+fi
+
 if [[ -n "${allowed_devices:-}" ]]; then
     allowed_devices_csv=",${allowed_devices//[[:space:]]/},"
     for device_id in "${engine_device_ids[@]}"; do
@@ -180,6 +257,10 @@ if [[ -n "${allowed_devices:-}" ]]; then
 fi
 
 device_count="${#engine_device_ids[@]}"
+runtime_device_count="${#runtime_device_ids[@]}"
+if [[ -z "${runtime_visible_devices:-}" ]]; then
+    runtime_device_count="$device_count"
+fi
 engine_tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
 if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ || "$engine_tp_size" -ne "$device_count" ]]; then
     echo "ERROR: VLLM_ENGINE_TP_SIZE=$engine_tp_size must equal the configured device count ($device_count)." >&2
@@ -227,13 +308,35 @@ export VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS="${VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS:
 export VLLM_ENGINE_GPU_MEM_UTIL="${VLLM_ENGINE_GPU_MEM_UTIL:-0.9}"
 export VLLM_ENGINE_MAX_NUM_SEQS="${VLLM_ENGINE_MAX_NUM_SEQS:-16}"
 export VLLM_ENGINE_DTYPE="${VLLM_ENGINE_DTYPE:-bfloat16}"
-export VLLM_ENGINE_NPU_DEVICES="$engine_devices"
-export ASCEND_RT_VISIBLE_DEVICES="$engine_devices"
-export ASCEND_VISIBLE_DEVICES="$engine_devices"
+export VLLM_ENGINE_NPU_DEVICES="$runtime_visible_devices"
+export VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES="$runtime_visible_devices"
+export VLLM_ENGINE_HOST_VISIBLE_NPU_DEVICES="$engine_devices"
+export ASCEND_RT_VISIBLE_DEVICES="$runtime_visible_devices"
+export ASCEND_VISIBLE_DEVICES="$runtime_visible_devices"
 export VLLM_ENGINE_CONDA_ENV="${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}"
 export VLLM_ENGINE_BIN="${VLLM_ENGINE_BIN:-vllm-hust}"
 export VLLM_ENGINE_BASE_PYTHONPATH="${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
-export VLLM_ENGINE_CONTAINER_LOG_FILE="${VLLM_ENGINE_CONTAINER_LOG_FILE:-/tmp/sage-mate-vllm-engine.redacted.log}"
+runtime_log_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/runtime}/logs"
+mkdir -p "$runtime_log_root" 2>/dev/null || true
+if [[ -z "${VLLM_ENGINE_CONTAINER_LOG_FILE:-}" ]]; then
+    fallback_log_file="${runtime_log_root%/}/sage-mate-vllm-engine.redacted.log"
+    if touch "$fallback_log_file" 2>/dev/null; then
+        export VLLM_ENGINE_CONTAINER_LOG_FILE="$fallback_log_file"
+    else
+        export VLLM_ENGINE_CONTAINER_LOG_FILE="/tmp/sage-mate-vllm-engine.redacted.log"
+    fi
+else
+    if touch "${VLLM_ENGINE_CONTAINER_LOG_FILE}" 2>/dev/null; then
+        export VLLM_ENGINE_CONTAINER_LOG_FILE
+    else
+        fallback_log_file="${runtime_log_root%/}/sage-mate-vllm-engine.redacted.log"
+        if touch "$fallback_log_file" 2>/dev/null; then
+            export VLLM_ENGINE_CONTAINER_LOG_FILE="$fallback_log_file"
+        else
+            export VLLM_ENGINE_CONTAINER_LOG_FILE="/tmp/sage-mate-vllm-engine.redacted.log"
+        fi
+    fi
+fi
 export VLLM_ENGINE_AUTO_CREATE_CONTAINER="${VLLM_ENGINE_AUTO_CREATE_CONTAINER:-true}"
 export VLLM_ENGINE_REPLACE_EXISTING="${VLLM_ENGINE_REPLACE_EXISTING:-true}"
 export VLLM_ENGINE_CONTAINER_NON_INTERACTIVE="${VLLM_ENGINE_CONTAINER_NON_INTERACTIVE:-1}"
@@ -252,6 +355,19 @@ if [[ "$HOST_WORKSPACE_ROOT" != /* ]]; then
 fi
 export CONTAINER_WORKSPACE_ROOT="${CONTAINER_WORKSPACE_ROOT:-/workspace}"
 export CONTAINER_WORKDIR="${CONTAINER_WORKDIR:-/workspace/vllm-hust-dev-hub}"
+
+prepare_runtime_log_mount() {
+    local workspace_root="${HOST_WORKSPACE_ROOT%/}"
+    local runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/runtime}"
+    local link_path="$workspace_root/.sage-mate-runtime-logs"
+    [[ -d "$runtime_root" ]] || mkdir -p "$runtime_root"
+    if [[ -e "$link_path" || -L "$link_path" ]]; then
+        local current_target
+        current_target="$(readlink "$link_path" 2>/dev/null || true)"
+        [[ "$current_target" == "$runtime_root" ]] || rm -f "$link_path"
+    fi
+    [[ -e "$link_path" || -L "$link_path" ]] || ln -s "$runtime_root" "$link_path"
+}
 
 prepare_host_model_mount() {
     local model_path="${VLLM_ENGINE_MODEL_PATH:-}"
@@ -333,7 +449,42 @@ ensure_container_model_visibility() {
     "${cmd[@]}" rm -f "$container_name" >/dev/null 2>&1 || true
 }
 
+ensure_container_device_visibility() {
+    local container_name="${VLLM_ENGINE_CONTAINER:?}"
+    local physical_devices="${VLLM_ENGINE_HOST_VISIBLE_NPU_DEVICES:-}"
+    local -a cmd=("${docker_cmd[@]}")
+    [[ -n "$physical_devices" ]] || return 0
+    container_is_running || return 0
+
+    local mounted
+    mounted="$("${cmd[@]}" inspect -f '{{range .HostConfig.Devices}}{{.PathOnHost}} {{end}}' "$container_name" 2>/dev/null || true)"
+    local id
+    for id in ${physical_devices//,/ }; do
+        if [[ "$mounted" != *"/dev/davinci${id}"* ]]; then
+            echo "[sage-mate] container '$container_name' is not bound to physical NPU set '$physical_devices'; recreating."
+            "${cmd[@]}" stop "$container_name" >/dev/null 2>&1 || true
+            "${cmd[@]}" rm -f "$container_name" >/dev/null 2>&1 || true
+            return 0
+        fi
+    done
+}
+
+ensure_container_runtime_log_visibility() {
+    local container_name="${VLLM_ENGINE_CONTAINER:?}"
+    local runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/runtime}"
+    local -a cmd=("${docker_cmd[@]}")
+    container_is_running || return 0
+    local mounts
+    mounts="$("${cmd[@]}" inspect -f '{{range .Mounts}}{{.Source}} {{end}}' "$container_name" 2>/dev/null || true)"
+    if [[ "$mounts" != *"$runtime_root"* ]]; then
+        echo "[sage-mate] container '$container_name' lacks runtime log mount '$runtime_root'; recreating."
+        "${cmd[@]}" stop "$container_name" >/dev/null 2>&1 || true
+        "${cmd[@]}" rm -f "$container_name" >/dev/null 2>&1 || true
+    fi
+}
+
 prepare_host_model_mount
+prepare_runtime_log_mount
 
 if [[ -z "${VLLM_HUST_API_KEY:-}" && -n "${DIGITAL_TWIN_API_KEY:-}" ]]; then
     export VLLM_ENGINE_API_KEY="$DIGITAL_TWIN_API_KEY"
@@ -345,6 +496,17 @@ if ! docker_cmd="$(resolve_docker_cmd)"; then
 fi
 read -r -a docker_cmd <<< "$docker_cmd"
 ensure_container_model_visibility
+ensure_container_device_visibility
+ensure_container_runtime_log_visibility
 
 echo "[sage-mate] delegating vLLM-HUST launch to $launcher"
+{
+  echo "[sage-mate] model family=${VLLM_ENGINE_MODEL_FAMILY:-unknown}"
+  echo "[sage-mate] model source=${VLLM_ENGINE_MODEL_SOURCE:-auto}"
+  echo "[sage-mate] model id=${VLLM_ENGINE_ACTUAL_MODEL_ID:-unknown}"
+  echo "[sage-mate] model served name=${VLLM_ENGINE_SERVED_MODEL_NAME:-unknown}"
+  echo "[sage-mate] quantization=${VLLM_ENGINE_QUANTIZATION:-none}"
+  echo "[sage-mate] npu devices=${VLLM_ENGINE_NPU_DEVICES}"
+  echo "[sage-mate] host=${VLLM_ENGINE_HOST:-0.0.0.0} port=${VLLM_ENGINE_PORT:-8000}"
+} >>"$VLLM_ENGINE_CONTAINER_LOG_FILE"
 exec "$launcher"
