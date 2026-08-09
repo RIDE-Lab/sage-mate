@@ -16,6 +16,7 @@ import shlex
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+import argparse
 from typing import Iterable
 
 from huggingface_hub import snapshot_download
@@ -70,8 +71,22 @@ def _shell_quote(item: str) -> str:
 
 
 def _readable_family_order() -> list[str]:
-    order_raw = os.environ.get("VLLM_ENGINE_MODEL_FAMILY_ORDER", "glm,deepseek,minimax,qwen")
-    return [item.strip() for item in order_raw.split(",") if item.strip()]
+    required = [item.strip().lower() for item in _env_list("VLLM_ENGINE_REQUIRED_FAMILIES", "") if item.strip()]
+    order_raw = os.environ.get("VLLM_ENGINE_MODEL_FAMILY_ORDER", "")
+    if order_raw.strip():
+        families = [item.strip() for item in order_raw.split(",") if item.strip()]
+    else:
+        families = [item.strip() for item in "deepseek,glm,minimax,qwen".split(",") if item.strip()]
+
+    ordered: list[str] = []
+    for family in required:
+        if family and family not in ordered:
+            ordered.append(family)
+    for family in families:
+        family_l = family.strip().lower()
+        if family_l and family_l not in ordered:
+            ordered.append(family_l)
+    return ordered
 
 
 def _family_patterns(family: str) -> list[str]:
@@ -220,7 +235,7 @@ def _collect_candidates_for_family(family: str, family_rank: int, root_paths: li
 def _pick_best(candidates: Iterable[Candidate]) -> Candidate | None:
     sorted_candidates = sorted(
         candidates,
-        key=lambda item: (-item.size_bytes, item.family_rank, len(item.path.as_posix())),
+        key=lambda item: (item.family_rank, -item.size_bytes, len(item.path.as_posix())),
     )
     return sorted_candidates[0] if sorted_candidates else None
 
@@ -337,7 +352,19 @@ def _allow_qwen_fallback() -> bool:
     return _env_flag("VLLM_ENGINE_ALLOW_QWEN_FALLBACK", True)
 
 
+def _family_name_list(raw: str) -> list[str]:
+    return [item.strip().lower() for item in raw.split(",") if item.strip()]
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--print-env",
+        action="store_true",
+        help="Emit only resolved env lines (compatible with existing CI/download scripts).",
+    )
+    parser.parse_args()
+
     families = _readable_family_order()
     family_rank_map = {family: idx for idx, family in enumerate(families)}
     roots = _scan_roots()

@@ -23,6 +23,8 @@ These are systemd-facing scripts. They should stay small and source shared helpe
 
 - `run_app_server.sh` - Faculty Twin FastAPI app on `127.0.0.1:${APP_PORT:-55601}`.
 - `run_vllm_engine.sh` - Ascend vLLM-HUST engine path.
+- `lock_sage_mate_deployment.sh` - **唯一**的一键部署/锁定入口。读取机器本地 `.env`，清理旧 systemd 环境覆盖，锁定物理 NPU 到容器逻辑映射，并重启引擎。
+- `verify_sage_mate_deployment.sh` - 只读验证入口，检查 systemd、`/health`、`/v1/models` 和实际 vLLM 命令行。
 - `run_vllm_nvidia_engine.sh` - NVIDIA/CUDA vLLM-HUST engine path. Uses pinned `deps/vllm-hust`.
 - `run_vllm_openai_proxy.sh` - OpenAI-compatible auth proxy.
 - `run_local_proxy.sh` - local site proxy.

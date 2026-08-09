@@ -15,6 +15,7 @@ __pycache__/
 .planning/
 deps/.faculty-twin-primary-model
 deps/.sage-mate-primary-model
+deps/.sage-mate-runtime-logs
 output/
 findings.md
 progress.md
