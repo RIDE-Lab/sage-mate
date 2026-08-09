@@ -7258,6 +7258,10 @@ class DigitalTwinService:
         # Pre-LLM invitation code detection: intercept invitation codes before
         # routing to the LLM pipeline so that the onboarding flow is triggered
         # instead of treating the code as a research query.
+        boundary_response = self._check_sensitive_boundary_request(request)
+        if boundary_response is not None:
+            return boundary_response
+
         invitation_response = self._check_invitation_code_in_message(request)
         if invitation_response is not None:
             return invitation_response
@@ -7448,6 +7452,31 @@ class DigitalTwinService:
             ),
         )
         return self._workflow_planner.plan(context)
+
+    @staticmethod
+    def _check_sensitive_boundary_request(request: ChatRequest) -> ChatResponse | None:
+        """Answer credential/prompt-exfiltration requests without an LLM call."""
+        question = str(request.question or "")
+        lowered = question.lower()
+        markers = (
+            "系统提示词", "system prompt", "内部密钥", "api key", "apikey",
+            "访问令牌", "token", "管理员密码", "admin password", "密码",
+            "secret", "credential",
+        )
+        if not any(marker in question or marker in lowered for marker in markers):
+            return None
+        return ChatResponse(
+            answer=(
+                "这类系统提示词、密钥、令牌和管理员凭据属于受保护的内部信息，不能提供或猜测。"
+                "如果你是在排查 Sage Mate，请通过管理员控制台查看脱敏后的运行状态，"
+                "或让系统维护者按轮换流程处理凭据。"
+            ),
+            owner_name=request.student_name,
+            used_model="policy-boundary",
+            conversation_id=request.conversation_id or str(uuid4()),
+            workflow_action="answer",
+            decision_mode="direct_answer",
+        )
 
     def _check_invitation_code_in_message(
         self, request: ChatRequest
