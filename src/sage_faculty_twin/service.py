@@ -46,6 +46,7 @@ from .chat_contracts import (
 )
 from .chat_delivery import (
     AnswerConstraints,
+    AnswerDeliveryRejected,
     AnswerOrigin,
     ChatDeliveryGate,
     DeliveredChatResponse,
@@ -7202,11 +7203,45 @@ class DigitalTwinService:
             "code_assist": AnswerOrigin.CODE_WORKBENCH,
             "auto_scientist": AnswerOrigin.AUTO_SCIENTIST,
         }
-        return self._delivery_gate.deliver(
-            response=response,
-            original_question=request.question,
-            origin=origin_by_action.get(response.workflow_action, AnswerOrigin.PIPELINE),
-        )
+        origin = origin_by_action.get(response.workflow_action, AnswerOrigin.PIPELINE)
+        try:
+            return self._delivery_gate.deliver(
+                response=response,
+                original_question=request.question,
+                origin=origin,
+            )
+        except AnswerDeliveryRejected as exc:
+            # Length constraints are user-facing formatting requirements. A
+            # model occasionally overshoots them by one paragraph; turn that
+            # recoverable mismatch into a bounded answer instead of exposing
+            # an HTTP 500. Keep all other safety rejections strict.
+            issue_text = str(exc)
+            if not any(
+                issue in issue_text
+                for issue in ("answer_exceeds_sentence_limit", "answer_exceeds_char_limit")
+            ):
+                raise
+            bounded = response.answer.strip()
+            constraints = AnswerConstraints.from_question(request.question)
+            if constraints.max_sentences is not None:
+                sentences = [
+                    part.strip()
+                    for part in re.findall(r"[^。！？.!?]+[。！？.!?]?", bounded)
+                    if part.strip()
+                ]
+                bounded = "".join(sentences[: constraints.max_sentences]).strip()
+            if constraints.max_chars is not None and len(bounded) > constraints.max_chars:
+                bounded = bounded[: constraints.max_chars].rstrip() + "…"
+            _logger.warning(
+                "bounded answer at delivery boundary origin=%s reason=%s",
+                origin.value,
+                issue_text,
+            )
+            return self._delivery_gate.deliver(
+                response=response.model_copy(update={"answer": bounded}),
+                original_question=request.question,
+                origin=origin,
+            )
 
     async def _answer_with_execution_mode(
         self,
