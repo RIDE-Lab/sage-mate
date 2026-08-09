@@ -491,6 +491,7 @@ async def _parse_chat_request(raw_request: Request) -> ChatRequest:
             in ("true", "1", "on", "yes"),
             "attachments": await _parse_chat_attachments(files),
         }
+        payload["visitor_profile"] = _normalize_visitor_profile(payload.get("visitor_profile"))
         try:
             return ChatRequest.model_validate(payload)
         except ValidationError as exc:
@@ -501,10 +502,23 @@ async def _parse_chat_request(raw_request: Request) -> ChatRequest:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="聊天请求体不是合法 JSON。") from exc
 
+    if isinstance(payload, dict):
+        payload["visitor_profile"] = _normalize_visitor_profile(payload.get("visitor_profile"))
     try:
         return ChatRequest.model_validate(payload)
     except ValidationError as exc:
         _raise_chat_validation_error(exc)
+
+
+def _normalize_visitor_profile(value: object) -> object:
+    """Accept common public aliases without weakening profile validation."""
+    aliases = {
+        "guest": "general_visitor",
+        "visitor": "general_visitor",
+        "student": "hust_undergraduate",
+    }
+    normalized = str(value or "").strip().lower()
+    return aliases.get(normalized, value)
 
 
 def _resolve_effective_chat_visitor_profile(
