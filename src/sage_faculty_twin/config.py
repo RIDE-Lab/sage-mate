@@ -69,6 +69,15 @@ class AppSettings(BaseSettings):
         le=4096,
         description="Default max_tokens for non-thinking interactive answers.",
     )
+    llm_deep_answer_max_tokens: int = Field(
+        default=256,
+        ge=128,
+        le=4096,
+        description=(
+            "Maximum completion tokens for explicit deep-thinking answers. "
+            "Keep this bounded on low-throughput accelerators."
+        ),
+    )
     llm_answer_temperature: float = Field(
         default=0.1,
         ge=0.0,

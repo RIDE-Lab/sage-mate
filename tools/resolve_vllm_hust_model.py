@@ -89,7 +89,8 @@ def _family_patterns(family: str) -> list[str]:
 def _family_remote_candidates(family: str) -> list[str]:
     env_key = f"VLLM_ENGINE_FAMILY_REMOTE_{family.upper()}_CANDIDATES"
     defaults = {
-        "GLM": "THUDM/glm-4-9b-chat",
+        # THUDM was migrated to zai-org; keep the current upstream ID first.
+        "GLM": "zai-org/glm-4-9b-chat,THUDM/glm-4-9b-chat",
         "DEEPSEEK": "deepseek-ai/DeepSeek-V2.5,deepseek-ai/DeepSeek-V2",
         "MINIMAX": "",
         "QWEN": "Qwen/Qwen3___5-35B-A3B,Qwen/Qwen3-32B",
@@ -224,6 +225,31 @@ def _pick_best(candidates: Iterable[Candidate]) -> Candidate | None:
     return sorted_candidates[0] if sorted_candidates else None
 
 
+def _preferred_model_tokens() -> list[str]:
+    """Return optional model-name hints, without tying deployment to a path."""
+    return _env_list("VLLM_ENGINE_MODEL_PREFERENCE")
+
+
+def _pick_preferred(candidates: Iterable[Candidate]) -> Candidate | None:
+    items = list(candidates)
+    def normalize(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+    tokens = [normalize(token) for token in _preferred_model_tokens()]
+    if not tokens:
+        return None
+    preferred = [
+        item for item in items
+        if any(
+            token in normalize(item.path.as_posix())
+            or token in normalize(item.served_name)
+            or token in normalize(item.model_id)
+            for token in tokens
+        )
+    ]
+    return _pick_best(preferred)
+
+
 def _download_family_model(family: str, family_rank: int) -> Candidate | None:
     if not _env_flag("VLLM_ENGINE_AUTO_DOWNLOAD", True):
         return None
@@ -302,15 +328,27 @@ def _emit_env_lines(candidate: Candidate) -> None:
     print(f"VLLM_ENGINE_MODEL_FAMILY={_shell_quote(candidate.family)}")
 
 
+def _required_families() -> set[str]:
+    raw = os.environ.get("VLLM_ENGINE_REQUIRED_FAMILIES", "").strip()
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _allow_qwen_fallback() -> bool:
+    return _env_flag("VLLM_ENGINE_ALLOW_QWEN_FALLBACK", True)
+
+
 def main() -> int:
     families = _readable_family_order()
     family_rank_map = {family: idx for idx, family in enumerate(families)}
     roots = _scan_roots()
+    required_families = _required_families()
 
     local_candidates: list[Candidate] = []
     for family in families:
         family = family.strip()
         if not family:
+            continue
+        if required_families and family.strip().lower() not in required_families:
             continue
         local_candidates.extend(
             _collect_candidates_for_family(family, family_rank_map[family], roots)
@@ -322,9 +360,9 @@ def main() -> int:
 
     selected: Candidate | None = None
     if preferred_candidates:
-        selected = _pick_best(preferred_candidates)
+        selected = _pick_preferred(preferred_candidates) or _pick_best(preferred_candidates)
     if selected is None:
-        selected = _pick_best(local_candidates)
+        selected = _pick_preferred(local_candidates) or _pick_best(local_candidates)
 
     if selected is None:
         fallback_families = preferred_families if preferred_families else families
@@ -332,13 +370,30 @@ def main() -> int:
             family = family.strip()
             if not family:
                 continue
+            if required_families and family.strip().lower() not in required_families:
+                continue
             selected = _download_family_model(family, family_rank_map[family])
             if selected:
                 break
 
-        if selected is None and "qwen" in {item.strip().lower() for item in families}:
+        if (
+            selected is None
+            and _allow_qwen_fallback()
+            and "qwen" in {item.strip().lower() for item in families}
+        ):
             qwen_family = next(item for item in families if item.strip().lower() == "qwen")
             selected = _download_family_model(qwen_family, family_rank_map[qwen_family])
+
+    if selected is None and required_families and all(
+        family.strip().lower() != "qwen" for family in required_families
+    ):
+        family_clause = ", ".join(sorted(required_families))
+        print(
+            f"[resolver] no model found for required families: {family_clause}. "
+            "Set or disable VLLM_ENGINE_REQUIRED_FAMILIES / VLLM_ENGINE_ALLOW_QWEN_FALLBACK.",
+            file=sys.stderr,
+        )
+        return 2
 
 
     if selected is None:

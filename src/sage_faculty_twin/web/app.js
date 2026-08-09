@@ -324,6 +324,7 @@ const operationsSuggestions = document.getElementById("operations-suggestions");
 const poweredBySageVersion = document.getElementById("powered-by-sage-version");
 const poweredByNeuromemVersion = document.getElementById("powered-by-neuromem-version");
 const poweredByVllmVersion = document.getElementById("powered-by-vllm-version");
+const poweredByModelName = document.getElementById("powered-by-model-name");
 const poweredBySagevdbVersion = document.getElementById("powered-by-sagevdb-version");
 const poweredBySageAnnsVersion = document.getElementById("powered-by-sage-anns-version");
 const appVersionBadge = document.getElementById("app-version-badge");
@@ -387,6 +388,7 @@ let activeWorkflowStream = null;
 let activeWorkflowRequestId = null;
 let lastAutoChatQuestion = chatQuestion?.value?.trim() || "";
 let lastAutoCourseContext = courseContextInput?.value?.trim() || "";
+let lastHardwareSnapshot = null;
 let activeWorkflowSteps = [];
 let availabilityEditorState = null;
 let workflowMobileHandlePointerId = null;
@@ -3357,16 +3359,17 @@ async function refreshStatus() {
 
     try {
         const data = await fetchHealthSnapshot();
-        lastHealthyStatusSnapshot = data;
+        const mergedData = { ...data, ...(lastHardwareSnapshot || {}) };
+        lastHealthyStatusSnapshot = mergedData;
         lastHealthyStatusAt = Date.now();
-        applyBranding(data.owner_name, data.owner_role, data.homepage_public_url);
-        renderPoweredByVersions(data);
-        statusPill && (statusPill.textContent = data.status === "ok" ? "服务正常" : `状态 ${data.status}`);
-        modelPill && (modelPill.textContent = data.model_name ? `模型 ${data.model_name}` : "连接已就绪");
-        knowledgePill && (knowledgePill.textContent = `知识库 ${data.knowledge_documents}`);
-        renderTopbarLiveStatus(data);
-        renderOnlineOverview(data);
-        renderLlmMetrics(data);
+        applyBranding(mergedData.owner_name, mergedData.owner_role, mergedData.homepage_public_url);
+        renderPoweredByVersions(mergedData);
+        statusPill && (statusPill.textContent = mergedData.status === "ok" ? "服务正常" : `状态 ${mergedData.status}`);
+        modelPill && (modelPill.textContent = mergedData.model_name ? `模型 ${mergedData.model_name}` : "连接已就绪");
+        knowledgePill && (knowledgePill.textContent = `知识库 ${mergedData.knowledge_documents}`);
+        renderTopbarLiveStatus(mergedData);
+        renderOnlineOverview(mergedData);
+        renderLlmMetrics(mergedData);
     } catch (error) {
         const hasRecentSnapshot =
             lastHealthyStatusSnapshot
@@ -3403,6 +3406,15 @@ function normalizePoweredByVersion(rawVersion) {
 }
 
 function renderPoweredByVersions(data) {
+    if (poweredByModelName) {
+        poweredByModelName.textContent = data?.model_name || "模型未配置";
+        poweredByModelName.parentElement?.setAttribute(
+            "title",
+            [data?.model_name, data?.engine_image, data?.npu_devices ? `NPU ${data.npu_devices}` : ""]
+                .filter(Boolean)
+                .join(" · "),
+        );
+    }
     if (poweredBySageVersion) {
         poweredBySageVersion.textContent = normalizePoweredByVersion(data?.stack_version_sage);
     }
@@ -3438,6 +3450,10 @@ async function refreshPoweredByVersions() {
 async function refreshHardwareBar() {
     try {
         const data = await apiRequest("/stack/hardware", { timeoutMs: 5000 });
+        lastHardwareSnapshot = data;
+        if (lastHealthyStatusSnapshot) {
+            updateStatusDrawer({ ...lastHealthyStatusSnapshot, ...data });
+        }
         const bar = document.getElementById("app-hardware-bar");
         const npuEl = document.getElementById("hw-npu");
         const cpuEl = document.getElementById("hw-cpu");
@@ -3550,6 +3566,12 @@ function updateStatusDrawer(data) {
     const userEl = document.querySelector("#view-user-count .status-value");
     const questionEl = document.querySelector("#view-question-count .status-value");
     const modelEl = document.querySelector("#view-model-status .status-value");
+    const modelNameEl = document.querySelector("#view-model-name .status-value");
+    const npuDevicesEl = document.querySelector("#view-npu-devices .status-value");
+    const npuUtilEl = document.querySelector("#view-npu-utilization .status-value");
+    const npuMemoryEl = document.querySelector("#view-npu-memory .status-value");
+    const npuDetailEl = document.querySelector("#view-npu-detail .status-value");
+    const engineImageEl = document.querySelector("#view-engine-image .status-value");
     const llmStatusEl = document.querySelector("#view-llm-status .status-value");
     const llmLatencyEl = document.querySelector("#view-llm-latency .status-value");
     const llmCacheEl = document.querySelector("#view-llm-cache .status-value");
@@ -3559,6 +3581,12 @@ function updateStatusDrawer(data) {
         if (userEl) userEl.textContent = "--";
         if (questionEl) questionEl.textContent = "--";
         if (modelEl) modelEl.textContent = "未知";
+        if (modelNameEl) modelNameEl.textContent = "未知";
+        if (npuDevicesEl) npuDevicesEl.textContent = "未知";
+        if (npuUtilEl) npuUtilEl.textContent = "未知";
+        if (npuMemoryEl) npuMemoryEl.textContent = "未知";
+        if (npuDetailEl) npuDetailEl.textContent = "未知";
+        if (engineImageEl) engineImageEl.textContent = "未知";
         if (llmStatusEl) llmStatusEl.textContent = "--";
         if (llmLatencyEl) llmLatencyEl.textContent = "--";
         if (llmCacheEl) llmCacheEl.textContent = "--";
@@ -3570,6 +3598,17 @@ function updateStatusDrawer(data) {
     if (userEl) userEl.textContent = formatCount(data.registered_user_accounts);
     if (questionEl) questionEl.textContent = formatCount(data.conversation_memory_records);
     if (modelEl) modelEl.textContent = modelSummary.headline;
+    if (modelNameEl) modelNameEl.textContent = data.model_name || "未配置";
+    if (npuDevicesEl) {
+        const devices = data.npu_devices || data.npu || "未读取";
+        npuDevicesEl.textContent = data.npu_active_count
+            ? `${devices} · ${data.npu_active_count} 卡`
+            : devices;
+    }
+    if (npuUtilEl) npuUtilEl.textContent = data.npu_utilization || "--";
+    if (npuMemoryEl) npuMemoryEl.textContent = data.npu_memory_usage || "--";
+    if (npuDetailEl) npuDetailEl.textContent = data.npu_utilization_by_device || "--";
+    if (engineImageEl) engineImageEl.textContent = data.engine_image || "--";
 
     // LLM metrics
     const requestCount = toCountNumber(data.llm_request_count);
@@ -3785,6 +3824,7 @@ function startStatusAutoRefresh() {
             return;
         }
         refreshStatus();
+        refreshHardwareBar();
     }, STATUS_REFRESH_INTERVAL_MS);
 }
 
@@ -7226,6 +7266,7 @@ function renderAssistantMessage(
             title: "本次回答依据",
             copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
             count: basisItems.length,
+            defaultExpanded: true,
             contentHtml: `
                 <div class="message-basis-list">
                     ${basisItems.map((item) => buildAnswerBasisItemHtml(item)).join("")}

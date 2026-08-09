@@ -5,6 +5,7 @@ import hashlib
 import inspect
 import json
 import logging
+import os
 import re
 import threading
 from collections.abc import Callable, Iterable
@@ -301,9 +302,30 @@ def _resolve_vllm_hust_version() -> str:
     value, so _resolve_source_version will fall through to pip metadata
     which carries the full setuptools-scm string.
     """
-    return _resolve_source_version(
+    configured_image = os.environ.get("VLLM_ENGINE_IMAGE", "").strip()
+    if configured_image and ":" in configured_image:
+        image_tag = configured_image.rsplit(":", 1)[-1]
+        if image_tag:
+            return image_tag if image_tag.startswith("v") else f"v{image_tag}"
+    source_version = _resolve_source_version(
         "vllm-hust", pip_names=("vllm-hust", "vllm"), expect_name="vllm-hust",
     )
+    if source_version != "unknown":
+        return source_version
+    vendored = Path(__file__).resolve().parents[2] / "deps" / "vllm-hust"
+    try:
+        import subprocess
+
+        commit = subprocess.check_output(
+            ["git", "-C", str(vendored), "rev-parse", "--short", "HEAD"],
+            text=True,
+            timeout=2,
+        ).strip()
+        if commit:
+            return f"git-{commit}"
+    except Exception:
+        pass
+    return "unknown"
 
 
 def build_stack_versions_payload() -> dict[str, str]:
@@ -323,6 +345,13 @@ def build_stack_versions_payload() -> dict[str, str]:
         "stack_version_sage_anns": _resolve_source_version(
             "sage-anns", pip_names=("isage-anns",), expect_name="isage-anns",
         ),
+        "model_name": os.environ.get("DIGITAL_TWIN_MODEL_NAME", "").strip()
+        or os.environ.get("VLLM_HUST_MODEL", "").strip()
+        or "unknown",
+        "engine_image": os.environ.get("VLLM_ENGINE_IMAGE", "").strip() or "unknown",
+        "npu_devices": os.environ.get("ASCEND_VISIBLE_DEVICES", "").strip()
+        or os.environ.get("VLLM_ENGINE_NPU_DEVICES", "").strip()
+        or "unknown",
     }
 
 
@@ -332,6 +361,12 @@ def build_hardware_payload() -> dict[str, str]:
     import subprocess as _sp
 
     info: dict[str, str] = {}
+    active_devices = (
+        os.environ.get("ASCEND_VISIBLE_DEVICES", "").strip()
+        or os.environ.get("VLLM_ENGINE_NPU_DEVICES", "").strip()
+    )
+    if active_devices:
+        info["npu_devices"] = active_devices
 
     # --- NPU (Ascend) ---
     npu_smi = shutil.which("npu-smi")
@@ -339,6 +374,8 @@ def build_hardware_payload() -> dict[str, str]:
         try:
             out = _sp.check_output([npu_smi, "info"], text=True, timeout=5)
             npu_names: list[str] = []
+            npu_stats: dict[str, dict[str, float]] = {}
+            pending_device: str | None = None
             for line in out.splitlines():
                 parts = line.split("|")
                 if len(parts) < 3:
@@ -352,9 +389,53 @@ def build_hardware_payload() -> dict[str, str]:
                     # Model names are alphanumeric like "910B2", not pure digits
                     if not name.isdigit():
                         npu_names.append(name)
+                        pending_device = tokens[0]
+                        npu_stats.setdefault(pending_device, {})["model"] = name
+                elif pending_device is not None and len(parts) >= 4:
+                    # The following npu-smi row contains AICore, memory and
+                    # HBM figures. Keep parsing positional numeric fields so
+                    # this remains portable across npu-smi minor versions.
+                    numeric = re.findall(r"\d+(?:\.\d+)?", parts[3])
+                    if len(numeric) >= 5:
+                        values = [float(value) for value in numeric[-5:]]
+                        npu_stats[pending_device].update(
+                            aicore=values[0],
+                            memory_used=values[1],
+                            memory_total=values[2],
+                            hbm_used=values[3],
+                            hbm_total=values[4],
+                        )
+                    pending_device = None
             if npu_names:
                 unique = sorted(set(npu_names), key=npu_names.index)
-                info["npu"] = f"{len(npu_names)}\u00d7 {unique[0]}" if len(unique) == 1 else f"{len(npu_names)}\u00d7 {','.join(unique)}"
+                host_summary = f"{len(npu_names)}\u00d7 {unique[0]}" if len(unique) == 1 else f"{len(npu_names)}\u00d7 {','.join(unique)}"
+                info["npu_host"] = host_summary
+                if active_devices:
+                    count = len([item for item in active_devices.split(",") if item.strip()])
+                    info["npu"] = f"{active_devices} · {count}\u00d7 {unique[0]}"
+                else:
+                    info["npu"] = host_summary
+                selected = [
+                    npu_stats[device]
+                    for device in (active_devices.split(",") if active_devices else npu_stats)
+                    if device in npu_stats
+                ]
+                if selected:
+                    aicore_values = [item["aicore"] for item in selected if "aicore" in item]
+                    hbm_used = sum(item.get("hbm_used", 0.0) for item in selected)
+                    hbm_total = sum(item.get("hbm_total", 0.0) for item in selected)
+                    if aicore_values:
+                        info["npu_utilization"] = f"{sum(aicore_values) / len(aicore_values):.1f}%"
+                        info["npu_utilization_by_device"] = ",".join(
+                            f"{device}:{npu_stats[device].get('aicore', 0):.0f}%"
+                            for device in (active_devices.split(",") if active_devices else npu_stats)
+                            if device in npu_stats
+                        )
+                    if hbm_total:
+                        info["npu_memory_usage"] = (
+                            f"{hbm_used / 1024:.1f}/{hbm_total / 1024:.1f} GiB"
+                        )
+                    info["npu_active_count"] = str(len(selected))
         except Exception:
             pass
 
@@ -1235,7 +1316,10 @@ class FacultyTwinWorkflowSupport:
         # --- Post-retrieval: clarification override or demotion ---
         trace_summary, trace_detail, trace_status = None, None, "completed"
         if context.pending_clarification_message is not None and needs_retrieval:
-            if hit_count > 0 and top_score >= 12.0:
+            # Retrieval ranking is backend-specific; do not apply a global
+            # score cutoff here. Candidates have already passed the
+            # provenance/relevance sanity check below.
+            if hit_count > 0:
                 # Strong KB hit → cancel clarification, proceed to answer
                 context.pending_clarification_message = None
                 if context.workflow_action == "ask_follow_up":
@@ -1248,7 +1332,7 @@ class FacultyTwinWorkflowSupport:
                     f"命中本地 {hit_count} 条，联网 {web_count} 条，已取消澄清，直接依据 KB 回答。"
                 )
                 trace_detail = (
-                    f"top-1 得分 {top_score:.1f} 超过阈值 12，将 ask_followup 降级为 answer；"
+                    "检索结果通过证据相关性校验，将 ask_followup 降级为 answer；"
                     f"意图域 {interaction_intent.domain}。"
                 )
             else:
@@ -1269,7 +1353,7 @@ class FacultyTwinWorkflowSupport:
                 context.pending_clarification_message = None
                 trace_summary = (
                     f"命中本地 {hit_count} 条，联网 {web_count} 条，"
-                    f"但 top 得分 {top_score:.1f} 不足，发出澄清。"
+                    "但当前证据不足以直接回答，发出澄清。"
                     if hit_count else f"本地无命中，联网 {web_count} 条，发出澄清。"
                 )
                 trace_detail = (
@@ -1329,9 +1413,11 @@ class FacultyTwinWorkflowSupport:
         if not asks_realtime:
             return False
 
-        # Keep local knowledge as first-class. Auto web search only when local
-        # grounding is weak.
-        return asks_realtime and local_top_score < 8.0
+        # Keep local knowledge as first-class. The local retriever has already
+        # applied its provenance sanity check, so a non-empty local result is
+        # considered grounded; avoid comparing backend-specific scores to a
+        # global threshold.
+        return asks_realtime and local_hit_count == 0
 
     def _retrieve_web_search_hits(
         self,
@@ -2232,7 +2318,19 @@ class FacultyTwinWorkflowSupport:
         ttft_plan = "ttft" in lowered and any(
             marker in question for marker in ("优先级", "本周", "安排")
         )
-        return weekly_progress or unstable_experiment or research_direction or ttft_plan
+        weekly_blocker_review = (
+            "blocker" in lowered
+            and any(marker in question for marker in ("baseline", "公平对比"))
+            and "消融" in question
+            and any(marker in question for marker in ("组会", "汇报", "逻辑骨架"))
+        )
+        return (
+            weekly_progress
+            or unstable_experiment
+            or research_direction
+            or ttft_plan
+            or weekly_blocker_review
+        )
 
     @staticmethod
     def _build_compact_answer_system_prompt(question: str) -> str:
@@ -2300,14 +2398,21 @@ class FacultyTwinWorkflowSupport:
         errors: list[str] = []
         relevance_question = self._build_answer_relevance_question(context)
         retry_id = uuid4().hex
-        for attempt in range(2):
+        # Deep recovery is deliberately single-shot and bounded. Retrying a
+        # 384/768-token answer on this backend can exceed the outer request
+        # deadline even when the first request is healthy.
+        retry_attempts = 1 if deep_recovery else 2
+        for attempt in range(retry_attempts):
             try:
                 answer = self._call_compact_retry_sync(
                     system_prompt=compact_system_prompt,
                     user_prompt=compact_user_prompt,
                     temperature=0.2 if deep_recovery else 0.0,
                     max_tokens=(
-                        (768 if attempt == 0 else 640)
+                        min(
+                            int(self._settings.llm_deep_answer_max_tokens),
+                            256 if attempt == 0 else 192,
+                        )
                         if deep_recovery
                         else (384 if attempt == 0 else 320)
                     ),
@@ -2380,6 +2485,38 @@ class FacultyTwinWorkflowSupport:
     def _build_deterministic_fallback_answer(context: ChatWorkflowContext) -> str:
         question = context.request.question.strip()
         lowered_question = question.lower()
+        if (
+            "blocker" in lowered_question
+            and any(marker in question for marker in ("baseline", "公平对比"))
+            and "消融" in question
+            and any(marker in question for marker in ("组会", "汇报", "逻辑骨架"))
+        ):
+            return (
+                "先校正一个关键点：仅凭“本周 blocker”这句话，不能直接断言瓶颈一定是显存、调度或算子；"
+                "本周汇报应把 blocker 写成可证伪命题，并用一组最小实验把它钉死。\n\n"
+                "## 一页组会逻辑骨架\n\n"
+                "**1. 本周结论（顶部）**\n"
+                "- Blocker：当前结果无法稳定归因于某个机制，先解决“证据不足/对比不公平”，而不是继续堆实现。\n"
+                "- 决策：本周只验证一个主假设：在固定模型、输入长度、并发、硬件和软件版本后，目标指标的主要差异是否仍由该机制造成。\n\n"
+                "**2. 现象与影响（左上）**\n"
+                "- 展示 1 张主图：目标指标的均值 + P50/P95（系统问题可用 TTFT、TPOT、吞吐、显存和失败率）。\n"
+                "- 标出当前 blocker 的可观测证据、影响范围和还不能解释的部分；没有测到的内容明确写“未知”。\n\n"
+                "**3. 公平 baseline（右上）**\n"
+                "- 只比较同一模型、精度、输入/输出长度、硬件卡数、并发、版本和 warm-up 条件。\n"
+                "- 至少包含：原始系统、最强公开/内部 baseline、你的方法；报告完整配置和重复次数。\n"
+                "- 主结论只使用预先声明的主指标，不能只挑对自己有利的吞吐或平均值。\n\n"
+                "**4. 关键消融（左下）**\n"
+                "- 一次只去掉一个机制：例如缓存、调度、并行/通信优化或内存策略。\n"
+                "- 先做 full vs. -one-component，再做关键参数敏感性；同时报告收益、副作用和失败案例。\n"
+                "- 消融结果要能回答“为什么有效”，而不只是证明“数字变大”。\n\n"
+                "**5. 本周行动与验收（右下）**\n"
+                "- Day 1：冻结环境和 baseline，补齐原始日志。\n"
+                "- Day 2：跑 full/去组件消融，至少重复多次并保留原始结果。\n"
+                "- Day 3：按主指标和尾延迟复核，形成一张结论表。\n"
+                "- 验收标准：能明确说明 blocker 是什么、哪个机制解释收益、结论在公平条件下是否成立；否则停止扩展实现，先补实验。\n\n"
+                "**最后一句（底部）**\n"
+                "本周目标不是证明方案“有效”，而是用公平 baseline 和最小消融判断：收益是否真实、来自哪里、是否值得继续投入。"
+            )
         owner_research_summary = (
             FacultyTwinWorkflowSupport._extract_owner_research_summary(context)
         )
@@ -2734,9 +2871,14 @@ class FacultyTwinWorkflowSupport:
         if "max_tokens" in signature.parameters:
             if enable_thinking:
                 kwargs["max_tokens"] = min(
-                    1536,
+                    int(self._settings.llm_deep_answer_max_tokens),
                     int(self._settings.llm_policy_output_max_tokens_cap),
                 )
+                if "continue_on_length" in signature.parameters:
+                    # Do not recursively continue a deep response. On a
+                    # low-throughput NPU that turns one bounded request into
+                    # an unbounded sequence and triggers the outer timeout.
+                    kwargs["continue_on_length"] = False
             elif policy_context.get("max_tokens") is not None:
                 kwargs["max_tokens"] = policy_context["max_tokens"]
         if "cache_namespace" in signature.parameters and context.conversation_id:
@@ -5368,12 +5510,12 @@ class FacultyTwinWorkflowSupport:
         question: str,
         hit: KnowledgeSearchHit,
     ) -> bool:
-        """Require topic evidence beyond broad scope tags.
+        """Keep semantically retrieved evidence without a global score cutoff.
 
-        Scope tags express document type, not whether a particular chunk
-        answers the current question. Three-character Chinese spans and
-        substantive ASCII terms provide a conservative, backend-independent
-        relevance floor after retrieval and reranking.
+        The knowledge backend performs ranking; this is only a provenance
+        sanity check. A candidate must share a meaningful query anchor with
+        its title, excerpt, source, or tags. Scores are not compared across
+        domains or embedding backends.
         """
 
         stop_words = {
@@ -5393,6 +5535,12 @@ class FacultyTwinWorkflowSupport:
             "子解释",
             "控制在",
             "字以内",
+            "老师",
+            "请问",
+            "介绍",
+            "一下",
+            "是什么",
+            "哪些",
         }
         anchors = {
             token.lower()
@@ -5400,14 +5548,25 @@ class FacultyTwinWorkflowSupport:
             if token.lower() not in stop_words
         }
         for span in re.findall(r"[\u4e00-\u9fff]+", question):
-            anchors.update(
-                span[index : index + 3]
-                for index in range(max(len(span) - 2, 0))
-                if span[index : index + 3] not in stop_words
-            )
+            # Two- and three-character spans handle short entities and
+            # paraphrases better than the previous three-character-only rule.
+            for width in (2, 3):
+                anchors.update(
+                    span[index : index + width]
+                    for index in range(max(len(span) - width + 1, 0))
+                    if span[index : index + width] not in stop_words
+                )
         if not anchors:
             return True
-        searchable = f"{hit.title}\n{hit.excerpt}".lower()
+        searchable = "\n".join(
+            (
+                hit.title or "",
+                hit.excerpt or "",
+                hit.source_name or "",
+                " ".join(hit.tags or []),
+                " ".join(f"{key} {value}" for key, value in (hit.metadata or {}).items()),
+            )
+        ).lower()
         return any(anchor in searchable for anchor in anchors)
 
     def _prioritize_guidance_hits(
@@ -7079,8 +7238,19 @@ class DigitalTwinService:
 
         recent_session_context = self._build_recent_session_context(request)
 
-        # Skill routing: check if a skill matches before running the standard pipeline
-        matched_skill = self._skill_router.match(request.question)
+        # Explicit deep-thinking requests use the grounded SAGE pipeline
+        # directly. Skill runners have their own answer-generation/retry
+        # budget; routing through them first can spend the entire chat
+        # deadline before the deep answer stage even starts (and is especially
+        # costly on the current low-throughput NPU backend).
+        matched_skill = (
+            None
+            if (
+                bool(getattr(request, "deep_thinking_explicit", False))
+                and bool(getattr(request, "deep_thinking", True))
+            )
+            else self._skill_router.match(request.question)
+        )
         if matched_skill is not None:
             _logger.info(
                 "Skill router matched '%s' for question (len=%d)",

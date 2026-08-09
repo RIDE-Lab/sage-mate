@@ -20,6 +20,13 @@ fi
 
 proxy_host="$(require_runtime_setting VLLM_PROXY_HOST)"
 proxy_port="$(require_runtime_setting VLLM_PROXY_PORT)"
+proxy_upstream_base_url="${VLLM_PROXY_UPSTREAM_BASE_URL-}"
+
+if [[ -z "$proxy_upstream_base_url" ]]; then
+    proxy_connect_host="${VLLM_ENGINE_CONNECT_HOST:-${VLLM_ENGINE_HOST:-127.0.0.1}}"
+    proxy_connect_port="${VLLM_ENGINE_CONNECT_PORT:-${VLLM_ENGINE_PORT:-8000}}"
+    proxy_upstream_base_url="http://$proxy_connect_host:$proxy_connect_port/v1"
+fi
 
 if ! "$python_bin" - "$proxy_host" "$proxy_port" <<'PY' >/dev/null 2>&1
 import socket
@@ -48,7 +55,9 @@ import importlib.util
 raise SystemExit(0 if importlib.util.find_spec("uvicorn") else 1)
 PY
 then
+    export VLLM_PROXY_UPSTREAM_BASE_URL="$proxy_upstream_base_url"
     exec "$python_bin" -m uvicorn sage_faculty_twin.vllm_openai_proxy:app --host "$proxy_host" --port "$proxy_port"
 fi
 
+export VLLM_PROXY_UPSTREAM_BASE_URL="$proxy_upstream_base_url"
 exec "$python_bin" "$repo_root/tools/openai_key_proxy.py"

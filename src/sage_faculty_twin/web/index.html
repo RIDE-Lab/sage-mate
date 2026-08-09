@@ -218,6 +218,35 @@
                                     <span class="status-label">模型请求</span>
                                     <strong class="status-value">检查中</strong>
                                 </div>
+                                <div class="status-item" id="view-model-name">
+                                    <span class="status-label">当前模型</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
+                                <div class="status-item" id="view-npu-devices">
+                                    <span class="status-label">NPU 分配</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="status-section">
+                            <h4 class="status-section-title">硬件实时状态</h4>
+                            <div class="status-grid" id="status-hardware-grid">
+                                <div class="status-item" id="view-npu-utilization">
+                                    <span class="status-label">NPU 利用率</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
+                                <div class="status-item" id="view-npu-memory">
+                                    <span class="status-label">NPU 显存</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
+                                <div class="status-item" id="view-npu-detail">
+                                    <span class="status-label">各卡利用率</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
+                                <div class="status-item" id="view-engine-image">
+                                    <span class="status-label">推理引擎</span>
+                                    <strong class="status-value">--</strong>
+                                </div>
                             </div>
                         </div>
                         <div class="status-section">
@@ -633,6 +662,9 @@
             <div class="stack-row-powered">
                 <span class="app-stack-label">Powered by</span>
                 <div class="app-powered-by-list">
+                    <span class="app-stack-chip stack-vllm" title="当前实际推理模型">
+                        <span class="stack-dot"></span><span id="powered-by-model-name">模型未配置</span>
+                    </span>
                     <a class="app-stack-chip stack-sage" href="https://github.com/intellistream/SAGE" target="_blank"
                         rel="noreferrer"><span class="stack-dot"></span>SAGE<span class="stack-ver" id="powered-by-sage-version">v0.3.2.3</span></a>
                     <a class="app-stack-chip stack-neuromem" href="https://github.com/intellistream/neuromem" target="_blank"

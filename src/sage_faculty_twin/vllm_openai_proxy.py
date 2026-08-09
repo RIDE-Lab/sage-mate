@@ -59,6 +59,19 @@ def load_proxy_settings() -> ProxySettings:
         raise RuntimeError("VLLM_PROXY_PORT must be configured.")
     if not path_prefix.startswith("/"):
         raise RuntimeError("VLLM_PROXY_PATH_PREFIX must start with '/'.")
+    if not upstream_base_url:
+        connect_host = (
+            os.environ.get("VLLM_ENGINE_CONNECT_HOST", "").strip()
+            or os.environ.get("VLLM_PROXY_CONNECT_HOST", "").strip()
+            or "127.0.0.1"
+        )
+        connect_port = (
+            os.environ.get("VLLM_ENGINE_CONNECT_PORT", "").strip()
+            or os.environ.get("VLLM_ENGINE_PORT", "").strip()
+            or "8000"
+        )
+        upstream_base_url = f"http://{connect_host}:{connect_port}/v1"
+
     if not upstream_base_url.startswith(("http://", "https://")):
         raise RuntimeError("VLLM_PROXY_UPSTREAM_BASE_URL must be an absolute HTTP(S) URL.")
 
