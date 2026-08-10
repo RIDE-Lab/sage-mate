@@ -2329,6 +2329,7 @@ class FacultyTwinWorkflowSupport:
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
         identity_fact_markers = (
+            "张老师",
             "张老师是谁",
             "介绍一下张老师",
             "介绍张老师",
@@ -2338,7 +2339,15 @@ class FacultyTwinWorkflowSupport:
             "你们组主要做什么",
             "实验室主要做什么",
         )
-        if any(marker in question or marker in lowered for marker in identity_fact_markers):
+        normalized_identity_question = re.sub(r"[\s。！？!?，,：:]+$", "", question)
+        is_identity_alias_question = normalized_identity_question in {"张老师", "老师", "老师是谁"}
+        refers_to_other_teacher = any(
+            marker in question for marker in ("另一个张老师", "其他张老师", "某位张老师", "某个张老师")
+        )
+        if not refers_to_other_teacher and (
+            is_identity_alias_question
+            or any(marker in question or marker in lowered for marker in identity_fact_markers)
+        ):
             candidates = [
                 hit
                 for hit in context.knowledge_hits
@@ -4857,7 +4866,9 @@ class FacultyTwinWorkflowSupport:
     )
 
     def _identity_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
-        if not question or not self._IDENTITY_QUESTION_PATTERN.search(question):
+        normalized = re.sub(r"[\s。！？!?，,：:]+$", "", str(question or "").strip())
+        identity_alias = normalized in {"张老师", "老师", "老师是谁"}
+        if not question or (not identity_alias and not self._IDENTITY_QUESTION_PATTERN.search(question)):
             return []
         hits: list[KnowledgeSearchHit] = []
         for record in self._knowledge_store.list_documents():
@@ -7944,7 +7955,12 @@ class DigitalTwinService:
             or self._question_needs_recent_context(question)
         ):
             return None
+        if any(
+            marker in question for marker in ("另一个张老师", "其他张老师", "某位张老师", "某个张老师")
+        ):
+            return None
         markers = (
+            "张老师", "老师是谁", "老师呢",
             "张老师是谁", "介绍一下张老师", "介绍张老师", "张老师简介",
             "课题组主要做什么", "课题组是做什么", "你们组主要做什么",
             "实验室主要做什么", "老师主要研究什么", "老师研究什么",
