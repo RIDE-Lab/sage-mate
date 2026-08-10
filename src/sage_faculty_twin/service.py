@@ -2340,6 +2340,10 @@ class FacultyTwinWorkflowSupport:
             "会讲",
             "会覆盖",
             "讲什么",
+            "实验分组",
+            "分组规则",
+            "考核要求",
+            "作业要求",
         )
         advising_fact_markers = (
             "加入课题组",
@@ -2364,7 +2368,8 @@ class FacultyTwinWorkflowSupport:
                 and self._is_public_evidence_hit(hit)
             ]
             if not candidates:
-                return "当前可见的公开资料不足以确认具体研究方向；我不使用通用模板替你补写事实。你可以开启联网检索，或补充想了解的具体项目/论文。"
+                context.knowledge_hits = []
+                return "当前可见的公开资料不足以确认具体研究方向；我不使用通用模板替你补写事实。可以选择联网检索，或补充想了解的具体项目/论文。"
             summary = self._extract_owner_research_summary(context)
             lines = ["基于当前检索到的公开资料，能确认的是："]
             if summary:
@@ -2387,7 +2392,8 @@ class FacultyTwinWorkflowSupport:
                 if self._is_teaching_hit(hit) and self._is_public_evidence_hit(hit)
             ]
             if not candidates:
-                return "当前可见的课程资料不足以确认这门课的具体内容；我不使用通用模板猜测课程安排。你可以指定课程讲次，或开启联网检索补充资料。"
+                context.knowledge_hits = []
+                return "当前可见的课程资料不足以确认这门课的具体内容；我不使用通用模板猜测课程安排。可以指定课程讲次，或选择联网检索补充资料。"
             lines = ["基于当前检索到的公开课程资料，能确认的内容是："]
             for hit in candidates[:3]:
                 fact = self._grounded_course_fact_line(hit)
@@ -2406,6 +2412,7 @@ class FacultyTwinWorkflowSupport:
                 and ({str(tag).lower() for tag in hit.tags} & {"profile", "research", "overview"})
             ]
             if not candidates:
+                context.knowledge_hits = []
                 return "当前可见的公开资料不足以确认具体招生或加入课题组要求；我不替老师补写未公开的标准。你可以先准备简历、项目/代码证据和 1–2 个具体问题，再通过正式渠道确认。"
             candidates.sort(
                 key=lambda hit: (
@@ -3342,10 +3349,37 @@ class FacultyTwinWorkflowSupport:
 
     def render_chat_response(self, context: ChatWorkflowContext) -> ChatResponse:
         if context.answer is None:
-            raise RuntimeError("chat workflow completed without producing an answer")
+            # A planner may legitimately finish a fact request without routing
+            # through the LLM stage (for example, an empty course collection).
+            # Preserve the evidence-first unknown contract instead of turning
+            # that state into an HTTP 500.
+            context.answer = self._build_grounded_fact_answer(context)
+            if context.answer is None:
+                domain = context.interaction_intent.domain if context.interaction_intent else ""
+                if context.request.course_context and (
+                    domain == "teaching" or "课程" in context.request.course_context
+                ):
+                    context.answer = (
+                        "当前可见的课程资料不足以确认这门课的具体内容；"
+                        "我不使用通用模板猜测课程安排。可以指定课程讲次，或选择联网检索补充资料。"
+                    )
+                elif domain in {"research", "advising"}:
+                    context.answer = (
+                        "当前可见的公开资料不足以确认这个事实；"
+                        "我不使用通用模板替你补写。可以补充具体项目/论文，或选择联网检索。"
+                    )
+                else:
+                    context.answer = (
+                        "当前可见资料不足以可靠回答这个问题；"
+                        "我不使用通用模板猜测事实。可以补充更具体的资料范围，或选择联网检索。"
+                    )
         context.answer = context.answer.strip()
         if self._is_degenerate_answer(context.answer):
-            raise RuntimeError("chat workflow produced an empty or degenerate answer")
+            _logger.warning("chat workflow produced an empty/degenerate answer; returning bounded unknown")
+            context.answer = (
+                "当前可见资料不足以可靠回答这个问题；"
+                "我不使用通用模板猜测事实。可以补充更具体的资料范围，或选择联网检索。"
+            )
 
         started_at = perf_counter()
 

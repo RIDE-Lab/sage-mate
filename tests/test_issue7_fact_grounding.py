@@ -131,3 +131,14 @@ def test_student_course_fact_uses_fast_teaching_intent(tmp_path: Path) -> None:
     assert intent is not None
     assert intent.domain == "teaching"
     assert intent.confidence == 0.98
+
+
+def test_empty_fact_route_is_rendered_as_unknown_not_http500(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service._trace_callback = None
+    context = _context("这门课的实验分组规则是什么？", "teaching", [])
+    context.request.course_context = "未收录课程"
+
+    response = service.render_chat_response(context)
+
+    assert "资料不足" in response.answer
