@@ -1190,23 +1190,26 @@ const LUCKY_QUESTION_BLUEPRINTS = {
     general_visitor: {
         context: "初次来访",
         topics: [
-            "张老师当前关注的推理系统研究",
-            "加入课题组前的能力准备",
-            "一次有效的科研交流或合作",
-            "从课程学习过渡到系统研究",
+            "张老师是谁、经历如何以及现在主要研究什么",
+            "课题组主要做什么、几个研究板块如何衔接",
+            "课题组有哪些代表性系统、论文和开源项目",
+            "如果想加入课题组或合作，应该先了解什么",
+            "从课程或工程背景如何进入课题组的研究主线",
+            "访客最适合先看的公开资料和入门路径",
         ],
         lenses: [
-            "研究问题、已有基础和开放挑战",
-            "学习成本、实践路径和验证方式",
-            "匹配程度、准备材料和沟通效率",
-            "短期入门价值与长期成长空间",
+            "个人经历、研究主线和问题来源",
+            "课题组方向、代表工作和真实应用场景",
+            "学生/合作匹配、准备材料和沟通效率",
+            "入门成本、公开资料和下一步行动",
         ],
         outcomes: [
+            "一段适合第一次了解时的清晰介绍",
             "三个由浅入深的追问",
-            "一份一周内可执行的探索清单",
-            "判断是否值得继续投入的标准",
-            "一个最小可验证的下一步",
+            "一份值得先阅读的公开资料清单",
+            "一个适合继续交流或合作的下一步",
         ],
+        priorityTopicIndexes: [0, 1, 2, 3],
     },
     hust_undergraduate: {
         context: "本科课程答疑",
@@ -1296,6 +1299,7 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
                         topicIndex: blueprint.topics.indexOf(topic),
                         lensIndex: blueprint.lenses.indexOf(lens),
                         outcomeIndex: blueprint.outcomes.indexOf(outcome),
+                        priorityBoost: blueprint.priorityTopicIndexes?.includes(blueprint.topics.indexOf(topic)) ? 2 : 0,
                     });
                 }
             }
@@ -1308,13 +1312,13 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 // 3 are randomly picked on each page load to give variety.
 const SEED_CHIP_POOL = {
     general_visitor: [
-        { label: "研究方向", question: "张老师主要研究什么方向？", context: "初次来访" },
-        { label: "预约前准备", question: "如果想预约一次讨论，我需要先准备什么？", context: "初次来访" },
-        { label: "公开资料", question: "有没有适合先看的公开资料？", context: "初次来访" },
-        { label: "代表性工作", question: "张老师有没有公开的代表性论文或项目？", context: "初次来访" },
-        { label: "课题组介绍", question: "这个课题组主要做什么，和一般企业 R&D 有什么区别？", context: "初次来访" },
+        { label: "老师介绍", question: "张老师是谁，主要经历和研究主线是什么？", context: "初次来访" },
+        { label: "课题组介绍", question: "张老师课题组主要做什么，几个研究方向如何衔接？", context: "初次来访" },
+        { label: "代表性工作", question: "课题组有哪些代表性论文、系统或开源项目？", context: "初次来访" },
+        { label: "公开资料", question: "如果想先了解张老师和课题组，最适合看哪些公开资料？", context: "初次来访" },
+        { label: "加入合作", question: "如果想加入课题组或开展合作，应该提前准备什么？", context: "初次来访" },
         { label: "联系方式", question: "如果我想联系张老师讨论合作，最好的方式是什么？", context: "初次来访" },
-        { label: "入门建议", question: "如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？", context: "初次来访" },
+        { label: "入门建议", question: "如果我对课题组的 LLM 推理研究感兴趣，建议从哪些关键词或系统开始？", context: "初次来访" },
         { label: "招生信息", question: "张老师课题组目前接收什么样的学生或访问学者？", context: "初次来访" },
         { label: "课程信息", question: "张老师目前开设哪些课程，适合什么背景的学生选修？", context: "初次来访" },
     ],
@@ -2087,8 +2091,16 @@ function pickLuckyQuestion(profile = visitorProfileInput?.value) {
             + counts("lensIndex", entry.lensIndex)
             + counts("outcomeIndex", entry.outcomeIndex),
     }));
-    const bestScore = Math.min(...scored.map((item) => item.score));
-    const topPool = scored
+    // The first few visitor prompts should answer “who is the teacher and
+    // what does the group do?” before branching into preparation or deep
+    // research questions. After eight clicks, frequency balancing takes over.
+    const introBias = profile === "general_visitor" && recent.length < 8 ? 1 : 0;
+    const adjustedScored = scored.map((item) => ({
+        ...item,
+        score: item.score - introBias * (item.entry.priorityBoost || 0),
+    }));
+    const bestScore = Math.min(...adjustedScored.map((item) => item.score));
+    const topPool = adjustedScored
         .filter((item) => item.score <= bestScore + 1)
         .map((item) => item.entry);
     return topPool[Math.floor(Math.random() * topPool.length)] || null;
@@ -2121,6 +2133,7 @@ async function handleLuckyQuestionClick() {
             topicIndex: selected.topicIndex,
             lensIndex: selected.lensIndex,
             outcomeIndex: selected.outcomeIndex,
+            priorityBoost: selected.priorityBoost,
         });
         luckyQuestionRecentParts = luckyQuestionRecentParts.slice(-LUCKY_QUESTION_RECENT_LIMIT);
         saveLuckyQuestionParts();
