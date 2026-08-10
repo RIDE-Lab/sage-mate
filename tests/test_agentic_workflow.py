@@ -6,6 +6,7 @@ import pytest
 
 from sage_faculty_twin.benchmark_adapter import LampQuestionSample, build_lamp_request
 from sage_faculty_twin.config import AppSettings, settings
+from sage_faculty_twin.auth import build_admin_session_token
 from sage_faculty_twin.models import (
     ChatRequest,
     InteractionIntent,
@@ -427,23 +428,10 @@ def test_simple_greeting_plan_skips_live_retrieval_stages(tmp_path: Path) -> Non
         )
     )
 
-    memory_retrieve_step = _trace_step(response, "memory_retrieve")
-    knowledge_retrieve_step = _trace_step(response, "knowledge_retrieve")
-
-    assert response.planner_preview is not None
-    assert response.planner_preview.goal == "respond_simple_greeting"
-    assert response.planner_preview.accepted is True
-    assert response.planner_preview.planned_steps == [
-        "detect_profile_context",
-        "classify_intent",
-        "assemble_prompt_context",
-        "answer_with_citations",
-        "render_user_response",
-    ]
-    assert memory_retrieve_step.status == "skipped"
-    assert memory_retrieve_step.summary == "当前工作流规划跳过对话记忆检索。"
-    assert knowledge_retrieve_step.status == "skipped"
-    assert knowledge_retrieve_step.summary == "当前工作流规划跳过知识检索。"
+    assert response.decision_mode == "direct_fast_path"
+    assert response.used_model == "sage-fast-path"
+    assert response.workflow_trace == []
+    assert response.planner_preview is None
     assert service._conversation_store.get_telemetry_summary()["query_count"] == 0
 
 
@@ -891,7 +879,10 @@ def test_chat_surfaces_llm_shadow_planner_comparison_without_affecting_execution
                 course_context="科研指导",
                 conversation_id="conv-shadow-live",
                 question="预约前我应该准备什么材料？",
-            )
+            ),
+            admin_session_token=build_admin_session_token(
+                settings, username=settings.admin_username, role="super_admin"
+            ),
         )
     )
 

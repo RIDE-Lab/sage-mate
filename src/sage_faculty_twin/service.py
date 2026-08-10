@@ -916,7 +916,11 @@ class FacultyTwinWorkflowSupport:
             request,
             conversation_id=context.conversation_id,
         )
-        context.recent_session_context = self._format_recent_session_context(request)
+        context.recent_session_context = (
+            self._format_recent_session_context(request)
+            if DigitalTwinService._question_needs_recent_context(request.question)
+            else ""
+        )
         self._append_trace(
             context,
             key="bootstrap",
@@ -2324,6 +2328,46 @@ class FacultyTwinWorkflowSupport:
         question = request.question.strip()
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
+        identity_fact_markers = (
+            "张老师是谁",
+            "介绍一下张老师",
+            "介绍张老师",
+            "张老师简介",
+            "课题组主要做什么",
+            "课题组是做什么",
+            "你们组主要做什么",
+            "实验室主要做什么",
+        )
+        if any(marker in question or marker in lowered for marker in identity_fact_markers):
+            candidates = [
+                hit
+                for hit in context.knowledge_hits
+                if self._is_public_evidence_hit(hit)
+                and ({str(tag).lower() for tag in hit.tags} & {"profile", "research", "overview"})
+            ]
+            if not candidates:
+                context.knowledge_hits = []
+                return "当前可见的公开资料不足以确认这项介绍；我不使用通用模板补写事实。可以选择联网检索，或补充想了解的具体方向。"
+            candidates.sort(
+                key=lambda hit: (
+                    0 if "主页资料｜张书豪" in hit.title else 1,
+                    0 if "研究" in hit.title else 1,
+                    hit.title,
+                )
+            )
+            candidate_ids = {hit.document_id for hit in candidates[:3]}
+            context.knowledge_hits = [
+                hit for hit in candidates if hit.document_id in candidate_ids
+            ] + [
+                hit for hit in context.knowledge_hits if hit.document_id not in candidate_ids
+            ]
+            lines = ["基于当前已加载的公开资料，能确认的是："]
+            for hit in candidates[:3]:
+                excerpt = self._grounded_excerpt_for_answer(hit, question)
+                if excerpt:
+                    lines.append(f"- {hit.title}：{excerpt}")
+            lines.append("\n以上内容均来自 Sage 知识库中的公开资料；未明确说明的细节我不作推断。")
+            return "\n".join(lines)
         research_fact_markers = (
             "主要研究",
             "研究方向",
@@ -4802,7 +4846,7 @@ class FacultyTwinWorkflowSupport:
         return "\n".join(sections) + "\n"
 
     _IDENTITY_QUESTION_PATTERN = re.compile(
-        r"你是谁|介绍.{0,4}你|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
+        r"你是谁|介绍.{0,4}你|张老师是谁|介绍.{0,4}张老师|张老师简介|课题组主要做什么|课题组研究|实验室主要做什么|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
     )
     _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
         "主页资料｜张书豪",
@@ -7633,20 +7677,36 @@ class DigitalTwinService:
         if self._settings.app_profile == "auto_scientist":
             return await self._answer_auto_scientist(request)
 
-        recent_session_context = self._build_recent_session_context(request)
+        fast_response = self._build_lightweight_chat_response(request)
+        if fast_response is not None:
+            return fast_response
+
+        fact_response = self._build_lightweight_fact_response(request)
+        if fact_response is not None:
+            return fact_response
+
+        recent_session_context = (
+            self._build_recent_session_context(request)
+            if self._question_needs_recent_context(request.question)
+            else ""
+        )
 
         # Explicit deep-thinking requests use the grounded SAGE pipeline
         # directly. Skill runners have their own answer-generation/retry
         # budget; routing through them first can spend the entire chat
         # deadline before the deep answer stage even starts (and is especially
         # costly on the current low-throughput NPU backend).
+        skip_skill_for_light_request = self._is_light_request(request)
         matched_skill = (
             None
             if (
+                skip_skill_for_light_request
+                or (
                 FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(request.question)
                 or (
                     bool(getattr(request, "deep_thinking_explicit", False))
                     and bool(getattr(request, "deep_thinking", True))
+                )
                 )
             )
             else self._skill_router.match(request.question)
@@ -7705,10 +7765,26 @@ class DigitalTwinService:
         planner_decision = self._workflow_planner.plan(workflow_context)
         deterministic_latency_ms = (perf_counter() - deterministic_started_at) * 1000.0
         shadow_started_at = perf_counter()
-        shadow_decision, shadow_status, shadow_message = self._plan_shadow_comparison(
-            workflow_context,
-            planner_decision,
-        )
+        if self._is_light_request(request) or admin_session_payload is None:
+            shadow_decision, shadow_status, shadow_message = (
+                None,
+                "shadow_disabled",
+                (
+                    "简单问答跳过 shadow planner，避免为非决策问题额外调用模型。"
+                    if self._is_light_request(request)
+                    else (
+                        "Benchmark evaluation request skips shadow planner to keep latency and scoring focused on the main execution lane."
+                        if (request.course_context or "").strip()
+                        in {"CharacterEval role-play benchmark", "LaMP personalization benchmark"}
+                        else "LLM shadow planner not enabled yet."
+                    )
+                ),
+            )
+        else:
+            shadow_decision, shadow_status, shadow_message = self._plan_shadow_comparison(
+                workflow_context,
+                planner_decision,
+            )
         shadow_latency_ms = (perf_counter() - shadow_started_at) * 1000.0
         self._record_planner_metrics(
             request,
@@ -7813,6 +7889,110 @@ class DigitalTwinService:
             ),
         )
         return self._workflow_planner.plan(context)
+
+    @staticmethod
+    def _question_needs_recent_context(question: str) -> bool:
+        normalized = str(question or "").strip()
+        return any(
+            marker in normalized
+            for marker in (
+                "刚才", "前面", "上次", "之前", "上一轮", "继续", "下一步",
+                "结合我", "我提到", "刚刚说", "那个方向", "这个方向",
+                "那个方案", "这个方案", "值得继续", "按前面", "那个", "这个", "继续",
+            )
+        )
+
+    @classmethod
+    def _is_light_request(cls, request: ChatRequest) -> bool:
+        question = str(request.question or "").strip()
+        lowered = question.lower()
+        if (
+            not question
+            or len(question) > 120
+            or getattr(request, "deep_thinking_explicit", False)
+            or getattr(request, "web_search", False)
+            or request.attachments
+            or request.course_context
+        ):
+            return False
+        if any(marker in question for marker in ("预约", "约时间", "office hour", "meeting", "合作准备")):
+            return False
+        return not cls._question_needs_recent_context(question) or len(question) <= 32
+
+    @classmethod
+    def _build_lightweight_chat_response(cls, request: ChatRequest) -> ChatResponse | None:
+        normalized = str(request.question or "").strip().lower().strip("。！？!? ")
+        if normalized in {"你好", "您好", "嗨", "hello", "hi", "在吗", "在不在"}:
+            answer = "你好！我是张书豪老师的 Sage Mate，可以帮你了解老师和课题组、课程资料、研究方向，也可以一起梳理问题和下一步行动。"
+        elif normalized in {"谢谢", "感谢", "多谢", "好的", "明白了", "收到"}:
+            answer = "不客气。如果你愿意，可以继续问我张老师、课题组、课程或研究方向相关的问题。"
+        elif any(marker in normalized for marker in ("你能做什么", "能帮我做什么", "有什么功能", "怎么使用")) and len(normalized) <= 24:
+            answer = "我可以帮你了解张老师和课题组、查找公开课程/研究资料、准备交流或合作问题，并把复杂研究问题拆成可执行的下一步。"
+        else:
+            return None
+        return ChatResponse(
+            answer=answer,
+            owner_name=request.student_name,
+            used_model="sage-fast-path",
+            conversation_id=request.conversation_id or str(uuid4()),
+            workflow_action="answer",
+            decision_mode="direct_fast_path",
+        )
+
+    def _build_lightweight_fact_response(self, request: ChatRequest) -> ChatResponse | None:
+        """Serve short, public fact questions from the local evidence store.
+
+        This lane deliberately does not call the planner, memory backend, skill
+        runner, or LLM.  It is restricted to stable profile/research questions;
+        anything contextual, private, state-changing, or ambiguous falls back
+        to the normal SAGE workflow.
+        """
+        question = str(request.question or "").strip()
+        if (
+            not self._is_light_request(request)
+            or len(question) > 80
+            or self._question_needs_recent_context(question)
+        ):
+            return None
+        markers = (
+            "张老师是谁", "介绍一下张老师", "介绍张老师", "张老师简介",
+            "课题组主要做什么", "课题组是做什么", "你们组主要做什么",
+            "实验室主要做什么", "老师主要研究什么", "老师研究什么",
+            "主要研究方向", "研究方向是什么",
+        )
+        if not any(marker in question for marker in markers):
+            return None
+
+        support = self._build_support()
+        intent = support._build_fallback_interaction_intent(request)
+        query = support._build_knowledge_query(request, intent)
+        raw_hits = self._knowledge_store.search(
+            query,
+            visitor_profile=request.visitor_profile,
+            admin_role=support._resolve_admin_role(),
+        )
+        hits = support._filter_knowledge_hits_by_intent(
+            raw_hits, intent, question=question
+        )
+        floor_hits = support._identity_floor_hits(question)
+        if floor_hits:
+            seen_ids = {hit.document_id for hit in floor_hits}
+            hits = floor_hits + [hit for hit in hits if hit.document_id not in seen_ids]
+        context = ChatWorkflowContext(
+            request=request,
+            conversation_id=request.conversation_id or str(uuid4()),
+            owner_name=self._settings.owner_name,
+            used_model=self._llm_client.model_name,
+            interaction_intent=intent,
+            knowledge_hits=hits,
+            decision_mode="direct_answer",
+            workflow_action="answer",
+        )
+        context.answer = support._build_grounded_fact_answer(context)
+        if context.answer is None:
+            return None
+        response = support.render_chat_response(context)
+        return response.model_copy(update={"decision_mode": "local_evidence_fast_path"})
 
     @staticmethod
     def _check_sensitive_boundary_request(request: ChatRequest) -> ChatResponse | None:
