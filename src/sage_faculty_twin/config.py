@@ -119,6 +119,24 @@ class AppSettings(BaseSettings):
         description="Maximum assembled chat prompt size in characters before deterministic truncation.",
     )
     chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
+    chat_max_inflight_requests: int = Field(
+        default=1,
+        ge=1,
+        le=64,
+        description=(
+            "Maximum number of interactive /chat workflows admitted at once. "
+            "Keep this aligned with the deployed engine's usable batching capacity."
+        ),
+    )
+    chat_admission_timeout_seconds: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=30.0,
+        description=(
+            "How long an interactive request waits for a chat slot before receiving "
+            "a retryable 429 instead of timing out at the edge."
+        ),
+    )
     chat_sse_keepalive_seconds: float = Field(default=15.0, ge=1.0, le=90.0)
     stream_chat_answer: bool = Field(
         default=False,

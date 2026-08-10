@@ -194,6 +194,9 @@ MAX_CHAT_ATTACHMENT_TEXT_CHARS = 12000
 # ``DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`` if the upstream LLM is
 # consistently slower than this budget.
 CHAT_REQUEST_TIMEOUT_SECONDS = settings.chat_request_timeout_seconds
+CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
+CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
+_chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
@@ -1672,10 +1675,30 @@ async def chat(
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     timeout_seconds = CHAT_REQUEST_TIMEOUT_SECONDS
 
+    try:
+        await asyncio.wait_for(
+            _chat_admission.acquire(), timeout=CHAT_ADMISSION_TIMEOUT_SECONDS
+        )
+    except asyncio.TimeoutError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail="当前问答请求较多，请稍候片刻后重试。",
+            headers={"Retry-After": "2"},
+        ) from exc
+
     if request_id is None:
+        # API clients do not always open the workflow-events SSE channel.
+        # Still attach a no-op trace callback so the same production path
+        # can run post-answer persistence in the background. This keeps
+        # memory/profile bookkeeping out of the HTTP critical path without
+        # changing the public response schema.
         try:
             return await asyncio.wait_for(
-                service.answer(payload, admin_session_token=admin_session_token),
+                service.answer(
+                    payload,
+                    admin_session_token=admin_session_token,
+                    trace_callback=lambda _step: None,
+                ),
                 timeout=timeout_seconds,
             )
         except asyncio.TimeoutError as exc:
@@ -1683,6 +1706,10 @@ async def chat(
                 status_code=504,
                 detail=(f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"),
             ) from exc
+        finally:
+            # A return still executes this finally; the slot is released
+            # before the response leaves the endpoint.
+            _chat_admission.release()
 
     # When ``request_id`` is supplied the chat workflow streams trace events
     # over the workflow-events SSE channel. With
@@ -1734,6 +1761,8 @@ async def chat(
     except Exception as exc:
         workflow_event_broker.publish_error(request_id, str(exc))
         raise
+    finally:
+        _chat_admission.release()
 
     if STREAM_CHAT_ANSWER:
         # Surface the final structured ChatResponse to the SSE channel so

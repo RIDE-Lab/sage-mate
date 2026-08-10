@@ -2759,18 +2759,21 @@ chatForm.addEventListener("submit", async (event) => {
             sageCompanionController?.recordAnswerCompleted();
             break;
         } catch (error) {
-            // Retry on transient failures: gateway timeout (504) or network
+            // Retry on transient failures: admission throttling (429), gateway
+            // timeout (504), or network
             // errors (fetch threw, no HTTP status — common on mobile when
             // the carrier proxy or Cloudflare tunnel drops the connection).
             const isTransientNetworkError = error?.status === undefined;
             const canRetry =
                 attempt < maxAttempts &&
-                (error?.status === 504 || isTransientNetworkError) &&
+                (error?.status === 429 || error?.status === 504 || isTransientNetworkError) &&
                 submittedFiles.length === 0;
             if (canRetry) {
                 stopWorkflowTraceStream();
                 workflowRequestIdActive = createConversationId();
-                const retryLabel = error?.status === 504
+                const retryLabel = error?.status === 429
+                    ? "当前请求较多，排队稍后重试…"
+                    : error?.status === 504
                     ? "后端响应超时，正在自动重试…"
                     : "网络连接中断，正在自动重试…";
                 renderPendingAssistantMessage(
@@ -6458,6 +6461,9 @@ function friendlyHttpErrorMessage(status, body) {
     }
     if (status === 504 || status === 502) {
         return "服务在 LLM 响应期间超时（错误码 " + status + "）。请稍后重试；如果问题较复杂，可以拆成更小的问题再问。";
+    }
+    if (status === 429) {
+        return "当前问答请求较多，系统正在保护响应速度。请稍后重试。";
     }
     if (status === 503) {
         return "后端临时不可用（503），请稍后重试。";

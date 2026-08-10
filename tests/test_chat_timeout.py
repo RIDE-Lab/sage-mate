@@ -96,3 +96,33 @@ def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
     assert any(
         rid == "test-rid-timeout" and "未完成响应" in msg for rid, msg in published_errors
     ), published_errors
+
+
+def test_chat_returns_retryable_429_when_admission_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saturated inference capacity must fail fast with a retryable status.
+
+    Returning 429 here is intentional: an edge-visible 504 gives the user no
+    indication whether the request was queued or lost, while a bounded
+    admission response lets the UI retry without holding a worker for 80s.
+    """
+
+    monkeypatch.setattr(api_module, "CHAT_ADMISSION_TIMEOUT_SECONDS", 0.01)
+    monkeypatch.setattr(api_module, "_chat_admission", asyncio.Semaphore(0))
+    client.cookies.clear()
+
+    response = client.post(
+        "/chat",
+        json={
+            "student_name": "Alice",
+            "student_email": "alice@example.com",
+            "course_context": None,
+            "conversation_id": "conv-admission-full",
+            "question": "请稍后回答。",
+        },
+    )
+
+    assert response.status_code == 429
+    assert response.headers.get("retry-after") == "2"
+    assert "请求较多" in response.json().get("detail", "")
