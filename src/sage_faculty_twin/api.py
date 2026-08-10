@@ -1442,7 +1442,18 @@ async def health() -> dict[str, object]:
 
 @llm_app.get("/stack/versions")
 async def stack_versions() -> dict[str, str]:
-    return build_stack_versions_payload()
+    payload = build_stack_versions_payload()
+    # Environment preferences can be stale after the OpenAI-compatible engine
+    # resolves the actually served model. The public stack panel must report
+    # the model used by the live client, just like /health does.
+    payload["model_name"] = service._llm_client.model_name
+    runtime_snapshot = getattr(service._llm_client, "runtime_snapshot", None)
+    if callable(runtime_snapshot):
+        snapshot = runtime_snapshot()
+        for key in ("model_name", "engine_image", "npu_devices"):
+            if snapshot.get(key):
+                payload[key] = str(snapshot[key])
+    return payload
 
 
 @llm_app.get("/stack/hardware")
