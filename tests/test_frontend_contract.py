@@ -131,12 +131,17 @@ def test_send_button_uses_animation_state() -> None:
 
 
 def test_chat_scrollbar_is_edge_aligned_and_hidden_until_needed() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 
+    assert 'id="chat-scroll-rail"' in html
+    assert 'id="chat-scroll-thumb"' in html
     assert "width: 100%;" in css[css.index(".chat-stream {"):css.index(".chat-stream:has")]
-    assert ".chat-stream::-webkit-scrollbar" in css
     assert "scrollbar-width: none;" in css
-    assert ".chat-stream:hover::-webkit-scrollbar" in css
+    assert ".chat-scroll-rail" in css
+    assert "function syncChatScrollRail()" in js
+    assert "moveChatScrollFromPointer" in js
 
 
 def test_interface_icons_share_one_accessible_svg_system() -> None:

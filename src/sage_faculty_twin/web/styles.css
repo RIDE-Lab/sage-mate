@@ -1587,31 +1587,54 @@ body.drawer-pinned .history-rail {
     scrollbar-color: transparent transparent;
 }
 
-.chat-stream:hover,
-.chat-stream:focus-within {
-    scrollbar-width: thin;
-    scrollbar-color: rgba(77, 96, 124, 0.38) transparent;
-}
-
 .chat-stream::-webkit-scrollbar {
     width: 0;
     height: 0;
 }
 
-.chat-stream:hover::-webkit-scrollbar,
-.chat-stream:focus-within::-webkit-scrollbar {
-    width: 8px;
-}
-
-.chat-stream::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.chat-stream::-webkit-scrollbar-thumb {
-    border: 2px solid transparent;
+.chat-scroll-rail {
+    position: fixed;
+    top: 18vh;
+    right: 10px;
+    bottom: 16vh;
+    z-index: 45;
+    width: 16px;
+    padding: 0 4px;
     border-radius: 999px;
-    background-clip: padding-box;
-    background-color: rgba(77, 96, 124, 0.38);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 160ms ease;
+}
+
+.chat-scroll-rail.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.chat-scroll-thumb {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    width: 8px;
+    min-height: 42px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(77, 96, 124, 0.42);
+    box-shadow: 0 2px 8px rgba(22, 35, 56, 0.12);
+    cursor: grab;
+    touch-action: none;
+}
+
+.chat-scroll-thumb:hover,
+.chat-scroll-thumb:active {
+    background: rgba(47, 78, 122, 0.7);
+}
+
+.chat-scroll-thumb:active { cursor: grabbing; }
+
+@media (max-width: 720px) {
+    .chat-scroll-rail { right: 4px; }
 }
 
 .chat-stream:has(> .intro-card:only-child) {
