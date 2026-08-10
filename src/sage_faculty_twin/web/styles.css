@@ -1789,6 +1789,15 @@ body.drawer-pinned .history-rail {
     margin-bottom: 2px;
 }
 
+.message-pending-support {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 0.78rem;
+    padding-top: 2px;
+}
+
 .message-reply-divider {
     height: 1px;
     width: 100%;

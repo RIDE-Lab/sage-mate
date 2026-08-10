@@ -7387,6 +7387,10 @@ function renderPendingAssistantMessage(
                         <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
                         <div class="thinking-text-body"></div>
                     </div>
+                    <div class="message-pending-support" aria-live="polite">
+                        <span class="message-section-kicker">Support</span>
+                        <span>正在整理回答依据…</span>
+                    </div>
                 </div>
             </div>
         </div>
