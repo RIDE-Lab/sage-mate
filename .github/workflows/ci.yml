@@ -96,27 +96,23 @@ jobs:
           test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/workflow_scenarios/v3_preview_scenarios.json"
           test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/capability_plugins/course_advising.json"
 
-  install-linux-ascend:
-    runs-on: [self-hosted, linux, server, ascend]
+  validate-linux-ascend:
+    # GitHub-hosted runners do not have Ascend NPUs. Keep this job hardware
+    # independent; real NPU deployment remains an explicitly managed host
+    # verification step outside the pull-request gate.
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Initialize Ascend launcher submodules
-        run: git submodule update --init deps/vllm-hust-dev-hub deps/vllm-hust deps/vllm-ascend-hust deps/ascend-runtime-manager
-      - name: Verify one-command Linux Ascend install path
-        env:
-          FACULTY_TWIN_PARENT_DIR: ${{ runner.temp }}/sage-ascend-parent
-          DIGITAL_TWIN_RUNTIME_DIR: ${{ runner.temp }}/sage-ascend-parent/sage-mate-runtime-private
-          FACULTY_TWIN_VENV: ${{ runner.temp }}/sage-ascend-venv
-          PIP_INSTALL_TIMEOUT_SECONDS: "300"
+      - name: Validate Ascend launcher shell syntax
         run: |
-          bash ./quickstart.sh \
-            --target hosted-web \
-            --with-vllm-engine \
-            --with-vllm-proxy \
-            --no-systemd \
-            --no-siblings \
-            --skip-vdb-extras \
-            --yes
-          test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/workflow_policies/faculty-default-2026-05.json"
-          grep -q '^DIGITAL_TWIN_DEPLOYMENT_MODE=hosted$' .env
-          grep -q '^VLLM_PROXY_UPSTREAM_BASE_URL=http://127.0.0.1:8000/v1$' .env
+          bash -n tools/run_vllm_engine.sh
+          bash -n tools/lock_sage_mate_engine.sh
+          bash -n tools/verify_sage_mate_engine.sh
+          bash -n tools/retry_deploy_vllm_ascend_until_success.sh
+      - name: Validate Ascend deployment contract
+        run: |
+          grep -q 'VLLM_ENGINE_HOST_VISIBLE_NPU_DEVICES' tools/run_vllm_engine.sh
+          grep -q 'VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES' tools/run_vllm_engine.sh
+          grep -q 'VLLM_ENGINE_ENFORCE_EAGER=0' tools/lock_sage_mate_engine.sh
+          grep -q '/health' tools/verify_sage_mate_engine.sh
+          ! grep -q 'self-hosted' .github/workflows/ci.yml

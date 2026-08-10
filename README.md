@@ -91,7 +91,7 @@ curl -s http://127.0.0.1:55601/healthz
 ## CI 覆盖
 
 - `ubuntu-latest`: lint、frontend 静态契约、Firefox 多视口布局回归、pytest、Linux CPU 一键安装检查。
-- `self-hosted, linux, server, ascend`: Linux Ascend 一键安装检查。
+- `ubuntu-latest`: Ascend 启动脚本语法和部署契约检查；真实 NPU 部署需在受控 Ascend 主机上单独执行。
 
 ## 入口
 
