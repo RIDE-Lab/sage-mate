@@ -499,6 +499,15 @@ def _strip_internal_thinking_content(answer: str | None) -> str:
     return stripped.strip()
 
 
+def _strip_repeated_role_prefixes(answer: str | None) -> str:
+    """Remove chat-role labels echoed by small instruction-following models."""
+    if not answer:
+        return ""
+    cleaned = re.sub(r"(?im)^\s*(?:user|assistant|system)\s*:\s*", "", str(answer))
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
 def _answer_does_not_complete_requested_task(question: str, answer: str | None) -> bool:
     """Catch polite but non-responsive answers that pass basic text checks."""
     if not answer:
@@ -2256,6 +2265,7 @@ class FacultyTwinWorkflowSupport:
             _logger.warning("LLM returned an empty chat message; retrying with compact prompt")
             context.answer = self._retry_answer_with_compact_prompt(context)
         context.answer = _strip_internal_thinking_content(context.answer)
+        context.answer = _strip_repeated_role_prefixes(context.answer)
         if _contains_internal_prompt_leak(context.answer):
             _logger.warning("LLM answer leaked prompt instructions; retrying with compact prompt")
             context.answer = self._retry_answer_with_compact_prompt(context)
@@ -4471,7 +4481,7 @@ class FacultyTwinWorkflowSupport:
             return ""
         lines = [
             "Mandatory owner-fact grounding for the current question:",
-            "Answer owner-specific facts only from the retrieved statements below. Reuse their concrete research terms; do not substitute a plausible unrelated field.",
+            "Answer owner-specific facts only from the retrieved statements below. Reuse their concrete research terms; do not substitute a plausible unrelated field. Respond once in natural prose; do not emit User:/Assistant: labels or repeat the prompt.",
         ]
         for hit in owner_hits:
             excerpt = re.sub(r"\s+", " ", hit.excerpt).strip()[:700]
