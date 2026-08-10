@@ -2067,25 +2067,29 @@ function pickLuckyQuestion(profile = visitorProfileInput?.value) {
         (entry) => !luckyQuestionHistory.includes(entry.question)
     );
     const basePool = unseenCandidates.length > 0 ? unseenCandidates : candidates;
-    const recent = luckyQuestionRecentParts.slice(-LUCKY_QUESTION_RECENT_LIMIT);
-    // Prefer candidates that change all four dimensions. If the pool is
-    // exhausted, progressively relax the constraint instead of repeating the
-    // same topic/lens combination on every click.
-    const diversityLevels = [
-        (entry) => !recent.some((item) => item.topicIndex === entry.topicIndex
-            || item.lensIndex === entry.lensIndex
-            || item.outcomeIndex === entry.outcomeIndex),
-        (entry) => !recent.some((item) => item.topicIndex === entry.topicIndex
-            && item.lensIndex === entry.lensIndex),
-        (entry) => !recent.some((item) => item.question === entry.question),
-    ];
-    for (const isDiverse of diversityLevels) {
-        const diversePool = basePool.filter(isDiverse);
-        if (diversePool.length > 0) {
-            return diversePool[Math.floor(Math.random() * diversePool.length)];
-        }
-    }
-    return basePool[Math.floor(Math.random() * basePool.length)] || null;
+    const recent = luckyQuestionRecentParts
+        .filter((item) => !item.profile || item.profile === profile)
+        .slice(-LUCKY_QUESTION_RECENT_LIMIT);
+    const counts = (key, value) => recent.reduce(
+        (total, item) => total + (item[key] === value ? 1 : 0),
+        0,
+    );
+    // Score instead of hard-filtering: with only four values per dimension,
+    // hard exclusions become impossible after a few clicks and silently
+    // fall back to ordinary random selection. Least-seen dimensions win,
+    // while a small top bucket preserves surprise.
+    const scored = basePool.map((entry) => ({
+        entry,
+        score: counts("templateIndex", entry.templateIndex)
+            + counts("topicIndex", entry.topicIndex)
+            + counts("lensIndex", entry.lensIndex)
+            + counts("outcomeIndex", entry.outcomeIndex),
+    }));
+    const bestScore = Math.min(...scored.map((item) => item.score));
+    const topPool = scored
+        .filter((item) => item.score <= bestScore + 1)
+        .map((item) => item.entry);
+    return topPool[Math.floor(Math.random() * topPool.length)] || null;
 }
 
 async function handleLuckyQuestionClick() {
@@ -2109,6 +2113,7 @@ async function handleLuckyQuestionClick() {
         luckyQuestionHistory = luckyQuestionHistory.slice(-LUCKY_QUESTION_RECENT_LIMIT);
         saveLuckyQuestionHistory();
         luckyQuestionRecentParts.push({
+            profile: profile,
             question: selected.question,
             templateIndex: selected.templateIndex,
             topicIndex: selected.topicIndex,
