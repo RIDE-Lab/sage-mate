@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v4.6.1 - 2026-08-10
+
+### Changed
+
+- Sage Mate now runs the DeepSeek backend on NPU 4–7 with a portable deployment lock and runtime verification path.
+- Research/course factual answers use SAGE evidence first and expose an explicit basis instead of silently presenting unsupported text.
+- The lucky-question dice now combines multiple templates and rotates recent topic, analysis lens, outcome, and wording dimensions.
+
+### Fixed
+
+- Bounded interactive chat admission and retry behavior under NPU contention to avoid avoidable 504 responses.
+- Added deterministic policy boundaries for prompt/credential disclosure and explicit unknown answers when evidence is insufficient.
+- Added a fast path for baseline/fair-comparison/ablation research-direction questions, reducing them from model-timeout latency to a short structured response.
+- Corrected the personal homepage link to `https://me.sage.org.ai/` and synchronized the displayed runtime model name with the served `/v1/models` backend.
+
 ## v4.5.0 - 2026-07-10
 
 ### Changed

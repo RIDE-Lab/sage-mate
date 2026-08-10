@@ -220,6 +220,7 @@ class VllmChatClient:
                 )
                 self.model_name = detected_model
         self._intent_model_name = self._settings.intent_model_name or self.model_name
+        self._runtime_model_refresh_at = 0.0
         self._cache_lock = threading.Lock()
         self._response_cache: OrderedDict[str, tuple[float, str, str]] = OrderedDict()
         self._metrics_lock = threading.Lock()
@@ -295,6 +296,23 @@ class VllmChatClient:
             logger.warning("Failed to auto-detect model name from %s: %s",
                            self._settings.llm_base_url, exc)
         return ""
+
+    def refresh_runtime_model_name(self) -> str:
+        """Refresh the displayed model from the serving endpoint.
+
+        The engine can be restarted or swapped independently of the app
+        process, so the configured preference is not authoritative for health
+        and status views.
+        """
+        now = time.monotonic()
+        if now - self._runtime_model_refresh_at < 15.0:
+            return self.model_name
+        self._runtime_model_refresh_at = now
+        detected = self._detect_model_name()
+        if detected:
+            self.model_name = detected
+            self._intent_model_name = self._settings.intent_model_name or detected
+        return self.model_name
 
     def _probe_model_max_len(self) -> None:
         """Query /models to discover max_model_len when model name is pre-configured."""

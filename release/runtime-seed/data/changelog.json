@@ -1,0 +1,33 @@
+[
+  {
+    "version": "v4.6.1",
+    "date": "2026-08-10",
+    "summary": "SAGE 证据回答、DeepSeek 部署与交互体验升级",
+    "highlights": [
+      "DeepSeek 后端固定运行在 NPU 4–7，并提供可验证的便携部署锁",
+      "研究/课程事实回答优先使用 SAGE 检索证据，并显示明确依据",
+      "骰子问题池增加多种模板，并按主题、分析角度、输出目标和句式轮换",
+      "限制 NPU 竞争下的交互并发，减少可避免的 504 超时",
+      "新增安全边界、证据不足时的明确未知回答，以及研究方法问题快速路径",
+      "个人主页链接更新为 https://me.sage.org.ai/"
+    ]
+  },
+  {
+    "version": "v4.5.0",
+    "date": "2026-07-10",
+    "summary": "Sage Mate 产品身份与部署路径统一",
+    "highlights": [
+      "统一 Sage Mate 产品、仓库、安装器和运行目录命名",
+      "完善本地 Code Assistant 与远程模型配置"
+    ]
+  },
+  {
+    "version": "v4.4.0",
+    "date": "2026-07-09",
+    "summary": "Hosted/Web 一键部署",
+    "highlights": [
+      "新增 hosted/web release installer",
+      "支持 Cloudflare tunnel、加密 release secrets 和多种模型预设"
+    ]
+  }
+]

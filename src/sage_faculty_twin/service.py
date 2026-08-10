@@ -9517,6 +9517,13 @@ class DigitalTwinService:
         raise ValueError(f"Unsupported service action: {action}")
 
     def health(self) -> dict[str, str]:
+        refresh_model = getattr(self._llm_client, "refresh_runtime_model_name", None)
+        if callable(refresh_model):
+            try:
+                refresh_model()
+            except Exception:
+                # Health must remain available while the engine is restarting.
+                pass
         due_follow_ups = self._follow_up_store.list_due_actions()
         presence_snapshot = self._online_presence_store.snapshot(
             window_seconds=self._settings.online_presence_window_seconds
@@ -9611,6 +9618,11 @@ class DigitalTwinService:
         }
         runtime_snapshot = getattr(self._llm_client, "runtime_snapshot", None)
         payload.update(build_stack_versions_payload())
+        # build_stack_versions_payload reads the configured environment value,
+        # which may be stale after the engine resolves a different model. Keep
+        # the health contract authoritative: report the model actually used by
+        # this client after the runtime refresh above.
+        payload["model_name"] = self._llm_client.model_name
         if callable(runtime_snapshot):
             payload.update(runtime_snapshot())
         else:
