@@ -2816,7 +2816,7 @@ chatForm.addEventListener("submit", async (event) => {
                 shadowPlannerPreview: data.shadow_planner_preview || null,
                 plannerComparison: data.planner_comparison || null,
             });
-            if (!streamingFinalResponseApplied && pendingMessage.classList.contains("message-pending")) {
+            if (!streamingFinalResponseApplied && pendingMessage) {
                 renderAssistantMessage(
                     pendingMessage,
                     data.answer,
@@ -9350,7 +9350,13 @@ function handleWorkflowStreamEvent(payload) {
                 response.exchange_id || null,
                 response.workflow_trace || []
             );
-            streamingFinalResponseApplied = true;
+            // Some SSE deployments publish answer_done before post-answer
+            // evidence is attached. Do not prevent the canonical /chat
+            // response from repainting the bubble with Support references.
+            streamingFinalResponseApplied = Boolean(
+                (Array.isArray(response.answer_basis) && response.answer_basis.length)
+                || (Array.isArray(response.knowledge_hits) && response.knowledge_hits.length)
+            );
             noteConversationAnswerPreview(response.answer);
             updateTokenUsageBadge(response.token_usage || null);
             persistActiveConversationSnapshot();
