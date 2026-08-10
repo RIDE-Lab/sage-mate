@@ -1137,9 +1137,9 @@ def test_chat_reuses_neuromem_conversation_memory_in_follow_up_prompt(
     assert not any(item.basis_label == "近期交流记录" for item in follow_up.answer_basis)
     assert follow_up.memory_used is True
     assert follow_up.memory_write_back is True
-    assert len(follow_up.retrieved_items) >= 1
-    assert {item.memory_type for item in follow_up.retrieved_items} == {"short_term"}
-    assert any(item.source_label == "同会话上下文" for item in follow_up.retrieved_items)
+    # Immediate session context remains internal prompt grounding and is not
+    # repeated in the client-visible audit panel.
+    assert not any(item.source_label == "同会话上下文" for item in follow_up.retrieved_items)
     assert all(item.entry_id for item in follow_up.retrieved_items)
     usefulness_step = next(
         step for step in follow_up.workflow_trace if step.key == "memory_usefulness_score"

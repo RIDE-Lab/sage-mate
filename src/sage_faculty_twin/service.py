@@ -6180,20 +6180,10 @@ class FacultyTwinWorkflowSupport:
         recent_session_context: str = "",
         conversation_id: str = "",
     ) -> list[MemoryAuditItem]:
+        # Recent session context is an internal prompt aid, not evidence. It
+        # must never be surfaced in the client audit panel: doing so repeats
+        # the user's question and can expose the prior assistant answer.
         audit_items: list[MemoryAuditItem] = []
-        recent_session_summary = self._normalize_recent_session_context(recent_session_context)
-        if recent_session_summary:
-            audit_items.append(
-                MemoryAuditItem(
-                    entry_id=f"session-context:{conversation_id or 'current'}",
-                    memory_type="short_term",
-                    source="session_context",
-                    topic="conversation_exchange",
-                    source_label="同会话上下文",
-                    summary=self._clip_basis_text(recent_session_summary, 1200),
-                    score=2.0,
-                )
-            )
         for hit in memory_hits[:5]:
             audit_items.append(
                 MemoryAuditItem(
