@@ -1777,6 +1777,20 @@ body.drawer-pinned .history-rail {
     gap: 14px;
 }
 
+.message-processing-meta {
+    color: var(--muted);
+    font-size: 0.76rem;
+    line-height: 1.2;
+    letter-spacing: 0.01em;
+    padding: 0 2px;
+}
+
+.message-reply-divider {
+    height: 1px;
+    width: 100%;
+    background: var(--line);
+}
+
 /* --- Bouncing dots typing indicator --- */
 .typing-dots {
     display: flex;

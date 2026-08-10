@@ -2775,8 +2775,10 @@ chatForm.addEventListener("submit", async (event) => {
         emphasis: "user",
         attachments: submittedAttachments,
     });
+    const answerStartedAt = performance.now();
     const pendingMessage = appendMessage("assistant", assistantLabel, "正在整理问题、检索资料并准备回复", {
         state: "pending",
+        startedAt: answerStartedAt,
     });
     const explicitDeepMode = payload.deep_thinking && payload.deep_thinking_explicit;
     renderPendingAssistantMessage(pendingMessage, "理解问题", [], {
@@ -6738,6 +6740,9 @@ function appendMessage(role, label, text, options = {}) {
         : "";
     const avatarLabel = role === "user" ? "你" : "S";
     article.className = `message message-${role}${stateClass}${emphasisClass}`;
+    if (Number.isFinite(options.startedAt)) {
+        article.dataset.startedAt = String(options.startedAt);
+    }
     article.innerHTML = `
     <div class="message-bubble-row">
         <div class="message-avatar" aria-hidden="true">${avatarLabel}</div>
@@ -7420,6 +7425,8 @@ function renderAssistantMessage(
     exchangeId = null,
     workflowTrace = []
 ) {
+    const startedAt = Number(container?.dataset?.startedAt);
+    const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
     const bodyClass = isError ? "message-body" : "message-body";
     const afterNotification = stripNotificationText(text, bookingResult?.notification || null);
     // Strip <think>...</think> from the final answer and optionally display it
@@ -7492,12 +7499,17 @@ function renderAssistantMessage(
                <div class="thinking-text-body">${escapeHtml(thinkContent)}</div>
            </div>`
         : "";
+    const processingMetaHtml = !isError && elapsedMs > 0
+        ? `<div class="message-processing-meta" aria-label="本次回答处理耗时">已处理 ${formatAnswerProcessingDuration(elapsedMs)}</div>
+           <div class="message-reply-divider" role="separator"></div>`
+        : "";
     container.innerHTML = `
         <div class="message-bubble-row">
             <div class="message-avatar" aria-hidden="true">S</div>
             <div class="message-bubble">
                 <div class="message-role">${escapeHtml(assistantLabel)}</div>
                 <div class="message-frame">
+                    ${processingMetaHtml}
                     <div class="message-main-copy">
                         <div class="message-reply-block">
                             <span class="message-section-kicker">Reply</span>
@@ -9463,6 +9475,13 @@ function formatWorkflowDuration(durationMs) {
         return `${durationMs} ms`;
     }
     return `${(durationMs / 1000).toFixed(1)} s`;
+}
+
+function formatAnswerProcessingDuration(durationMs) {
+    if (!Number.isFinite(durationMs) || durationMs <= 0) {
+        return "0.0 秒";
+    }
+    return `${(durationMs / 1000).toFixed(1)} 秒`;
 }
 
 function updateWorkflowStats(steps, meta = {}) {
