@@ -21,7 +21,7 @@ def test_chat_shell_exposes_topbar_action_entries() -> None:
     assert 'id="lucky-question-button"' in html
     assert 'id="open-suggestions"' in html
     assert 'id="suggestion-modal"' in html
-    assert 'id="homepage-link" href="/home/"' in html
+    assert 'id="homepage-link" href="https://me.sage.org.ai/"' in html
     assert 'id="knowledge-feedback-web-list"' in html
     assert "联网资料审查区" in html
 
