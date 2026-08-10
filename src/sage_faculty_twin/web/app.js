@@ -7358,6 +7358,7 @@ function renderPendingAssistantMessage(
             <div class="message-bubble">
                 <div class="message-role">${escapeHtml(assistantLabel)}</div>
                 <div class="message-frame message-pending-frame">
+                    <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta" aria-live="polite">已处理 0.0 秒</div>
                     <div class="typing-dots" id="pending-typing-dots">
                         <span class="dot"></span>
                         <span class="dot"></span>
@@ -7393,6 +7394,28 @@ function renderPendingAssistantMessage(
     if (INLINE_WORKFLOW_TRACE_ENABLED) {
         syncPendingWorkflowTrace(workflowSteps, { animateNewItems: false, currentStage });
     }
+    startAnswerProcessingTicker(container);
+}
+
+function startAnswerProcessingTicker(container) {
+    stopAnswerProcessingTicker(container);
+    const startedAt = Number(container?.dataset?.startedAt);
+    const label = container?.querySelector("#pending-processing-meta");
+    if (!label || !Number.isFinite(startedAt)) {
+        return;
+    }
+    const update = () => {
+        label.textContent = `已处理 ${formatAnswerProcessingDuration(Math.max(0, performance.now() - startedAt))}`;
+    };
+    update();
+    container._answerProcessingTimer = globalThis.setInterval(update, 100);
+}
+
+function stopAnswerProcessingTicker(container) {
+    if (container?._answerProcessingTimer) {
+        globalThis.clearInterval(container._answerProcessingTimer);
+        container._answerProcessingTimer = null;
+    }
 }
 
 function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
@@ -7425,6 +7448,7 @@ function renderAssistantMessage(
     exchangeId = null,
     workflowTrace = []
 ) {
+    stopAnswerProcessingTicker(container);
     const startedAt = Number(container?.dataset?.startedAt);
     const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
     const bodyClass = isError ? "message-body" : "message-body";
