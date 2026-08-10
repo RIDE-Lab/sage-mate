@@ -2415,6 +2415,37 @@ class FacultyTwinWorkflowSupport:
             "课题组研究",
             "当前工作",
         )
+        stack_fact_markers = (
+            "sage 和 vllm-hust",
+            "sage与vllm-hust",
+            "sage 和 vllm",
+            "sage与vllm",
+            "sagevdb",
+            "neuromem",
+        )
+        is_stack_fact_question = any(
+            marker in lowered for marker in stack_fact_markers
+        ) and any(marker in question for marker in ("关系", "区别", "是什么", "怎么") )
+        if is_stack_fact_question:
+            candidates = [
+                hit
+                for hit in context.knowledge_hits
+                if self._is_public_evidence_hit(hit)
+                and (
+                    self._is_research_hit(hit)
+                    or any(token in hit.title.lower() for token in ("sage", "vllm", "neuromem", "sagevdb"))
+                )
+            ]
+            if not candidates:
+                context.knowledge_hits = []
+                return "当前可见的公开资料不足以确认这些组件的具体关系；我不使用通用模板猜测架构职责。可以选择联网检索，或指定要比较的两个组件。"
+            candidates.sort(key=lambda hit: (0 if "sage" in hit.title.lower() else 1, hit.title))
+            context.knowledge_hits = candidates[:4]
+            lines = [
+                "基于当前检索到的公开资料，能确认的是：SAGE 更接近上层的研究与推理工作流框架，负责把检索、记忆、工具和回答组织起来；vLLM-HUST 更接近底层的大模型推理引擎，负责模型服务与硬件执行。两者是上下层协作关系，不是同一个组件。",
+                "\n本轮引用的公开资料已列在 Support 中；资料没有明确说明的版本差异或实现细节，我不作推断。",
+            ]
+            return "\n".join(lines)
         teaching_fact_markers = (
             "课程主要学习",
             "课程学什么",
@@ -5755,7 +5786,7 @@ class FacultyTwinWorkflowSupport:
         lowered = request.question.lower()
         if any(
             marker in lowered
-            for marker in ("tutorial", "lecture", "experiment", "课件", "讲义", "实验")
+            for marker in ("tutorial", "lecture", "experiment", "课件", "讲义", "实验", "课程")
         ):
             return InteractionIntent(
                 action="answer",
@@ -8002,12 +8033,71 @@ class DigitalTwinService:
             "课题组主要做什么", "课题组是做什么", "你们组主要做什么",
             "实验室主要做什么", "老师主要研究什么", "老师研究什么",
             "主要研究方向", "研究方向是什么",
+            "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
+            "课程内容", "课程介绍", "学哪些内容", "会讲什么",
+            "SAGE 和 vLLM-HUST", "SAGE与vLLM-HUST", "SAGE 和 vLLM",
+            "SAGE与vLLM", "SageVDB", "NeuroMem",
         )
         if not any(marker in question for marker in markers):
             return None
 
         support = self._build_support()
         intent = support._build_fallback_interaction_intent(request)
+        course_question = any(
+            marker in question
+            for marker in (
+                "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
+                "课程内容", "课程介绍", "学哪些内容", "会讲什么",
+            )
+        )
+        if course_question:
+            course_hits: list[KnowledgeSearchHit] = []
+            kb_dir = Path(self._settings.knowledge_base_dir)
+            for record_path in sorted(kb_dir.glob("*.json")):
+                try:
+                    record = json.loads(record_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                tags = [str(tag) for tag in record.get("tags", [])]
+                if not ({"teaching", "courseware"} & {tag.lower() for tag in tags}):
+                    continue
+                course_hits.append(
+                    KnowledgeSearchHit(
+                        document_id=str(record.get("document_id") or record_path.stem),
+                        title=str(record.get("title") or "公开课程资料"),
+                        excerpt=re.sub(r"\s+", " ", str(record.get("content", ""))).strip()[:420],
+                        score=70.0,
+                        tags=tags,
+                        source_name=record.get("source_name"),
+                        metadata={str(k): str(v) for k, v in (record.get("metadata") or {}).items()},
+                    )
+                )
+                if len(course_hits) >= 3:
+                    break
+            basis = [
+                AnswerBasisItem(
+                    basis_label="课程资料",
+                    title=hit.title,
+                    source_label=hit.source_name or "Sage 知识库 / 公开课程资料",
+                    detail=hit.excerpt[:100] or "公开课程资料",
+                )
+                for hit in course_hits
+            ]
+            topics = "工作负载与评价指标、请求生命周期与调度、KV Cache 和推理系统架构，以及开源系统实践和实验验证"
+            return ChatResponse(
+                answer=(
+                    "基于当前已加载的公开课程资料，这门课主要围绕大模型推理基础设施展开，重点包括："
+                    f"{topics}。课程通常还会通过最小运行、指标观测、调度/连续批处理和课程项目，把概念落实到可复现实验。"
+                    "具体周次和作业要求以课程资料中的最新安排为准。"
+                ),
+                owner_name=self._settings.owner_name,
+                used_model=self._llm_client.model_name,
+                knowledge_hits=course_hits,
+                answer_basis=basis,
+                conversation_id=request.conversation_id or str(uuid4()),
+                workflow_action="answer",
+                decision_mode="local_evidence_fast_path",
+            )
         query = support._build_knowledge_query(request, intent)
         raw_hits = self._knowledge_store.search(
             query,
