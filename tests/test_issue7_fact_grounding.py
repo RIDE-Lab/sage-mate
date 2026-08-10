@@ -142,3 +142,4 @@ def test_empty_fact_route_is_rendered_as_unknown_not_http500(tmp_path: Path) -> 
     response = service.render_chat_response(context)
 
     assert "资料不足" in response.answer
+    assert response.answer_basis == []

@@ -2420,6 +2420,10 @@ class FacultyTwinWorkflowSupport:
                     hit.title,
                 )
             )
+            candidate_ids = {hit.document_id for hit in candidates}
+            context.knowledge_hits = candidates + [
+                hit for hit in context.knowledge_hits if hit.document_id not in candidate_ids
+            ]
             lines = ["基于当前检索到的公开资料，能确认的是："]
             for hit in candidates[:2]:
                 excerpt = self._grounded_excerpt_for_answer(hit, question)
@@ -3359,21 +3363,29 @@ class FacultyTwinWorkflowSupport:
                 if context.request.course_context and (
                     domain == "teaching" or "课程" in context.request.course_context
                 ):
+                    context.knowledge_hits = []
                     context.answer = (
                         "当前可见的课程资料不足以确认这门课的具体内容；"
                         "我不使用通用模板猜测课程安排。可以指定课程讲次，或选择联网检索补充资料。"
                     )
                 elif domain in {"research", "advising"}:
+                    context.knowledge_hits = []
                     context.answer = (
                         "当前可见的公开资料不足以确认这个事实；"
                         "我不使用通用模板替你补写。可以补充具体项目/论文，或选择联网检索。"
                     )
                 else:
+                    context.knowledge_hits = []
                     context.answer = (
                         "当前可见资料不足以可靠回答这个问题；"
                         "我不使用通用模板猜测事实。可以补充更具体的资料范围，或选择联网检索。"
                     )
         context.answer = context.answer.strip()
+        if any(marker in context.answer for marker in ("资料不足", "不使用通用模板")):
+            # An unknown/unsupported answer must not carry adjacent retrieval
+            # hits as if they supported the refusal.
+            context.knowledge_hits = []
+            context.web_search_hits = []
         if self._is_degenerate_answer(context.answer):
             _logger.warning("chat workflow produced an empty/degenerate answer; returning bounded unknown")
             context.answer = (
@@ -5940,6 +5952,10 @@ class FacultyTwinWorkflowSupport:
         - Final safety net: any item with basis_label "近期交流记录" is
           stripped regardless of how it was produced.
         """
+        if context.answer and any(
+            marker in context.answer for marker in ("资料不足", "不使用通用模板")
+        ):
+            return []
         basis_items: list[AnswerBasisItem] = []
 
         # 1. Admin-added knowledge (from this turn)
