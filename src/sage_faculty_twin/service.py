@@ -2407,6 +2407,12 @@ class FacultyTwinWorkflowSupport:
             ]
             if not candidates:
                 return "当前可见的公开资料不足以确认具体招生或加入课题组要求；我不替老师补写未公开的标准。你可以先准备简历、项目/代码证据和 1–2 个具体问题，再通过正式渠道确认。"
+            candidates.sort(
+                key=lambda hit: (
+                    0 if any(marker in hit.title for marker in ("招生", "合作", "联系方式")) else 1,
+                    hit.title,
+                )
+            )
             lines = ["基于当前检索到的公开资料，能确认的是："]
             for hit in candidates[:2]:
                 excerpt = self._grounded_excerpt_for_answer(hit, question)
@@ -4714,7 +4720,7 @@ class FacultyTwinWorkflowSupport:
         return "\n".join(sections) + "\n"
 
     _IDENTITY_QUESTION_PATTERN = re.compile(
-        r"你是谁|介绍.{0,4}你|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|你的学术|你主要|你是做|你是什么样的老师"
+        r"你是谁|介绍.{0,4}你|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
     )
     _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
         "主页资料｜张书豪",
@@ -5323,13 +5329,25 @@ class FacultyTwinWorkflowSupport:
             )
         if self._needs_booking_intent_classification(question):
             return None
+        fact_lowered = question.lower()
+        if any(
+            marker in question or marker in fact_lowered
+            for marker in ("加入课题组", "加入你们组", "招生要求", "需要什么准备", "提前准备")
+        ):
+            return InteractionIntent(
+                action="answer",
+                domain="advising",
+                retrieval_scopes=["profile", "preparation"],
+                exclude_scopes=["courseware"],
+                decision_mode="advise_only",
+                confidence=0.98,
+            )
         if self._looks_like_collaboration_preparation_question(question):
             return None
 
         # High-frequency factual questions should not spend a second model
         # call guessing the intent. Their answer path is evidence-first and
         # safe for visitors, students, and lab members alike.
-        fact_lowered = question.lower()
         if any(
             marker in question or marker in fact_lowered
             for marker in ("课程主要学习", "课程学什么", "课程内容", "课程介绍", "课程覆盖")
