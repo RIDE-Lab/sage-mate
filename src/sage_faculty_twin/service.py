@@ -1304,6 +1304,16 @@ class FacultyTwinWorkflowSupport:
                 interaction_intent,
                 question=context.request.question,
             )
+            # Identity/research questions get a small deterministic floor of
+            # canonical public profile sections. Keep these in the response
+            # evidence as well as in the prompt so every stated research
+            # direction has a visible source.
+            floor_hits = self._identity_floor_hits(context.request.question)
+            if floor_hits:
+                seen_ids = {hit.document_id for hit in floor_hits}
+                context.knowledge_hits = floor_hits + [
+                    hit for hit in context.knowledge_hits if hit.document_id not in seen_ids
+                ]
             hit_count = len(context.knowledge_hits)
             top_score = context.knowledge_hits[0].score if context.knowledge_hits else 0.0
 
@@ -2138,6 +2148,22 @@ class FacultyTwinWorkflowSupport:
         relevance_question = self._build_answer_relevance_question(context)
         explicit_deep = self._is_explicit_deep_request(context.request)
         output_constraints = AnswerConstraints.from_question(context.request.question)
+        grounded_fact_answer = self._build_grounded_fact_answer(context)
+        if grounded_fact_answer is not None and not output_constraints.has_limits:
+            context.answer = grounded_fact_answer
+            context.workflow_action = "answer"
+            self._append_trace(
+                context,
+                key="llm_answer",
+                title="生成回答",
+                summary="已依据 SAGE 检索证据整理事实回答。",
+                detail=(
+                    "当前问题属于研究/课程事实问法，回答仅重组已检索到的公开资料，"
+                    "未让模型补写未被证据支持的具体事实。"
+                ),
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
         use_curated_answer = self._should_use_curated_technical_guidance(
             relevance_question
         ) or (
@@ -2274,6 +2300,173 @@ class FacultyTwinWorkflowSupport:
             duration_ms=self._elapsed_ms(started_at),
         )
         return context
+
+    def _build_grounded_fact_answer(self, context: ChatWorkflowContext) -> str | None:
+        """Answer high-frequency faculty/course fact questions from evidence only.
+
+        Small local models are useful for synthesis, but they tend to expand a
+        short biography or course description into plausible unsupported facts.
+        For questions whose primary job is to report retrieved facts, preserving
+        the source wording is safer and makes each statement directly traceable
+        to the visible ``answer_basis`` items.
+        """
+        request = context.request
+        if (
+            self._is_explicit_deep_request(request)
+            or context.web_search_hits
+            or getattr(request, "attachments", None)
+        ):
+            return None
+
+        question = request.question.strip()
+        lowered = question.lower()
+        intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
+        research_fact_markers = (
+            "主要研究",
+            "研究方向",
+            "研究主线",
+            "研究重点",
+            "研究什么",
+            "课题组研究",
+            "当前工作",
+        )
+        teaching_fact_markers = (
+            "课程主要学习",
+            "课程学什么",
+            "课程内容",
+            "课程介绍",
+            "课程覆盖",
+            "学哪些内容",
+            "会讲",
+            "会覆盖",
+            "讲什么",
+        )
+        advising_fact_markers = (
+            "加入课题组",
+            "加入你们组",
+            "招生要求",
+            "需要什么准备",
+            "提前准备",
+        )
+
+        is_research_fact_question = any(
+            marker in question or marker in lowered for marker in research_fact_markers
+        ) and (
+            intent_domain == "research"
+            or any(marker in question for marker in ("张老师", "课题组", "老师目前", "老师主要"))
+        )
+        if is_research_fact_question:
+            candidates = [
+                hit
+                for hit in context.knowledge_hits
+                if self._is_research_hit(hit)
+                and not self._is_teaching_hit(hit)
+                and self._is_public_evidence_hit(hit)
+            ]
+            if not candidates:
+                return "当前可见的公开资料不足以确认具体研究方向；我不使用通用模板替你补写事实。你可以开启联网检索，或补充想了解的具体项目/论文。"
+            summary = self._extract_owner_research_summary(context)
+            lines = ["基于当前检索到的公开资料，能确认的是："]
+            if summary:
+                lines.append(f"- {summary}。")
+            lines.append("\n相关资料还将这条主线拆成以下公开板块：")
+            for hit in candidates[:3]:
+                excerpt = self._grounded_excerpt_for_answer(hit, question)
+                if excerpt:
+                    lines.append(f"- {hit.title}：{excerpt}")
+            lines.append("\n以上内容均来自本轮可见资料；资料没有明确说明的细节，我不作推断。")
+            return "\n".join(lines)
+
+        is_teaching_fact_question = any(
+            marker in question or marker in lowered for marker in teaching_fact_markers
+        ) and (intent_domain == "teaching" or bool(request.course_context))
+        if is_teaching_fact_question:
+            candidates = [
+                hit
+                for hit in context.knowledge_hits
+                if self._is_teaching_hit(hit) and self._is_public_evidence_hit(hit)
+            ]
+            if not candidates:
+                return "当前可见的课程资料不足以确认这门课的具体内容；我不使用通用模板猜测课程安排。你可以指定课程讲次，或开启联网检索补充资料。"
+            lines = ["基于当前检索到的公开课程资料，能确认的内容是："]
+            for hit in candidates[:3]:
+                fact = self._grounded_course_fact_line(hit)
+                if fact:
+                    lines.append(f"- {hit.title}：{fact}")
+            lines.append("\n如果你需要具体周次、实验要求或最新安排，我建议继续指定课程/讲次；当前资料未覆盖的部分我不作补充猜测。")
+            return "\n".join(lines)
+
+        if intent_domain == "advising" and any(
+            marker in question or marker in lowered for marker in advising_fact_markers
+        ):
+            candidates = [
+                hit
+                for hit in context.knowledge_hits
+                if self._is_public_evidence_hit(hit)
+                and ({str(tag).lower() for tag in hit.tags} & {"profile", "research", "overview"})
+            ]
+            if not candidates:
+                return "当前可见的公开资料不足以确认具体招生或加入课题组要求；我不替老师补写未公开的标准。你可以先准备简历、项目/代码证据和 1–2 个具体问题，再通过正式渠道确认。"
+            lines = ["基于当前检索到的公开资料，能确认的是："]
+            for hit in candidates[:2]:
+                excerpt = self._grounded_excerpt_for_answer(hit, question)
+                if excerpt:
+                    lines.append(f"- {hit.title}：{excerpt}")
+            lines.append("\n具体名额、时间和未公开要求需要通过正式渠道确认；资料没有明确说明的部分，我不作推断。")
+            return "\n".join(lines)
+        return None
+
+    @staticmethod
+    def _is_public_evidence_hit(hit: KnowledgeSearchHit) -> bool:
+        metadata = {str(key).lower(): str(value).lower() for key, value in (hit.metadata or {}).items()}
+        audience = metadata.get("audience", "")
+        if audience in {"admin", "private", "lab_member"}:
+            return False
+        tags = {str(tag).lower() for tag in hit.tags}
+        return not (tags & {"audience:admin", "audience:private", "audience:lab_member"})
+
+    @staticmethod
+    def _grounded_excerpt_for_answer(hit: KnowledgeSearchHit, question: str) -> str:
+        normalized = re.sub(r"\s+", " ", hit.excerpt or "").strip()
+        if not normalized:
+            return ""
+        # Prefer a sentence containing a query anchor, while keeping the
+        # original wording and never generating a synthetic fact.
+        anchors = [token for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9+-]{3,}", question)]
+        sentences = [part.strip() for part in re.split(r"(?<=[。！？.!?])\s*", normalized) if part.strip()]
+        factual_markers = (
+            "研究", "当前工作", "大模型", "推理", "状态管理", "课程",
+            "prefill", "decode", "KV cache",
+        )
+        metadata_markers = ("来源：", "可见性：", "说明：", "用途：", "维护稿")
+        ranked: list[tuple[int, int, str]] = []
+        for sentence in sentences:
+            if any(marker in sentence for marker in metadata_markers):
+                continue
+            anchor_score = sum(anchor.lower() in sentence.lower() for anchor in anchors)
+            fact_score = sum(marker.lower() in sentence.lower() for marker in factual_markers)
+            if anchor_score or fact_score:
+                # Factual markers outrank incidental query-word matches (for
+                # example a metadata sentence containing only “课程”).
+                ranked.append((fact_score * 3 + anchor_score, fact_score, sentence))
+        if ranked:
+            ranked.sort(key=lambda item: (-item[0], -item[1], len(item[2])))
+            return ranked[0][2][:360]
+        return normalized[:360]
+
+    @staticmethod
+    def _grounded_course_fact_line(hit: KnowledgeSearchHit) -> str:
+        """Turn course titles/snippets into bounded, source-shaped facts."""
+        title = re.sub(r"\s+", " ", hit.title or "").strip()
+        excerpt = re.sub(r"\s+", " ", hit.excerpt or "").strip()
+        lowered = f"{title} {excerpt}".lower()
+        if "prefill" in lowered and "decode" in lowered:
+            return "资料明确覆盖 LLM 推理的 Prefill 与 Decode 两个核心阶段。"
+        if "benchmark" in lowered:
+            return "资料包含推理系统 Benchmark 指南，说明课程/资源也覆盖性能评测方法。"
+        if "三个研究方向" in excerpt:
+            return "课程组织方式是背景、三个研究方向、代表论文展开和开放问题。"
+        return FacultyTwinWorkflowSupport._grounded_excerpt_for_answer(hit, title)
 
     def _build_answer_relevance_question(self, context: ChatWorkflowContext) -> str:
         if self._looks_like_contextual_follow_up(
@@ -4525,6 +4718,7 @@ class FacultyTwinWorkflowSupport:
     )
     _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
         "主页资料｜张书豪",
+        "主页资料｜研究板块",
         "主页资料｜当前系统建设",
         "主页资料｜招生与合作",
         "研究总览｜一、共享状态访问、调度与运行时管理",
@@ -5131,6 +5325,35 @@ class FacultyTwinWorkflowSupport:
             return None
         if self._looks_like_collaboration_preparation_question(question):
             return None
+
+        # High-frequency factual questions should not spend a second model
+        # call guessing the intent. Their answer path is evidence-first and
+        # safe for visitors, students, and lab members alike.
+        fact_lowered = question.lower()
+        if any(
+            marker in question or marker in fact_lowered
+            for marker in ("课程主要学习", "课程学什么", "课程内容", "课程介绍", "课程覆盖")
+        ) or request.course_context and "课程" in request.course_context:
+            return InteractionIntent(
+                action="answer",
+                domain="teaching",
+                retrieval_scopes=["courseware", "profile"],
+                exclude_scopes=["publications"],
+                decision_mode="direct_answer",
+                confidence=0.98,
+            )
+        if any(
+            marker in question or marker in fact_lowered
+            for marker in ("主要研究", "研究方向", "研究主线", "当前工作", "课题组研究")
+        ) and any(marker in question for marker in ("张老师", "老师", "课题组")):
+            return InteractionIntent(
+                action="answer",
+                domain="research",
+                retrieval_scopes=["publications", "profile"],
+                exclude_scopes=["courseware"],
+                decision_mode="direct_answer",
+                confidence=0.98,
+            )
         if (request.visitor_profile or "general_visitor") != "general_visitor":
             return None
 
