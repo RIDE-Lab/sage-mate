@@ -1577,8 +1577,41 @@ body.drawer-pinned .history-rail {
     overflow: auto;
     overscroll-behavior: contain;
     scroll-padding-top: 18px;
-    width: min(100%, 820px);
-    margin: 0 auto;
+    /* Keep the scroll surface full-width so its scrollbar belongs to the
+       page edge, not the centered composer column. Message cards retain
+       their own max-width and stay visually centered. */
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    scrollbar-width: none;
+    scrollbar-color: transparent transparent;
+}
+
+.chat-stream:hover,
+.chat-stream:focus-within {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(77, 96, 124, 0.38) transparent;
+}
+
+.chat-stream::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+}
+
+.chat-stream:hover::-webkit-scrollbar,
+.chat-stream:focus-within::-webkit-scrollbar {
+    width: 8px;
+}
+
+.chat-stream::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.chat-stream::-webkit-scrollbar-thumb {
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background-clip: padding-box;
+    background-color: rgba(77, 96, 124, 0.38);
 }
 
 .chat-stream:has(> .intro-card:only-child) {
