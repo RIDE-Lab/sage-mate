@@ -2338,8 +2338,27 @@ class FacultyTwinWorkflowSupport:
         question = request.question.strip()
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
+        contact_fact_markers = (
+            "如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "招生", "申请", "合作"
+        )
+        if any(marker in question for marker in contact_fact_markers):
+            candidates = [
+                hit for hit in context.knowledge_hits
+                if self._is_public_evidence_hit(hit)
+                and ({str(tag).lower() for tag in hit.tags} & {"profile", "overview", "advising"})
+            ]
+            if candidates:
+                lines = ["基于当前已加载的公开资料，建议通过以下正式渠道联系："]
+                for hit in candidates[:2]:
+                    excerpt = self._grounded_excerpt_for_answer(hit, question)
+                    if excerpt:
+                        lines.append(f"- {hit.title}：{excerpt}")
+                lines.append("\n具体名额、时间和未公开联系方式以正式渠道确认；资料没有明确说明的部分，我不作推断。")
+                return "\n".join(lines)
+            context.knowledge_hits = []
+            return "当前可见的公开资料没有明确联系方式；请通过课题组公开主页或正式邮件渠道联系，不要猜测私人联系方式。"
+
         identity_fact_markers = (
-            "张老师",
             "张老师是谁",
             "介绍一下张老师",
             "介绍张老师",
@@ -4877,7 +4896,10 @@ class FacultyTwinWorkflowSupport:
 
     def _identity_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
         normalized = re.sub(r"[\s。！？!?，,：:]+$", "", str(question or "").strip())
-        identity_alias = normalized in {"张老师", "老师", "老师是谁"}
+        identity_alias = normalized in {"张老师", "老师", "老师是谁"} or (
+            "张老师" in normalized
+            and not any(marker in normalized for marker in ("另一个", "其他", "某位", "某个"))
+        )
         if not question or (not identity_alias and not self._IDENTITY_QUESTION_PATTERN.search(question)):
             return []
         hits: list[KnowledgeSearchHit] = []
@@ -7967,6 +7989,11 @@ class DigitalTwinService:
             return None
         if any(
             marker in question for marker in ("另一个张老师", "其他张老师", "某位张老师", "某个张老师")
+        ):
+            return None
+        if any(
+            marker in question
+            for marker in ("如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "招生", "申请", "合作", "预约")
         ):
             return None
         markers = (
