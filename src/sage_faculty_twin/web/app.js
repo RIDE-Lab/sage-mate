@@ -433,7 +433,9 @@ let lastHealthyStatusSnapshot = null;
 let lastHealthyStatusAt = 0;
 let lastLuckyQuestion = "";
 const LUCKY_QUESTION_HISTORY_KEY = "myTwinLuckyQuestionHistory";
+const LUCKY_QUESTION_PARTS_KEY = "myTwinLuckyQuestionParts";
 let luckyQuestionHistory = loadLuckyQuestionHistory();
+let luckyQuestionRecentParts = loadLuckyQuestionParts();
 
 function loadLuckyQuestionHistory() {
     try {
@@ -455,6 +457,24 @@ function saveLuckyQuestionHistory() {
         localStorage.setItem(LUCKY_QUESTION_HISTORY_KEY, JSON.stringify(luckyQuestionHistory));
     } catch {
         // Ignore storage errors.
+    }
+}
+
+function loadLuckyQuestionParts() {
+    try {
+        const raw = localStorage.getItem(LUCKY_QUESTION_PARTS_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed.filter((item) => item && typeof item === "object") : [];
+    } catch {
+        return [];
+    }
+}
+
+function saveLuckyQuestionParts() {
+    try {
+        localStorage.setItem(LUCKY_QUESTION_PARTS_KEY, JSON.stringify(luckyQuestionRecentParts));
+    } catch {
+        // Ignore storage access errors.
     }
 }
 
@@ -1158,6 +1178,10 @@ const LUCKY_QUESTION_TEMPLATES = [
     "如果目标是“{topic}”，最容易忽略什么？请结合{lens}分析，最后给出{outcome}。",
     "把“{topic}”变成一个可行动的问题：先梳理{lens}，再形成{outcome}。",
     "我想更具体地理解“{topic}”。请避免泛泛介绍，围绕{lens}给出{outcome}。",
+    "假设你要帮我判断“{topic}”是否值得投入：请检查{lens}，并输出{outcome}。",
+    "不要只给结论。针对“{topic}”，沿着{lens}拆解，最后落到{outcome}。",
+    "请把“{topic}”当作一个待验证假设，结合{lens}，帮我设计{outcome}。",
+    "我准备开始探索“{topic}”，想先看清{lens}，请给我{outcome}。",
 ];
 
 const LUCKY_QUESTION_BLUEPRINTS = {
@@ -1266,6 +1290,10 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
                     candidates.push({
                         question: fillLuckyQuestionTemplate(template, { topic, lens, outcome }),
                         context: blueprint.context,
+                        templateIndex: LUCKY_QUESTION_TEMPLATES.indexOf(template),
+                        topicIndex: blueprint.topics.indexOf(topic),
+                        lensIndex: blueprint.lenses.indexOf(lens),
+                        outcomeIndex: blueprint.outcomes.indexOf(outcome),
                     });
                 }
             }
@@ -2038,8 +2066,26 @@ function pickLuckyQuestion(profile = visitorProfileInput?.value) {
     const unseenCandidates = candidates.filter(
         (entry) => !luckyQuestionHistory.includes(entry.question)
     );
-    const pool = unseenCandidates.length > 0 ? unseenCandidates : candidates;
-    return pool[Math.floor(Math.random() * pool.length)] || null;
+    const basePool = unseenCandidates.length > 0 ? unseenCandidates : candidates;
+    const recent = luckyQuestionRecentParts.slice(-LUCKY_QUESTION_RECENT_LIMIT);
+    // Prefer candidates that change all four dimensions. If the pool is
+    // exhausted, progressively relax the constraint instead of repeating the
+    // same topic/lens combination on every click.
+    const diversityLevels = [
+        (entry) => !recent.some((item) => item.topicIndex === entry.topicIndex
+            || item.lensIndex === entry.lensIndex
+            || item.outcomeIndex === entry.outcomeIndex),
+        (entry) => !recent.some((item) => item.topicIndex === entry.topicIndex
+            && item.lensIndex === entry.lensIndex),
+        (entry) => !recent.some((item) => item.question === entry.question),
+    ];
+    for (const isDiverse of diversityLevels) {
+        const diversePool = basePool.filter(isDiverse);
+        if (diversePool.length > 0) {
+            return diversePool[Math.floor(Math.random() * diversePool.length)];
+        }
+    }
+    return basePool[Math.floor(Math.random() * basePool.length)] || null;
 }
 
 async function handleLuckyQuestionClick() {
@@ -2062,6 +2108,15 @@ async function handleLuckyQuestionClick() {
         luckyQuestionHistory.push(selected.question);
         luckyQuestionHistory = luckyQuestionHistory.slice(-LUCKY_QUESTION_RECENT_LIMIT);
         saveLuckyQuestionHistory();
+        luckyQuestionRecentParts.push({
+            question: selected.question,
+            templateIndex: selected.templateIndex,
+            topicIndex: selected.topicIndex,
+            lensIndex: selected.lensIndex,
+            outcomeIndex: selected.outcomeIndex,
+        });
+        luckyQuestionRecentParts = luckyQuestionRecentParts.slice(-LUCKY_QUESTION_RECENT_LIMIT);
+        saveLuckyQuestionParts();
         applyLuckyQuestionPreferences(selected);
         seedChatQuestion(selected.question, selected.context || "");
         updateComposerContextChips();
