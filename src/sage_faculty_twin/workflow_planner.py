@@ -99,6 +99,13 @@ class DeterministicWorkflowPlanner:
         self._planner_version = planner_version
         self._step_registry = step_registry if step_registry is not None else get_default_step_registry()
         self._policy = policy or build_default_workflow_policy(policy_path)
+        # Validation is pure for a planner instance. Reusing the validator
+        # avoids rebuilding the same policy/registry wrapper on every chat,
+        # while keeping per-request ``WorkflowRequestContext`` validation.
+        self._validator = WorkflowPolicyValidator(
+            policy=self._policy,
+            step_registry=self._step_registry,
+        )
 
     @property
     def policy_version(self) -> str:
@@ -115,10 +122,7 @@ class DeterministicWorkflowPlanner:
     def evaluate_plan(
         self, plan: PlanSpec, context: WorkflowRequestContext
     ) -> PlannerDecision:
-        validation = WorkflowPolicyValidator(
-            policy=self._policy,
-            step_registry=self._step_registry,
-        ).validate(plan, context)
+        validation = self._validator.validate(plan, context)
         fallback = None
         if not validation.accepted:
             fallback = PlannerFallback(
