@@ -235,6 +235,7 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
     env["VLLM_ENGINE_AUTO_CREATE_CONTAINER"] = "false"
     env["VLLM_ENGINE_REPLACE_EXISTING"] = "false"
     env["VLLM_HUST_API_KEY"] = "test-api-key"
+    env["VLLM_ENGINE_MODEL_PATH"] = "/tmp/nonexistent-test-model"
     idle_probe = _make_fake_python(tmp_path / "idle-probe", has_uvicorn=True)
     env["PYTHON_BIN"] = str(idle_probe)
 

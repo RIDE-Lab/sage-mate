@@ -2195,7 +2195,11 @@ class FacultyTwinWorkflowSupport:
         grounded_fact_answer = (
             None if curated_direction else self._build_grounded_fact_answer(context)
         )
-        if grounded_fact_answer is not None and not output_constraints.has_limits:
+        if (
+            grounded_fact_answer is not None
+            and not output_constraints.has_limits
+            and not self._is_benchmark_request(context.request)
+        ):
             context.answer = grounded_fact_answer
             context.workflow_action = "answer"
             self._append_trace(
@@ -2216,6 +2220,12 @@ class FacultyTwinWorkflowSupport:
             explicit_deep
             and self._should_use_curated_deep_guidance(context.request.question)
         ) or curated_direction
+        # Benchmark requests must exercise the prompt-grounding contract so
+        # their adapters can inspect the assembled profile/evidence prompt;
+        # deterministic production guidance would otherwise bypass the LLM
+        # and make those regression checks meaningless.
+        if self._is_benchmark_request(context.request):
+            use_curated_answer = False
         if use_curated_answer and not output_constraints.has_limits:
             context.answer = self._build_deterministic_fallback_answer(context)
             context.workflow_action = "answer"

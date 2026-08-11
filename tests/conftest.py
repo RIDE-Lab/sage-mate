@@ -26,6 +26,11 @@ os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 # Ensure the project src is importable before any test module is collected.
 _repo_root = Path(__file__).resolve().parent.parent
 _src = str(_repo_root / "src")
+# A few repository-level verification tests import helpers from ``tools``.
+# Keep the test runner hermetic by exposing the checkout root explicitly
+# instead of requiring callers to set PYTHONPATH themselves.
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
 if _src not in sys.path:
     sys.path.insert(0, _src)
 

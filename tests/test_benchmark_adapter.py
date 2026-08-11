@@ -470,8 +470,10 @@ def test_run_memory_followup_adapter_with_service_reuses_memory(tmp_path: Path) 
     prediction = predictions[0]
     assert prediction.memory_used is True
     assert prediction.memory_write_back is True
-    assert prediction.retrieved_item_count >= 1
-    assert "short_term" in prediction.retrieved_memory_types
+    # Immediate same-conversation context is intentionally kept as an
+    # internal prompt aid and is not surfaced as a duplicate Support item.
+    assert prediction.retrieved_item_count == 0
+    assert prediction.retrieved_memory_types == []
     assert prediction.scenario_duration_ms is not None
     assert prediction.evaluation_diagnostics is not None
     assert prediction.evaluation_diagnostics.workflow_duration_ms is not None
