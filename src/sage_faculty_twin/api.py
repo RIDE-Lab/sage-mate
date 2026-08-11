@@ -1686,6 +1686,13 @@ async def chat(
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     timeout_seconds = CHAT_REQUEST_TIMEOUT_SECONDS
 
+    # Safety-boundary replies do not need the model or NPU.  Resolve them
+    # before the single-model admission gate so a slow deep/web request cannot
+    # make an obvious credential-exfiltration refusal return 429.
+    boundary_response = service._check_sensitive_boundary_request(payload)
+    if boundary_response is not None:
+        return boundary_response
+
     try:
         await asyncio.wait_for(
             _chat_admission.acquire(), timeout=CHAT_ADMISSION_TIMEOUT_SECONDS

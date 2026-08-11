@@ -143,3 +143,52 @@ def test_empty_fact_route_is_rendered_as_unknown_not_http500(tmp_path: Path) -> 
 
     assert "资料不足" in response.answer
     assert response.answer_basis == []
+
+
+def test_stack_relation_answer_is_chinese_and_evidence_bound(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    context = _context(
+        "SAGE、NeuroMem、SageVDB 和 vLLM-HUST 在系统里分别负责什么？",
+        "research",
+        [
+            KnowledgeSearchHit(
+                document_id="sage-paper",
+                title="论文提炼｜SAGE Framework",
+                excerpt="SAGE organizes retrieval, memory, tools, and reasoning workflows.",
+                score=90,
+                tags=["research", "publication", "audience:public"],
+                source_name="public-profile:sage",
+            )
+        ],
+    )
+
+    answer = service._build_grounded_fact_answer(context)
+
+    assert answer is not None
+    assert "上下层协作关系" in answer
+    assert "Support" in answer
+
+
+def test_collaboration_question_has_actionable_next_steps(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    context = _context(
+        "我们想和张老师合作，应该如何推进？",
+        "advising",
+        [
+            KnowledgeSearchHit(
+                document_id="profile",
+                title="主页资料｜研究板块",
+                excerpt="研究聚焦推理系统、状态管理和运行时优化。",
+                score=80,
+                tags=["profile", "research", "audience:public"],
+                source_name="public-profile:research",
+            )
+        ],
+    )
+
+    answer = service._build_grounded_fact_answer(context)
+
+    assert answer is not None
+    assert "一页纸" in answer
+    assert "分工" in answer
+    assert "正式确认" in answer

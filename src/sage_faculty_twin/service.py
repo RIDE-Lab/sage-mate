@@ -2341,7 +2341,34 @@ class FacultyTwinWorkflowSupport:
         contact_fact_markers = (
             "如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "招生", "申请", "合作"
         )
-        if any(marker in question for marker in contact_fact_markers):
+        advising_fact_markers = (
+            "加入课题组", "加入你们组", "招生要求", "需要什么准备", "提前准备", "申请加入"
+        )
+        is_advising_fact_question = any(marker in question for marker in advising_fact_markers)
+        is_collaboration_next_step = (
+            "合作" in question
+            and any(marker in question for marker in ("如何推进", "怎么推进", "合作方案", "合作方向", "下一步"))
+        )
+        if is_collaboration_next_step:
+            candidates = [
+                hit for hit in context.knowledge_hits
+                if self._is_public_evidence_hit(hit)
+                and ({str(tag).lower() for tag in hit.tags} & {"profile", "research", "overview"})
+            ]
+            lines = [
+                "基于当前公开资料，建议按三步推进合作：",
+                "1. 先用一页纸写清共同问题、工作负载、现有 baseline 和希望验证的指标；",
+                "2. 再对齐数据/代码、算力、分工、时间表和可公开边界；",
+                "3. 最后通过课题组公开主页或正式邮件渠道发起讨论，并附上具体材料。",
+            ]
+            if candidates:
+                excerpt = self._grounded_excerpt_for_answer(candidates[0], question)
+                if excerpt:
+                    lines.append(f"\n公开资料显示，当前研究主线与推理系统、状态管理和运行时优化相关：{excerpt}")
+                context.knowledge_hits = candidates[:3]
+            lines.append("\n具体合作是否可行、资源与时间安排需要由老师和合作方正式确认；我不替任何一方承诺名额或排期。")
+            return "\n".join(lines)
+        if any(marker in question for marker in contact_fact_markers) and not is_advising_fact_question:
             candidates = [
                 hit for hit in context.knowledge_hits
                 if self._is_public_evidence_hit(hit)
@@ -2425,7 +2452,7 @@ class FacultyTwinWorkflowSupport:
         )
         is_stack_fact_question = any(
             marker in lowered for marker in stack_fact_markers
-        ) and any(marker in question for marker in ("关系", "区别", "是什么", "怎么") )
+        ) and any(marker in question for marker in ("关系", "区别", "是什么", "怎么", "分别负责"))
         if is_stack_fact_question:
             candidates = [
                 hit
@@ -2460,15 +2487,10 @@ class FacultyTwinWorkflowSupport:
             "分组规则",
             "考核要求",
             "作业要求",
+            "学习路线",
+            "刚开始学",
+            "先掌握",
         )
-        advising_fact_markers = (
-            "加入课题组",
-            "加入你们组",
-            "招生要求",
-            "需要什么准备",
-            "提前准备",
-        )
-
         is_research_fact_question = any(
             marker in question or marker in lowered for marker in research_fact_markers
         ) and (
@@ -5786,7 +5808,7 @@ class FacultyTwinWorkflowSupport:
         lowered = request.question.lower()
         if any(
             marker in lowered
-            for marker in ("tutorial", "lecture", "experiment", "课件", "讲义", "实验", "课程")
+            for marker in ("tutorial", "lecture", "experiment", "课件", "讲义", "实验", "课程", "学习路线", "刚开始学")
         ):
             return InteractionIntent(
                 action="answer",
@@ -8024,7 +8046,10 @@ class DigitalTwinService:
             return None
         if any(
             marker in question
-            for marker in ("如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "招生", "申请", "合作", "预约")
+            for marker in ("如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "预约")
+        ) or (
+            "合作" in question
+            and not any(marker in question for marker in ("如何推进", "怎么推进", "合作方案", "合作方向", "下一步"))
         ):
             return None
         markers = (
@@ -8035,8 +8060,10 @@ class DigitalTwinService:
             "主要研究方向", "研究方向是什么",
             "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
             "课程内容", "课程介绍", "学哪些内容", "会讲什么",
+            "加入课题组", "加入你们组", "招生要求", "申请加入",
+            "需要什么准备", "提前准备", "刚开始学大模型推理", "学习路线",
             "SAGE 和 vLLM-HUST", "SAGE与vLLM-HUST", "SAGE 和 vLLM",
-            "SAGE与vLLM", "SageVDB", "NeuroMem",
+            "SAGE与vLLM", "SageVDB", "NeuroMem", "分别负责什么",
         )
         if not any(marker in question for marker in markers):
             return None
@@ -8048,6 +8075,7 @@ class DigitalTwinService:
             for marker in (
                 "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
                 "课程内容", "课程介绍", "学哪些内容", "会讲什么",
+                "刚开始学大模型推理", "学习路线",
             )
         )
         if course_question:
