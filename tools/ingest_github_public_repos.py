@@ -12,6 +12,7 @@ import base64
 import json
 import os
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -83,6 +84,13 @@ def sync_public_repositories(orgs: tuple[str, ...]) -> tuple[int, int, int]:
                 content=content[:MAX_README_CHARS + 1200],
                 tags=["github", "public-repository", f"org:{org.lower()}", "audience:public"],
                 source_name=f"github-public:{full_name}",
+                metadata={
+                    "visibility": "public",
+                    "repository_url": str(repository.get("html_url") or ""),
+                    "default_branch": str(repository.get("default_branch") or "main"),
+                    "github_updated_at": str(repository.get("updated_at") or ""),
+                    "synced_at": datetime.now(UTC).isoformat(),
+                },
             )
             _, inserted = store.upsert_document(payload, rebuild_indexes=False)
             if inserted:
