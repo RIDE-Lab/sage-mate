@@ -115,7 +115,12 @@ from .models import (
 )
 from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
-from .service import DigitalTwinService, build_stack_versions_payload, build_hardware_payload
+from .service import (
+    DigitalTwinService,
+    build_stack_versions_payload,
+    build_hardware_payload,
+    request_cancellation_scope,
+)
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
 
@@ -198,6 +203,79 @@ CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
 CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
 _chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
 _chat_waiting_requests = 0
+
+
+async def _run_chat_with_cancellation(
+    raw_request: Request,
+    *,
+    timeout_seconds: float,
+    **answer_kwargs,
+) -> ChatResponse:
+    """Run one chat request while propagating disconnect/timeout to workers.
+
+    The model call itself is synchronous in a worker thread, so cancelling the
+    asyncio wrapper alone would leave that thread free to perform validation
+    retries after the HTTP request has gone away.  The context-scoped event is
+    checked before every retry and post-answer branch.
+    """
+    cancel_event = threading.Event()
+    request_payload = answer_kwargs.pop("payload")
+
+    async def _run_answer():
+        with request_cancellation_scope(cancel_event):
+            return await service.answer(request_payload, **answer_kwargs)
+
+    answer_task = asyncio.create_task(_run_answer())
+    watch_disconnect = not raw_request.headers.get("content-type", "").lower().startswith(
+        "multipart/"
+    )
+
+    async def _watch_disconnect():
+        while True:
+            try:
+                disconnected = await asyncio.wait_for(raw_request.is_disconnected(), timeout=0.5)
+            except asyncio.TimeoutError:
+                disconnected = False
+            if disconnected:
+                return
+            await asyncio.sleep(0.25)
+
+    watcher_task = asyncio.create_task(_watch_disconnect()) if watch_disconnect else None
+    try:
+        if watcher_task is None:
+            return await asyncio.wait_for(answer_task, timeout=timeout_seconds)
+        done, _ = await asyncio.wait(
+            {answer_task, watcher_task},
+            timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if answer_task in done:
+            return answer_task.result()
+        cancel_event.set()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        if watcher_task in done:
+            raise HTTPException(status_code=499, detail="客户端已断开，已停止后续模型重试。")
+        raise asyncio.TimeoutError
+    except asyncio.TimeoutError:
+        cancel_event.set()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        raise
+    except asyncio.CancelledError:
+        cancel_event.set()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        raise
+    finally:
+        cancel_event.set()
+        if not answer_task.done():
+            answer_task.cancel()
+        if watcher_task is not None and not watcher_task.done():
+            watcher_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        if watcher_task is not None:
+            await asyncio.gather(watcher_task, return_exceptions=True)
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
@@ -1699,13 +1777,15 @@ async def chat(
     # request cannot make a lightweight student question return 429.  Keep a
     # short guard: an unexpectedly slow local index falls back to the normal
     # admission path instead of creating an unbounded side queue.
-    try:
-        fast_response = await asyncio.wait_for(
-            asyncio.to_thread(service.try_fast_answer, payload),
-            timeout=2.5,
-        )
-    except asyncio.TimeoutError:
-        fast_response = None
+    fast_response = None
+    if not payload.attachments:
+        try:
+            fast_response = await asyncio.wait_for(
+                asyncio.to_thread(service.try_fast_answer, payload),
+                timeout=2.5,
+            )
+        except asyncio.TimeoutError:
+            fast_response = None
     if fast_response is not None:
         return fast_response
 
@@ -1740,13 +1820,12 @@ async def chat(
         # memory/profile bookkeeping out of the HTTP critical path without
         # changing the public response schema.
         try:
-            return await asyncio.wait_for(
-                service.answer(
-                    payload,
-                    admin_session_token=admin_session_token,
-                    trace_callback=lambda _step: None,
-                ),
-                timeout=timeout_seconds,
+            return await _run_chat_with_cancellation(
+                raw_request,
+                timeout_seconds=timeout_seconds,
+                payload=payload,
+                admin_session_token=admin_session_token,
+                trace_callback=lambda _step: None,
             )
         except asyncio.TimeoutError as exc:
             raise HTTPException(
@@ -1791,15 +1870,14 @@ async def chat(
         answer_chunk_callback = _on_answer_chunk
 
     try:
-        response = await asyncio.wait_for(
-            service.answer(
-                payload,
-                admin_session_token=admin_session_token,
-                trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),
-                on_post_answer_complete=_on_post_answer_complete,
-                answer_chunk_callback=answer_chunk_callback,
-            ),
-            timeout=timeout_seconds,
+        response = await _run_chat_with_cancellation(
+            raw_request,
+            timeout_seconds=timeout_seconds,
+            payload=payload,
+            admin_session_token=admin_session_token,
+            trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),
+            on_post_answer_complete=_on_post_answer_complete,
+            answer_chunk_callback=answer_chunk_callback,
         )
     except asyncio.TimeoutError as exc:
         message = f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"

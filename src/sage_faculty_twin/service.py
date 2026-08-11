@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import inspect
 import json
@@ -16,6 +18,34 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
+
+
+_request_cancel_event: ContextVar[threading.Event | None] = ContextVar(
+    "sage_mate_request_cancel_event", default=None
+)
+
+
+@contextmanager
+def request_cancellation_scope(event: threading.Event):
+    token = _request_cancel_event.set(event)
+    try:
+        yield
+    finally:
+        _request_cancel_event.reset(token)
+
+
+class RequestCancelledError(RuntimeError):
+    """Raised inside worker threads after the client request is gone."""
+
+
+def _request_was_cancelled() -> bool:
+    event = _request_cancel_event.get()
+    return event is not None and event.is_set()
+
+
+def _raise_if_request_cancelled() -> None:
+    if _request_was_cancelled():
+        raise RequestCancelledError("chat request cancelled by client or timeout")
 
 from fastapi import HTTPException, status
 from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
@@ -2240,6 +2270,7 @@ class FacultyTwinWorkflowSupport:
             answer_system_prompt = answer_prompt.system_prompt
             answer_user_prompt = answer_prompt.user_prompt
         try:
+            _raise_if_request_cancelled()
             if self._answer_chunk_callback is not None:
                 context.answer = self._call_answer_question_sync(
                     answer_system_prompt,
@@ -2259,7 +2290,10 @@ class FacultyTwinWorkflowSupport:
                     use_reuse_hints=not use_compact_general_answer,
                     continue_on_length=not use_compact_general_answer,
                 )
+            _raise_if_request_cancelled()
         except RuntimeError as exc:
+            if isinstance(exc, RequestCancelledError):
+                raise
             if "empty chat message" not in str(exc):
                 raise
             _logger.warning("LLM returned an empty chat message; retrying with compact prompt")
@@ -2267,9 +2301,11 @@ class FacultyTwinWorkflowSupport:
         context.answer = _strip_internal_thinking_content(context.answer)
         context.answer = _strip_repeated_role_prefixes(context.answer)
         if _contains_internal_prompt_leak(context.answer):
+            _raise_if_request_cancelled()
             _logger.warning("LLM answer leaked prompt instructions; retrying with compact prompt")
             context.answer = self._retry_answer_with_compact_prompt(context)
         if not context.answer:
+            _raise_if_request_cancelled()
             _logger.warning("LLM answer only contained thinking content; retrying compact prompt")
             context.answer = self._retry_answer_with_compact_prompt(context)
         if (
@@ -2287,6 +2323,7 @@ class FacultyTwinWorkflowSupport:
                 context.answer,
             )
         ):
+            _raise_if_request_cancelled()
             _logger.warning("LLM returned a degenerate answer; retrying with compact prompt")
             context.answer = self._retry_answer_with_compact_prompt(context)
         context.workflow_action = (
@@ -2767,6 +2804,7 @@ class FacultyTwinWorkflowSupport:
         # deadline even when the first request is healthy.
         retry_attempts = 1 if deep_recovery else 2
         for attempt in range(retry_attempts):
+            _raise_if_request_cancelled()
             try:
                 answer = self._call_compact_retry_sync(
                     system_prompt=compact_system_prompt,
