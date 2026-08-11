@@ -2173,6 +2173,51 @@ def test_chat_auto_web_searches_when_local_knowledge_is_empty(
     assert any(item.basis_label == "联网检索" for item in response.answer_basis)
 
 
+def test_explicit_web_search_returns_bounded_sources_without_second_llm_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge-base",
+        conversation_memory_dir=tmp_path / "conversation-memory",
+        knowledge_backend="local",
+        conversation_memory_index_type="segment",
+        web_search_enabled=True,
+    )
+    service = DigitalTwinService(settings)
+    llm = RecordingLLMClient(booking_intent=False, answer="不应调用模型")
+    service._llm_client = llm
+    monkeypatch.setattr(
+        "sage_faculty_twin.web_search.WebSearchClient.search",
+        lambda self, query, max_results=None: [
+            WebSearchResult(
+                title="官方推理系统资料",
+                url="https://example.com/inference",
+                snippet="介绍推理服务的关键指标与缓存机制。",
+                score=9.0,
+            )
+        ],
+    )
+
+    response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                question="请联网搜索推理系统资料。",
+                conversation_id="conv-explicit-web-fast",
+                web_search=True,
+                deep_thinking=False,
+            )
+        )
+    )
+
+    assert response.decision_mode == "web_search_direct"
+    assert "官方推理系统资料" in response.answer
+    assert "https://example.com/inference" in response.answer
+    assert any(item.basis_label == "联网检索" for item in response.answer_basis)
+    assert llm.prompts == []
+
+
 def test_positive_feedback_writes_web_sources_back_to_knowledge_base(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

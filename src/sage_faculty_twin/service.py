@@ -2214,6 +2214,29 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
+        # An explicit web-search toggle is a retrieval request. When the user
+        # did not ask for deep reasoning, return bounded snippets and URLs
+        # immediately instead of paying for a second full model generation.
+        # This keeps the search feature within its own latency budget while
+        # preserving a model-backed path for explicit deep-thinking requests.
+        if (
+            getattr(context.request, "web_search", False)
+            and context.web_search_hits
+            and not explicit_deep
+            and not output_constraints.has_limits
+        ):
+            context.answer = self._build_direct_web_answer(context)
+            context.workflow_action = "answer"
+            context.decision_mode = "web_search_direct"
+            self._append_trace(
+                context,
+                key="llm_answer",
+                title="整理联网结果",
+                summary="已直接整理联网检索结果。",
+                detail="用户未要求深度思考，已跳过第二次模型生成并保留实时来源链接。",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
         use_curated_answer = self._should_use_curated_technical_guidance(
             relevance_question
         ) or (
@@ -6285,6 +6308,22 @@ class FacultyTwinWorkflowSupport:
             item for item in deduped_items
             if item.basis_label != "近期交流记录"
         ][:5]
+
+    @staticmethod
+    def _build_direct_web_answer(context: ChatWorkflowContext) -> str:
+        """Render explicit search hits without spending another model turn."""
+        lines = ["根据联网检索结果，整理出以下公开信息："]
+        for index, hit in enumerate(context.web_search_hits[:3], start=1):
+            title = str(hit.title or "未命名来源").strip()
+            snippet = _normalize_whitespace(str(hit.snippet or "").strip())
+            source = str(hit.url or "").strip()
+            lines.append(f"{index}. {title}")
+            if snippet:
+                lines.append(f"   {snippet[:500]}")
+            if source:
+                lines.append(f"   来源：{source}")
+        lines.append("以上内容来自实时检索结果；如需进一步比较、归纳或推演，可打开深度思考。")
+        return "\n".join(lines)
 
     @staticmethod
     def _is_generic_index_page(hit: KnowledgeSearchHit) -> bool:

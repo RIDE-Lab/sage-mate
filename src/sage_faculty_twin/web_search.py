@@ -4,6 +4,7 @@ from datetime import date
 from dataclasses import dataclass
 from html import unescape
 from re import IGNORECASE, compile as re_compile
+from time import monotonic
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
@@ -106,6 +107,7 @@ class WebSearchClient:
         self._timeout_seconds = max(1.0, float(timeout_seconds))
         self._max_results = max(1, min(int(max_results), 8))
         self._tavily_api_key = (tavily_api_key or "").strip()
+        self._search_deadline: float | None = None
 
     @property
     def enabled(self) -> bool:
@@ -118,27 +120,38 @@ class WebSearchClient:
 
         limit = self._max_results if max_results is None else max(1, min(int(max_results), 8))
 
-        # --- Tavily (primary) ---
-        if self._tavily_api_key:
-            try:
-                tavily_results = self._search_tavily(normalized_query, limit)
-                if tavily_results:
-                    return tavily_results
-            except Exception:
-                pass  # fall through to Bing
+        # Treat the configured timeout as a budget for the *whole* provider
+        # chain, not once per fallback. Otherwise an RSS timeout followed by
+        # an HTML timeout can silently double the latency of /chat.
+        deadline = monotonic() + self._timeout_seconds
+        previous_deadline = self._search_deadline
+        self._search_deadline = deadline
+        try:
+            # --- Tavily (primary) ---
+            if self._tavily_api_key and monotonic() < deadline:
+                try:
+                    tavily_results = self._search_tavily(normalized_query, limit)
+                    if tavily_results:
+                        return tavily_results
+                except Exception:
+                    pass  # fall through to Bing
 
-        # --- Bing fallback ---
-        search_query = self._rewrite_query_for_bing(normalized_query)
-        for searcher in (self._search_bing_rss, self._search_bing_html):
-            try:
-                results = searcher(search_query, limit)
-            except Exception:
-                continue
-            if results:
-                reranked = self._rerank_results(normalized_query, results, limit)
-                if reranked:
-                    return reranked
-        return []
+            # --- Bing fallback ---
+            search_query = self._rewrite_query_for_bing(normalized_query)
+            for searcher in (self._search_bing_rss, self._search_bing_html):
+                if monotonic() >= deadline:
+                    break
+                try:
+                    results = searcher(search_query, limit)
+                except Exception:
+                    continue
+                if results:
+                    reranked = self._rerank_results(normalized_query, results, limit)
+                    if reranked:
+                        return reranked
+            return []
+        finally:
+            self._search_deadline = previous_deadline
 
     # ---- Tavily backend ----
 
@@ -168,8 +181,11 @@ class WebSearchClient:
         return hits
 
     def _client(self) -> httpx.Client:
+        timeout_seconds = self._timeout_seconds
+        if self._search_deadline is not None:
+            timeout_seconds = max(0.05, self._search_deadline - monotonic())
         return httpx.Client(
-            timeout=self._timeout_seconds,
+            timeout=timeout_seconds,
             follow_redirects=True,
             headers={
                 "User-Agent": _DEFAULT_USER_AGENT,
