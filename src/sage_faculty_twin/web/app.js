@@ -2848,8 +2848,12 @@ chatForm.addEventListener("submit", async (event) => {
             if (canRetry) {
                 stopWorkflowTraceStream();
                 workflowRequestIdActive = createConversationId();
+                const retrySeconds = Math.max(2, Math.ceil(error?.retryAfterSeconds || 2));
+                const queueHint = Number.isFinite(error?.queuePosition) && error.queuePosition > 0
+                    ? `前方约 ${error.queuePosition} 个请求，`
+                    : "";
                 const retryLabel = error?.status === 429
-                    ? "当前请求较多，排队稍后重试…"
+                    ? `${queueHint}预计 ${retrySeconds} 秒后自动重试…`
                     : error?.status === 504
                     ? "后端响应超时，正在自动重试…"
                     : "网络连接中断，正在自动重试…";
@@ -2860,7 +2864,7 @@ chatForm.addEventListener("submit", async (event) => {
                     { deepThinking: explicitDeepMode }
                 );
                 sageCompanionController?.setState("thinking", retryLabel);
-                await new Promise((resolve) => globalThis.setTimeout(resolve, 2000));
+                await new Promise((resolve) => globalThis.setTimeout(resolve, retrySeconds * 1000));
                 await openWorkflowTraceStream(workflowRequestIdActive);
                 continue;
             }
@@ -6301,6 +6305,14 @@ async function apiRequest(path, options = {}) {
         const error = new Error(friendly);
         error.status = response.status;
         error.responseBody = text;
+        const retryAfter = Number(response.headers.get("Retry-After"));
+        if (Number.isFinite(retryAfter) && retryAfter > 0) {
+            error.retryAfterSeconds = retryAfter;
+        }
+        const queuePosition = Number(response.headers.get("X-Queue-Position"));
+        if (Number.isFinite(queuePosition) && queuePosition >= 0) {
+            error.queuePosition = queuePosition;
+        }
         throw error;
     }
 
@@ -6532,7 +6544,16 @@ async function saveLocalCodeConfig(event) {
 function friendlyHttpErrorMessage(status, body) {
     const trimmed = typeof body === "string" ? body.trim() : "";
     const looksLikeHtml = trimmed.startsWith("<");
-    const detail = looksLikeHtml || trimmed.length > 240 ? "" : trimmed;
+    let structuredDetail = "";
+    if (!looksLikeHtml && trimmed) {
+        try {
+            const parsed = JSON.parse(trimmed);
+            structuredDetail = typeof parsed?.detail === "string" ? parsed.detail : "";
+        } catch {
+            structuredDetail = "";
+        }
+    }
+    const detail = structuredDetail || (looksLikeHtml || trimmed.length > 240 ? "" : trimmed);
     if (status === 413) {
         return "附件超过服务允许的大小。单份附件请控制在 5MB 以内；如果是长 PDF，可以先发主要章节或转成文本后再上传。";
     }
@@ -6540,7 +6561,7 @@ function friendlyHttpErrorMessage(status, body) {
         return "服务在 LLM 响应期间超时（错误码 " + status + "）。请稍后重试；如果问题较复杂，可以拆成更小的问题再问。";
     }
     if (status === 429) {
-        return "当前问答请求较多，系统正在保护响应速度。请稍后重试。";
+        return detail || "当前问答请求正在排队，系统正在保护响应速度。请稍后重试。";
     }
     if (status === 503) {
         return "后端临时不可用（503），请稍后重试。";
@@ -7398,6 +7419,7 @@ function renderPendingAssistantMessage(
     if (INLINE_WORKFLOW_TRACE_ENABLED) {
         syncPendingWorkflowTrace(workflowSteps, { animateNewItems: false, currentStage });
     }
+    container.dataset.lastStageAt = String(performance.now());
     startAnswerProcessingTicker(container);
 }
 
@@ -7409,7 +7431,18 @@ function startAnswerProcessingTicker(container) {
         return;
     }
     const update = () => {
-        label.textContent = `已处理 ${formatAnswerProcessingDuration(Math.max(0, performance.now() - startedAt))}`;
+        const elapsedMs = Math.max(0, performance.now() - startedAt);
+        label.textContent = `已处理 ${formatAnswerProcessingDuration(elapsedMs)}`;
+        const stageLabel = container.querySelector("#pending-stage-label");
+        const lastStageAt = Number(container.dataset.lastStageAt || startedAt);
+        const idleMs = Math.max(0, performance.now() - lastStageAt);
+        if (stageLabel && idleMs >= 8000) {
+            stageLabel.textContent = elapsedMs >= 45000
+                ? "模型响应较慢，仍在继续；无需重复提交"
+                : elapsedMs >= 20000
+                ? "模型正在生成较长回答，请稍候"
+                : "正在等待模型资源，已为你保留请求";
+        }
     };
     update();
     container._answerProcessingTimer = globalThis.setInterval(update, 100);
@@ -7426,6 +7459,10 @@ function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
     const pendingLabel = chatStream?.querySelector(".message-pending #pending-stage-label");
     if (pendingLabel) {
         pendingLabel.textContent = currentStage;
+    }
+    const pendingMessage = chatStream?.querySelector(".message-pending");
+    if (pendingMessage) {
+        pendingMessage.dataset.lastStageAt = String(performance.now());
     }
     const pendingRail = chatStream?.querySelector(".message-pending .thinking-phase-rail");
     if (pendingRail) {

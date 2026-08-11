@@ -125,4 +125,5 @@ def test_chat_returns_retryable_429_when_admission_is_full(
 
     assert response.status_code == 429
     assert response.headers.get("retry-after") == "2"
-    assert "请求较多" in response.json().get("detail", "")
+    assert "正在排队" in response.json().get("detail", "")
+    assert response.headers.get("x-queue-position") == "1"

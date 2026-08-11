@@ -197,6 +197,7 @@ CHAT_REQUEST_TIMEOUT_SECONDS = settings.chat_request_timeout_seconds
 CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
 CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
 _chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
+_chat_waiting_requests = 0
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
@@ -1708,16 +1709,29 @@ async def chat(
     if fast_response is not None:
         return fast_response
 
+    global _chat_waiting_requests
+    queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
+    _chat_waiting_requests += 1
     try:
         await asyncio.wait_for(
             _chat_admission.acquire(), timeout=CHAT_ADMISSION_TIMEOUT_SECONDS
         )
     except asyncio.TimeoutError as exc:
+        _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
+        estimated_wait = max(2, min(15, int(round(CHAT_ADMISSION_TIMEOUT_SECONDS * max(1, queue_position)))))
         raise HTTPException(
             status_code=429,
-            detail="当前问答请求较多，请稍候片刻后重试。",
-            headers={"Retry-After": "2"},
+            detail=(
+                f"当前请求正在排队，前方约 {queue_position} 个请求，"
+                f"预计 {estimated_wait} 秒后重试。"
+            ),
+            headers={
+                "Retry-After": str(estimated_wait),
+                "X-Queue-Position": str(queue_position),
+                "X-Queue-Estimated-Wait": str(estimated_wait),
+            },
         ) from exc
+    _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
 
     if request_id is None:
         # API clients do not always open the workflow-events SSE channel.
