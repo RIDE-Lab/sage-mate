@@ -2339,7 +2339,7 @@ class FacultyTwinWorkflowSupport:
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
         contact_fact_markers = (
-            "如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "招生", "申请", "合作"
+            "如何联系", "怎么联系", "联系张老师", "联系老师", "联系方式", "邮箱", "邮件", "招生", "申请", "合作"
         )
         advising_fact_markers = (
             "加入课题组", "加入你们组", "招生要求", "需要什么准备", "提前准备", "申请加入"
@@ -8059,7 +8059,7 @@ class DigitalTwinService:
             return None
         if any(
             marker in question
-            for marker in ("如何联系", "怎么联系", "联系方式", "邮箱", "邮件", "预约")
+            for marker in ("如何联系", "怎么联系", "联系张老师", "联系老师", "联系方式", "邮箱", "邮件", "预约")
         ) or (
             "合作" in question
             and not any(marker in question for marker in ("如何推进", "怎么推进", "合作方案", "合作方向", "下一步"))
