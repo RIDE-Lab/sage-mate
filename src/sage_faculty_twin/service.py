@@ -8025,6 +8025,19 @@ class DigitalTwinService:
             decision_mode="direct_fast_path",
         )
 
+    def try_fast_answer(self, request: ChatRequest) -> ChatResponse | None:
+        """Resolve deterministic/local-evidence answers without model admission.
+
+        The API uses this small preflight before acquiring the single-model
+        semaphore.  It deliberately mirrors only the no-LLM branches at the
+        top of ``answer``; unresolved questions return ``None`` and continue
+        through the normal SAGE workflow.
+        """
+        fast_response = self._build_lightweight_chat_response(request)
+        if fast_response is not None:
+            return fast_response
+        return self._build_lightweight_fact_response(request)
+
     def _build_lightweight_fact_response(self, request: ChatRequest) -> ChatResponse | None:
         """Serve short, public fact questions from the local evidence store.
 

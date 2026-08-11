@@ -1693,6 +1693,21 @@ async def chat(
     if boundary_response is not None:
         return boundary_response
 
+    # Public greetings and bounded local-evidence FAQs do not consume the
+    # model/NPU slot.  Probe this lane before admission so a long DeepSeek
+    # request cannot make a lightweight student question return 429.  Keep a
+    # short guard: an unexpectedly slow local index falls back to the normal
+    # admission path instead of creating an unbounded side queue.
+    try:
+        fast_response = await asyncio.wait_for(
+            asyncio.to_thread(service.try_fast_answer, payload),
+            timeout=2.5,
+        )
+    except asyncio.TimeoutError:
+        fast_response = None
+    if fast_response is not None:
+        return fast_response
+
     try:
         await asyncio.wait_for(
             _chat_admission.acquire(), timeout=CHAT_ADMISSION_TIMEOUT_SECONDS
