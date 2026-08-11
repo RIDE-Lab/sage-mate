@@ -305,6 +305,207 @@ body.drawer-pinned .app-shell {
     }
 }
 
+/* -------------------------------------------------------------------------
+   Codex-inspired interaction polish
+   Keep the Sage identity and evidence panels, but use a quieter workspace:
+   compact chrome, neutral controls, a centered reading column, and a single
+   visual focus around the composer.
+   ------------------------------------------------------------------------- */
+:root {
+    --bg: #ffffff;
+    --surface: #ffffff;
+    --surface-soft: #f7f7f8;
+    --surface-muted: #f1f1f1;
+    --ink: #2f2f2f;
+    --muted: #707070;
+    --line: rgba(0, 0, 0, 0.09);
+    --line-strong: rgba(0, 0, 0, 0.15);
+    --accent: #2f6fed;
+    --accent-deep: #2459bf;
+    --accent-soft: #e8efff;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-strong: 0 8px 28px rgba(0, 0, 0, 0.09);
+}
+
+body {
+    background: var(--bg);
+    color: var(--ink);
+}
+
+.topbar {
+    width: 100%;
+    min-height: 54px;
+    padding: 8px 20px;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.topbar-title {
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    font-size: 0.98rem;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+}
+
+.topbar-subtitle {
+    margin-top: 1px;
+    color: #8a8a8a;
+    font-size: 0.72rem;
+}
+
+.sidebar,
+.sidebar-rail {
+    background: #f7f7f8;
+    border-color: rgba(0, 0, 0, 0.07);
+}
+
+.sidebar {
+    width: 58px;
+}
+
+body.sidebar-expanded .sidebar {
+    width: 260px;
+}
+
+body.sidebar-expanded .app-shell {
+    margin-left: 260px;
+    width: calc(100% - 260px);
+}
+
+.rail-btn,
+.rail-brand-btn,
+.rail-user {
+    border-radius: 8px;
+}
+
+.rail-btn {
+    height: 38px;
+    color: #686868;
+}
+
+.rail-btn:hover,
+.rail-brand-btn:hover,
+.rail-user:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: #2f2f2f;
+}
+
+.chat-shell,
+.workflow-shell,
+.modal-panel,
+.side-drawer {
+    background: var(--surface);
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    backdrop-filter: none;
+}
+
+.chat-stream {
+    padding: 30px 24px 18px;
+    gap: 30px;
+}
+
+.message {
+    width: min(100%, 820px);
+    max-width: 820px;
+    padding: 0;
+}
+
+.message-user .message-bubble {
+    padding: 10px 15px;
+    border: 0;
+    border-radius: 18px;
+    background: #f4f4f4;
+}
+
+.message-assistant .message-avatar {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    margin-top: 3px;
+}
+
+.composer-shell {
+    padding: 12px 24px calc(16px + var(--safe-bottom));
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.94) 28%, #ffffff 100%);
+}
+
+.composer-inner {
+    width: min(100%, 820px);
+}
+
+.composer-row {
+    min-height: 58px;
+    padding: 8px 12px;
+    border: 1px solid rgba(0, 0, 0, 0.14);
+    border-radius: 18px;
+    box-shadow: 0 2px 9px rgba(0, 0, 0, 0.06);
+}
+
+.composer-row:focus-within {
+    border-color: rgba(47, 111, 237, 0.42);
+    box-shadow: 0 0 0 3px rgba(47, 111, 237, 0.10), 0 3px 12px rgba(0, 0, 0, 0.07);
+}
+
+.composer-pill-toggle,
+.deep-thinking-toggle {
+    border-color: rgba(0, 0, 0, 0.11);
+    background: #ffffff;
+    box-shadow: none;
+    color: #656565;
+}
+
+.composer-pill-toggle:hover,
+.deep-thinking-toggle:hover {
+    border-color: rgba(0, 0, 0, 0.2);
+    background: #f7f7f7;
+    box-shadow: none;
+}
+
+.composer-pill-toggle:has(input:checked),
+.deep-thinking-toggle:has(input:checked) {
+    background: #eef3ff;
+    border-color: rgba(47, 111, 237, 0.3);
+    color: #2459bf;
+    box-shadow: none;
+    transform: none;
+}
+
+.composer-pill-toggle.web-search-pill:has(input:checked) {
+    background: #eef8f7;
+    border-color: rgba(20, 125, 120, 0.28);
+    color: #126e69;
+    box-shadow: none;
+}
+
+.composer-tools-row {
+    padding: 10px 4px 0;
+}
+
+.workflow-shell {
+    border-left: 1px solid rgba(0, 0, 0, 0.07);
+}
+
+:is(button, a, input, textarea):focus-visible {
+    outline: 2px solid rgba(47, 111, 237, 0.72);
+    outline-offset: 2px;
+}
+
+@media (max-width: 720px) {
+    .topbar {
+        padding: 8px 14px;
+    }
+
+    .chat-stream {
+        padding: 22px 14px 14px;
+        gap: 24px;
+    }
+
+    .composer-shell {
+        padding: 10px 12px calc(12px + var(--safe-bottom));
+    }
+}
+
 .topbar {
     display: flex;
     align-items: center;
@@ -2977,6 +3178,39 @@ body.conversation-active .intro-card .message-body {
     width: min(100%, var(--content-column-max));
     max-width: var(--content-column-max);
     margin: clamp(16px, 4vh, 42px) auto 12px;
+}
+
+/* Final Codex-like surface overrides (kept at the end for cascade stability). */
+.topbar { width: 100%; min-height: 54px; padding: 8px 20px; border-bottom: 1px solid rgba(0, 0, 0, 0.06); }
+.topbar-title { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; font-size: .98rem; font-weight: 600; }
+.topbar-subtitle { margin-top: 1px; color: #8a8a8a; font-size: .72rem; }
+.sidebar, .sidebar-rail { background: #f7f7f8; border-color: rgba(0, 0, 0, .07); }
+.sidebar { width: 58px; }
+body.sidebar-expanded .sidebar { width: 260px; }
+body.sidebar-expanded .app-shell { margin-left: 260px; width: calc(100% - 260px); }
+.rail-btn, .rail-brand-btn, .rail-user { border-radius: 8px; }
+.rail-btn { height: 38px; color: #686868; }
+.rail-btn:hover, .rail-brand-btn:hover, .rail-user:hover { background: rgba(0, 0, 0, .06); color: #2f2f2f; }
+.chat-shell, .workflow-shell, .modal-panel, .side-drawer { background: #fff; border: 0; border-radius: 0; box-shadow: none; backdrop-filter: none; }
+.chat-stream { padding: 30px 24px 18px; gap: 30px; }
+.message { width: min(100%, 820px); max-width: 820px; padding: 0; }
+.message-user .message-bubble { padding: 10px 15px; border: 0; border-radius: 18px; background: #f4f4f4; }
+.message-assistant .message-avatar { width: 28px; height: 28px; border-radius: 8px; margin-top: 3px; }
+.composer-shell { padding: 12px 24px calc(16px + var(--safe-bottom)); background: linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.94) 28%, #fff 100%); }
+.composer-inner { width: min(100%, 820px); }
+.composer-row { min-height: 58px; padding: 8px 12px; border: 1px solid rgba(0,0,0,.14); border-radius: 18px; box-shadow: 0 2px 9px rgba(0,0,0,.06); }
+.composer-row:focus-within { border-color: rgba(47,111,237,.42); box-shadow: 0 0 0 3px rgba(47,111,237,.1), 0 3px 12px rgba(0,0,0,.07); }
+.composer-pill-toggle, .deep-thinking-toggle { border-color: rgba(0,0,0,.11); background: #fff; box-shadow: none; color: #656565; }
+.composer-pill-toggle:hover, .deep-thinking-toggle:hover { border-color: rgba(0,0,0,.2); background: #f7f7f7; box-shadow: none; }
+.composer-pill-toggle:has(input:checked), .deep-thinking-toggle:has(input:checked) { background: #eef3ff; border-color: rgba(47,111,237,.3); color: #2459bf; box-shadow: none; transform: none; }
+.composer-pill-toggle.web-search-pill:has(input:checked) { background: #eef8f7; border-color: rgba(20,125,120,.28); color: #126e69; box-shadow: none; }
+.composer-tools-row { padding: 10px 4px 0; }
+.workflow-shell { border-left: 1px solid rgba(0,0,0,.07); }
+:is(button, a, input, textarea):focus-visible { outline: 2px solid rgba(47,111,237,.72); outline-offset: 2px; }
+@media (max-width: 720px) {
+    .topbar { padding: 8px 14px; }
+    .chat-stream { padding: 22px 14px 14px; gap: 24px; }
+    .composer-shell { padding: 10px 12px calc(12px + var(--safe-bottom)); }
 }
 
 body.onboarding-active .chat-shell {
