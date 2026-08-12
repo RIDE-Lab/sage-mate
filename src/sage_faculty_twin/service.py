@@ -8096,12 +8096,13 @@ class DigitalTwinService:
         to the normal SAGE workflow.
         """
         question = str(request.question or "").strip()
+        support = self._build_support()
         effective_request = request
         recent_context = ""
         was_resolved_followup = False
         if request.conversation_id and self._question_needs_recent_context(question):
-            recent_context = self._format_recent_session_context(request)
-            expanded = self._expand_followup_question(question, recent_context)
+            recent_context = support._format_recent_session_context(request)
+            expanded = support._expand_followup_question(question, recent_context)
             if expanded != question:
                 # Reuse the local evidence lane for resolvable follow-ups;
                 # this keeps a short continuation from falling into a slow
@@ -8144,7 +8145,6 @@ class DigitalTwinService:
         if not any(marker in question for marker in markers):
             return None
 
-        support = self._build_support()
         intent = support._build_fallback_interaction_intent(request)
         course_question = contains_marker(question, COURSE_FACT_MARKERS) or any(
             marker in question for marker in ("刚开始学大模型推理", "学习路线")
