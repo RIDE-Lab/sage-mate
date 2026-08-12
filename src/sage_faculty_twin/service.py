@@ -2539,6 +2539,9 @@ class FacultyTwinWorkflowSupport:
             "研究什么",
             "课题组研究",
             "当前工作",
+            "本科生",
+            "学生参与",
+            "适合参与",
         )
         stack_fact_markers = (
             "sage 和 vllm-hust",
@@ -8093,10 +8096,23 @@ class DigitalTwinService:
         to the normal SAGE workflow.
         """
         question = str(request.question or "").strip()
+        effective_request = request
+        recent_context = ""
+        was_resolved_followup = False
+        if request.conversation_id and self._question_needs_recent_context(question):
+            recent_context = self._format_recent_session_context(request)
+            expanded = self._expand_followup_question(question, recent_context)
+            if expanded != question:
+                # Reuse the local evidence lane for resolvable follow-ups;
+                # this keeps a short continuation from falling into a slow
+                # full-model workflow merely because its subject is omitted.
+                effective_request = request.model_copy(update={"question": expanded})
+                question = expanded
+                was_resolved_followup = True
         if (
             not self._is_light_request(request)
             or len(question) > 80
-            or self._question_needs_recent_context(question)
+            or (self._question_needs_recent_context(question) and not was_resolved_followup)
         ):
             return None
         if any(
@@ -8116,6 +8132,7 @@ class DigitalTwinService:
             "课题组是做什么", "你们组主要做什么",
             "老师主要研究什么", "老师研究什么",
             "主要研究方向", "研究方向是什么",
+            "本科生", "学生参与", "适合参与",
             "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
             "课程内容", "课程介绍", "学哪些内容", "会讲什么",
             "加入课题组", "加入你们组", "招生要求", "申请加入",
@@ -8184,7 +8201,9 @@ class DigitalTwinService:
                 workflow_action="answer",
                 decision_mode="local_evidence_fast_path",
             )
-        query = support._build_knowledge_query(request, intent)
+        query = support._build_knowledge_query(
+            effective_request, intent, recent_session_context=recent_context
+        )
         raw_hits = self._knowledge_store.search(
             query,
             visitor_profile=request.visitor_profile,
@@ -8198,7 +8217,7 @@ class DigitalTwinService:
             seen_ids = {hit.document_id for hit in floor_hits}
             hits = floor_hits + [hit for hit in hits if hit.document_id not in seen_ids]
         context = ChatWorkflowContext(
-            request=request,
+            request=effective_request,
             conversation_id=request.conversation_id or str(uuid4()),
             owner_name=self._settings.owner_name,
             used_model=self._llm_client.model_name,
