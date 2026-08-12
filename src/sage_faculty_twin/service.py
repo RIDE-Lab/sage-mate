@@ -2495,6 +2495,9 @@ class FacultyTwinWorkflowSupport:
         if not refers_to_other_teacher and (
             is_identity_alias_question
             or contains_marker(question, OWNER_IDENTITY_MARKERS)
+        ) and not any(
+            marker in question
+            for marker in ("研究方向", "主要研究", "研究主线", "当前工作", "本科生", "学生参与")
         ):
             candidates = [
                 hit
