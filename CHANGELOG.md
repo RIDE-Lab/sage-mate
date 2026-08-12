@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v4.6.4 - 2026-08-12
+
+### Fixed
+
+- Shortcut responses now expose context reuse, local retrieval, workflow trace, memory write-back, and model context capacity instead of rendering all context fields as zero.
+- The token/context badge now remains visible for model-bypass responses and clearly reports zero generated tokens rather than hiding the metadata.
+
 ## v4.6.3 - 2026-08-12
 
 ### Fixed

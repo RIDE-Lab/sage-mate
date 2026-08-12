@@ -32,6 +32,9 @@ def test_fast_answer_persists_exchange_for_follow_up(tmp_path) -> None:
     record = service._conversation_store.get_record(persisted.exchange_id)
     assert record is not None
     assert record.question == "你好"
+    assert persisted.memory_write_back is True
+    assert len(persisted.workflow_trace) == 4
+    assert persisted.token_usage is not None
     assert response.used_model == "sage-fast-path"
     assert "课题组" in response.answer
 

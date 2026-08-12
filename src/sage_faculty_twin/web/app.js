@@ -10280,7 +10280,7 @@ function formatTokenCount(n) {
 
 function updateTokenUsageBadge(usage) {
     const badge = document.getElementById("token-usage-badge");
-    if (!badge || !usage || !usage.total_tokens) return;
+    if (!badge || !usage || (!usage.total_tokens && !usage.max_context_length)) return;
     badge.hidden = false;
     const prompt = usage.prompt_tokens || 0;
     const completion = usage.completion_tokens || 0;

@@ -8072,6 +8072,11 @@ class DigitalTwinService:
         if response.exchange_id:
             return response
         conversation_id = response.conversation_id or request.conversation_id or str(uuid4())
+        prior_records = self._conversation_store.list_recent_conversation_records(
+            conversation_id,
+            exclude_question=request.question,
+            limit=4,
+        )
         record = self._conversation_store.add_exchange(
             request,
             conversation_id=conversation_id,
@@ -8082,11 +8087,37 @@ class DigitalTwinService:
             booking_result=response.booking_result,
             web_search_hits=response.web_search_hits,
         )
+        trace = [
+            WorkflowTraceStep(
+                key="bootstrap", title="接收用户请求", summary="已建立当前会话。",
+                detail="快捷路径已接收请求，未启动完整模型工作流。", status="completed",
+            ),
+            WorkflowTraceStep(
+                key="memory_retrieve", title="找上下文",
+                summary=(f"复用了最近 {len(prior_records)} 条会话记录。" if prior_records else "本轮无历史会话上下文。"),
+                detail=("快捷路径读取了同一会话的历史主题，用于解析追问。" if prior_records else "本轮不需要历史会话上下文。"),
+                status="completed",
+            ),
+            WorkflowTraceStep(
+                key="knowledge_retrieve", title="知识检索",
+                summary=f"命中本地 {len(response.knowledge_hits)} 条公开资料。",
+                detail="快捷证据路径直接使用本地知识库，未调用模型。", status="completed",
+                parallel_group="retrieval",
+            ),
+            WorkflowTraceStep(
+                key="response_render", title="返回结果", summary="已返回快捷路径结果。",
+                detail="回答已通过统一交付边界并写入会话记忆。", status="completed",
+            ),
+        ]
+        max_context = int(getattr(self._llm_client, "model_max_len", 0) or 0)
         return response.model_copy(
             update={
                 "conversation_id": conversation_id,
                 "exchange_id": record.memory_id,
                 "memory_write_back": True,
+                "memory_used": bool(prior_records),
+                "workflow_trace": trace,
+                "token_usage": TokenUsage(max_context_length=max_context),
             }
         )
 
