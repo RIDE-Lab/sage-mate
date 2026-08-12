@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.10 - 2026-08-12
+
+### Fixed
+
+- Darkened the cyan gradient stops used behind deep-thinking labels so every stop keeps white text at least 4.5:1 contrast.
+
 ## v4.6.9 - 2026-08-12
 
 ### Fixed

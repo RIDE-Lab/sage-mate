@@ -5056,7 +5056,9 @@ body.sidebar-expanded .rail-user {
 .deep-thinking-toggle:has(input:checked),
 .composer-pill-toggle.is-active,
 .deep-thinking-toggle.is-active {
-    background: linear-gradient(135deg, #3f4fd0 0%, #6549e8 54%, #178fae 100%);
+    /* Every stop is WCAG-safe for white label/icon text; bright cyan remains
+       reserved for the border and glow, never behind glyphs. */
+    background: linear-gradient(135deg, #3f4fd0 0%, #6549e8 54%, #0b7188 100%);
     border-color: rgba(150, 220, 255, 0.72);
     color: #ffffff;
     box-shadow: 0 0 0 3px rgba(109, 124, 255, 0.22), 0 10px 26px rgba(39, 213, 233, 0.2);
@@ -5065,7 +5067,7 @@ body.sidebar-expanded .rail-user {
 
 .composer-pill-toggle.is-processing,
 .deep-thinking-toggle.is-processing {
-    background: linear-gradient(110deg, #3f4fd0 0%, #7c4dff 42%, #22c9df 68%, #3f4fd0 100%);
+    background: linear-gradient(110deg, #3f4fd0 0%, #7c4dff 42%, #0b7188 68%, #3f4fd0 100%);
     background-size: 220% 100%;
     border-color: rgba(180, 235, 255, 0.9);
     color: #ffffff;
@@ -5075,7 +5077,7 @@ body.sidebar-expanded .rail-user {
 /* Processing must win over the checked/active rule while the request is live. */
 .composer-pill-toggle.is-active.is-processing,
 .deep-thinking-toggle.is-active.is-processing {
-    background: linear-gradient(110deg, #3f4fd0 0%, #7c4dff 42%, #22c9df 68%, #3f4fd0 100%);
+    background: linear-gradient(110deg, #3f4fd0 0%, #7c4dff 42%, #0b7188 68%, #3f4fd0 100%);
     background-size: 220% 100%;
     border-color: rgba(180, 235, 255, 0.9);
     color: #ffffff;
