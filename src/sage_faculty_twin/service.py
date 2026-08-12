@@ -227,6 +227,16 @@ from .skill_runner import SkillRunner
 from .skill_tools import SkillToolRegistry
 from .skills import SkillContext
 from .workflow_planner import DeterministicWorkflowPlanner, PlannerDecision
+from .query_routing_catalog import (
+    COURSE_FACT_MARKERS,
+    OWNER_CONTEXT_MARKERS,
+    OWNER_IDENTITY_MARKERS,
+    SYSTEM_PROJECT_MARKERS,
+    contains_marker,
+    is_explicit_other_teacher_query,
+    is_owner_identity_query,
+    normalize_query,
+)
 
 
 def _resolve_distribution_version(*candidates: str) -> str:
@@ -2455,30 +2465,12 @@ class FacultyTwinWorkflowSupport:
             context.knowledge_hits = []
             return "当前可见的公开资料没有明确联系方式；请通过课题组公开主页或正式邮件渠道联系，不要猜测私人联系方式。"
 
-        identity_fact_markers = (
-            "张书豪老师是谁",
-            "张书豪是谁",
-            "介绍张书豪",
-            "张书豪简介",
-            "张老师是谁",
-            "介绍一下张老师",
-            "介绍张老师",
-            "张老师简介",
-            "课题组主要做什么",
-            "课题组是做什么",
-            "你们组主要做什么",
-            "实验室主要做什么",
-        )
-        normalized_identity_question = re.sub(r"[\s。！？!?，,：:]+$", "", question)
-        is_identity_alias_question = normalized_identity_question in {
-            "张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "张书豪老师是谁", "老师", "老师是谁"
-        }
-        refers_to_other_teacher = any(
-            marker in question for marker in ("另一个张老师", "其他张老师", "某位张老师", "某个张老师")
-        )
+        normalized_identity_question = normalize_query(question)
+        is_identity_alias_question = is_owner_identity_query(normalized_identity_question)
+        refers_to_other_teacher = is_explicit_other_teacher_query(question)
         if not refers_to_other_teacher and (
             is_identity_alias_question
-            or any(marker in question or marker in lowered for marker in identity_fact_markers)
+            or contains_marker(question, OWNER_IDENTITY_MARKERS)
         ):
             candidates = [
                 hit
@@ -2533,19 +2525,7 @@ class FacultyTwinWorkflowSupport:
             "sagevdb",
             "neuromem",
         )
-        system_project_question = any(
-            marker in question or marker in lowered
-            for marker in (
-                "有哪些系统",
-                "哪些系统",
-                "系统或开源项目",
-                "开源项目",
-                "系统建设",
-                "代表性系统",
-                "课题组目前有",
-                "实验室目前有",
-            )
-        )
+        system_project_question = contains_marker(question, SYSTEM_PROJECT_MARKERS)
         if system_project_question:
             floor_hits = self._system_project_floor_hits(question)
             candidates = [
@@ -5078,7 +5058,7 @@ class FacultyTwinWorkflowSupport:
         return "\n".join(sections) + "\n"
 
     _IDENTITY_QUESTION_PATTERN = re.compile(
-        r"你是谁|介绍.{0,4}你|张书豪.{0,4}(是谁|简介|介绍)|张老师是谁|介绍.{0,4}张老师|张老师简介|课题组主要做什么|课题组研究|实验室主要做什么|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
+        "|".join(re.escape(marker) for marker in (*OWNER_IDENTITY_MARKERS, *OWNER_CONTEXT_MARKERS))
     )
     _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
         "主页资料｜张书豪",
@@ -5089,16 +5069,8 @@ class FacultyTwinWorkflowSupport:
     )
 
     def _identity_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
-        normalized = re.sub(r"[\s。！？!?，,：:]+$", "", str(question or "").strip())
-        identity_alias = normalized in {"张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "张书豪老师是谁", "老师", "老师是谁"} or (
-            "张老师" in normalized
-            and not any(marker in normalized for marker in ("另一个", "其他", "某位", "某个"))
-        )
-        identity_alias = identity_alias or (
-            "张书豪" in normalized
-            and any(marker in normalized for marker in ("是谁", "简介", "介绍"))
-        )
-        if not question or (not identity_alias and not self._IDENTITY_QUESTION_PATTERN.search(question)):
+        normalized = normalize_query(question)
+        if not question or (not is_owner_identity_query(normalized) and not self._IDENTITY_QUESTION_PATTERN.search(question)):
             return []
         hits: list[KnowledgeSearchHit] = []
         for record in self._knowledge_store.list_documents():
@@ -5130,17 +5102,7 @@ class FacultyTwinWorkflowSupport:
         model synthesis is attempted.
         """
         lowered = str(question or "").lower()
-        markers = (
-            "有哪些系统",
-            "哪些系统",
-            "系统或开源项目",
-            "开源项目",
-            "系统建设",
-            "代表性系统",
-            "课题组目前有",
-            "实验室目前有",
-        )
-        if not any(marker in question or marker in lowered for marker in markers):
+        if not contains_marker(question, SYSTEM_PROJECT_MARKERS):
             return []
         preferred_titles = (
             "主页资料｜当前系统建设",
@@ -5794,17 +5756,7 @@ class FacultyTwinWorkflowSupport:
                 decision_mode="direct_answer",
                 confidence=0.98,
             )
-        system_project_markers = (
-            "有哪些系统",
-            "哪些系统",
-            "系统或开源项目",
-            "开源项目",
-            "系统建设",
-            "代表性系统",
-            "课题组目前有",
-            "实验室目前有",
-        )
-        if any(marker in question or marker in fact_lowered for marker in system_project_markers):
+        if contains_marker(question, SYSTEM_PROJECT_MARKERS):
             return InteractionIntent(
                 action="answer",
                 domain="research",
@@ -8298,10 +8250,9 @@ class DigitalTwinService:
         ):
             return None
         markers = (
-            "张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "老师是谁", "老师呢",
-            "张老师是谁", "介绍一下张老师", "介绍张老师", "张老师简介",
-            "课题组主要做什么", "课题组是做什么", "你们组主要做什么",
-            "实验室主要做什么", "老师主要研究什么", "老师研究什么",
+            *OWNER_IDENTITY_MARKERS, *OWNER_CONTEXT_MARKERS,
+            "课题组是做什么", "你们组主要做什么",
+            "老师主要研究什么", "老师研究什么",
             "主要研究方向", "研究方向是什么",
             "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
             "课程内容", "课程介绍", "学哪些内容", "会讲什么",
@@ -8309,7 +8260,7 @@ class DigitalTwinService:
             "需要什么准备", "提前准备", "刚开始学大模型推理", "学习路线",
             "SAGE 和 vLLM-HUST", "SAGE与vLLM-HUST", "SAGE 和 vLLM",
             "SAGE与vLLM", "SageVDB", "NeuroMem", "分别负责什么",
-            "有哪些系统", "哪些系统", "开源项目", "系统建设", "代表性系统",
+            *SYSTEM_PROJECT_MARKERS,
         )
         if not any(marker in question for marker in markers):
             return None
