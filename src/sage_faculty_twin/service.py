@@ -105,6 +105,13 @@ from .interaction_policy import (
     requires_human_handoff,
 )
 from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
+from .knowledge_authority import (
+    IDENTITY_FLOOR_TITLES,
+    OWNER_PROFILE_TITLE,
+    OWNER_SYSTEM_OVERVIEW_TITLE,
+    PUBLIC_COURSE_TAGS,
+    is_owner_profile_source,
+)
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
 from .llm_client import VllmChatClient
@@ -2486,8 +2493,7 @@ class FacultyTwinWorkflowSupport:
             ]
             canonical_identity = [
                 hit for hit in candidates
-                if hit.title == "主页资料｜张书豪"
-                or ("homepage:contents/home.md#张书豪" in (hit.source_name or ""))
+                if is_owner_profile_source(hit.title, hit.source_name)
             ]
             if canonical_identity:
                 candidates = canonical_identity
@@ -2496,7 +2502,7 @@ class FacultyTwinWorkflowSupport:
                 return "当前可见的公开资料不足以确认这项介绍；我不使用通用模板补写事实。可以选择联网检索，或补充想了解的具体方向。"
             candidates.sort(
                 key=lambda hit: (
-                    0 if "主页资料｜张书豪" in hit.title else 1,
+                    0 if is_owner_profile_source(hit.title, hit.source_name) else 1,
                     0 if "研究" in hit.title else 1,
                     hit.title,
                 )
@@ -2543,7 +2549,7 @@ class FacultyTwinWorkflowSupport:
             # accumulation is useful for broader research questions, but
             # should not appear as an unexplained extra citation here.
             current_overview = [
-                hit for hit in candidates if hit.title == "主页资料｜当前系统建设"
+                hit for hit in candidates if hit.title == OWNER_SYSTEM_OVERVIEW_TITLE
             ]
             if current_overview:
                 candidates = current_overview
@@ -5061,13 +5067,7 @@ class FacultyTwinWorkflowSupport:
     _IDENTITY_QUESTION_PATTERN = re.compile(
         "|".join(re.escape(marker) for marker in (*OWNER_IDENTITY_MARKERS, *OWNER_CONTEXT_MARKERS))
     )
-    _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
-        "主页资料｜张书豪",
-        "主页资料｜研究板块",
-        "主页资料｜当前系统建设",
-        "主页资料｜招生与合作",
-        "研究总览｜一、共享状态访问、调度与运行时管理",
-    )
+    _IDENTITY_FLOOR_TITLES: tuple[str, ...] = IDENTITY_FLOOR_TITLES
 
     def _identity_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
         normalized = normalize_query(question)
@@ -8187,13 +8187,8 @@ class DigitalTwinService:
 
         support = self._build_support()
         intent = support._build_fallback_interaction_intent(request)
-        course_question = any(
-            marker in question
-            for marker in (
-                "课程主要学什么", "大模型推理基础设施课程", "这门课学什么",
-                "课程内容", "课程介绍", "学哪些内容", "会讲什么",
-                "刚开始学大模型推理", "学习路线",
-            )
+        course_question = contains_marker(question, COURSE_FACT_MARKERS) or any(
+            marker in question for marker in ("刚开始学大模型推理", "学习路线")
         )
         if course_question:
             course_hits: list[KnowledgeSearchHit] = []
@@ -8204,7 +8199,7 @@ class DigitalTwinService:
                 except (OSError, ValueError):
                     continue
                 tags = [str(tag) for tag in record.get("tags", [])]
-                if not ({"teaching", "courseware"} & {tag.lower() for tag in tags}):
+                if not (PUBLIC_COURSE_TAGS & {tag.lower() for tag in tags}):
                     continue
                 course_hits.append(
                     KnowledgeSearchHit(
@@ -8228,12 +8223,16 @@ class DigitalTwinService:
                 )
                 for hit in course_hits
             ]
-            topics = "工作负载与评价指标、请求生命周期与调度、KV Cache 和推理系统架构，以及开源系统实践和实验验证"
+            topic_lines = []
+            for hit in course_hits:
+                excerpt = re.sub(r"\s+", " ", hit.excerpt or "").strip()
+                if excerpt:
+                    topic_lines.append(f"- {excerpt[:180]}")
+            topics = "\n".join(dict.fromkeys(topic_lines)) or "- 当前课程资料未提供可提炼的主题摘要。"
             return ChatResponse(
                 answer=(
                     "基于当前已加载的公开课程资料，这门课主要围绕大模型推理基础设施展开，重点包括："
-                    f"{topics}。课程通常还会通过最小运行、指标观测、调度/连续批处理和课程项目，把概念落实到可复现实验。"
-                    "具体周次和作业要求以课程资料中的最新安排为准。"
+                    f"\n{topics}\n课程的具体周次和作业要求以课程资料中的最新安排为准。"
                 ),
                 owner_name=self._settings.owner_name,
                 used_model=self._llm_client.model_name,
