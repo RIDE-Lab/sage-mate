@@ -1072,8 +1072,8 @@ body.drawer-pinned .history-rail {
     display: none;
     width: 100%;
     padding: 6px 12px;
-    background: rgba(250, 250, 252, 0.9);
-    border: 1px solid rgba(32, 33, 35, 0.08);
+    background: var(--surface-solid);
+    border: 1px solid var(--line);
     border-radius: 8px;
     cursor: pointer;
     align-items: center;
@@ -1085,8 +1085,8 @@ body.drawer-pinned .history-rail {
 }
 
 .footer-toggle-btn:hover {
-    background: rgba(238, 242, 255, 0.9);
-    color: var(--ink);
+    background: var(--surface-hover);
+    color: var(--text-primary);
 }
 
 .footer-toggle-icon {
@@ -1137,8 +1137,8 @@ body.drawer-pinned .history-rail {
     gap: 6px 10px;
     padding: 7px 14px;
     border-radius: 12px 12px 0 0;
-    background: linear-gradient(135deg, rgba(238, 242, 255, 0.82) 0%, rgba(237, 250, 243, 0.72) 100%);
-    border: 1px solid rgba(32, 33, 35, 0.06);
+    background: linear-gradient(135deg, rgba(20, 43, 77, 0.95), rgba(25, 58, 91, 0.88));
+    border: 1px solid var(--line);
     border-bottom: none;
 }
 
@@ -1150,9 +1150,9 @@ body.drawer-pinned .history-rail {
     gap: 6px 10px;
     padding: 7px 14px;
     border-radius: 0 0 12px 12px;
-    background: rgba(250, 250, 252, 0.78);
-    border: 1px solid rgba(32, 33, 35, 0.06);
-    border-top: 1px solid rgba(32, 33, 35, 0.04);
+    background: rgba(13, 29, 53, 0.92);
+    border: 1px solid var(--line);
+    border-top: 1px solid var(--line);
 }
 
 .app-stack-label {
@@ -1331,7 +1331,7 @@ body.drawer-pinned .history-rail {
     z-index: 6;
     padding: 4px 12px;
     border-radius: 999px;
-    border: 1px solid rgba(32, 33, 35, 0.12);
+    border: 1px solid var(--line-strong);
     background: rgba(255, 255, 255, 0.64);
     color: rgba(32, 33, 35, 0.62);
     font-size: 0.78rem;
@@ -2281,12 +2281,12 @@ body.drawer-pinned .history-rail {
 .message-pending .message-frame {
     padding: 12px 14px;
     border-radius: 16px;
-    border: 1px dashed rgba(36, 90, 166, 0.22);
-    background: linear-gradient(180deg, rgba(239, 246, 255, 0.78), rgba(255, 252, 246, 0.86));
+    border: 1px dashed rgba(109, 124, 255, 0.5);
+    background: linear-gradient(180deg, rgba(20, 43, 77, 0.94), rgba(13, 29, 53, 0.92));
 }
 
 .message-pending .message-body {
-    color: #35516f;
+    color: var(--text-secondary);
 }
 
 .message-pending .message-body::after {
@@ -2307,8 +2307,8 @@ body.drawer-pinned .history-rail {
     gap: 10px;
     padding: 12px 14px;
     border-radius: 16px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    background: rgba(255, 255, 255, 0.44);
+    border: 1px solid var(--line);
+    background: rgba(20, 43, 77, 0.62);
 }
 
 .thinking-panel,
@@ -2317,16 +2317,16 @@ body.drawer-pinned .history-rail {
     gap: 12px;
     padding: 12px 14px;
     border-radius: 16px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(250, 246, 240, 0.64));
-    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    border: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(20, 43, 77, 0.94), rgba(13, 29, 53, 0.92));
+    box-shadow: inset 0 1px 0 rgba(166, 201, 255, 0.14), var(--shadow);
 }
 
 .thinking-panel.is-deep-mode {
     border-color: color-mix(in srgb, var(--accent) 28%, transparent);
     background:
         radial-gradient(circle at 8% 10%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 38%),
-        linear-gradient(180deg, rgba(247, 248, 255, 0.9), rgba(250, 246, 240, 0.72));
+        linear-gradient(180deg, rgba(28, 57, 114, 0.92), rgba(13, 29, 53, 0.94));
     box-shadow:
         inset 0 1px 0 rgba(255, 255, 255, 0.72),
         0 10px 28px color-mix(in srgb, var(--accent) 9%, transparent);
@@ -4162,8 +4162,8 @@ body.onboarding-active .chat-shell .onboarding-done {
     height: 100vh;
     z-index: 100;
     display: flex;
-    background: #f9f9f9;
-    border-right: 1px solid rgba(0, 0, 0, 0.06);
+    background: rgba(4, 10, 22, 0.96);
+    border-right: 1px solid var(--line);
     overflow: hidden;
     transition: width 200ms ease;
 }
@@ -4178,7 +4178,7 @@ body.sidebar-expanded .sidebar {
     flex-direction: column;
     padding: 8px 8px;
     gap: 2px;
-    background: #f9f9f9;
+    background: rgba(4, 10, 22, 0.96);
     overflow-y: auto;
 }
 
@@ -4197,7 +4197,7 @@ body.sidebar-expanded .sidebar {
     width: 100%;
     margin-top: 8px;
     padding-bottom: 8px;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+    border-bottom: 1px solid var(--line);
 }
 
 .rail-shortcuts {
@@ -4500,8 +4500,8 @@ body.sidebar-expanded .rail-user {
     padding: 12px 16px;
     border: 1px solid rgba(32, 33, 35, 0.12);
     border-radius: 28px;
-    background: #ffffff;
-    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+    background: var(--surface-solid);
+    box-shadow: var(--shadow);
 }
 
 .code-approval-menu {
