@@ -4283,11 +4283,11 @@ body.sidebar-expanded .rail-history {
 }
 
 .rail-brand-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--surface-hover);
 }
 
 .rail-brand-btn:active {
-    background: rgba(0, 0, 0, 0.1);
+    background: var(--surface-muted);
 }
 
 .rail-brand-btn svg {
@@ -4302,7 +4302,7 @@ body.sidebar-expanded .rail-history {
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--muted);
     cursor: pointer;
     transition: all 150ms ease;
     text-decoration: none;
@@ -4331,7 +4331,7 @@ body.sidebar-expanded .rail-btn {
     display: none;
     font-size: 0.85rem;
     font-weight: 500;
-    color: rgba(0, 0, 0, 0.7);
+    color: var(--text-secondary);
     overflow: hidden;
     text-overflow: ellipsis;
 }
@@ -4362,7 +4362,7 @@ body.sidebar-expanded .profile-switcher-btn svg {
 .rail-sublabel {
     display: none;
     max-width: 100%;
-    color: rgba(0, 0, 0, 0.42);
+    color: var(--muted);
     font-size: 0.72rem;
     font-weight: 600;
     overflow: hidden;
@@ -4382,8 +4382,8 @@ body.sidebar-expanded .rail-sublabel {
 }
 
 .rail-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: rgba(0, 0, 0, 0.8);
+    background: var(--surface-hover);
+    color: var(--text-primary);
 }
 
 .rail-btn:hover .ui-icon {
@@ -4391,7 +4391,7 @@ body.sidebar-expanded .rail-sublabel {
 }
 
 .rail-btn:active {
-    background: rgba(0, 0, 0, 0.1);
+    background: var(--surface-muted);
 }
 
 .rail-user {
