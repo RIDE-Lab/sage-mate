@@ -2748,6 +2748,12 @@ class FacultyTwinWorkflowSupport:
             return "资料包含推理系统 Benchmark 指南，说明课程/资源也覆盖性能评测方法。"
         if "三个研究方向" in excerpt:
             return "课程组织方式是背景、三个研究方向、代表论文展开和开放问题。"
+        if "tutorial" in lowered or "教程" in lowered:
+            return f"课程资料包含教程主题：{title}。"
+        if "实验" in lowered or "project sheet" in lowered or "experimental sheet" in lowered:
+            return f"课程资料包含实验/项目材料：{title}。"
+        if "讲" in title or "lecture" in lowered:
+            return f"课程资料包含讲次：{title}。"
         return FacultyTwinWorkflowSupport._grounded_excerpt_for_answer(hit, title)
 
     def _build_answer_relevance_question(self, context: ChatWorkflowContext) -> str:
