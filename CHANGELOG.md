@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v4.6.3 - 2026-08-12
+
+### Fixed
+
+- Migrated application and vLLM proxy startup/shutdown to FastAPI lifespan handlers.
+- Synchronized the machine-local application model label with the served DeepSeek backend to remove misleading startup fallback warnings.
+
 ## v4.6.2 - 2026-08-12
 
 ### Changed

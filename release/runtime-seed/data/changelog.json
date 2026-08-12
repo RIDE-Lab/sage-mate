@@ -1,5 +1,14 @@
 [
   {
+    "version": "v4.6.3",
+    "date": "2026-08-12",
+    "summary": "生命周期与运行模型标识修复",
+    "highlights": [
+      "应用和 vLLM 代理迁移到 FastAPI lifespan 生命周期管理",
+      "运行模型标识与实际 DeepSeek 后端同步，消除误导性回退日志"
+    ]
+  },
+  {
     "version": "v4.6.2",
     "date": "2026-08-12",
     "summary": "上下文追问、引用校验与响应可靠性修复",

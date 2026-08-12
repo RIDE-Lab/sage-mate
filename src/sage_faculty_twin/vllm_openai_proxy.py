@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
@@ -165,7 +166,20 @@ def create_app(
     settings: ProxySettings | None = None,
     client_factory: Callable[[ProxySettings], httpx.AsyncClient] | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="Sage Mate vLLM OpenAI Proxy")
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        proxy_settings = app.state.proxy_settings or load_proxy_settings()
+        _validate_settings(proxy_settings)
+        app.state.proxy_settings = proxy_settings
+        app.state.proxy_client = client_factory(proxy_settings)
+        try:
+            yield
+        finally:
+            proxy_client = app.state.proxy_client
+            if proxy_client is not None:
+                await proxy_client.aclose()
+
+    app = FastAPI(title="Sage Mate vLLM OpenAI Proxy", lifespan=lifespan)
     app.state.proxy_settings = settings
     app.state.proxy_client = None
 
@@ -198,19 +212,6 @@ def create_app(
             "upstream_base_url": proxy_settings.upstream_base_url,
             "path_prefix": proxy_settings.path_prefix,
         }
-
-    @app.on_event("startup")
-    async def _startup() -> None:
-        proxy_settings = app.state.proxy_settings or load_proxy_settings()
-        _validate_settings(proxy_settings)
-        app.state.proxy_settings = proxy_settings
-        app.state.proxy_client = client_factory(proxy_settings)
-
-    @app.on_event("shutdown")
-    async def _shutdown() -> None:
-        proxy_client = app.state.proxy_client
-        if proxy_client is not None:
-            await proxy_client.aclose()
 
     @app.api_route("/{full_path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
     async def proxy(full_path: str, request: Request) -> Response:

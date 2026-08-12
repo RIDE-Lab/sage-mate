@@ -12,6 +12,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -139,7 +140,16 @@ def configure_local_cors(target_app: FastAPI) -> None:
     )
 
 
-llm_app = FastAPI(title="Sage Mate", version="1.1")
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
+llm_app = FastAPI(title="Sage Mate", version="1.1", lifespan=_app_lifespan)
 configure_local_cors(llm_app)
 
 
@@ -1735,14 +1745,12 @@ async def slack_events(
     return JSONResponse({"ok": True})
 
 
-@llm_app.on_event("startup")
 async def startup_event() -> None:
     if settings.warm_service_on_startup:
         instance = await asyncio.to_thread(service.ensure_initialized)
         await asyncio.to_thread(instance.warm_fixed_prefix_cache)
 
 
-@llm_app.on_event("shutdown")
 async def shutdown_event() -> None:
     if service.is_initialized():
         await service.aclose()
