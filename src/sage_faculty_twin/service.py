@@ -102,6 +102,12 @@ from .answer_rendering import (
     grounded_course_fact_line,
     grounded_excerpt,
 )
+from .context_routing import (
+    expand_followup_question,
+    is_light_request,
+    looks_like_contextual_follow_up,
+    question_needs_recent_context,
+)
 from .follow_up_store import FollowUpQueueStore
 from .interaction_policy import (
     InteractionPolicyEngine,
@@ -5971,27 +5977,7 @@ class FacultyTwinWorkflowSupport:
         question: str,
         recent_session_context: str | None,
     ) -> bool:
-        if not recent_session_context:
-            return False
-        normalized = question.strip()
-        if not normalized:
-            return False
-        if self._SHORT_FOLLOWUP_PATTERN.match(normalized):
-            return True
-        markers = (
-            "刚才",
-            "前面",
-            "上面",
-            "那个方向",
-            "这个方向",
-            "那个方案",
-            "这个方案",
-            "继续",
-            "下一步",
-            "值得继续",
-            "风险是什么",
-        )
-        return any(marker in normalized for marker in markers)
+        return looks_like_contextual_follow_up(question, recent_session_context)
 
     def _looks_like_collaboration_preparation_question(self, question: str) -> bool:
         lowered = question.lower()
@@ -6019,31 +6005,7 @@ class FacultyTwinWorkflowSupport:
     def _expand_followup_question(
         self, question: str, recent_session_context: str | None
     ) -> str:
-        normalized = (question or "").strip()
-        if not normalized or not recent_session_context:
-            return question
-        if len(normalized) >= 25 and not self._SHORT_FOLLOWUP_PATTERN.match(normalized):
-            return question
-        # Pull up to two most-recent user turns out of the formatted context.
-        prior_user_turns: list[str] = []
-        for raw_line in recent_session_context.splitlines():
-            line = raw_line.strip()
-            # _format_recent_session_context emits lines like
-            #   "1. User: 你能帮我看论文吗"
-            # so we only keep the user-side sentences.
-            if not line:
-                continue
-            marker = line.find("User:")
-            if marker == -1:
-                continue
-            extracted = line[marker + len("User:"):].strip()
-            if extracted:
-                prior_user_turns.append(extracted)
-        if not prior_user_turns:
-            return question
-        # Keep the two most recent (already chronological in the formatted text).
-        prior = " ".join(prior_user_turns[-2:])
-        return f"{prior} {question}".strip()
+        return expand_followup_question(question, recent_session_context)
 
     def _filter_knowledge_hits_by_intent(
         self,
@@ -8036,32 +7998,11 @@ class DigitalTwinService:
 
     @staticmethod
     def _question_needs_recent_context(question: str) -> bool:
-        normalized = str(question or "").strip()
-        return any(
-            marker in normalized
-            for marker in (
-                "刚才", "前面", "上次", "之前", "上一轮", "继续", "下一步",
-                "结合我", "我提到", "刚刚说", "那个方向", "这个方向",
-                "那个方案", "这个方案", "值得继续", "按前面", "那个", "这个", "继续",
-            )
-        )
+        return question_needs_recent_context(question)
 
     @classmethod
     def _is_light_request(cls, request: ChatRequest) -> bool:
-        question = str(request.question or "").strip()
-        lowered = question.lower()
-        if (
-            not question
-            or len(question) > 120
-            or getattr(request, "deep_thinking_explicit", False)
-            or getattr(request, "web_search", False)
-            or request.attachments
-            or request.course_context
-        ):
-            return False
-        if any(marker in question for marker in ("预约", "约时间", "office hour", "meeting", "合作准备")):
-            return False
-        return not cls._question_needs_recent_context(question) or len(question) <= 32
+        return is_light_request(request)
 
     @classmethod
     def _build_lightweight_chat_response(cls, request: ChatRequest) -> ChatResponse | None:
