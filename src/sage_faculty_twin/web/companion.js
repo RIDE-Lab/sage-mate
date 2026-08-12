@@ -954,6 +954,20 @@
                 void this.root.offsetWidth;
                 this.root.classList.remove("is-positioning");
             }
+            // A restored/wandering viewport position can be stale for one
+            // frame while the mobile composer reflows. Clamp it again after
+            // measuring the live form so the companion never covers input or
+            // recommendation chips.
+            if (usesViewportPosition && this.chatShell.classList.contains("chat-empty") && !this.root.classList.contains("is-dragging")) {
+                const rect = this.root.getBoundingClientRect();
+                const bounds = this.movementBounds();
+                if (rect.bottom > formRect.top - 12 || rect.top > bounds.maxY) {
+                    this.root.classList.add("is-positioning");
+                    this.setViewportPosition(rect.left, bounds.maxY);
+                    void this.root.offsetWidth;
+                    this.root.classList.remove("is-positioning");
+                }
+            }
             globalThis.requestAnimationFrame(() => {
                 this.syncPanelPlacement();
                 this.syncScrollCue();

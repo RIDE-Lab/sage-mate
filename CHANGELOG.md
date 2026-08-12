@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.9 - 2026-08-12
+
+### Fixed
+
+- Re-clamped the mobile companion after composer reflow so it cannot cover the input or recommendation chips.
+
 ## v4.6.8 - 2026-08-12
 
 ### Fixed
