@@ -4853,6 +4853,15 @@ body.sidebar-expanded .rail-user {
     animation: composer-processing-shimmer 2s linear infinite;
 }
 
+/* Processing must win over the checked/active rule while the request is live. */
+.composer-pill-toggle.is-active.is-processing,
+.deep-thinking-toggle.is-active.is-processing {
+    background: linear-gradient(110deg, #3f4fd0 0%, #7c4dff 42%, #22c9df 68%, #3f4fd0 100%);
+    background-size: 220% 100%;
+    border-color: rgba(180, 235, 255, 0.9);
+    color: #ffffff;
+}
+
 .composer-pill-toggle:has(input:disabled),
 .deep-thinking-toggle:has(input:disabled),
 .composer-pill-toggle[aria-disabled="true"],
