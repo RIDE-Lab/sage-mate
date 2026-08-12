@@ -25,7 +25,7 @@
     --safe-bottom: env(safe-area-inset-bottom, 0px);
     --drawer-width: 340px;
     --drawer-gap: 20px;
-    --content-column-max: 720px;
+    --content-column-max: 860px;
     --mobile-layout-gutter: 12px;
     --mobile-panel-padding: 18px;
 }
@@ -3246,6 +3246,152 @@ body.conversation-active .intro-card .message-body {
     width: min(100%, var(--content-column-max));
     max-width: var(--content-column-max);
     margin: clamp(16px, 4vh, 42px) auto 12px;
+}
+
+/* Public chat first screen: give the conversation a clear, calm focal column. */
+.chat-shell.chat-empty .welcome-greeting {
+    flex-direction: column;
+    gap: 10px;
+    min-height: clamp(170px, 24vh, 250px);
+    padding: 28px 20px 10px;
+    text-align: center;
+}
+
+.chat-shell.chat-empty .greeting-text {
+    font-size: clamp(2.1rem, 4vw, 3rem);
+    letter-spacing: -0.035em;
+}
+
+.greeting-subtitle {
+    max-width: 620px;
+    margin: 0;
+    color: rgba(32, 33, 35, 0.54);
+    font-size: 0.94rem;
+    line-height: 1.6;
+}
+
+.chat-shell.chat-empty .seed-chips {
+    max-width: 760px;
+    margin: 0 auto 14px;
+    padding: 18px 20px;
+    border: 1px solid rgba(32, 33, 35, 0.09);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.78);
+    box-shadow: 0 12px 30px rgba(15, 23, 42, 0.045);
+}
+
+.chat-shell.chat-empty .seed-chips-label {
+    color: rgba(32, 33, 35, 0.5);
+    font-size: 0.82rem;
+    font-weight: 600;
+}
+
+.chat-shell.chat-empty .seed-chip {
+    min-height: 38px;
+    padding: 8px 15px;
+    border-color: rgba(99, 102, 241, 0.14);
+    background: rgba(248, 248, 255, 0.9);
+}
+
+.composer-mode-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    margin: 8px 8px 0;
+    padding: 7px 11px;
+    border: 1px solid rgba(99, 102, 241, 0.16);
+    border-radius: 10px;
+    background: rgba(245, 247, 255, 0.9);
+    color: #4f46e5;
+    font-size: 0.76rem;
+    line-height: 1.35;
+}
+
+.composer-mode-status::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    background: #6366f1;
+}
+
+.composer-mode-status[data-state="processing"] {
+    border-color: rgba(47, 111, 237, 0.25);
+    background: linear-gradient(90deg, rgba(238, 244, 255, 0.95), rgba(248, 247, 255, 0.92));
+}
+
+.composer-mode-status[data-state="processing"]::before {
+    animation: workflow-breathe 1.4s ease-in-out infinite;
+}
+
+.thinking-text-section {
+    width: 100%;
+    margin-top: 12px;
+    border: 1px solid rgba(99, 102, 241, 0.14);
+    border-radius: 15px;
+    background: rgba(248, 248, 255, 0.84);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.thinking-text-toggle {
+    justify-content: space-between;
+    min-height: 42px;
+    padding: 10px 14px;
+    color: #4f46e5;
+    font-size: 0.8rem;
+}
+
+.thinking-text-toggle::after {
+    content: "⌄";
+    margin-left: auto;
+    color: rgba(79, 70, 229, 0.55);
+    font-size: 1rem;
+    transition: transform 160ms ease;
+}
+
+.thinking-text-section[data-collapsed="false"] .thinking-text-toggle::after {
+    transform: rotate(180deg);
+}
+
+.thinking-text-body {
+    max-height: 320px;
+    padding: 0 14px 14px;
+    color: rgba(32, 33, 35, 0.62);
+    font-size: 0.8rem;
+    line-height: 1.65;
+}
+
+.composer-pill-toggle.is-active {
+    background: linear-gradient(135deg, rgba(238, 242, 255, 0.98), rgba(245, 243, 255, 0.98));
+    border-color: rgba(99, 102, 241, 0.3);
+    color: #4f46e5;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08), 0 5px 16px rgba(99, 102, 241, 0.12);
+}
+
+@media (max-width: 720px) {
+    .chat-shell.chat-empty .welcome-greeting {
+        min-height: 150px;
+        padding: 20px 10px 8px;
+    }
+
+    .greeting-subtitle {
+        max-width: 340px;
+        font-size: 0.84rem;
+    }
+
+    .chat-shell.chat-empty .seed-chips {
+        margin-bottom: 10px;
+        padding: 15px 12px;
+        border-radius: 15px;
+    }
+
+    .composer-mode-status {
+        margin-left: 4px;
+        margin-right: 4px;
+        font-size: 0.72rem;
+    }
 }
 
 /* Final Codex-like surface overrides (kept at the end for cascade stability). */

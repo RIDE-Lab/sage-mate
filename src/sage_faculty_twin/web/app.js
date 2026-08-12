@@ -185,6 +185,7 @@ let currentAppProfile = "faculty_twin";
 
 const chatForm = document.getElementById("chat-form");
 const deepThinkingCheckbox = document.getElementById("deep-thinking-checkbox");
+const composerModeStatus = document.getElementById("composer-mode-status");
 const webSearchCheckbox = document.getElementById("web-search-checkbox");
 const adminLoginForm = document.getElementById("admin-login-form");
 const userRegisterForm = document.getElementById("user-register-form");
@@ -264,6 +265,25 @@ function syncDeepThinkingPresentation() {
         "aria-label",
         active ? "深度思考已开启" : "深度思考未开启"
     );
+    if (composerModeStatus) {
+        composerModeStatus.hidden = !active;
+        composerModeStatus.dataset.state = active ? "ready" : "off";
+        composerModeStatus.textContent = active
+            ? "深度思考已开启 · 回答完成后可展开结构化过程"
+            : "";
+    }
+}
+
+function setDeepThinkingProcessing(processing) {
+    if (!composerModeStatus || !deepThinkingCheckbox?.checked) {
+        syncDeepThinkingPresentation();
+        return;
+    }
+    composerModeStatus.hidden = false;
+    composerModeStatus.dataset.state = processing ? "processing" : "ready";
+    composerModeStatus.textContent = processing
+        ? "深度思考进行中 · 正在整理完整上下文和权衡分析"
+        : "深度思考已开启 · 回答完成后可展开结构化过程";
 }
 
 deepThinkingCheckbox?.addEventListener("change", syncDeepThinkingPresentation);
@@ -1126,6 +1146,10 @@ function renderDefaultLandingForProfile() {
         chatStream.innerHTML = initialChatStreamMarkup;
         syncIntroCardPresentation();
         updateChatEmptyState();
+        // A fresh conversation restores the landing shell from the initial
+        // markup, whose greeting/chips start hidden until initialization. Make
+        // the same landing content visible when users explicitly start over.
+        showDefaultLandingContent();
     }
 }
 
@@ -1136,7 +1160,7 @@ function applyAppProfilePresentation(data = {}) {
     document.body.classList.toggle("profile-auto-scientist", currentAppProfile === "auto_scientist");
     document.body.classList.toggle("profile-faculty-twin", currentAppProfile === "faculty_twin");
     if (topbarKicker) {
-        topbarKicker.textContent = isCodeAssistantProfile() ? "Sage Mate" : "Personal Twin OS";
+        topbarKicker.textContent = isCodeAssistantProfile() ? "Sage Mate" : "SAGE Mate · 学术分身";
     }
     if (topbarTitle) {
         topbarTitle.textContent = appProfileLabel(currentAppProfile) === "Faculty Twin"
@@ -2789,6 +2813,7 @@ chatForm.addEventListener("submit", async (event) => {
     document.getElementById("chat-question").value = "";
     clearPendingChatAttachments();
     autoResizeTextarea();
+    setDeepThinkingProcessing(Boolean(explicitDeepMode));
     setChatSubmitLoading(true);
     sageCompanionController?.setRequestActive(true);
     sageCompanionController?.setState("thinking", "收到问题啦，我正在认真想一想。");
@@ -2880,6 +2905,7 @@ chatForm.addEventListener("submit", async (event) => {
         }
     }
     setChatSubmitLoading(false);
+    setDeepThinkingProcessing(false);
 
     // Auto-advance onboarding after chat response completes
     if (wasOnboarding && onboardingActive) {
