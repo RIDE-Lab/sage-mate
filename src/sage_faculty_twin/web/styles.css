@@ -3289,7 +3289,14 @@ html[data-theme="light"] .inline-status-error { background: var(--error-surface)
 
 @media (max-width: 720px) {
     html[data-theme="light"] .topbar { background: rgba(255, 255, 255, 0.86); }
-    .theme-toggle { width: 36px; height: 36px; }
+    .theme-toggle {
+        position: absolute;
+        top: 8px;
+        right: 12px;
+        width: 36px;
+        height: 36px;
+        margin-left: 0;
+    }
 }
 
 /* Public chat first screen: give the conversation a clear, calm focal column. */

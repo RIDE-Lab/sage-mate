@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.8 - 2026-08-12
+
+### Fixed
+
+- Kept the selected theme button at its resting scale and moved it to the right edge on narrow screens.
+
 ## v4.6.7 - 2026-08-12
 
 ### Added
