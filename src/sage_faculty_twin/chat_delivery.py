@@ -124,6 +124,11 @@ def answer_language_mismatches_question(question: str, answer: str | None) -> bo
     if len(answer_text) < 80:
         return False
     answer_letters = len(re.findall(r"[A-Za-z]", language_text))
+    # A Chinese answer may legitimately mention product names, acronyms and
+    # English source titles.  Once it contains a substantive Chinese body,
+    # those terms must not turn a valid response into a server error.
+    if answer_cjk >= 20:
+        return False
     return answer_letters >= 40 and (answer_cjk < 8 or answer_letters > answer_cjk * 2)
 
 
