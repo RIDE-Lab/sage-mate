@@ -590,10 +590,13 @@
                 return;
             }
             const clamped = this.clampPosition(left, top);
-            const fixedPosition = globalThis.matchMedia?.("(max-width: 720px)").matches;
             const shellRect = this.chatShell?.getBoundingClientRect();
-            const localLeft = fixedPosition ? clamped.left : clamped.left - (shellRect?.left || 0);
-            const localTop = fixedPosition ? clamped.top : clamped.top - (shellRect?.top || 0);
+            // The mobile media rule uses `position: fixed`, but the chat shell
+            // establishes a containing block; use shell-local coordinates in
+            // both layouts so a transformed/positioned shell cannot double
+            // offset the companion after a resize or reflow.
+            const localLeft = clamped.left - (shellRect?.left || 0);
+            const localTop = clamped.top - (shellRect?.top || 0);
             this.root.style.setProperty("--sage-companion-travel-ms", `${Math.max(0, Math.round(duration))}ms`);
             this.root.style.left = `${Math.round(localLeft)}px`;
             this.root.style.top = `${Math.round(localTop)}px`;

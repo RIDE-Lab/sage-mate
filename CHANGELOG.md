@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.11 - 2026-08-12
+
+### Fixed
+
+- Corrected mobile companion coordinates when the chat shell establishes a fixed-position containing block.
+
 ## v4.6.10 - 2026-08-12
 
 ### Fixed
