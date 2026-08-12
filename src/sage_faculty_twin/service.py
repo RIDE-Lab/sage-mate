@@ -91,6 +91,12 @@ from .code_agent_backends import (
 from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
 from .escalation_store import EscalationQueueStore
+from .evidence_policy import (
+    has_query_evidence,
+    is_public_evidence_hit,
+    is_research_hit,
+    is_teaching_hit,
+)
 from .follow_up_store import FollowUpQueueStore
 from .interaction_policy import (
     InteractionPolicyEngine,
@@ -2693,12 +2699,7 @@ class FacultyTwinWorkflowSupport:
 
     @staticmethod
     def _is_public_evidence_hit(hit: KnowledgeSearchHit) -> bool:
-        metadata = {str(key).lower(): str(value).lower() for key, value in (hit.metadata or {}).items()}
-        audience = metadata.get("audience", "")
-        if audience in {"admin", "private", "lab_member"}:
-            return False
-        tags = {str(tag).lower() for tag in hit.tags}
-        return not (tags & {"audience:admin", "audience:private", "audience:lab_member"})
+        return is_public_evidence_hit(hit)
 
     @staticmethod
     def _grounded_excerpt_for_answer(hit: KnowledgeSearchHit, question: str) -> str:
@@ -5211,34 +5212,10 @@ class FacultyTwinWorkflowSupport:
         )
 
     def _is_research_hit(self, hit: KnowledgeSearchHit) -> bool:
-        hit_tags = {tag.lower() for tag in hit.tags}
-        if hit_tags & {
-            "research",
-            "publication",
-            "paper-digest",
-            "overview",
-            "profile",
-        }:
-            return True
-        source_name = (hit.source_name or "").lower()
-        return (
-            "研究" in hit.title or "publications" in source_name or "research_papers" in source_name
-        )
+        return is_research_hit(hit)
 
     def _is_teaching_hit(self, hit: KnowledgeSearchHit) -> bool:
-        hit_tags = {tag.lower() for tag in hit.tags}
-        return bool(
-            hit_tags
-            & {
-                "teaching",
-                "courseware",
-                "tutorial",
-                "lecture",
-                "experiment",
-                "pdf",
-                "resources",
-            }
-        )
+        return is_teaching_hit(hit)
 
     def _build_intent_guidance(self, interaction_intent: InteractionIntent | None) -> str:
         if interaction_intent is None:
@@ -6157,64 +6134,7 @@ class FacultyTwinWorkflowSupport:
         question: str,
         hit: KnowledgeSearchHit,
     ) -> bool:
-        """Keep semantically retrieved evidence without a global score cutoff.
-
-        The knowledge backend performs ranking; this is only a provenance
-        sanity check. A candidate must share a meaningful query anchor with
-        its title, excerpt, source, or tags. Scores are not compared across
-        domains or embedding backends.
-        """
-
-        stop_words = {
-            "please",
-            "explain",
-            "example",
-            "simple",
-            "what",
-            "with",
-            "within",
-            "请用一",
-            "一个简",
-            "个简单",
-            "简单例",
-            "单例子",
-            "例子解",
-            "子解释",
-            "控制在",
-            "字以内",
-            "老师",
-            "请问",
-            "介绍",
-            "一下",
-            "是什么",
-            "哪些",
-        }
-        anchors = {
-            token.lower()
-            for token in re.findall(r"[A-Za-z0-9_+-]{4,}", question)
-            if token.lower() not in stop_words
-        }
-        for span in re.findall(r"[\u4e00-\u9fff]+", question):
-            # Two- and three-character spans handle short entities and
-            # paraphrases better than the previous three-character-only rule.
-            for width in (2, 3):
-                anchors.update(
-                    span[index : index + width]
-                    for index in range(max(len(span) - width + 1, 0))
-                    if span[index : index + width] not in stop_words
-                )
-        if not anchors:
-            return True
-        searchable = "\n".join(
-            (
-                hit.title or "",
-                hit.excerpt or "",
-                hit.source_name or "",
-                " ".join(hit.tags or []),
-                " ".join(f"{key} {value}" for key, value in (hit.metadata or {}).items()),
-            )
-        ).lower()
-        return any(anchor in searchable for anchor in anchors)
+        return has_query_evidence(question, hit)
 
     def _prioritize_guidance_hits(
         self,
