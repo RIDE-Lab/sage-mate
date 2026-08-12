@@ -8037,6 +8037,37 @@ class DigitalTwinService:
             return fast_response
         return self._build_lightweight_fact_response(request)
 
+    def persist_fast_answer(
+        self, request: ChatRequest, response: ChatResponse
+    ) -> ChatResponse:
+        """Persist a deterministic answer before returning it to the client.
+
+        Fast-path responses bypass the workflow DAG, so they do not pass
+        through ``persist_memory``.  Keeping this boundary explicit ensures a
+        subsequent short follow-up can retrieve the same conversation turn
+        without paying for an unnecessary model call.
+        """
+        if response.exchange_id:
+            return response
+        conversation_id = response.conversation_id or request.conversation_id or str(uuid4())
+        record = self._conversation_store.add_exchange(
+            request,
+            conversation_id=conversation_id,
+            answer=response.answer,
+            workflow_action=response.workflow_action,
+            interaction_domain=None,
+            knowledge_hit_count=len(response.knowledge_hits),
+            booking_result=response.booking_result,
+            web_search_hits=response.web_search_hits,
+        )
+        return response.model_copy(
+            update={
+                "conversation_id": conversation_id,
+                "exchange_id": record.memory_id,
+                "memory_write_back": True,
+            }
+        )
+
     def _build_lightweight_fact_response(self, request: ChatRequest) -> ChatResponse | None:
         """Serve short, public fact questions from the local evidence store.
 

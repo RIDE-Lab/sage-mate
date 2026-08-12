@@ -1787,7 +1787,20 @@ async def chat(
         except asyncio.TimeoutError:
             fast_response = None
     if fast_response is not None:
-        return fast_response
+        # Fast answers skip the workflow DAG by design, but must still write
+        # the exchange before returning so the next turn can resolve short
+        # follow-ups against the same conversation.
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(service.persist_fast_answer, payload, fast_response),
+                timeout=2.0,
+            )
+        except asyncio.TimeoutError:
+            _logger.exception("fast-path memory persistence timed out")
+            return fast_response
+        except Exception:
+            _logger.exception("fast-path memory persistence failed")
+            return fast_response
 
     global _chat_waiting_requests
     queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
