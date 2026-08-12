@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.5 - 2026-08-12
+
+### Changed
+
+- Redesigned deep-thinking progress as a full-width Codex-style reasoning state with persistent selected-mode visibility, progress rail, and completion summary.
+
 ## v4.6.4 - 2026-08-12
 
 ### Fixed

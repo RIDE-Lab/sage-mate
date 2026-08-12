@@ -7392,7 +7392,9 @@ function renderPendingAssistantMessage(
                                 <strong>${processingLabel}</strong>
                                 <p id="pending-stage-label" class="thinking-stage-label">${escapeHtml(currentStage)}</p>
                             </div>
+                            ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
                         </div>
+                        <div class="thinking-progress" aria-hidden="true"><span></span></div>
                         ${INLINE_WORKFLOW_TRACE_ENABLED
             ? `<div class="thinking-phase-rail" aria-live="polite">
                             ${buildWorkflowPhaseRailHtml({ currentStage, workflowSteps, complete: false })}

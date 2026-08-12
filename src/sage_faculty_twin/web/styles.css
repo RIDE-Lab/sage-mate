@@ -2373,6 +2373,74 @@ body.drawer-pinned .history-rail {
     animation-duration: 1.9s;
 }
 
+/* Codex-style persistent reasoning state: wide, calm, and readable rather
+   than a tiny transient card that gets lost beside the answer bubble. */
+.message-pending-frame {
+    width: min(100%, 760px);
+}
+
+.thinking-panel.is-deep-mode {
+    width: 100%;
+    min-height: 148px;
+    padding: 18px 20px;
+    border-radius: 18px;
+}
+
+.thinking-panel.is-deep-mode .thinking-panel-head {
+    min-height: 42px;
+}
+
+.thinking-panel.is-deep-mode .thinking-panel-head strong {
+    font-size: 0.98rem;
+    letter-spacing: 0.01em;
+}
+
+.thinking-mode-badge {
+    margin-left: auto;
+    padding: 5px 9px;
+    border-radius: 999px;
+    color: #4f46e5;
+    background: rgba(99, 102, 241, 0.1);
+    border: 1px solid rgba(99, 102, 241, 0.18);
+    font-size: 0.7rem;
+    font-weight: 650;
+    white-space: nowrap;
+}
+
+.thinking-progress {
+    position: relative;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: rgba(99, 102, 241, 0.1);
+}
+
+.thinking-progress span {
+    display: block;
+    width: 38%;
+    height: 100%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, #6366f1, #8b5cf6, #60a5fa);
+    animation: thinking-progress-slide 1.8s ease-in-out infinite;
+}
+
+@keyframes thinking-progress-slide {
+    0% { transform: translateX(-120%); }
+    55%, 100% { transform: translateX(290%); }
+}
+
+.composer-pill-toggle:has(input:checked),
+.deep-thinking-toggle:has(input:checked) {
+    background: linear-gradient(135deg, rgba(99, 102, 241, 0.16), rgba(79, 70, 229, 0.1));
+    border-color: rgba(79, 70, 229, 0.42);
+    color: #4338ca;
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.08), 0 4px 14px rgba(79, 70, 229, 0.12);
+}
+
+body.conversation-active .deep-thinking-toggle:has(input:checked) {
+    position: relative;
+}
+
 .thinking-panel-head,
 .message-workflow-summary-head {
     display: flex;
