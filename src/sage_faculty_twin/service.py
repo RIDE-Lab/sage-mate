@@ -2456,6 +2456,10 @@ class FacultyTwinWorkflowSupport:
             return "当前可见的公开资料没有明确联系方式；请通过课题组公开主页或正式邮件渠道联系，不要猜测私人联系方式。"
 
         identity_fact_markers = (
+            "张书豪老师是谁",
+            "张书豪是谁",
+            "介绍张书豪",
+            "张书豪简介",
             "张老师是谁",
             "介绍一下张老师",
             "介绍张老师",
@@ -2466,7 +2470,9 @@ class FacultyTwinWorkflowSupport:
             "实验室主要做什么",
         )
         normalized_identity_question = re.sub(r"[\s。！？!?，,：:]+$", "", question)
-        is_identity_alias_question = normalized_identity_question in {"张老师", "老师", "老师是谁"}
+        is_identity_alias_question = normalized_identity_question in {
+            "张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "张书豪老师是谁", "老师", "老师是谁"
+        }
         refers_to_other_teacher = any(
             marker in question for marker in ("另一个张老师", "其他张老师", "某位张老师", "某个张老师")
         )
@@ -2480,6 +2486,13 @@ class FacultyTwinWorkflowSupport:
                 if self._is_public_evidence_hit(hit)
                 and ({str(tag).lower() for tag in hit.tags} & {"profile", "research", "overview"})
             ]
+            canonical_identity = [
+                hit for hit in candidates
+                if hit.title == "主页资料｜张书豪"
+                or ("homepage:contents/home.md#张书豪" in (hit.source_name or ""))
+            ]
+            if canonical_identity:
+                candidates = canonical_identity
             if not candidates:
                 context.knowledge_hits = []
                 return "当前可见的公开资料不足以确认这项介绍；我不使用通用模板补写事实。可以选择联网检索，或补充想了解的具体方向。"
@@ -2520,6 +2533,63 @@ class FacultyTwinWorkflowSupport:
             "sagevdb",
             "neuromem",
         )
+        system_project_question = any(
+            marker in question or marker in lowered
+            for marker in (
+                "有哪些系统",
+                "哪些系统",
+                "系统或开源项目",
+                "开源项目",
+                "系统建设",
+                "代表性系统",
+                "课题组目前有",
+                "实验室目前有",
+            )
+        )
+        if system_project_question:
+            floor_hits = self._system_project_floor_hits(question)
+            candidates = [
+                hit for hit in floor_hits
+                if self._is_public_evidence_hit(hit)
+            ]
+            # The current system overview is the authoritative source for a
+            # “currently available systems” question.  Historical system
+            # accumulation is useful for broader research questions, but
+            # should not appear as an unexplained extra citation here.
+            current_overview = [
+                hit for hit in candidates if hit.title == "主页资料｜当前系统建设"
+            ]
+            if current_overview:
+                candidates = current_overview
+            if not candidates:
+                context.knowledge_hits = []
+                return (
+                    "当前可见的公开资料不足以确认课题组的系统清单；"
+                    "我不使用论文内容或通用模板猜测项目名称。"
+                    "可以指定某个系统，或选择联网检索补充。"
+                )
+            context.knowledge_hits = candidates
+            source_lines = [
+                re.sub(r"\s+", " ", line).strip()
+                for line in candidates[0].excerpt.splitlines()
+                if line.strip().startswith("-")
+            ]
+            project_lines = [
+                line for line in source_lines
+                if any(name.lower() in line.lower() for name in ("sage", "neuromem", "vllm-hust"))
+            ]
+            if not project_lines:
+                excerpt = self._grounded_excerpt_for_answer(candidates[0], question)
+                project_lines = [f"- {excerpt}"] if excerpt else []
+            if not project_lines:
+                context.knowledge_hits = []
+                return "当前公开资料没有给出可核验的系统条目；我不使用通用模板补写项目名称。"
+            return (
+                "基于张书豪老师个人主页的当前系统建设资料，课题组公开的系统主线包括：\n"
+                + "\n".join(project_lines)
+                + "\n\n"
+                "以上是当前公开主页资料明确列出的系统主线；具体仓库状态和版本以对应公开仓库为准。"
+            )
         is_stack_fact_question = any(
             marker in lowered for marker in stack_fact_markers
         ) and any(marker in question for marker in ("关系", "区别", "是什么", "怎么", "分别负责"))
@@ -5008,7 +5078,7 @@ class FacultyTwinWorkflowSupport:
         return "\n".join(sections) + "\n"
 
     _IDENTITY_QUESTION_PATTERN = re.compile(
-        r"你是谁|介绍.{0,4}你|张老师是谁|介绍.{0,4}张老师|张老师简介|课题组主要做什么|课题组研究|实验室主要做什么|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
+        r"你是谁|介绍.{0,4}你|张书豪.{0,4}(是谁|简介|介绍)|张老师是谁|介绍.{0,4}张老师|张老师简介|课题组主要做什么|课题组研究|实验室主要做什么|个人简介|个人介绍|学术背景|主要研究|研究方向|招什么样|招生|加入课题组|加入你们组|需要什么准备|提前准备|你的学术|你主要|你是做|你是什么样的老师"
     )
     _IDENTITY_FLOOR_TITLES: tuple[str, ...] = (
         "主页资料｜张书豪",
@@ -5020,9 +5090,13 @@ class FacultyTwinWorkflowSupport:
 
     def _identity_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
         normalized = re.sub(r"[\s。！？!?，,：:]+$", "", str(question or "").strip())
-        identity_alias = normalized in {"张老师", "老师", "老师是谁"} or (
+        identity_alias = normalized in {"张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "张书豪老师是谁", "老师", "老师是谁"} or (
             "张老师" in normalized
             and not any(marker in normalized for marker in ("另一个", "其他", "某位", "某个"))
+        )
+        identity_alias = identity_alias or (
+            "张书豪" in normalized
+            and any(marker in normalized for marker in ("是谁", "简介", "介绍"))
         )
         if not question or (not identity_alias and not self._IDENTITY_QUESTION_PATTERN.search(question)):
             return []
@@ -5047,6 +5121,52 @@ class FacultyTwinWorkflowSupport:
         hits.sort(key=lambda h: ordering.get(h.title, 999))
         return hits
 
+    def _system_project_floor_hits(self, question: str) -> list[KnowledgeSearchHit]:
+        """Force the canonical public system overview into project-list queries.
+
+        Vector/BM25 retrieval can rank a long, technically similar paper PDF
+        above the short homepage system overview.  Project-list questions are
+        factual and should be grounded in the canonical overview before any
+        model synthesis is attempted.
+        """
+        lowered = str(question or "").lower()
+        markers = (
+            "有哪些系统",
+            "哪些系统",
+            "系统或开源项目",
+            "开源项目",
+            "系统建设",
+            "代表性系统",
+            "课题组目前有",
+            "实验室目前有",
+        )
+        if not any(marker in question or marker in lowered for marker in markers):
+            return []
+        preferred_titles = (
+            "主页资料｜当前系统建设",
+            "系统资料｜代表性系统积累",
+        )
+        records_by_title = {
+            record.title: record for record in self._knowledge_store.list_documents()
+        }
+        hits: list[KnowledgeSearchHit] = []
+        for title in preferred_titles:
+            record = records_by_title.get(title)
+            if record is None:
+                continue
+            hits.append(
+                KnowledgeSearchHit(
+                    document_id=record.document_id,
+                    title=record.title,
+                    excerpt=record.content[:900],
+                    score=100.0,
+                    tags=list(record.tags),
+                    source_name=record.source_name,
+                    metadata=dict(record.metadata),
+                )
+            )
+        return hits
+
     def _select_prompt_knowledge_hits(
         self,
         question: str,
@@ -5066,6 +5186,12 @@ class FacultyTwinWorkflowSupport:
                 hit for hit in knowledge_hits if hit.document_id not in seen_ids
             ]
             knowledge_hits = merged
+        system_floor_hits = self._system_project_floor_hits(question)
+        if system_floor_hits:
+            seen_ids = {hit.document_id for hit in system_floor_hits}
+            knowledge_hits = system_floor_hits + [
+                hit for hit in knowledge_hits if hit.document_id not in seen_ids
+            ]
         if interaction_intent is not None:
             scoped_hits = self._filter_knowledge_hits_by_intent(knowledge_hits, interaction_intent)
             if interaction_intent.domain == "research":
@@ -5667,6 +5793,25 @@ class FacultyTwinWorkflowSupport:
                 exclude_scopes=["publications"],
                 decision_mode="direct_answer",
                 confidence=0.98,
+            )
+        system_project_markers = (
+            "有哪些系统",
+            "哪些系统",
+            "系统或开源项目",
+            "开源项目",
+            "系统建设",
+            "代表性系统",
+            "课题组目前有",
+            "实验室目前有",
+        )
+        if any(marker in question or marker in fact_lowered for marker in system_project_markers):
+            return InteractionIntent(
+                action="answer",
+                domain="research",
+                retrieval_scopes=["profile", "publications"],
+                exclude_scopes=["courseware"],
+                decision_mode="direct_answer",
+                confidence=0.99,
             )
         if any(
             marker in question or marker in fact_lowered
@@ -8153,7 +8298,7 @@ class DigitalTwinService:
         ):
             return None
         markers = (
-            "张老师", "老师是谁", "老师呢",
+            "张老师", "张书豪老师", "张书豪教授", "张书豪是谁", "老师是谁", "老师呢",
             "张老师是谁", "介绍一下张老师", "介绍张老师", "张老师简介",
             "课题组主要做什么", "课题组是做什么", "你们组主要做什么",
             "实验室主要做什么", "老师主要研究什么", "老师研究什么",
@@ -8164,6 +8309,7 @@ class DigitalTwinService:
             "需要什么准备", "提前准备", "刚开始学大模型推理", "学习路线",
             "SAGE 和 vLLM-HUST", "SAGE与vLLM-HUST", "SAGE 和 vLLM",
             "SAGE与vLLM", "SageVDB", "NeuroMem", "分别负责什么",
+            "有哪些系统", "哪些系统", "开源项目", "系统建设", "代表性系统",
         )
         if not any(marker in question for marker in markers):
             return None

@@ -169,6 +169,83 @@ def test_stack_relation_answer_is_chinese_and_evidence_bound(tmp_path: Path) -> 
     assert "Support" in answer
 
 
+def test_system_project_list_uses_canonical_overview_and_rejects_paper_noise(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    service._knowledge_store = type("Store", (), {
+        "list_documents": lambda self: [
+            type("Record", (), {
+                "document_id": "systems",
+                "title": "主页资料｜当前系统建设",
+                "content": "- SAGE：大模型推理服务系统\n- Neuromem：记忆智能体中间件\n- vLLM-HUST：推理引擎底座",
+                "tags": ["homepage", "profile", "research", "audience:public"],
+                "source_name": "homepage:contents/home.md#当前系统建设",
+                "metadata": {},
+            })(),
+            type("Record", (), {
+                "document_id": "paper",
+                "title": "论文 PDF",
+                "content": "图像识别和自然语言处理工具包",
+                "tags": ["publication", "pdf", "audience:public"],
+                "source_name": "homepage:paper.pdf",
+                "metadata": {},
+            })(),
+        ]
+    })()
+    context = _context(
+        "课题组目前有哪些系统或开源项目？",
+        "research",
+        [
+            KnowledgeSearchHit(
+                document_id="paper",
+                title="论文 PDF",
+                excerpt="图像识别和自然语言处理工具包",
+                score=99,
+                tags=["publication", "pdf", "audience:public"],
+                source_name="homepage:paper.pdf",
+            )
+        ],
+    )
+
+    answer = service._build_grounded_fact_answer(context)
+
+    assert answer is not None
+    assert "SAGE" in answer and "Neuromem" in answer and "vLLM-HUST" in answer
+    assert "图像识别" not in answer
+    assert [hit.title for hit in context.knowledge_hits] == ["主页资料｜当前系统建设"]
+
+
+def test_explicit_shuhao_alias_is_treated_as_owner_identity(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    context = _context(
+        "张书豪老师是谁？",
+        "general",
+        [
+            KnowledgeSearchHit(
+                document_id="wrong-teacher",
+                title="其他教师资料",
+                excerpt="北京大学教师，研究图像识别。",
+                score=99,
+                tags=["profile", "audience:public"],
+                source_name="external:wrong-teacher",
+            ),
+            KnowledgeSearchHit(
+                document_id="owner",
+                title="主页资料｜张书豪",
+                excerpt="张书豪，华中科技大学计算机学院教授，研究大模型推理系统。",
+                score=80,
+                tags=["homepage", "profile", "audience:public"],
+                source_name="homepage:contents/home.md#张书豪",
+            ),
+        ],
+    )
+
+    answer = service._build_grounded_fact_answer(context)
+
+    assert answer is not None
+    assert "华中科技大学" in answer
+    assert "北京大学" not in answer
+
+
 def test_collaboration_question_has_actionable_next_steps(tmp_path: Path) -> None:
     service = _service(tmp_path)
     context = _context(
