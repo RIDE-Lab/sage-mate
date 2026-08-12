@@ -125,6 +125,8 @@ const openAvailabilityEditorButton = document.getElementById("open-availability-
 const topbarTitle = document.getElementById("topbar-title");
 const topbarSubtitle = document.getElementById("topbar-subtitle");
 const topbarKicker = document.querySelector(".topbar-kicker");
+const themeToggleButton = document.getElementById("theme-toggle");
+const themeMediaQuery = globalThis.matchMedia?.("(prefers-color-scheme: dark)") || null;
 const openOnboardingHelpButton = document.getElementById("open-onboarding-help");
 const openProfileSwitcherButton = document.getElementById("open-profile-switcher");
 const profileSwitcherCurrent = document.getElementById("profile-switcher-current");
@@ -195,6 +197,46 @@ const knowledgeForm = document.getElementById("knowledge-form");
 const bookingForm = document.getElementById("booking-form");
 const suggestionForm = document.getElementById("suggestion-form");
 const chatSubmitButton = chatForm?.querySelector('button[type="submit"]') || null;
+
+const THEME_STORAGE_KEY = "sageMateTheme";
+
+function readStoredTheme() {
+    try {
+        const value = globalThis.localStorage?.getItem(THEME_STORAGE_KEY);
+        return value === "light" || value === "dark" ? value : "";
+    } catch {
+        return "";
+    }
+}
+
+function currentTheme() {
+    const explicit = readStoredTheme();
+    if (explicit) return explicit;
+    return document.documentElement.dataset.theme || (themeMediaQuery?.matches ? "dark" : "light");
+}
+
+function applyTheme(theme, { persist = false } = {}) {
+    const nextTheme = theme === "dark" ? "dark" : "light";
+    document.documentElement.dataset.theme = nextTheme;
+    document.documentElement.style.colorScheme = nextTheme;
+    if (persist) {
+        try { globalThis.localStorage?.setItem(THEME_STORAGE_KEY, nextTheme); } catch { /* private mode */ }
+    }
+    if (themeToggleButton) {
+        const nextLabel = nextTheme === "dark" ? "切换到浅色主题" : "切换到深色主题";
+        themeToggleButton.setAttribute("aria-label", nextLabel);
+        themeToggleButton.setAttribute("title", nextLabel);
+        themeToggleButton.setAttribute("aria-pressed", String(nextTheme === "dark"));
+    }
+}
+
+applyTheme(currentTheme());
+themeToggleButton?.addEventListener("click", () => {
+    applyTheme(currentTheme() === "dark" ? "light" : "dark", { persist: true });
+});
+themeMediaQuery?.addEventListener?.("change", (event) => {
+    if (!readStoredTheme()) applyTheme(event.matches ? "dark" : "light");
+});
 
 function setChatSubmitLoading(isLoading) {
     if (!chatSubmitButton) {

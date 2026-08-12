@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v4.6.7 - 2026-08-12
+
+### Added
+
+- Added an explicit sun/moon theme switch with semantic midnight-glass and cool light palettes.
+- Persisted the visitor's theme choice while respecting system preference until explicitly changed.
+- Added light-theme contrast coverage for the composer, Support evidence, status states, and narrow screens.
+
 ## v4.6.6 - 2026-08-12
 
 ### Changed

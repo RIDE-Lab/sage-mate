@@ -5,6 +5,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>张书豪的分身</title>
+    <script>
+        (() => {
+            const key = "sageMateTheme";
+            let stored = "";
+            try { stored = localStorage.getItem(key) || ""; } catch { /* private mode */ }
+            const systemDark = window.matchMedia?.("(prefers-color-scheme: dark)").matches;
+            const theme = stored === "light" || stored === "dark" ? stored : (systemDark ? "dark" : "light");
+            document.documentElement.dataset.theme = theme;
+            document.documentElement.style.colorScheme = theme;
+        })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -59,6 +70,8 @@
             <symbol id="icon-checklist" viewBox="0 0 24 24"><rect x="4.5" y="3.5" width="15" height="17" rx="3"/><path d="m7.5 8 1.2 1.2L11 6.8M12.5 8h4M7.5 14h1M11 14h5.5M7.5 17h1M11 17h5.5"/></symbol>
             <symbol id="icon-sparkle" viewBox="0 0 24 24"><path d="M12 3.5c.7 4.8 3.2 7.3 8 8-4.8.7-7.3 3.2-8 8-.7-4.8-3.2-7.3-8-8 4.8-.7 7.3-3.2 8-8Z"/><path d="M19 3v3M17.5 4.5h3M5 18v2.5M3.75 19.25h2.5"/></symbol>
             <symbol id="icon-bean" viewBox="0 0 24 24"><path d="M17.8 4.8c3.1 3.1 2.6 8.8-1 12.4s-9.3 4.1-12.4 1c-2.1-2.1-.9-4.9 1.4-6.1 2.4-1.3 3.1-1.2 4.4-3.9 1.2-2.3 5.4-5.6 7.6-3.4Z"/><path d="M9.2 16.1c2.8-.5 5.1-2.2 6.6-5"/></symbol>
+            <symbol id="icon-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4"/></symbol>
+            <symbol id="icon-moon" viewBox="0 0 24 24"><path d="M19.5 15.4A7.8 7.8 0 0 1 8.6 4.5 8.6 8.6 0 1 0 19.5 15.4Z"/></symbol>
         </defs>
     </svg>
     <div class="app-shell">
@@ -74,6 +87,12 @@
                     <p id="topbar-subtitle" class="topbar-subtitle">张书豪 · 华中科技大学计算机学院教师</p>
                 </div>
             </div>
+            <button type="button" id="theme-toggle" class="theme-toggle" aria-label="切换到浅色主题"
+                title="切换到浅色主题">
+                <svg class="ui-icon theme-icon theme-icon-sun" aria-hidden="true"><use href="#icon-sun"></use></svg>
+                <svg class="ui-icon theme-icon theme-icon-moon" aria-hidden="true"><use href="#icon-moon"></use></svg>
+                <span class="sr-only">切换主题</span>
+            </button>
             <!-- Status info moved to drawer, opened by rail icon -->
             <!-- User badge moved to sidebar, topbar-actions removed -->
             <button type="button" id="topbar-user-badge" class="topbar-user-badge hidden" aria-label="当前账号"
