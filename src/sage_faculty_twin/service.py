@@ -8225,9 +8225,9 @@ class DigitalTwinService:
             ]
             topic_lines = []
             for hit in course_hits:
-                excerpt = re.sub(r"\s+", " ", hit.excerpt or "").strip()
-                if excerpt:
-                    topic_lines.append(f"- {excerpt[:180]}")
+                fact = support._grounded_course_fact_line(hit)
+                if fact:
+                    topic_lines.append(f"- {fact}")
             topics = "\n".join(dict.fromkeys(topic_lines)) or "- 当前课程资料未提供可提炼的主题摘要。"
             return ChatResponse(
                 answer=(
