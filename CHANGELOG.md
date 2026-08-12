@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## v4.6.6 - 2026-08-12
+
+### Changed
+
+- Consolidated composer mode controls into one accessible state system with readable deep-thinking and web-search checked, processing, focus, hover, and disabled states.
+- Introduced a midnight glass design token system with deep navy surfaces, indigo/electric-cyan accents, and semantic success/warning/error foreground and surface tokens.
+- Restyled Support evidence cards, status badges, workflow states, and composer placeholder text for dark-surface contrast.
+
 ## v4.6.5 - 2026-08-12
 
 ### Changed

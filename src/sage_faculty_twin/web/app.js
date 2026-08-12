@@ -255,6 +255,7 @@ function syncDeepThinkingPresentation() {
     const toggle = deepThinkingCheckbox.closest(".composer-pill-toggle");
     deepThinkingExplicitlyEnabled = active;
     toggle?.classList.toggle("is-active", active);
+    toggle?.classList.remove("is-processing");
     toggle?.setAttribute(
         "title",
         active
@@ -275,6 +276,8 @@ function syncDeepThinkingPresentation() {
 }
 
 function setDeepThinkingProcessing(processing) {
+    const toggle = deepThinkingCheckbox?.closest(".composer-pill-toggle");
+    toggle?.classList.toggle("is-processing", Boolean(processing && deepThinkingCheckbox?.checked));
     if (!composerModeStatus || !deepThinkingCheckbox?.checked) {
         syncDeepThinkingPresentation();
         return;
