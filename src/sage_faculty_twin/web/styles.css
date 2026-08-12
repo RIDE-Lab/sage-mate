@@ -4875,11 +4875,16 @@ body.sidebar-expanded .rail-user {
     gap: 6px;
     white-space: nowrap;
     font-weight: 500;
+    /* A legacy `label span` rule sets muted text globally.  Mode labels must
+       inherit the control state so checked/processing remains high contrast. */
+    color: inherit;
 }
 
 .composer-pill-toggle .ui-icon,
 .deep-thinking-toggle .ui-icon {
     opacity: 1;
+    color: inherit;
+    stroke: currentColor;
     stroke-width: 1.8;
 }
 
