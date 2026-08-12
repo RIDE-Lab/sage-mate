@@ -107,18 +107,23 @@ def answer_language_mismatches_question(question: str, answer: str | None) -> bo
         return False
     question_cjk = len(re.findall(r"[\u4e00-\u9fff]", question))
     answer_text = answer.strip()
+    # URLs and markdown source labels are transport metadata, not answer
+    # language.  Counting their latin characters made otherwise valid Chinese
+    # web-search answers fail the delivery gate (and surface as HTTP 500).
+    language_text = re.sub(r"https?://\S+", " ", answer_text)
+    language_text = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", language_text)
     if question_cjk < 4:
         return False
-    answer_cjk = len(re.findall(r"[\u4e00-\u9fff]", answer_text))
+    answer_cjk = len(re.findall(r"[\u4e00-\u9fff]", language_text))
     if (
         answer_cjk == 0
         and answer_text.upper() != "OK"
-        and sum(character.isalpha() for character in answer_text) >= 2
+        and sum(character.isalpha() for character in language_text) >= 2
     ):
         return True
     if len(answer_text) < 80:
         return False
-    answer_letters = len(re.findall(r"[A-Za-z]", answer_text))
+    answer_letters = len(re.findall(r"[A-Za-z]", language_text))
     return answer_letters >= 40 and (answer_cjk < 8 or answer_letters > answer_cjk * 2)
 
 

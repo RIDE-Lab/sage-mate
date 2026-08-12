@@ -105,6 +105,22 @@ def test_delivery_allows_legitimate_discussion_of_system_prompts() -> None:
     assert delivered.answer.startswith("A system prompt")
 
 
+def test_delivery_allows_chinese_web_answer_with_urls() -> None:
+    delivered = ChatDeliveryGate().deliver(
+        response=ChatResponse(
+            answer=(
+                "根据联网检索结果，相关配置用于前缀缓存。"
+                "来源：https://docs.vllm.ai/en/latest/features/automatic_prefix_caching.html"
+            ),
+            owner_name="Portable Owner",
+            used_model="portable-model",
+        ),
+        original_question="请查找近期 vLLM 官方文档并给出来源",
+    )
+
+    assert "前缀缓存" in delivered.answer
+
+
 def test_service_fast_path_crosses_delivery_gate(tmp_path) -> None:
     class RecordingGate(ChatDeliveryGate):
         called = False
