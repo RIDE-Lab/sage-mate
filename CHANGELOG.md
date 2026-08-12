@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v4.6.2 - 2026-08-12
+
+### Changed
+
+- Fast-path answers now persist conversation exchanges before returning, so short follow-ups retain their subject.
+- Resolved contextual follow-ups can use the local evidence lane and return grounded answers without an unnecessary model round-trip.
+- Answer delivery validation now tolerates URLs and technical English terms inside substantive Chinese answers.
+
+### Fixed
+
+- Fixed follow-up requests losing context or timing out after a fast first answer.
+- Fixed Chinese web-search answers being rejected as language mismatches and surfacing as HTTP 500.
+
 ## v4.6.1 - 2026-08-10
 
 ### Changed
