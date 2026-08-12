@@ -553,13 +553,22 @@
             const toggleRect = this.toggle?.getBoundingClientRect();
             const formRect = this.chatForm?.getBoundingClientRect();
             const margin = 12;
+            const usesViewportPosition = globalThis.matchMedia?.("(max-width: 720px)").matches;
             const left = Math.max(margin, shellRect?.left || margin);
             const right = Math.min(globalThis.innerWidth - margin, shellRect?.right || globalThis.innerWidth - margin);
             const top = Math.max(margin, shellRect?.top || margin);
-            const bottom = Math.min(
+            let bottom = Math.min(
                 globalThis.innerHeight - margin,
                 (formRect?.top || globalThis.innerHeight) - margin
             );
+            // On the narrow empty landing screen, keep the wandering companion
+            // above the recommendation card so it never hides a seed question.
+            if (usesViewportPosition && this.chatShell?.classList.contains("chat-empty")) {
+                const seedRect = document.getElementById("seed-chips")?.getBoundingClientRect();
+                if (seedRect && seedRect.height > 0) {
+                    bottom = Math.min(bottom, seedRect.top - margin);
+                }
+            }
             const width = toggleRect?.width || 64;
             const height = toggleRect?.height || 64;
             const maxX = Math.max(left, right - width);
