@@ -97,6 +97,11 @@ from .evidence_policy import (
     is_research_hit,
     is_teaching_hit,
 )
+from .answer_rendering import (
+    extract_research_summary,
+    grounded_course_fact_line,
+    grounded_excerpt,
+)
 from .follow_up_store import FollowUpQueueStore
 from .interaction_policy import (
     InteractionPolicyEngine,
@@ -2709,55 +2714,11 @@ class FacultyTwinWorkflowSupport:
 
     @staticmethod
     def _grounded_excerpt_for_answer(hit: KnowledgeSearchHit, question: str) -> str:
-        normalized = re.sub(r"\s+", " ", hit.excerpt or "").strip()
-        if not normalized:
-            return ""
-        # Prefer a sentence containing a query anchor, while keeping the
-        # original wording and never generating a synthetic fact.
-        anchors = [token for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9+-]{3,}", question)]
-        sentences = [part.strip() for part in re.split(r"(?<=[。！？.!?])\s*", normalized) if part.strip()]
-        factual_markers = (
-            "研究", "当前工作", "大模型", "推理", "状态管理", "课程",
-            "prefill", "decode", "KV cache",
-        )
-        metadata_markers = ("来源：", "可见性：", "说明：", "用途：", "维护稿")
-        ranked: list[tuple[int, int, str]] = []
-        for sentence in sentences:
-            if any(marker in sentence for marker in metadata_markers):
-                continue
-            anchor_score = sum(anchor.lower() in sentence.lower() for anchor in anchors)
-            fact_score = sum(marker.lower() in sentence.lower() for marker in factual_markers)
-            if anchor_score or fact_score:
-                # Factual markers outrank incidental query-word matches (for
-                # example a metadata sentence containing only “课程”).
-                ranked.append((fact_score * 3 + anchor_score, fact_score, sentence))
-        if ranked:
-            ranked.sort(key=lambda item: (-item[0], -item[1], len(item[2])))
-            return ranked[0][2][:360]
-        return normalized[:360]
+        return grounded_excerpt(hit, question)
 
     @staticmethod
     def _grounded_course_fact_line(hit: KnowledgeSearchHit) -> str:
-        """Turn course titles/snippets into bounded, source-shaped facts."""
-        title = re.sub(r"\s+", " ", hit.title or "").strip()
-        excerpt = re.sub(r"\s+", " ", hit.excerpt or "").strip()
-        lowered = f"{title} {excerpt}".lower()
-        if "prefill" in lowered and "decode" in lowered:
-            return "资料明确覆盖 LLM 推理的 Prefill 与 Decode 两个核心阶段。"
-        if "benchmark" in lowered:
-            return "资料包含推理系统 Benchmark 指南，说明课程/资源也覆盖性能评测方法。"
-        if "三个研究方向" in excerpt:
-            return "课程组织方式是背景、三个研究方向、代表论文展开和开放问题。"
-        if "tutorial" in lowered or "教程" in lowered:
-            clean_title = re.sub(r"^(?:课件正文|课程资料)｜[^｜]+｜", "", title)
-            return f"课程资料包含教程主题：{clean_title}。"
-        if "实验" in lowered or "project sheet" in lowered or "experimental sheet" in lowered:
-            clean_title = re.sub(r"^(?:课件正文|课程资料)｜[^｜]+｜", "", title)
-            return f"课程资料包含实验/项目材料：{clean_title}。"
-        if "讲" in title or "lecture" in lowered:
-            clean_title = re.sub(r"^(?:课件正文|课程资料)｜[^｜]+｜", "", title)
-            return f"课程资料包含讲次：{clean_title}。"
-        return FacultyTwinWorkflowSupport._grounded_excerpt_for_answer(hit, title)
+        return grounded_course_fact_line(hit)
 
     def _build_answer_relevance_question(self, context: ChatWorkflowContext) -> str:
         if self._looks_like_contextual_follow_up(
@@ -3212,27 +3173,11 @@ class FacultyTwinWorkflowSupport:
             context.request.question
         ):
             return None
-        candidates: list[tuple[int, str]] = []
-        for hit in context.knowledge_hits:
-            hit_tags = {tag.lower() for tag in hit.tags}
-            if not hit_tags & {"profile", "research", "research-agenda", "overview"}:
-                continue
-            for sentence in re.split(r"[。！？\n]+", hit.excerpt):
-                normalized = re.sub(r"\s+", " ", sentence).strip(" ：:；;")
-                if not normalized or not any(
-                    marker in normalized for marker in ("研究", "当前工作", "研究主线")
-                ):
-                    continue
-                if not any(
-                    marker in normalized
-                    for marker in ("大模型", "推理", "状态管理", "当前工作", "研究主线")
-                ):
-                    continue
-                priority = sum(
-                    marker in normalized
-                    for marker in ("当前工作", "研究聚焦", "研究主线", "大模型推理")
-                )
-                candidates.append((priority, normalized[:260]))
+        candidates = [
+            candidate
+            for hit in context.knowledge_hits
+            for candidate in extract_research_summary(hit)
+        ]
         if not candidates:
             return None
         candidates.sort(key=lambda item: (-item[0], len(item[1])))
