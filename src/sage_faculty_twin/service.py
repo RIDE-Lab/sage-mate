@@ -4539,6 +4539,9 @@ class FacultyTwinWorkflowSupport:
         resolved_recent_session_context = recent_session_context
         if resolved_recent_session_context is None:
             resolved_recent_session_context = self._format_recent_session_context(request)
+        resolved_followup_question = self._expand_followup_question(
+            request.question, resolved_recent_session_context
+        )
         memory_context = self._format_memory_context(memory_hits or [])
         prompt_hits = self._select_prompt_knowledge_hits(
             request.question, knowledge_hits, interaction_intent
@@ -4578,6 +4581,18 @@ class FacultyTwinWorkflowSupport:
             request.question,
             prompt_hits,
         )
+        followup_resolution = ""
+        if (
+            resolved_recent_session_context
+            and self._looks_like_contextual_follow_up(
+                request.question, resolved_recent_session_context
+            )
+        ):
+            followup_resolution = (
+                "Resolved follow-up context: The current question is a continuation of the prior user turn. "
+                "Answer the current request about that same subject; do not substitute a generic answer about unrelated fields.\n"
+                f"Resolved question with prior subject: {resolved_followup_question}\n"
+            )
         availability_context = self._meeting_service.describe_current_availability()
         live_calendar_context = self._calendar_bridge.describe_for_prompt(request.question)
         return (
@@ -4611,6 +4626,7 @@ class FacultyTwinWorkflowSupport:
             f"{knowledge_context}"
             f"{web_search_context}"
             f"{owner_fact_grounding}"
+            f"{followup_resolution}"
             "Current user question (answer this directly):\n"
             f"{request.question}\n"
         )
