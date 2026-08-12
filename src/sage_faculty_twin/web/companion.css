@@ -984,6 +984,18 @@ body.onboarding-active .sage-companion,
     .sage-companion-character { transform: scale(0.9); }
 }
 
+/* The empty landing card is a primary action surface. Keep the little Sage
+   in the open greeting area while it wanders on narrow screens; once a chat
+   starts, the normal composer-relative bounds apply again. */
+@media (max-width: 720px) {
+    .chat-shell.chat-empty .sage-companion {
+        transform: translateY(-148px);
+    }
+    .chat-shell.chat-empty .sage-companion.is-dragging {
+        transform: none;
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
     .sage-companion,
     .sage-companion-toggle,

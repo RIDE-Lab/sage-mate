@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.12 - 2026-08-12
+
+### Fixed
+
+- Kept the wandering mobile companion in the open greeting area on the empty landing screen.
+
 ## v4.6.11 - 2026-08-12
 
 ### Fixed

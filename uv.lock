@@ -2582,7 +2582,7 @@ wheels = [
 
 [[package]]
 name = "sage-mate"
-version = "4.6.11"
+version = "4.6.12"
 source = { editable = "." }
 dependencies = [
     { name = "cloudpickle" },
