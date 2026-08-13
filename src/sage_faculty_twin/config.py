@@ -64,10 +64,13 @@ class AppSettings(BaseSettings):
     llm_policy_output_max_tokens_cap: int = Field(default=4096, ge=64, le=8192)
     llm_policy_output_min_tokens_floor: int = Field(default=192, ge=32, le=4096)
     llm_fast_answer_max_tokens: int = Field(
-        default=1024,
+        default=256,
         ge=128,
         le=4096,
-        description="Default max_tokens for non-thinking interactive answers.",
+        description=(
+            "Default max_tokens for non-thinking interactive answers. Keep this "
+            "bounded on low-throughput accelerators; deep mode has its own budget."
+        ),
     )
     llm_deep_answer_max_tokens: int = Field(
         default=256,
