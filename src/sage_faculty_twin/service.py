@@ -10136,6 +10136,10 @@ class DigitalTwinService:
     def stack_versions(self) -> dict[str, str]:
         return build_stack_versions_payload()
 
+    def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
+        """Compress one conversation through the same SAGE support boundary as chat."""
+        return self._build_support().compress_conversation_context(conversation_id)
+
     async def aclose(self) -> None:
         await self._llm_client.aclose()
 
