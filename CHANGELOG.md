@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v4.6.14 - 2026-08-13
+
+### Fixed
+
+- Made disabled/unsupported composer actions opaque, contrast-safe, and explicitly marked; no longer rely on opacity to communicate unavailable input.
+- Kept Token expanded state at normal scale; only the instantaneous press uses scale feedback.
+
 ## v4.6.13 - 2026-08-13
 
 ### Fixed

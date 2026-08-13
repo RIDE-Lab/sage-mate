@@ -1,5 +1,14 @@
 [
   {
+    "version": "v4.6.14",
+    "date": "2026-08-13",
+    "summary": "禁用动作控件与展开态修复",
+    "highlights": [
+      "禁用或不支持的麦克风、上传、Token 和发送按钮使用不透明 disabled surface",
+      "语音不可用时增加斜杠禁用标记，Token 展开状态不再持续缩放"
+    ]
+  },
+  {
     "version": "v4.6.13",
     "date": "2026-08-13",
     "summary": "Composer 动作控件可读性修复",

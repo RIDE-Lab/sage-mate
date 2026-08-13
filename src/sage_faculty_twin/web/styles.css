@@ -43,6 +43,9 @@
     --send-surface: #5366ee;
     --send-surface-hover: #6375ff;
     --send-ink: #ffffff;
+    --action-disabled-surface: #1b3154;
+    --action-disabled-ink: #9dafc9;
+    --action-disabled-border: rgba(166, 201, 255, 0.28);
     --radius-xl: 20px;
     --radius-lg: 16px;
     --radius-md: 14px;
@@ -102,6 +105,9 @@ html[data-theme="light"] {
     --send-surface: #4d5ee5;
     --send-surface-hover: #5c6cf3;
     --send-ink: #ffffff;
+    --action-disabled-surface: #dce5f0;
+    --action-disabled-ink: #536a86;
+    --action-disabled-border: rgba(42, 77, 119, 0.28);
 }
 
 * {
@@ -4961,8 +4967,11 @@ body.sidebar-expanded .rail-user {
 .composer-mic-button:disabled,
 .composer-plus-button:disabled {
     cursor: not-allowed;
-    opacity: 0.62;
-    filter: saturate(0.65);
+    opacity: 1;
+    background: var(--action-disabled-surface);
+    border-color: var(--action-disabled-border);
+    color: var(--action-disabled-ink);
+    filter: none;
     box-shadow: none;
     transform: none;
 }
@@ -5045,18 +5054,30 @@ body.sidebar-expanded .rail-user {
 
 /* Voice unsupported: disabled state with explanatory tooltip */
 .composer-mic-button.is-unsupported {
-    opacity: 0.62;
+    opacity: 1;
     cursor: not-allowed;
     pointer-events: auto;
-    background: var(--surface-muted);
-    border-color: var(--line-strong);
-    color: var(--muted);
+    background: var(--action-disabled-surface);
+    border-color: var(--action-disabled-border);
+    color: var(--action-disabled-ink);
+    filter: none;
+}
+
+.composer-mic-button.is-unsupported::after {
+    content: "";
+    position: absolute;
+    width: 22px;
+    height: 2px;
+    border-radius: 999px;
+    background: currentColor;
+    transform: rotate(-45deg);
+    pointer-events: none;
 }
 
 .composer-mic-button.is-unsupported:hover {
-    background: var(--surface-muted);
-    border-color: var(--line-strong);
-    color: var(--muted);
+    background: var(--action-disabled-surface);
+    border-color: var(--action-disabled-border);
+    color: var(--action-disabled-ink);
     box-shadow: none;
 }
 
@@ -5519,8 +5540,11 @@ select {
 }
 
 .send-button:disabled {
-    opacity: 0.72;
-    filter: saturate(0.72);
+    opacity: 1;
+    background: var(--action-disabled-surface);
+    border: 1px solid var(--action-disabled-border);
+    color: var(--action-disabled-ink);
+    filter: none;
 }
 
 .send-button-icon {
@@ -8421,13 +8445,19 @@ body.profile-code-assistant .composer-tools-row {
     border-color: var(--accent-2);
     color: var(--text-primary);
     box-shadow: 0 0 0 3px var(--action-ring);
+}
+
+.token-usage-toggle:active {
     transform: scale(0.94);
 }
 
 .token-usage-toggle:disabled {
     cursor: not-allowed;
-    opacity: 0.62;
-    filter: saturate(0.65);
+    opacity: 1;
+    background: var(--action-disabled-surface);
+    border-color: var(--action-disabled-border);
+    color: var(--action-disabled-ink);
+    filter: none;
     box-shadow: none;
     transform: none;
 }
