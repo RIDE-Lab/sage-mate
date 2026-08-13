@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v4.6.15 - 2026-08-13
+
+### Fixed
+
+- Replaced translucent composer action borders with opaque contrast-safe tokens for reliable 3:1+ boundaries in both themes.
+
 ## v4.6.14 - 2026-08-13
 
 ### Fixed
