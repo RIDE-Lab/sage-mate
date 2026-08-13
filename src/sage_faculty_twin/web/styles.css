@@ -33,6 +33,16 @@
     --shadow: 0 18px 46px rgba(0, 0, 0, 0.26);
     --shadow-strong: 0 24px 68px rgba(0, 0, 0, 0.36);
     --glow: 0 0 28px rgba(109, 124, 255, 0.22);
+    --action-surface: #122847;
+    --action-surface-hover: #1d3b67;
+    --action-surface-active: #244b7b;
+    --action-ink: #d7e5fb;
+    --action-border: rgba(166, 201, 255, 0.42);
+    --action-border-hover: rgba(39, 213, 233, 0.86);
+    --action-ring: rgba(39, 213, 233, 0.28);
+    --send-surface: #5366ee;
+    --send-surface-hover: #6375ff;
+    --send-ink: #ffffff;
     --radius-xl: 20px;
     --radius-lg: 16px;
     --radius-md: 14px;
@@ -82,6 +92,16 @@ html[data-theme="light"] {
     --shadow: 0 18px 46px rgba(40, 68, 106, 0.14);
     --shadow-strong: 0 24px 68px rgba(40, 68, 106, 0.2);
     --glow: 0 0 28px rgba(77, 94, 229, 0.16);
+    --action-surface: #f5f8fd;
+    --action-surface-hover: #e7f0fb;
+    --action-surface-active: #dce8f6;
+    --action-ink: #29496d;
+    --action-border: rgba(42, 77, 119, 0.32);
+    --action-border-hover: #087f9f;
+    --action-ring: rgba(8, 127, 159, 0.22);
+    --send-surface: #4d5ee5;
+    --send-surface-hover: #5c6cf3;
+    --send-ink: #ffffff;
 }
 
 * {
@@ -4896,19 +4916,55 @@ body.sidebar-expanded .rail-user {
     height: 32px;
     padding: 0;
     border-radius: 999px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--muted);
+    border: 1px solid var(--action-border);
+    background: var(--action-surface);
+    color: var(--action-ink);
     font-size: 1rem;
     line-height: 1;
     cursor: pointer;
-    transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    transition: background 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
 .composer-icon-button:hover {
-    background: rgba(255, 255, 255, 0.95);
-    border-color: rgba(99, 102, 241, 0.18);
-    color: var(--ink);
+    background: var(--action-surface-hover);
+    border-color: var(--action-border-hover);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
+}
+
+.composer-icon-button:focus-visible,
+.composer-mic-button:focus-visible,
+.composer-plus-button:focus-visible,
+.send-button:focus-visible {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 3px;
+}
+
+.composer-icon-button:active,
+.composer-mic-button:active,
+.composer-plus-button:active {
+    background: var(--action-surface-active);
+    border-color: var(--accent-2);
+    transform: scale(0.94);
+}
+
+.composer-icon-button[aria-pressed="true"],
+.composer-icon-button[aria-expanded="true"],
+.composer-icon-button.is-selected {
+    background: var(--action-surface-active);
+    border-color: var(--accent-2);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
+}
+
+.composer-icon-button:disabled,
+.composer-mic-button:disabled,
+.composer-plus-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.62;
+    filter: saturate(0.65);
+    box-shadow: none;
+    transform: none;
 }
 
 .composer-icon-button:hover .ui-icon,
@@ -4922,6 +4978,8 @@ body.sidebar-expanded .rail-user {
     height: 15px;
     display: block;
     flex: 0 0 auto;
+    color: inherit;
+    stroke: currentColor;
 }
 
 /* ── Voice input mic button ───────────────────────────────────────────── */
@@ -4934,18 +4992,19 @@ body.sidebar-expanded .rail-user {
     height: var(--composer-action-size);
     padding: 0;
     border-radius: 999px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--muted);
+    border: 1px solid var(--action-border);
+    background: var(--action-surface);
+    color: var(--action-ink);
     cursor: pointer;
     position: relative;
     transition: background 150ms ease, border-color 150ms ease, color 150ms ease, transform 150ms ease;
 }
 
 .composer-mic-button:hover {
-    background: rgba(255, 255, 255, 0.95);
-    border-color: rgba(99, 102, 241, 0.18);
-    color: var(--ink);
+    background: var(--action-surface-hover);
+    border-color: var(--action-border-hover);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
 }
 
 .composer-mic-button .mic-icon {
@@ -4953,6 +5012,8 @@ body.sidebar-expanded .rail-user {
     width: 22px;
     height: 22px;
     flex: 0 0 auto;
+    color: inherit;
+    stroke: currentColor;
 }
 
 .composer-mic-button .mic-recording-indicator {
@@ -4966,9 +5027,10 @@ body.sidebar-expanded .rail-user {
 
 /* Recording active state */
 .composer-mic-button.is-recording {
-    background: rgba(220, 53, 69, 0.10);
-    border-color: rgba(220, 53, 69, 0.35);
-    color: #dc3545;
+    background: var(--error-surface);
+    border-color: var(--error-text);
+    color: var(--error-text);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--error-text) 22%, transparent);
 }
 
 .composer-mic-button.is-recording .mic-recording-indicator {
@@ -4983,15 +5045,19 @@ body.sidebar-expanded .rail-user {
 
 /* Voice unsupported: disabled state with explanatory tooltip */
 .composer-mic-button.is-unsupported {
-    opacity: 0.35;
+    opacity: 0.62;
     cursor: not-allowed;
     pointer-events: auto;
+    background: var(--surface-muted);
+    border-color: var(--line-strong);
+    color: var(--muted);
 }
 
 .composer-mic-button.is-unsupported:hover {
-    background: rgba(255, 255, 255, 0.72);
-    border-color: rgba(22, 35, 56, 0.08);
+    background: var(--surface-muted);
+    border-color: var(--line-strong);
     color: var(--muted);
+    box-shadow: none;
 }
 
 @keyframes lucky-spinner-rotate {
@@ -5135,18 +5201,20 @@ body.sidebar-expanded .rail-user {
     width: var(--composer-action-size);
     height: var(--composer-action-size);
     min-width: var(--composer-action-size);
-    border: none;
+    border: 1px solid var(--action-border);
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.05);
-    color: rgba(0, 0, 0, 0.5);
+    background: var(--action-surface);
+    color: var(--action-ink);
     cursor: pointer;
     flex-shrink: 0;
     transition: all 150ms ease;
 }
 
 .composer-plus-button:hover {
-    background: rgba(0, 0, 0, 0.1);
-    color: rgba(0, 0, 0, 0.7);
+    background: var(--action-surface-hover);
+    border-color: var(--action-border-hover);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
 }
 
 @media (max-width: 760px) {
@@ -5211,15 +5279,17 @@ body.sidebar-expanded .rail-user {
 }
 
 .composer-workflow-toggle[aria-expanded="true"] {
-    background: rgba(36, 90, 166, 0.1);
-    border-color: rgba(36, 90, 166, 0.24);
-    color: var(--accent-deep);
+    background: var(--action-surface-active);
+    border-color: var(--accent-2);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
 }
 
 .composer-icon-button.composer-workflow-toggle-streaming {
-    color: #0f6f6c;
-    border-color: rgba(20, 125, 120, 0.28);
-    background: rgba(20, 125, 120, 0.08);
+    color: var(--accent-2);
+    border-color: var(--accent-2);
+    background: var(--action-surface-active);
+    box-shadow: 0 0 0 3px var(--action-ring);
 }
 
 @keyframes workflow-stream-dot {
@@ -5414,8 +5484,8 @@ select {
 .primary-button {
     border: 0;
     padding: 14px 18px;
-    color: white;
-    background: linear-gradient(135deg, var(--accent), var(--accent-deep));
+    color: var(--send-ink);
+    background: linear-gradient(135deg, var(--send-surface), var(--accent-deep));
     box-shadow: 0 16px 28px rgba(23, 59, 112, 0.2);
 }
 
@@ -5434,6 +5504,25 @@ select {
     isolation: isolate;
 }
 
+.send-button:hover {
+    background: linear-gradient(135deg, var(--send-surface-hover), var(--accent-deep));
+    box-shadow: 0 0 0 3px var(--action-ring), 0 14px 26px rgba(23, 59, 112, 0.26);
+}
+
+.send-button:active {
+    transform: scale(0.94);
+}
+
+.send-button:disabled,
+.send-button.is-sending {
+    color: var(--send-ink);
+}
+
+.send-button:disabled {
+    opacity: 0.72;
+    filter: saturate(0.72);
+}
+
 .send-button-icon {
     position: relative;
     z-index: 1;
@@ -5445,6 +5534,8 @@ select {
 
 .send-button-icon svg {
     display: block;
+    color: currentColor;
+    stroke: currentColor;
 }
 
 .send-button-spinner {
@@ -8302,19 +8393,48 @@ body.profile-code-assistant .composer-tools-row {
     gap: 4px;
     height: 32px;
     padding: 0 8px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
+    border: 1px solid var(--action-border);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.72);
-    color: var(--muted);
+    background: var(--action-surface);
+    color: var(--action-ink);
     font-size: 0.78rem;
     font-weight: 500;
     cursor: pointer;
-    transition: background 150ms ease, border-color 150ms ease, color 150ms ease;
+    transition: background 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 150ms ease;
 }
 
 .token-usage-toggle:hover {
-    background: var(--surface-soft);
-    color: var(--ink);
+    background: var(--action-surface-hover);
+    border-color: var(--action-border-hover);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
+}
+
+.token-usage-toggle:focus-visible {
+    outline: 2px solid var(--accent-2);
+    outline-offset: 3px;
+}
+
+.token-usage-toggle:active,
+.token-usage-toggle[aria-expanded="true"] {
+    background: var(--action-surface-active);
+    border-color: var(--accent-2);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
+    transform: scale(0.94);
+}
+
+.token-usage-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.62;
+    filter: saturate(0.65);
+    box-shadow: none;
+    transform: none;
+}
+
+.token-usage-toggle .ui-icon {
+    color: inherit;
+    stroke: currentColor;
 }
 
 .token-usage-summary {

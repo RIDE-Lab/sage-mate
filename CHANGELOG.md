@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v4.6.13 - 2026-08-13
+
+### Fixed
+
+- Unified composer send, microphone, dice, token, workflow, and upload controls under readable theme-aware action tokens.
+- Added explicit hover, focus, active, selected, and disabled affordances without relying on low opacity alone.
+
 ## v4.6.12 - 2026-08-12
 
 ### Fixed

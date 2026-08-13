@@ -1,5 +1,14 @@
 [
   {
+    "version": "v4.6.13",
+    "date": "2026-08-13",
+    "summary": "Composer 动作控件可读性修复",
+    "highlights": [
+      "发送、麦克风、骰子、Token、工作流和上传按钮统一使用日夜主题 action token",
+      "补齐 hover、focus、active、selected、disabled 状态和清晰边界"
+    ]
+  },
+  {
     "version": "v4.6.12",
     "date": "2026-08-12",
     "summary": "空白首屏电子伙伴避让卡片",
