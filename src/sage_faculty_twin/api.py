@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from . import __version__
 from .runtime_env import bootstrap_runtime_env
@@ -1934,8 +1934,6 @@ async def submit_chat_feedback(request: ChatFeedbackRequest) -> ChatFeedbackResp
 async def compress_context(raw_request: Request) -> JSONResponse:
     """Manually trigger context compression for a conversation."""
     user_session = service.get_user_session(raw_request.cookies.get(USER_COOKIE_NAME))
-    if not user_session.is_authenticated:
-        raise HTTPException(status_code=401, detail="请先登录后再压缩对话上下文。")
     try:
         payload = await raw_request.json()
     except json.JSONDecodeError:
@@ -1944,6 +1942,18 @@ async def compress_context(raw_request: Request) -> JSONResponse:
     conversation_id = str(payload.get("conversation_id", "") or "").strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id 不能为空")
+
+    # Guest conversations are browser-generated UUIDs and contain no account
+    # data.  Allow compression for that scoped capability; reject arbitrary
+    # strings so the endpoint cannot be used as a write primitive against
+    # internal digest paths. Authenticated users retain the existing behavior.
+    if not user_session.is_authenticated:
+        try:
+            parsed_id = UUID(conversation_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。") from None
+        if parsed_id.version != 4:
+            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。")
 
     result = service.compress_conversation_context(conversation_id)
     return JSONResponse(content=result)

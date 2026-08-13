@@ -2097,6 +2097,13 @@ class FacultyTwinWorkflowSupport:
             "important context. Output plain text only, no headers or markers."
         )
 
+        # Manual and automatic compression must not add another interactive
+        # generation to the single NPU slot. Operators can opt into the LLM
+        # summarizer for offline experiments; production defaults to the
+        # bounded deterministic digest below.
+        if not getattr(self._settings, "context_digest_llm_enabled", False):
+            return self._build_deterministic_digest(new_turns, max_chars)
+
         try:
             result = self._llm_client.answer_question_sync(
                 system_prompt,
@@ -2112,10 +2119,24 @@ class FacultyTwinWorkflowSupport:
         except Exception as exc:
             _logger.warning("Digest summarization failed: %s", exc)
             # Fallback: simple concatenation truncated to max_chars.
-            fallback = f"[自动摘要失败] 最近 {len(new_turns)} 轮对话涉及："
-            topics = [r.question[:80] for r in new_turns[-4:]]
-            fallback += "；".join(topics)
-            return fallback[:max_chars]
+            return self._build_deterministic_digest(new_turns, max_chars)
+
+    @staticmethod
+    def _build_deterministic_digest(
+        new_turns: list[ConversationMemoryRecord], max_chars: int
+    ) -> str:
+        """Build a bounded digest without another model round-trip."""
+        if not new_turns:
+            return ""
+        lines = [f"最近 {len(new_turns)} 轮对话摘要："]
+        for index, record in enumerate(new_turns[-8:], start=1):
+            question = re.sub(r"\s+", " ", record.question).strip()[:180]
+            answer = re.sub(r"\s+", " ", record.answer).strip()[:260]
+            if question:
+                lines.append(f"{index}. 用户：{question}")
+            if answer:
+                lines.append(f"   结论：{answer}")
+        return "\n".join(lines)[:max_chars]
 
     def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
         """Manually trigger context compression for a conversation.
@@ -2874,7 +2895,11 @@ class FacultyTwinWorkflowSupport:
         # Deep recovery is deliberately single-shot and bounded. Retrying a
         # 384/768-token answer on this backend can exceed the outer request
         # deadline even when the first request is healthy.
-        retry_attempts = 1 if deep_recovery else 2
+        # A malformed non-deep answer used to trigger two additional full NPU
+        # generations, producing the 60–80s waits observed in the browser.
+        # One bounded repair is enough; if it also fails, use the deterministic
+        # grounded fallback instead of extending the critical path.
+        retry_attempts = 1
         for attempt in range(retry_attempts):
             _raise_if_request_cancelled()
             try:

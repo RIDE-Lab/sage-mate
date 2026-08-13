@@ -326,6 +326,14 @@ class AppSettings(BaseSettings):
     changelog_path: Path = Field(default=Path("data/changelog.json"))
     # --- Context Digest (rolling conversation compression) ---
     context_digest_enabled: bool = Field(default=True)
+    context_digest_llm_enabled: bool = Field(
+        default=False,
+        description=(
+            "Use an extra LLM call to summarize rolling conversation digests. "
+            "The deterministic bounded digest is the default so manual compression "
+            "never waits behind the interactive NPU queue."
+        ),
+    )
     context_digest_turn_threshold: int = Field(
         default=4, ge=2, le=16,
     )
