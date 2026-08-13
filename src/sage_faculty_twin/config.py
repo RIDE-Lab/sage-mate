@@ -64,7 +64,7 @@ class AppSettings(BaseSettings):
     llm_policy_output_max_tokens_cap: int = Field(default=4096, ge=64, le=8192)
     llm_policy_output_min_tokens_floor: int = Field(default=192, ge=32, le=4096)
     llm_fast_answer_max_tokens: int = Field(
-        default=256,
+        default=192,
         ge=128,
         le=4096,
         description=(
