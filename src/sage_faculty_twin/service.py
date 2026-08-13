@@ -2297,7 +2297,9 @@ class FacultyTwinWorkflowSupport:
         ) or (
             explicit_deep
             and self._should_use_curated_deep_guidance(context.request.question)
-        ) or curated_direction
+        ) or curated_direction or self._should_use_curated_general_guidance(
+            relevance_question
+        )
         # Benchmark requests must exercise the prompt-grounding contract so
         # their adapters can inspect the assembled profile/evidence prompt;
         # deterministic production guidance would otherwise bypass the LLM
@@ -2781,6 +2783,19 @@ class FacultyTwinWorkflowSupport:
         return accelerator_optimization or latency_throughput_tradeoff
 
     @staticmethod
+    def _should_use_curated_general_guidance(question: str) -> bool:
+        """Answer bounded first-week planning prompts without model fan-out."""
+        lowered = question.lower()
+        return (
+            "第一周" in question
+            and any(marker in question for marker in ("研究项目", "科研项目", "研究工作"))
+            and any(marker in question for marker in ("规划", "安排", "计划", "怎么做", "如何"))
+        ) or (
+            "first week" in lowered
+            and any(marker in lowered for marker in ("research project", "research work"))
+        )
+
+    @staticmethod
     def _should_use_curated_direction_evaluation(question: str) -> bool:
         """Use a fast structured answer for research-direction evaluation prompts."""
         lowered = question.lower()
@@ -2984,6 +2999,15 @@ class FacultyTwinWorkflowSupport:
     def _build_deterministic_fallback_answer(context: ChatWorkflowContext) -> str:
         question = context.request.question.strip()
         lowered_question = question.lower()
+        if FacultyTwinWorkflowSupport._should_use_curated_general_guidance(question):
+            return (
+                "第一周的目标不是把所有工作做完，而是把问题、基线和验收口径钉住。建议按下面四步推进：\n\n"
+                "1. 明确问题：用一页纸写清研究假设、输入/输出、目标指标和不做什么。\n"
+                "2. 固定基线：选一个可运行的 baseline，冻结模型、数据、硬件、软件版本、并发和随机种子，先跑通最小复现实验。\n"
+                "3. 建立测量：至少记录质量、吞吐、P50/P95 延迟、失败率和资源占用，并保留命令、配置和原始日志。\n"
+                "4. 设定周末验收：形成一张结果表和一个待验证清单；如果 baseline 仍不可复现，下一周优先修复实验闭环，不急着扩展新功能。\n\n"
+                "周末应能回答三个问题：主假设是什么？baseline 是否稳定？下一步最小实验如何证伪或支持它？"
+            )
         if FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(question):
             return (
                 "判断标准：先证明收益真实且可归因，再决定是否继续投入。按“收益/风险”排序，建议只做下面三项：\n\n"
