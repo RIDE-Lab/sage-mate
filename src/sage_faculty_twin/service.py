@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
-from contextvars import ContextVar
 import hashlib
 import inspect
 import json
@@ -19,40 +17,18 @@ from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
-
-_request_cancel_event: ContextVar[threading.Event | None] = ContextVar(
-    "sage_mate_request_cancel_event", default=None
-)
-
-
-@contextmanager
-def request_cancellation_scope(event: threading.Event):
-    token = _request_cancel_event.set(event)
-    try:
-        yield
-    finally:
-        _request_cancel_event.reset(token)
-
-
-class RequestCancelledError(RuntimeError):
-    """Raised inside worker threads after the client request is gone."""
-
-
-def _request_was_cancelled() -> bool:
-    event = _request_cancel_event.get()
-    return event is not None and event.is_set()
-
-
-def _raise_if_request_cancelled() -> None:
-    if _request_was_cancelled():
-        raise RequestCancelledError("chat request cancelled by client or timeout")
-
 from fastapi import HTTPException, status
 from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
 from sage.runtime import FlowNetEnvironment
 
 from . import __version__ as _app_version
 from .analytics_store import ConversationAnalyticsStore
+from .request_context import (
+    RequestCancelledError,
+    raise_if_request_cancelled as _raise_if_request_cancelled,
+    request_cancellation_scope,
+    request_was_cancelled as _request_was_cancelled,
+)
 from .artifact_memory_draft_store import (
     ArtifactMemoryDraftRecord,
     ArtifactMemoryDraftStore,
@@ -101,6 +77,7 @@ from .answer_rendering import (
     extract_research_summary,
     grounded_course_fact_line,
     grounded_excerpt,
+    render_sage_vllm_comparison,
 )
 from .context_routing import (
     expand_followup_question,
@@ -2622,9 +2599,16 @@ class FacultyTwinWorkflowSupport:
                 + "\n\n"
                 "以上是当前公开主页资料明确列出的系统主线；具体仓库状态和版本以对应公开仓库为准。"
             )
-        is_stack_fact_question = any(
-            marker in lowered for marker in stack_fact_markers
-        ) and any(marker in question for marker in ("关系", "区别", "是什么", "怎么", "分别负责"))
+        mentions_sage_vllm = "sage" in lowered and "vllm" in lowered
+        is_stack_fact_question = (
+            any(marker in lowered for marker in stack_fact_markers)
+            or mentions_sage_vllm
+        ) and any(
+            marker in question
+            for marker in (
+                "关系", "区别", "是什么", "怎么", "分别负责", "比较", "分工", "协同", "联合", "实验", "验证",
+            )
+        )
         if is_stack_fact_question:
             candidates = [
                 hit
@@ -2640,11 +2624,7 @@ class FacultyTwinWorkflowSupport:
                 return "当前可见的公开资料不足以确认这些组件的具体关系；我不使用通用模板猜测架构职责。可以选择联网检索，或指定要比较的两个组件。"
             candidates.sort(key=lambda hit: (0 if "sage" in hit.title.lower() else 1, hit.title))
             context.knowledge_hits = candidates[:4]
-            lines = [
-                "基于当前检索到的公开资料，能确认的是：SAGE 更接近上层的研究与推理工作流框架，负责把检索、记忆、工具和回答组织起来；vLLM-HUST 更接近底层的大模型推理引擎，负责模型服务与硬件执行。两者是上下层协作关系，不是同一个组件。",
-                "\n本轮引用的公开资料已列在 Support 中；资料没有明确说明的版本差异或实现细节，我不作推断。",
-            ]
-            return "\n".join(lines)
+            return render_sage_vllm_comparison(question)
         teaching_fact_markers = (
             "课程主要学习",
             "课程学什么",
@@ -5765,6 +5745,15 @@ class FacultyTwinWorkflowSupport:
                 confidence=0.98,
             )
         if contains_marker(question, SYSTEM_PROJECT_MARKERS):
+            return InteractionIntent(
+                action="answer",
+                domain="research",
+                retrieval_scopes=["profile", "publications"],
+                exclude_scopes=["courseware"],
+                decision_mode="direct_answer",
+                confidence=0.99,
+            )
+        if "sage" in fact_lowered and "vllm" in fact_lowered:
             return InteractionIntent(
                 action="answer",
                 domain="research",

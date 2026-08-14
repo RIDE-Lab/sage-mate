@@ -55,6 +55,7 @@ def test_chat_returns_504_when_service_exceeds_budget(
     detail = response.json().get("detail", "")
     assert "未完成响应" in detail
     assert "重试" in detail
+    assert response.headers.get("x-sage-trace-id")
 
 
 def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
@@ -127,3 +128,24 @@ def test_chat_returns_retryable_429_when_admission_is_full(
     assert response.headers.get("retry-after") == "2"
     assert "正在排队" in response.json().get("detail", "")
     assert response.headers.get("x-queue-position") == "1"
+    assert response.headers.get("x-sage-trace-id")
+
+
+def test_fast_chat_exposes_request_boundary_timing() -> None:
+    client.cookies.clear()
+    response = client.post(
+        "/chat",
+        json={
+            "student_name": "Alice",
+            "conversation_id": "conv-fast-timing",
+            "question": "你好",
+        },
+    )
+
+    assert response.status_code == 200
+    timing = response.json()["request_timing"]
+    assert timing["trace_id"]
+    assert timing["route"] == "fast_path"
+    assert timing["total_duration_ms"] <= timing["budget_ms"]
+    assert "request_parse" in timing["stage_durations_ms"]
+    assert "fast_path_probe" in timing["stage_durations_ms"]

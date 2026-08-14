@@ -204,6 +204,18 @@ class TokenUsage(BaseModel):
     max_context_length: int = 0
 
 
+class ChatRequestTiming(BaseModel):
+    """Request-boundary timings used to reconcile UI latency with workflow work."""
+
+    trace_id: str = Field(min_length=1, max_length=128)
+    route: str = Field(pattern="^(boundary|fast_path|sage_workflow)$")
+    total_duration_ms: float = Field(ge=0)
+    budget_ms: float = Field(gt=0)
+    remaining_budget_ms: float = Field(ge=0)
+    stage_durations_ms: dict[str, float] = Field(default_factory=dict)
+    workflow_trace_reported_ms: float = Field(default=0, ge=0)
+
+
 class ChatResponse(BaseModel):
     answer: str
     owner_name: str
@@ -227,6 +239,7 @@ class ChatResponse(BaseModel):
     memory_write_back: bool = False
     retrieved_items: list[MemoryAuditItem] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
+    request_timing: ChatRequestTiming | None = None
 
 
 class ConversationHistoryItemResponse(BaseModel):

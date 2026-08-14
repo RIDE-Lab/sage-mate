@@ -31,6 +31,11 @@ from .interaction_policy import (
     requires_human_handoff,
 )
 from .models import InteractionIntent
+from .request_context import (
+    bounded_request_timeout,
+    raise_if_request_cancelled,
+    request_remaining_seconds,
+)
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
 from .workflow_steps import get_default_step_registry
@@ -1223,9 +1228,16 @@ class VllmChatClient:
         for attempt in range(max_retries + 1):
             collected: list[str] = []
             try:
-                with self._client.stream("POST", "/chat/completions", json=payload) as response:
+                raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+                with self._client.stream(
+                    "POST",
+                    "/chat/completions",
+                    json=payload,
+                    **self._request_timeout_kwargs(),
+                ) as response:
                     response.raise_for_status()
                     for raw_line in response.iter_lines():
+                        raise_if_request_cancelled()
                         if not raw_line:
                             continue
                         line = (
@@ -1377,7 +1389,12 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             try:
-                response = self._client.post("/chat/completions", json=payload)
+                raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+                response = self._client.post(
+                    "/chat/completions",
+                    json=payload,
+                    **self._request_timeout_kwargs(),
+                )
                 response.raise_for_status()
 
                 data = response.json()
@@ -1496,7 +1513,12 @@ class VllmChatClient:
 
         started_at = perf_counter()
         try:
-            response = self._client.post("/chat/completions", json=payload)
+            raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+            response = self._client.post(
+                "/chat/completions",
+                json=payload,
+                **self._request_timeout_kwargs(),
+            )
             response.raise_for_status()
             data = response.json()
         except httpx.TimeoutException:
@@ -2327,8 +2349,22 @@ class VllmChatClient:
 
     def _sleep_before_retry(self, retry_number: int) -> None:
         delay_seconds = self._settings.llm_retry_backoff_seconds * (2 ** max(0, retry_number - 1))
+        remaining = request_remaining_seconds(reserve_seconds=0.25)
+        if remaining is not None:
+            if remaining <= delay_seconds:
+                raise_if_request_cancelled(minimum_remaining_seconds=delay_seconds)
+            delay_seconds = min(delay_seconds, remaining)
         if delay_seconds > 0:
             time.sleep(delay_seconds)
+
+    def _request_timeout_kwargs(self) -> dict[str, float]:
+        """Override the shared client timeout only inside a budgeted request."""
+
+        if request_remaining_seconds() is None:
+            return {}
+        return {
+            "timeout": bounded_request_timeout(float(self._settings.llm_timeout_seconds))
+        }
 
 
 def _looks_like_booking_request(lowered: str, question: str) -> bool:

@@ -169,6 +169,49 @@ def test_stack_relation_answer_is_chinese_and_evidence_bound(tmp_path: Path) -> 
     assert "Support" in answer
 
 
+def test_stack_comparison_with_experiments_stays_grounded(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    context = _context(
+        "请比较 SAGE 与 vLLM-HUST 的分工，并给出三个本周联合优化实验。",
+        "research",
+        [
+            KnowledgeSearchHit(
+                document_id="stack-overview",
+                title="主页资料｜当前系统建设",
+                excerpt="SAGE 负责工作流；vLLM-HUST 负责推理引擎与国产硬件执行。",
+                score=90,
+                tags=["research", "overview", "audience:public"],
+                source_name="public-profile:systems",
+            )
+        ],
+    )
+
+    answer = service._build_grounded_fact_answer(context)
+
+    assert answer is not None
+    assert "待验证" in answer
+    assert "NPU 利用率" in answer
+    assert "GPU" not in answer
+    assert "单卡" not in answer
+
+
+def test_stack_comparison_bypasses_model_intent_for_lab_member(tmp_path: Path) -> None:
+    service = _service(tmp_path)
+    context = _context(
+        "比较 SAGE 与 vLLM-HUST 的分工和联合实验。",
+        "general",
+        [],
+    )
+    context.request.visitor_profile = "lab_member"
+
+    intent = service._build_fast_path_interaction_intent(context)
+
+    assert intent is not None
+    assert intent.domain == "research"
+    assert intent.retrieval_scopes == ["profile", "publications"]
+    assert intent.confidence == 0.99
+
+
 def test_system_project_list_uses_canonical_overview_and_rejects_paper_noise(tmp_path: Path) -> None:
     service = _service(tmp_path)
     service._knowledge_store = type("Store", (), {

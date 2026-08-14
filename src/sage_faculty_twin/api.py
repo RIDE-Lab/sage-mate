@@ -41,6 +41,8 @@ from .auth import (
 )
 from .config import settings
 from .chat_delivery import DeliveredChatResponse
+from .request_context import RequestCancelledError
+from .request_timing import RequestTimingLedger
 from .models import (
     AdminLoginRequest,
     AdminSessionResponse,
@@ -219,6 +221,7 @@ async def _run_chat_with_cancellation(
     raw_request: Request,
     *,
     timeout_seconds: float,
+    deadline_at: float | None = None,
     **answer_kwargs,
 ) -> ChatResponse:
     """Run one chat request while propagating disconnect/timeout to workers.
@@ -232,7 +235,7 @@ async def _run_chat_with_cancellation(
     request_payload = answer_kwargs.pop("payload")
 
     async def _run_answer():
-        with request_cancellation_scope(cancel_event):
+        with request_cancellation_scope(cancel_event, deadline_at=deadline_at):
             return await service.answer(request_payload, **answer_kwargs)
 
     answer_task = asyncio.create_task(_run_answer())
@@ -260,7 +263,10 @@ async def _run_chat_with_cancellation(
             return_when=asyncio.FIRST_COMPLETED,
         )
         if answer_task in done:
-            return answer_task.result()
+            try:
+                return answer_task.result()
+            except RequestCancelledError as exc:
+                raise asyncio.TimeoutError from exc
         cancel_event.set()
         answer_task.cancel()
         await asyncio.gather(answer_task, return_exceptions=True)
@@ -1761,6 +1767,11 @@ async def chat(
     raw_request: Request,
     request_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> ChatResponse:
+    timing = RequestTimingLedger(
+        trace_id=request_id or uuid4().hex,
+        budget_seconds=CHAT_REQUEST_TIMEOUT_SECONDS,
+    )
+    stage_started = time.perf_counter()
     payload = await _parse_chat_request(raw_request)
     payload = payload.model_copy(
         update={
@@ -1770,15 +1781,15 @@ async def chat(
             )
         }
     )
+    timing.record("request_parse", stage_started)
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
-    timeout_seconds = CHAT_REQUEST_TIMEOUT_SECONDS
 
     # Safety-boundary replies do not need the model or NPU.  Resolve them
     # before the single-model admission gate so a slow deep/web request cannot
     # make an obvious credential-exfiltration refusal return 429.
     boundary_response = service._check_sensitive_boundary_request(payload)
     if boundary_response is not None:
-        return boundary_response
+        return timing.attach(boundary_response, route="boundary")
 
     # Public greetings and bounded local-evidence FAQs do not consume the
     # model/NPU slot.  Probe this lane before admission so a long DeepSeek
@@ -1787,37 +1798,54 @@ async def chat(
     # admission path instead of creating an unbounded side queue.
     fast_response = None
     if not payload.attachments:
+        stage_started = time.perf_counter()
         try:
             fast_response = await asyncio.wait_for(
                 asyncio.to_thread(service.try_fast_answer, payload),
-                timeout=2.5,
+                timeout=min(2.5, timing.remaining_seconds()),
             )
         except asyncio.TimeoutError:
             fast_response = None
+        finally:
+            timing.record("fast_path_probe", stage_started)
     if fast_response is not None:
         # Fast answers skip the workflow DAG by design, but must still write
         # the exchange before returning so the next turn can resolve short
         # follow-ups against the same conversation.
+        stage_started = time.perf_counter()
         try:
-            return await asyncio.wait_for(
+            persisted = await asyncio.wait_for(
                 asyncio.to_thread(service.persist_fast_answer, payload, fast_response),
-                timeout=2.0,
+                timeout=min(2.0, timing.remaining_seconds()),
             )
+            timing.record("fast_path_persist", stage_started)
+            return timing.attach(persisted, route="fast_path")
         except asyncio.TimeoutError:
             _logger.exception("fast-path memory persistence timed out")
-            return fast_response
+            timing.record("fast_path_persist", stage_started)
+            return timing.attach(fast_response, route="fast_path")
         except Exception:
             _logger.exception("fast-path memory persistence failed")
-            return fast_response
+            timing.record("fast_path_persist", stage_started)
+            return timing.attach(fast_response, route="fast_path")
 
     global _chat_waiting_requests
+    if timing.remaining_seconds() <= 0:
+        raise HTTPException(
+            status_code=504,
+            detail="后端在本次请求总预算内未完成响应，请稍后重试。",
+            headers={"X-Sage-Trace-ID": timing.trace_id},
+        )
     queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
     _chat_waiting_requests += 1
+    stage_started = time.perf_counter()
     try:
         await asyncio.wait_for(
-            _chat_admission.acquire(), timeout=CHAT_ADMISSION_TIMEOUT_SECONDS
+            _chat_admission.acquire(),
+            timeout=min(CHAT_ADMISSION_TIMEOUT_SECONDS, timing.remaining_seconds()),
         )
     except asyncio.TimeoutError as exc:
+        timing.record("admission_wait", stage_started)
         _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
         estimated_wait = max(2, min(15, int(round(CHAT_ADMISSION_TIMEOUT_SECONDS * max(1, queue_position)))))
         raise HTTPException(
@@ -1830,8 +1858,10 @@ async def chat(
                 "Retry-After": str(estimated_wait),
                 "X-Queue-Position": str(queue_position),
                 "X-Queue-Estimated-Wait": str(estimated_wait),
+                "X-Sage-Trace-ID": timing.trace_id,
             },
         ) from exc
+    timing.record("admission_wait", stage_started)
     _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
 
     if request_id is None:
@@ -1841,17 +1871,23 @@ async def chat(
         # memory/profile bookkeeping out of the HTTP critical path without
         # changing the public response schema.
         try:
-            return await _run_chat_with_cancellation(
+            stage_started = time.perf_counter()
+            response = await _run_chat_with_cancellation(
                 raw_request,
-                timeout_seconds=timeout_seconds,
+                timeout_seconds=timing.remaining_seconds(),
+                deadline_at=timing.deadline_at,
                 payload=payload,
                 admin_session_token=admin_session_token,
                 trace_callback=lambda _step: None,
             )
+            timing.record("sage_workflow", stage_started)
+            return timing.attach(response, route="sage_workflow")
         except asyncio.TimeoutError as exc:
+            timing.record("sage_workflow", stage_started)
             raise HTTPException(
                 status_code=504,
-                detail=(f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"),
+                detail="后端在本次请求总预算内未完成响应，请稍后重试。",
+                headers={"X-Sage-Trace-ID": timing.trace_id},
             ) from exc
         finally:
             # A return still executes this finally; the slot is released
@@ -1891,19 +1927,27 @@ async def chat(
         answer_chunk_callback = _on_answer_chunk
 
     try:
+        stage_started = time.perf_counter()
         response = await _run_chat_with_cancellation(
             raw_request,
-            timeout_seconds=timeout_seconds,
+            timeout_seconds=timing.remaining_seconds(),
+            deadline_at=timing.deadline_at,
             payload=payload,
             admin_session_token=admin_session_token,
             trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),
             on_post_answer_complete=_on_post_answer_complete,
             answer_chunk_callback=answer_chunk_callback,
         )
+        timing.record("sage_workflow", stage_started)
     except asyncio.TimeoutError as exc:
-        message = f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"
+        timing.record("sage_workflow", stage_started)
+        message = "后端在本次请求总预算内未完成响应，请稍后重试。"
         workflow_event_broker.publish_error(request_id, message)
-        raise HTTPException(status_code=504, detail=message) from exc
+        raise HTTPException(
+            status_code=504,
+            detail=message,
+            headers={"X-Sage-Trace-ID": timing.trace_id},
+        ) from exc
     except Exception as exc:
         workflow_event_broker.publish_error(request_id, str(exc))
         raise
@@ -1922,7 +1966,7 @@ async def chat(
         finally:
             answer_complete_gate.mark_answer_done()
 
-    return response
+    return timing.attach(response, route="sage_workflow")
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)

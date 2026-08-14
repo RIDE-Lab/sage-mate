@@ -64,3 +64,30 @@ def extract_research_summary(hit: KnowledgeSearchHit) -> list[tuple[int, str]]:
         priority = sum(marker in normalized for marker in ("当前工作", "研究聚焦", "研究主线", "大模型推理"))
         candidates.append((priority, normalized[:260]))
     return candidates
+
+
+def render_sage_vllm_comparison(question: str) -> str:
+    """Render an evidence-bounded stack comparison and optional experiment plan.
+
+    The component responsibilities are stable knowledge-base facts. Experiment
+    ideas are labelled as proposals so they cannot be mistaken for implemented
+    runtime capabilities.
+    """
+
+    lines = [
+        "基于当前公开资料，二者是上下层协作关系，而不是同一组件：",
+        "- SAGE 位于应用与工作流层，组织检索、记忆、工具、决策和回答，并负责跨阶段的状态、截止时间与可观测性。",
+        "- vLLM-HUST 位于推理引擎层，负责模型服务、批处理、KV Cache、并行执行和国产异构硬件适配。",
+        "- 联合边界应是明确的请求契约：优先级、deadline、缓存/状态复用提示、取消信号，以及逐阶段指标回传。",
+    ]
+    if any(marker in question for marker in ("实验", "验证", "评测", "优化", "本周")):
+        lines.extend(
+            [
+                "\n以下是待验证的联合实验建议，不代表当前系统已经实现：",
+                "1. 端到端预算实验：固定同一批简单/复杂问题，对比仅有局部 timeout 与统一 deadline；记录 TTFT、总延迟、超时率、取消后任务回收时间和引用完整率。",
+                "2. 状态复用实验：按冷启动、固定前缀命中、会话片段命中三组运行；记录 prompt tokens、首 token 延迟、KV/前缀命中率、吞吐与回答一致性。",
+                "3. SLO 联合调度实验：构造前台短问答与后台深度任务混合负载，传播优先级和取消信号；记录短请求 p95、深度任务完成率、NPU 利用率与孤儿任务数。",
+            ]
+        )
+    lines.append("\n本轮引用的公开资料列在 Support 中；版本和能力以对应仓库及真实运行收据为准。")
+    return "\n".join(lines)
