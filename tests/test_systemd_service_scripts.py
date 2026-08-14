@@ -12,6 +12,7 @@ QUICKSTART_SCRIPT = REPO_ROOT / "quickstart.sh"
 HOSTED_WEB_INSTALLER = REPO_ROOT / "release" / "hosted-web.sh"
 PROXY_SCRIPT = REPO_ROOT / "tools" / "run_vllm_openai_proxy.sh"
 ENGINE_SCRIPT = REPO_ROOT / "tools" / "run_vllm_engine.sh"
+ENGINE_LOCK_SCRIPT = REPO_ROOT / "tools" / "lock_sage_mate_engine.sh"
 APP_SCRIPT = REPO_ROOT / "tools" / "run_app_server.sh"
 
 
@@ -256,3 +257,14 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
         or "vLLM-HUST dev-hub submodule launcher not found" in diagnostics
         or "not executable in the container" in diagnostics
     )
+
+
+def test_engine_lock_clears_stale_kv_cache_contract() -> None:
+    """Manager environment must not override machine-local KV cache settings."""
+
+    script = ENGINE_LOCK_SCRIPT.read_text(encoding="utf-8")
+    unset_block = script.split("systemctl --user unset-environment", 1)[1].split(
+        ">/dev/null 2>&1 || true", 1
+    )[0]
+    assert "VLLM_ENGINE_KV_CACHE_DTYPE" in unset_block
+    assert "VLLM_ENGINE_KV_CACHE_MEMORY_BYTES" in unset_block

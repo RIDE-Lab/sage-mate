@@ -71,17 +71,44 @@ VLLM_ENGINE_EXTRA_ARGS_JSON="${VLLM_ENGINE_EXTRA_ARGS_JSON:-}"
 COMPILE_CUSTOM_KERNELS=1
 export VLLM_ENGINE_ENFORCE_EAGER VLLM_ENGINE_EXTRA_ARGS_JSON COMPILE_CUSTOM_KERNELS
 
-cleanup_managed_container() {
-  local container_name="${VLLM_ENGINE_CONTAINER:-}"
-  [[ -n "$container_name" ]] || return 0
-  local docker_bin=""
+docker_command() {
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
-    docker_bin="docker"
+    printf 'docker\n'
   elif command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
-    docker_bin="sudo -n docker"
-  else
-    return 0
+    printf 'sudo -n docker\n'
   fi
+}
+
+find_engine_container_on_port() {
+  local port="${VLLM_ENGINE_PORT:-8000}"
+  local docker_bin
+  local name
+  local args
+  docker_bin="$(docker_command)"
+  [[ -n "$docker_bin" ]] || return 0
+  local -a docker_cmd
+  read -r -a docker_cmd <<< "$docker_bin"
+  while IFS= read -r name; do
+    [[ -n "$name" ]] || continue
+    args="$("${docker_cmd[@]}" exec "$name" ps -eo args= 2>/dev/null || true)"
+    if awk -v port="$port" '
+      /vllm/ && / serve / && ($0 ~ ("--port " port) || $0 ~ ("--port=" port)) { found=1 }
+      END { exit !found }
+    ' <<< "$args"; then
+      printf '%s\n' "$name"
+      return 0
+    fi
+  done < <("${docker_cmd[@]}" ps --format '{{.Names}}')
+}
+
+previous_engine_container="$(find_engine_container_on_port)"
+
+cleanup_managed_container() {
+  local container_name="$1"
+  [[ -n "$container_name" ]] || return 0
+  local docker_bin
+  docker_bin="$(docker_command)"
+  [[ -n "$docker_bin" ]] || return 0
   read -r -a docker_cmd <<< "$docker_bin"
   if "${docker_cmd[@]}" inspect "$container_name" >/dev/null 2>&1; then
     echo "[sage-mate-lock] removing managed container '$container_name' to release NPUs"
@@ -101,10 +128,16 @@ if command -v systemctl >/dev/null 2>&1; then
     VLLM_ENGINE_AUTO_DOWNLOAD VLLM_USE_V1 \
     VLLM_ENGINE_MAX_MODEL_LEN VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS VLLM_ENGINE_MAX_NUM_SEQS \
     VLLM_ENGINE_GPU_MEM_UTIL VLLM_ENGINE_DTYPE VLLM_ENGINE_QUANTIZATION \
+    VLLM_ENGINE_KV_CACHE_DTYPE VLLM_ENGINE_KV_CACHE_MEMORY_BYTES \
+    VLLM_ENGINE_CONTAINER_HOME VLLM_ASCEND_ENABLE_MLAPO \
+    VLLM_ASCEND_KV_CACHE_FREE_MEMORY_FRACTION \
+    VLLM_ENGINE_CONTAINER_SHM_SIZE VLLM_ENGINE_CONTAINER_LD_PRELOAD SHM_SIZE VLLM_HUST_CONTAINER_PRIVILEGED \
     VLLM_ENGINE_ENABLE_PREFIX_CACHING VLLM_ENGINE_ENABLE_CHUNKED_PREFILL \
     VLLM_ENGINE_ENABLE_EXPERT_PARALLEL VLLM_ENGINE_VLLM_VERSION \
     VLLM_ENGINE_CANN_VERSION VLLM_ENGINE_TORCH_VERSION VLLM_ENGINE_TORCH_NPU_VERSION \
     VLLM_ENGINE_IMAGE VLLM_ENGINE_CONTAINER VLLM_ASCEND_ENABLE_FLASHCOMM1 \
+    HCCL_BUFFSIZE HCCL_OP_EXPANSION_MODE OMP_NUM_THREADS OMP_PROC_BIND \
+    PYTORCH_NPU_ALLOC_CONF TASK_QUEUE_ENABLE LD_PRELOAD \
     >/dev/null 2>&1 || true
   # Keep physical IDs in the manager; run_vllm_engine.sh derives 0..N-1 for
   # the container and exports the physical IDs only for host ownership checks.
@@ -119,7 +152,12 @@ if command -v systemctl >/dev/null 2>&1; then
     >/dev/null
 fi
 
-cleanup_managed_container
+if [[ -n "$previous_engine_container" ]]; then
+  cleanup_managed_container "$previous_engine_container"
+fi
+if [[ "${VLLM_ENGINE_CONTAINER:-}" != "$previous_engine_container" ]]; then
+  cleanup_managed_container "${VLLM_ENGINE_CONTAINER:-}"
+fi
 
 # Validate ownership after stopping the old service; this catches accidental
 # overlap with another workload before any container is recreated.
@@ -135,6 +173,8 @@ umask 077
   printf 'VLLM_ENGINE_TP_SIZE=%q\n' "$tp_size"
   printf 'VLLM_ENGINE_ENFORCE_EAGER=0\n'
   printf 'VLLM_ENGINE_EXTRA_ARGS_JSON=%q\n' "$VLLM_ENGINE_EXTRA_ARGS_JSON"
+  printf 'VLLM_ENGINE_CONTAINER_SHM_SIZE=%q\n' "${VLLM_ENGINE_CONTAINER_SHM_SIZE:-}"
+  printf 'VLLM_ENGINE_CONTAINER=%q\n' "${VLLM_ENGINE_CONTAINER:-}"
   printf 'COMPILE_CUSTOM_KERNELS=1\n'
   printf 'REPO_ROOT=%q\n' "$repo_root"
   printf 'LOCKED_AT_UTC=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
