@@ -268,3 +268,21 @@ def test_engine_lock_clears_stale_kv_cache_contract() -> None:
     )[0]
     assert "VLLM_ENGINE_KV_CACHE_DTYPE" in unset_block
     assert "VLLM_ENGINE_KV_CACHE_MEMORY_BYTES" in unset_block
+
+
+def test_engine_example_disables_foreign_pythonpath_inheritance() -> None:
+    """Pinned submodules must win over plugin sources baked into an image."""
+
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    assert "VLLM_ENGINE_INHERIT_PYTHONPATH=0" in example
+
+
+def test_engine_verifier_checks_runtime_import_origins() -> None:
+    """Verification must reject undeclared engine/plugin source trees."""
+
+    script = (REPO_ROOT / "tools" / "verify_sage_mate_engine.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "undeclared engine/plugin source found in runtime PYTHONPATH" in script
+    assert "engine/plugin imported from undeclared source" in script
+    assert "import_origins=" in script
