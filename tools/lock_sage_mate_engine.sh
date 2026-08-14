@@ -61,10 +61,13 @@ tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
   echo "ERROR: VLLM_ENGINE_TP_SIZE=$tp_size must equal physical NPU count=$device_count" >&2; exit 2;
 }
 
-# The lock contract is graph mode. Clear both the explicit flag and the JSON
-# escape hatch so no stale retry strategy can silently re-enable eager mode.
+# The lock contract keeps the target engine in graph mode. Clear the explicit
+# target flag, but retain an operator-declared extra-args JSON from the
+# machine-local .env (for example, a model's documented MTP configuration).
+# This prevents stale retry-loop values from leaking in while still allowing
+# model-specific, reproducible vLLM flags to be part of the locked contract.
 VLLM_ENGINE_ENFORCE_EAGER=0
-VLLM_ENGINE_EXTRA_ARGS_JSON=""
+VLLM_ENGINE_EXTRA_ARGS_JSON="${VLLM_ENGINE_EXTRA_ARGS_JSON:-}"
 COMPILE_CUSTOM_KERNELS=1
 export VLLM_ENGINE_ENFORCE_EAGER VLLM_ENGINE_EXTRA_ARGS_JSON COMPILE_CUSTOM_KERNELS
 
@@ -95,14 +98,21 @@ if command -v systemctl >/dev/null 2>&1; then
     COMPILE_CUSTOM_KERNELS \
     VLLM_ENGINE_MODEL_PATH VLLM_ENGINE_SERVED_MODEL_NAME VLLM_ENGINE_ACTUAL_MODEL_ID \
     VLLM_ENGINE_MODEL_SOURCE VLLM_ENGINE_MODEL_FAMILY VLLM_ENGINE_AUTO_RESOLVE_MODEL \
-    VLLM_ENGINE_AUTO_DOWNLOAD VLLM_USE_V1 >/dev/null 2>&1 || true
+    VLLM_ENGINE_AUTO_DOWNLOAD VLLM_USE_V1 \
+    VLLM_ENGINE_MAX_MODEL_LEN VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS VLLM_ENGINE_MAX_NUM_SEQS \
+    VLLM_ENGINE_GPU_MEM_UTIL VLLM_ENGINE_DTYPE VLLM_ENGINE_QUANTIZATION \
+    VLLM_ENGINE_ENABLE_PREFIX_CACHING VLLM_ENGINE_ENABLE_CHUNKED_PREFILL \
+    VLLM_ENGINE_ENABLE_EXPERT_PARALLEL VLLM_ENGINE_VLLM_VERSION \
+    VLLM_ENGINE_CANN_VERSION VLLM_ENGINE_TORCH_VERSION VLLM_ENGINE_TORCH_NPU_VERSION \
+    VLLM_ENGINE_IMAGE VLLM_ENGINE_CONTAINER VLLM_ASCEND_ENABLE_FLASHCOMM1 \
+    >/dev/null 2>&1 || true
   # Keep physical IDs in the manager; run_vllm_engine.sh derives 0..N-1 for
   # the container and exports the physical IDs only for host ownership checks.
   systemctl --user set-environment \
     VLLM_ENGINE_NPU_DEVICES="$physical_devices" \
     VLLM_ENGINE_TP_SIZE="$tp_size" \
     VLLM_ENGINE_ENFORCE_EAGER=0 \
-    VLLM_ENGINE_EXTRA_ARGS_JSON="" \
+    VLLM_ENGINE_EXTRA_ARGS_JSON="$VLLM_ENGINE_EXTRA_ARGS_JSON" \
     COMPILE_CUSTOM_KERNELS=1 \
     VLLM_ENGINE_AUTO_RESOLVE_MODEL="${VLLM_ENGINE_AUTO_RESOLVE_MODEL:-true}" \
     VLLM_ENGINE_AUTO_DOWNLOAD="${VLLM_ENGINE_AUTO_DOWNLOAD:-1}" \
@@ -124,7 +134,7 @@ umask 077
   printf 'VLLM_ENGINE_NPU_DEVICES=%q\n' "$physical_devices"
   printf 'VLLM_ENGINE_TP_SIZE=%q\n' "$tp_size"
   printf 'VLLM_ENGINE_ENFORCE_EAGER=0\n'
-  printf 'VLLM_ENGINE_EXTRA_ARGS_JSON=\n'
+  printf 'VLLM_ENGINE_EXTRA_ARGS_JSON=%q\n' "$VLLM_ENGINE_EXTRA_ARGS_JSON"
   printf 'COMPILE_CUSTOM_KERNELS=1\n'
   printf 'REPO_ROOT=%q\n' "$repo_root"
   printf 'LOCKED_AT_UTC=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
