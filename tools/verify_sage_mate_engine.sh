@@ -104,29 +104,109 @@ if [[ -n "$container" ]] && command -v docker >/dev/null 2>&1; then
       exit 1
     fi
   done
-  import_origins="$("${docker_cmd[@]}" exec --env "PYTHONPATH=$runtime_pythonpath" "$container" sh -c '
+  import_origins="$("${docker_cmd[@]}" exec \
+    --env "PYTHONPATH=$runtime_pythonpath" \
+    --env "SAGE_MATE_DECLARED_PYTHONPATH=$declared_pythonpath" \
+    --env "VLLM_ENGINE_INSTALLED_MODULES_JSON=${VLLM_ENGINE_INSTALLED_MODULES_JSON:-{}}" \
+    "$container" sh -c '
     pid=$(ps -eo pid=,args= | awk "/vllm serve/ {print \$1; exit}")
     exe=$(readlink "/proc/$pid/exe")
-    "$exe" -c "import vllm, vllm_ascend; print(vllm.__file__); print(vllm_ascend.__file__)"
-  ' 2>/dev/null | awk '/^\// {print}' | tail -n2)"
-  for origin in $import_origins; do
-    valid=0
-    for expected_root in "${declared_roots[@]}"; do
-      if [[ "$origin" == "$expected_root/"* ]]; then
-        valid=1
-        break
-      fi
-    done
-    [[ "$valid" == "1" ]] || {
-      echo "ERROR: engine/plugin imported from undeclared source: $origin" >&2
-      exit 1
+    "$exe" - <<'"'"'PY'"'"'
+import importlib
+import importlib.metadata
+import json
+import os
+import pathlib
+
+declared_roots = [
+    pathlib.Path(entry).resolve()
+    for entry in os.environ.get("SAGE_MATE_DECLARED_PYTHONPATH", "").split(":")
+    if entry
+]
+try:
+    installed_contract = json.loads(
+        os.environ.get("VLLM_ENGINE_INSTALLED_MODULES_JSON", "{}")
+    )
+except json.JSONDecodeError as exc:
+    raise SystemExit(
+        f"ERROR: invalid VLLM_ENGINE_INSTALLED_MODULES_JSON: {exc}"
+    ) from exc
+if not isinstance(installed_contract, dict):
+    raise SystemExit("ERROR: VLLM_ENGINE_INSTALLED_MODULES_JSON must be an object")
+
+for module_name in ("vllm", "vllm_ascend"):
+    module = importlib.import_module(module_name)
+    origin = pathlib.Path(module.__file__).resolve()
+    source_root = next(
+        (
+            root
+            for root in declared_roots
+            if (root / module_name / "__init__.py").is_file()
+        ),
+        None,
+    )
+    if source_root is not None:
+        if not origin.is_relative_to(source_root):
+            raise SystemExit(
+                f"ERROR: {module_name} imported from {origin}, expected {source_root}"
+            )
+        print(f"{module_name}={origin} (declared source)")
+        continue
+
+    contract = installed_contract.get(module_name)
+    if not isinstance(contract, dict):
+        raise SystemExit(
+            f"ERROR: {module_name} has no declared source root and no "
+            "installed-distribution contract"
+        )
+    distribution_name = contract.get("distribution")
+    expected_version = contract.get("version")
+    if not isinstance(distribution_name, str) or not distribution_name:
+        raise SystemExit(
+            f"ERROR: installed contract for {module_name} needs distribution"
+        )
+    if not isinstance(expected_version, str) or not expected_version:
+        raise SystemExit(
+            f"ERROR: installed contract for {module_name} needs exact version"
+        )
+    try:
+        distribution = importlib.metadata.distribution(distribution_name)
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise SystemExit(
+            f"ERROR: installed distribution {distribution_name} not found"
+        ) from exc
+    if distribution.version != expected_version:
+        raise SystemExit(
+            f"ERROR: installed distribution {distribution_name} version "
+            f"{distribution.version}, expected {expected_version}"
+        )
+    distribution_root = pathlib.Path(distribution.locate_file("")).resolve()
+    try:
+        relative_origin = origin.relative_to(distribution_root)
+    except ValueError as exc:
+        raise SystemExit(
+            f"ERROR: {module_name} imported from {origin}, outside installed "
+            f"distribution root {distribution_root}"
+        ) from exc
+    distribution_files = {
+        pathlib.PurePosixPath(str(item)) for item in (distribution.files or ())
     }
-  done
-  [[ "$(wc -w <<< "$import_origins")" == "2" ]] || {
+    if pathlib.PurePosixPath(relative_origin.as_posix()) not in distribution_files:
+        raise SystemExit(
+            f"ERROR: {module_name} origin {relative_origin} is not owned by "
+            f"installed distribution {distribution_name}"
+        )
+    print(
+        f"{module_name}={origin} "
+        f"(installed {distribution_name}=={distribution.version})"
+    )
+PY
+  ')"
+  [[ "$(wc -l <<< "$import_origins")" == "2" ]] || {
     echo "ERROR: could not verify vllm and vllm_ascend import origins" >&2
     exit 1
   }
-  echo "[sage-mate-verify] import_origins=$(tr '\n' ',' <<< "$import_origins" | sed 's/,$//')"
+  echo "[sage-mate-verify] import_origins=$(tr '\n' ';' <<< "$import_origins" | sed 's/;$//')"
   echo "[sage-mate-verify] graph_mode=ON command_verified"
 fi
 
