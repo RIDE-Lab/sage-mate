@@ -4,6 +4,7 @@ import os
 import socket
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -14,6 +15,28 @@ PROXY_SCRIPT = REPO_ROOT / "tools" / "run_vllm_openai_proxy.sh"
 ENGINE_SCRIPT = REPO_ROOT / "tools" / "run_vllm_engine.sh"
 ENGINE_LOCK_SCRIPT = REPO_ROOT / "tools" / "lock_sage_mate_engine.sh"
 APP_SCRIPT = REPO_ROOT / "tools" / "run_app_server.sh"
+DEPLOY_HELPERS = REPO_ROOT / "tools" / "lib" / "deploy_common.sh"
+
+
+def test_runtime_dependency_contract_separates_portable_core_from_full_neuromem() -> None:
+    project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
+        "project"
+    ]
+    dependencies = {
+        dependency.split(">=", 1)[0].lower() for dependency in project["dependencies"]
+    }
+
+    assert project["requires-python"] == ">=3.11"
+    assert {"isage", "isage-anns"} <= dependencies
+    assert any(
+        dependency.lower().startswith("isage-neuromem")
+        for dependency in project["optional-dependencies"]["neuromem"]
+    )
+    assert not any(
+        dependency.lower().startswith("isage-neuromem")
+        for extra in ("vdb", "vdb-anns")
+        for dependency in project["optional-dependencies"][extra]
+    )
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -217,10 +240,19 @@ def test_run_vllm_openai_proxy_fails_fast_when_port_is_occupied(tmp_path: Path) 
 
 def test_app_runtime_auto_installs_enabled_sage_anns_backend() -> None:
     script = APP_SCRIPT.read_text(encoding="utf-8")
+    helpers = DEPLOY_HELPERS.read_text(encoding="utf-8")
+    quickstart = QUICKSTART_SCRIPT.read_text(encoding="utf-8")
 
-    assert 'missing+=("isage-vdb>=0.2.0.9")' in script
-    assert 'missing+=("isage-anns>=0.2.0")' in script
-    assert '"$py" -m pip install --quiet "${missing[@]}"' in script
+    assert "_ensure_base_runtime_deps" in script
+    assert "version('isage')" in script
+    assert "version('isage-neuromem')" in script
+    assert "from sage.neuromem import UnifiedCollection" in script
+    assert '"$py" -m pip install --quiet -e "$repo_root"' in script
+    assert "ensure_neuromem_collection_runtime \"$repo_root\" \"$py\"" in script
+    assert '"$python_bin" -m pip install --quiet --no-deps "$requirement"' in helpers
+    assert '"$uv_bin" pip install --python "$python_bin" --no-deps "$requirement"' in helpers
+    assert "ensure_neuromem_collection_runtime \"$repo_root\" \"$python_bin\"" in quickstart
+    assert '"$py" -m pip install --quiet -e "$repo_root[vdb-anns]"' in script
     assert 'DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem' in script
     assert 'DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE:-segment' in script
     assert '"$conversation_index" == "sage_vdb_ann"' in script

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v4.6.22 - 2026-08-15
+
+### Fixed
+
+- 将运行时实际必需的 SAGE 与 SageANNS 纳入基础依赖，普通 `uv sync` 不再移除 ANNS 插件后留下依赖机器状态才能通过的伪完整环境。
+- NeuroMem collection 运行时会依据项目声明自动补齐，并隔离其当前仅 x86_64 可用的可选 SAGE Kernel 服务依赖，使 Ascend ARM64 与普通开发机使用同一安装入口。
+- 应用启动会依据仓库依赖契约自动修复基础 SAGE/NeuroMem 栈和按需 SageVDB 栈，不再在脚本中重复硬编码包版本。
+- 显式选择 SageANNS 对话索引但插件缺失时，稳定返回可操作的缺失依赖错误，而不是被 NeuroMem 注册表差异覆盖成“未知索引”。
+
 ## v4.6.21 - 2026-08-15
 
 ### Fixed
