@@ -197,7 +197,35 @@ def test_deployment_receipt_is_used_when_live_probe_fails(tmp_path: Path) -> Non
     assert identity.status == "receipt"
     assert identity.source == "deployment-lock"
     assert identity.served_model == "receipt-model"
+    assert identity.serving_available is False
     assert identity.device_count == 4
+    answer = render_runtime_identity_answer(identity)
+    assert "部署锁定目标" in answer
+    assert "不代表引擎当前正在提供推理" in answer
+
+
+def test_probe_error_keeps_configuration_but_marks_serving_unavailable(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "engine-deployment.lock.env").write_text(
+        "VLLM_ENGINE_SERVED_MODEL_NAME=locked-model\n"
+        "VLLM_ENGINE_NPU_DEVICES=0\\,1\n",
+        encoding="utf-8",
+    )
+    provider = RuntimeIdentityProvider(
+        AppSettings(runtime_dir=tmp_path),
+        model_probe=lambda: (_ for _ in ()).throw(TimeoutError("probe timed out")),
+        versions_provider=lambda: {},
+        hardware_provider=lambda: {},
+        environ={},
+    )
+
+    identity = provider.snapshot()
+
+    assert identity.status == "receipt"
+    assert identity.serving_available is False
+    assert identity.served_model == "locked-model"
+    assert "当前无法从实时 serving endpoint 确认" in render_runtime_identity_answer(identity)
 
 
 def test_unknown_runtime_never_guesses_cuda_or_gpu(tmp_path: Path) -> None:
@@ -207,6 +235,7 @@ def test_unknown_runtime_never_guesses_cuda_or_gpu(tmp_path: Path) -> None:
     answer = render_runtime_identity_answer(identity)
 
     assert identity.status == "unknown"
+    assert identity.serving_available is False
     assert "不会猜测" in answer
     assert "CUDA" not in answer
     assert "GPU" not in answer
@@ -279,4 +308,59 @@ def test_end_to_end_chat_uses_runtime_evidence_without_llm_facts(tmp_path: Path)
     health = service.health()
     assert health["model_name"] == response.used_model
     assert health["runtime_device_count"] == "8"
+    assert health["runtime_serving_available"] == "true"
     assert str(tmp_path) not in json.dumps(response.model_dump(), ensure_ascii=False)
+
+
+def test_end_to_end_receipt_answer_does_not_claim_live_serving(tmp_path: Path) -> None:
+    (tmp_path / "engine-deployment.lock.env").write_text(
+        "VLLM_ENGINE_SERVED_MODEL_NAME=locked-model\n"
+        "VLLM_ENGINE_NPU_DEVICES=0\\,1\n"
+        "VLLM_ENGINE_TP_SIZE=2\n",
+        encoding="utf-8",
+    )
+    settings = AppSettings(
+        runtime_dir=tmp_path,
+        knowledge_base_dir=tmp_path / "knowledge",
+        conversation_memory_dir=tmp_path / "memory",
+        chat_runtime_pipeline_enabled=False,
+    )
+    service = DigitalTwinService(settings)
+    service._runtime_identity_provider = RuntimeIdentityProvider(
+        settings,
+        model_probe=lambda: "",
+        versions_provider=lambda: {},
+        hardware_provider=lambda: {},
+        environ={},
+    )
+    service._llm_client.classify_interaction_intent_sync = lambda *_args, **_kwargs: (
+        InteractionIntent(
+            action="answer",
+            domain="general",
+            retrieval_scopes=[],
+            exclude_scopes=[],
+            decision_mode="direct_answer",
+            confidence=1.0,
+        )
+    )
+
+    response = asyncio.run(
+        service.answer_in_process(
+            ChatRequest(
+                student_name="guest",
+                question="当前运行的模型和 NPU 信息是什么？",
+                visitor_profile="general_visitor",
+            )
+        )
+    )
+
+    assert response.used_model == "runtime-identity-provider"
+    assert "部署锁定目标" in response.answer
+    assert "不代表引擎当前正在提供推理" in response.answer
+    assert "当前后端实际提供" not in response.answer
+    assert response.answer_basis[0].basis_label == "部署配置与可用性"
+    assert response.knowledge_hits[0].metadata["serving_available"] == "false"
+    health = service.health()
+    assert health["model_name"] == "locked-model"
+    assert health["runtime_identity_status"] == "receipt"
+    assert health["runtime_serving_available"] == "false"

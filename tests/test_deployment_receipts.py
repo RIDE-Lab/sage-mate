@@ -197,6 +197,7 @@ def test_runtime_identity_precedence_live_receipt_lock(tmp_path: Path) -> None:
     receipt_identity = provider.snapshot()
     assert receipt_identity.source == "deployment-receipt"
     assert receipt_identity.served_model == "receipt-model"
+    assert receipt_identity.serving_available is False
     assert receipt_identity.tensor_parallel_size == 4
     assert receipt_identity.checkpoint_family == "deepseek_v4"
     live["value"] = "live-model"
@@ -249,7 +250,8 @@ def test_runtime_question_cites_receipt_and_maintenance_reports_sync(
     receipt_hits = [
         hit for hit in response.knowledge_hits if "deployment-receipt" in hit.tags
     ]
-    assert response.used_model == "deepseek/citation-fixture"
+    assert response.used_model == "runtime-identity-provider"
+    assert "不代表引擎当前正在提供推理" in response.answer
     assert (
         receipt_hits and receipt_hits[0].metadata["receipt_id"] == receipt["receipt_id"]
     )
