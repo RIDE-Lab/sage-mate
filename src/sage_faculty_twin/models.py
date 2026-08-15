@@ -418,6 +418,10 @@ class KnowledgeDocumentReviewSummary(BaseModel):
     stale_documents: int = 0
     reviewable_documents: int = 0
     pending_items: list[KnowledgeDocumentRecord] = Field(default_factory=list)
+    active_deployment_receipt_id: str = ""
+    active_deployment_receipt_schema: str = ""
+    active_deployment_receipt_age_seconds: str = "unknown"
+    deployment_receipt_sync_status: str = "unknown"
 
 
 class KnowledgeDocumentActionResponse(BaseModel):

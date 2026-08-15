@@ -23,6 +23,7 @@ from sage.runtime import FlowNetEnvironment
 
 from . import __version__ as _app_version
 from .analytics_store import ConversationAnalyticsStore
+from .deployment_receipts import DeploymentReceiptStore
 from .request_context import (
     RequestCancelledError,
     raise_if_request_cancelled as _raise_if_request_cancelled,
@@ -931,6 +932,7 @@ class FacultyTwinWorkflowSupport:
         email_notifier: BookingEmailNotifier,
         digest_store: ConversationDigestStore | None = None,
         runtime_identity_provider: RuntimeIdentityProvider | None = None,
+        deployment_receipt_store: DeploymentReceiptStore | None = None,
         admin_session_payload: dict[str, Any] | None = None,
         trace_callback: WorkflowTraceCallback | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
@@ -961,6 +963,7 @@ class FacultyTwinWorkflowSupport:
             versions_provider=build_stack_versions_payload,
             hardware_provider=build_hardware_payload,
         )
+        self._deployment_receipt_store = deployment_receipt_store
         self._email_notifier = email_notifier
         self._digest_store = digest_store
         self._admin_session_payload = admin_session_payload
@@ -1356,6 +1359,10 @@ class FacultyTwinWorkflowSupport:
             identity = self._runtime_identity_provider.snapshot()
             context.runtime_identity = identity
             context.knowledge_hits = [identity.to_knowledge_hit()]
+            if self._deployment_receipt_store is not None:
+                receipt_hit = self._deployment_receipt_store.knowledge_hit()
+                if receipt_hit is not None:
+                    context.knowledge_hits.append(receipt_hit)
             if identity.served_model != "unknown":
                 context.used_model = identity.served_model
             self._append_trace(
@@ -7723,11 +7730,14 @@ class DigitalTwinService:
         self._settings = settings
         self._delivery_gate = delivery_gate or ChatDeliveryGate()
         self._llm_client = VllmChatClient(settings)
+        self._deployment_receipt_store = DeploymentReceiptStore(settings)
+        self._deployment_receipt_store.sync_inbox()
         self._runtime_identity_provider = RuntimeIdentityProvider(
             settings,
             model_probe=self._llm_client.probe_runtime_model_metadata,
             versions_provider=build_stack_versions_payload,
             hardware_provider=build_hardware_payload,
+            versioned_receipt_provider=self._deployment_receipt_store.runtime_mapping,
         )
         self._knowledge_store = LocalKnowledgeStore(settings)
         self._conversation_store = NeuroMemConversationStore(settings)
@@ -9303,7 +9313,24 @@ class DigitalTwinService:
         )
 
     def list_knowledge_review_summary(self, limit: int = 20) -> KnowledgeDocumentReviewSummary:
-        return self._build_support().list_knowledge_review_summary(limit=limit)
+        summary = self._build_support().list_knowledge_review_summary(limit=limit)
+        receipt_status = self._deployment_receipt_store.status()
+        return summary.model_copy(
+            update={
+                "active_deployment_receipt_id": receipt_status[
+                    "deployment_receipt_active_id"
+                ],
+                "active_deployment_receipt_schema": receipt_status[
+                    "deployment_receipt_schema"
+                ],
+                "active_deployment_receipt_age_seconds": receipt_status[
+                    "deployment_receipt_age_seconds"
+                ],
+                "deployment_receipt_sync_status": receipt_status[
+                    "deployment_receipt_sync_status"
+                ],
+            }
+        )
 
     def review_knowledge_document(
         self,
@@ -10196,6 +10223,7 @@ class DigitalTwinService:
         }
         runtime_snapshot = getattr(self._llm_client, "runtime_snapshot", None)
         payload.update(build_stack_versions_payload())
+        payload.update(self._deployment_receipt_store.status())
         payload.update(
             {
                 "runtime_identity_status": runtime_identity.status,
@@ -10312,6 +10340,7 @@ class DigitalTwinService:
             self._email_notifier,
             self._digest_store,
             runtime_identity_provider=self._runtime_identity_provider,
+            deployment_receipt_store=self._deployment_receipt_store,
             admin_session_payload=admin_session_payload,
             trace_callback=trace_callback,
             answer_chunk_callback=answer_chunk_callback,

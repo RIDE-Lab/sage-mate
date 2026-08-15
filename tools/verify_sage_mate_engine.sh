@@ -8,6 +8,7 @@ unit="${SAGE_MATE_ENGINE_UNIT:-sage-mate-vllm-engine.service}"
 host="${VLLM_ENGINE_CONNECT_HOST:-127.0.0.1}"
 port="${VLLM_ENGINE_CONNECT_PORT:-${VLLM_ENGINE_PORT:-8000}}"
 container="${VLLM_ENGINE_CONTAINER:-}"
+import_origins=""
 api_key="${VLLM_HUST_API_KEY:-${VLLM_ENGINE_API_KEY:-${DIGITAL_TWIN_API_KEY:-}}}"
 if [[ -f "$env_file" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -208,6 +209,19 @@ PY
   }
   echo "[sage-mate-verify] import_origins=$(tr '\n' ';' <<< "$import_origins" | sed 's/;$//')"
   echo "[sage-mate-verify] graph_mode=ON command_verified"
+fi
+
+if [[ "${SAGE_MATE_WRITE_DEPLOYMENT_RECEIPT:-1}" != "0" ]]; then
+  [[ -n "$import_origins" ]] || {
+    echo "ERROR: cannot publish a deployment receipt without verified import origins" >&2
+    exit 1
+  }
+  runtime_dir="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
+  receipt_path="$(python3 "$repo_root/tools/write_verified_deployment_receipt.py" \
+    --models-json "$models" \
+    --import-origins "$import_origins" \
+    --runtime-dir "$runtime_dir")"
+  echo "[sage-mate-verify] deployment_receipt=$receipt_path"
 fi
 
 echo "[sage-mate-verify] PASS"

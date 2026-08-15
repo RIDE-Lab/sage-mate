@@ -127,7 +127,7 @@ class RuntimeIdentity:
 
 
 class RuntimeIdentityProvider:
-    """Resolve live state first, then the latest deployment lock, then unknown."""
+    """Resolve live state, then a fresh versioned receipt, then the legacy lock."""
 
     def __init__(
         self,
@@ -136,12 +136,14 @@ class RuntimeIdentityProvider:
         model_probe: Callable[[], str | Mapping[str, Any]],
         versions_provider: Callable[[], Mapping[str, str]],
         hardware_provider: Callable[[], Mapping[str, str]],
+        versioned_receipt_provider: Callable[[], Mapping[str, str]] | None = None,
         environ: Mapping[str, str] | None = None,
     ) -> None:
         self._settings = settings
         self._model_probe = model_probe
         self._versions_provider = versions_provider
         self._hardware_provider = hardware_provider
+        self._versioned_receipt_provider = versioned_receipt_provider
         self._environ = environ if environ is not None else os.environ
 
     def snapshot(self) -> RuntimeIdentity:
@@ -159,21 +161,41 @@ class RuntimeIdentityProvider:
         except Exception:
             live_model = ""
 
-        receipt = self._read_receipt()
-        merged = dict(receipt)
+        legacy_receipt = self._read_receipt()
+        versioned_receipt: Mapping[str, str] = {}
+        if self._versioned_receipt_provider is not None:
+            try:
+                versioned_receipt = self._versioned_receipt_provider()
+            except Exception:
+                versioned_receipt = {}
+        merged = dict(legacy_receipt)
         merged.update({key: value for key, value in self._environ.items() if value})
+        merged.update({key: value for key, value in versioned_receipt.items() if value})
         versions = dict(self._versions_provider())
         hardware = dict(self._hardware_provider())
         served_model = live_model or self._first(
             merged, "VLLM_ENGINE_SERVED_MODEL_NAME", "DIGITAL_TWIN_MODEL_NAME"
         )
-        status = "live" if live_model else "receipt" if receipt else "unknown"
-        source = "live-serving-endpoint" if live_model else "deployment-lock" if receipt else "unavailable"
+        has_fallback = bool(versioned_receipt or legacy_receipt)
+        status = "live" if live_model else "receipt" if has_fallback else "unknown"
+        source = (
+            "live-serving-endpoint"
+            if live_model
+            else "deployment-receipt"
+            if versioned_receipt
+            else "deployment-lock"
+            if legacy_receipt
+            else "unavailable"
+        )
 
         config = self._checkpoint_config(merged)
-        family = str(config.get("model_type") or self._family_from_name(served_model))
+        family = self._first(merged, "VLLM_ENGINE_MODEL_FAMILY") or str(
+            config.get("model_type") or self._family_from_name(served_model)
+        )
         architectures = config.get("architectures") or []
-        architecture = str(architectures[0]) if architectures else "unknown"
+        architecture = self._first(merged, "VLLM_ENGINE_ARCHITECTURE") or (
+            str(architectures[0]) if architectures else "unknown"
+        )
         extra_args = self._extra_args(merged.get("VLLM_ENGINE_EXTRA_ARGS_JSON", ""))
         device_ids = self._device_ids(merged)
         accelerator_model = self._accelerator_model(hardware)
@@ -198,9 +220,12 @@ class RuntimeIdentityProvider:
             checkpoint_family=family or "unknown",
             architecture=architecture,
             engine="vLLM-HUST",
-            engine_version=versions.get("stack_version_vllm_hust", "unknown"),
-            plugin_version=versions.get("stack_version_vllm_ascend", "unknown"),
-            accelerator_model=accelerator_model,
+            engine_version=self._first(merged, "VLLM_ENGINE_VERSION")
+            or versions.get("stack_version_vllm_hust", "unknown"),
+            plugin_version=self._first(merged, "VLLM_ENGINE_PLUGIN_VERSION")
+            or versions.get("stack_version_vllm_ascend", "unknown"),
+            accelerator_model=self._first(merged, "VLLM_ENGINE_ACCELERATOR_MODEL")
+            or accelerator_model,
             device_ids=device_ids,
             device_count=len(device_ids),
             tensor_parallel_size=self._positive_int(merged.get("VLLM_ENGINE_TP_SIZE")),
