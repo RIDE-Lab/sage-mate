@@ -217,6 +217,7 @@ class DeploymentReceiptStore:
             ),
             "VLLM_ENGINE_EXTRA_ARGS_JSON": json.dumps(speculative_args),
             "VLLM_ENGINE_SPECULATIVE_CAPABILITY": active["speculative_resolved_method"],
+            "VLLM_ENGINE_SPECULATIVE_REASON": active["speculative_reason"],
             "VLLM_ENGINE_VERSION": active["engine_commit"],
             "VLLM_ENGINE_PLUGIN_VERSION": active["plugin_commit"],
             "VLLM_ENGINE_ACCELERATOR_MODEL": active["accelerator_model"],

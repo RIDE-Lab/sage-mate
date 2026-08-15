@@ -38,6 +38,11 @@ These are systemd-facing scripts. They should stay small and source shared helpe
   - app/public health checks,
   - vLLM `/v1/models`,
   - app model name, served model name, and actual model ID consistency.
+- `validate_operational_self_knowledge.py` - model-independent semantic deployment gate:
+  - derives expected runtime facts from `/health` or an independent fixture,
+  - checks 24 Chinese/English, typo, follow-up and misleading-premise questions,
+  - fails on answer/runtime contradictions, missing Support, `used_model` mismatch, or wrong route,
+  - writes a machine-readable JSON artifact with trace, stage timing, citation coverage and contradiction score.
 - `check_twin_inference.py` - low-level OpenAI-compatible LLM smoke test.
 - `monitor_twin_inference.sh` - recurring inference monitor for systemd timer.
 - `repair_sagevdb.sh` / `repair_sagevdb.py` - native extension repair.

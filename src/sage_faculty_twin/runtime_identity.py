@@ -17,23 +17,27 @@ from .models import KnowledgeSearchHit
 
 
 _RUNTIME_SUBJECT_MARKERS = (
-    "模型", "大模型", "推理引擎", "后端", "部署", "运行", "npu", "ascend",
+    "模型", "模形", "摸型", "大模型", "推理引擎", "后端", "部署", "运行", "npu", "ascend",
     "华为卡", "几张卡", "几块卡", "量化", "并行", "tp", "dp", "ep",
     "图模式", "eager", "speculative", "推测解码", "model", "engine",
     "backend", "deployed", "deployment", "hardware", "accelerator", "card",
-    "quantization", "parallel", "tensor parallel", "graph mode",
+    "quantization", "parallel", "tensor parallel", "graph mode", "cuda", "gpu",
+    "nvidia", "tensorrt", "sage", "vllm-hust", "vllm-ascend",
 )
 _RUNTIME_CONTEXT_MARKERS = (
-    "当前", "现在", "正在", "实际", "线上", "这个系统", "你用", "跑的", "运行的",
+    "当前", "现在", "目前", "正在", "实际", "线上", "这里", "这个系统", "你用", "跑的", "运行的",
     "跑在", "部署的", "用的是", "已经启用", "已启用", "有没有开启",
+    "启用", "active",
     "你们是怎么", "你是怎么", "怎么把", "如何把",
     "current", "currently", "running", "serving", "served", "live", "this system",
     "deployed", "deployed backend", "how did you deploy", "what are you using",
+    "this site", "here", "live rn", "runtime evidence", "model memory",
 )
 _RUNTIME_QUERY_MARKERS = (
     "是什么", "什么", "哪个", "哪种", "几张", "几块", "多少", "是否", "有没有",
     "用的是", "怎么把", "如何把", "what", "which", "how many", "is ",
-    "are ", "does ",
+    "are ", "does ", "对吗", "分别", "为什么", "关系", "协作", "还是",
+    "给出", "告诉我", " or ", "why", "how do", "come from",
 )
 
 
@@ -75,6 +79,7 @@ class RuntimeIdentity:
     speculative_capability: str = "unknown"
     speculative_method: str = "none"
     speculative_enabled: bool = False
+    speculative_reason: str = "unknown"
 
     def public_dict(self) -> dict[str, Any]:
         """Return an explicit allowlist; paths, hosts and credentials cannot escape."""
@@ -100,7 +105,7 @@ class RuntimeIdentity:
         speculative = (
             f"已启用（{self.speculative_method}）"
             if self.speculative_enabled
-            else f"未启用（能力：{self.speculative_capability}）"
+            else f"未启用（能力：{self.speculative_capability}；原因：{self.speculative_reason}）"
         )
         return (
             f"served model={self.served_model}；checkpoint={self.checkpoint_family} / "
@@ -206,6 +211,9 @@ class RuntimeIdentityProvider:
             live_capability.get("detected_checkpoint_method") or ""
         )
         capability_resolved = str(live_capability.get("resolved_method") or "")
+        capability_reason = str(
+            live_capability.get("reason") or live_capability.get("status_reason") or ""
+        )
         if live_capability:
             speculative_enabled = capability_status == "enabled"
             speculative_method = capability_resolved or "none"
@@ -238,6 +246,10 @@ class RuntimeIdentityProvider:
             ) or ("configured" if speculative[0] else "not-configured"),
             speculative_method=speculative_method,
             speculative_enabled=speculative_enabled,
+            speculative_reason=capability_reason
+            or self._first(merged, "VLLM_ENGINE_SPECULATIVE_REASON")
+            or capability_detected
+            or "not-configured",
         )
 
     def _read_receipt(self) -> dict[str, str]:
@@ -369,23 +381,44 @@ def render_runtime_identity_answer(identity: RuntimeIdentity, *, english: bool =
     dp = identity.data_parallel_size or "unknown"
     ep = "on" if identity.expert_parallel_enabled else "off" if identity.expert_parallel_enabled is False else "unknown"
     speculative = (
-        f"enabled ({identity.speculative_method})" if identity.speculative_enabled else "not enabled"
+        f"enabled ({identity.speculative_method})"
+        if identity.speculative_enabled
+        else f"not enabled ({identity.speculative_reason})"
+    )
+    accelerator_lower = identity.accelerator_model.lower()
+    is_ascend = any(
+        marker in accelerator_lower for marker in ("ascend", "910", "npu")
     )
     if english:
+        platform_relation = (
+            "its Ascend plugin maps execution to the NPU runtime"
+            if is_ascend
+            else "the selected platform backend maps execution to the accelerator runtime"
+        )
         return (
             f"The current backend serves **{identity.served_model}** with {identity.engine}. "
             f"Checkpoint family/architecture: {identity.checkpoint_family} / {identity.architecture}. "
             f"Hardware: {devices}; TP={tp}, DP={dp}, EP={ep}. Quantization: "
             f"{identity.quantization}; execution: {identity.graph_mode}; speculative decoding: "
-            f"{speculative}. This was collected from {identity.source} at {identity.collected_at}."
+            f"{speculative}. SAGE orchestrates the application workflow, vLLM-HUST provides "
+            f"the serving engine, and {platform_relation}. "
+            f"This was collected from {identity.source} at {identity.collected_at}."
         )
     speculative_zh = (
-        f"已启用（{identity.speculative_method}）" if identity.speculative_enabled else "未启用"
+        f"已启用（{identity.speculative_method}）"
+        if identity.speculative_enabled
+        else f"未启用（{identity.speculative_reason}）"
+    )
+    platform_relation_zh = (
+        "Ascend 插件将执行映射到 NPU 运行时"
+        if is_ascend
+        else "所选平台后端将执行映射到加速器运行时"
     )
     return (
         f"当前后端实际提供的是 **{identity.served_model}**，推理引擎为 {identity.engine}。"
         f"检查点族/架构是 {identity.checkpoint_family} / {identity.architecture}；"
         f"硬件为 {devices}，TP={tp}、DP={dp}、EP={ep}。量化方式为 {identity.quantization}，"
         f"执行模式为 {identity.graph_mode}，speculative decoding {speculative_zh}。"
+        f"SAGE 负责组织应用工作流，vLLM-HUST 提供推理服务引擎，{platform_relation_zh}。"
         f"这些信息采集自 {identity.source}，时间为 {identity.collected_at}。"
     )

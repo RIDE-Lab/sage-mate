@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v4.6.28 - 2026-08-15
+
+### Added
+
+- 新增与具体模型无关的 operational self-knowledge 部署门禁，从 `/health` 或独立 fixture 生成预期事实，并检查正文、`used_model`、Support、route、trace、阶段耗时与 contradiction score。
+- 门禁覆盖 24 个中英文、同义词、错别字、追问、误导前提和组件协作问题；同一评估器已覆盖 DeepSeek/Ascend、DeepSeek/GPU 与 GLM/Ascend fixture。
+- hosted/web 验收默认运行语义门禁并生成 `operational-self-knowledge/v1` JSON artifact，失败会阻止部署验收通过。
+
+### Fixed
+
+- 运行状态回答补充 SAGE、vLLM-HUST 与 Ascend 插件的职责边界，并展示 speculative decoding 的结构化未启用原因，不再只给出布尔状态。
+- 扩展模型错别字、误导性 CUDA/GPU 前提、协作关系及简短追问的通用意图识别；规则不绑定具体模型名或人物名。
+
 ## v4.6.27 - 2026-08-15
 
 ### Added
