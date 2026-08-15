@@ -3771,6 +3771,7 @@ function updateStatusDrawer(data) {
     const llmCacheEl = document.querySelector("#view-llm-cache .status-value");
     const llmRpsEl = document.querySelector("#view-llm-rps .status-value");
     if (!data) {
+        if (statusView) statusView.dataset.state = "error";
         if (serviceEl) serviceEl.textContent = "不可用";
         if (userEl) userEl.textContent = "--";
         if (questionEl) questionEl.textContent = "--";
@@ -3787,22 +3788,33 @@ function updateStatusDrawer(data) {
         if (llmRpsEl) llmRpsEl.textContent = "--";
         return;
     }
+    if (statusView) statusView.dataset.state = "ready";
     const modelSummary = buildModelRuntimeSummary(data);
     if (serviceEl) serviceEl.textContent = data.status === "ok" ? "在线" : data.status;
     if (userEl) userEl.textContent = formatCount(data.registered_user_accounts);
     if (questionEl) questionEl.textContent = formatCount(data.conversation_memory_records);
     if (modelEl) modelEl.textContent = modelSummary.headline;
-    if (modelNameEl) modelNameEl.textContent = data.model_name || "未配置";
+    if (modelNameEl) {
+        modelNameEl.textContent = data.model_name || "未配置";
+        modelNameEl.title = data.model_name || "未配置";
+    }
     if (npuDevicesEl) {
         const devices = data.npu_devices || data.npu || "未读取";
         npuDevicesEl.textContent = data.npu_active_count
             ? `${devices} · ${data.npu_active_count} 卡`
             : devices;
+        npuDevicesEl.title = npuDevicesEl.textContent;
     }
     if (npuUtilEl) npuUtilEl.textContent = data.npu_utilization || "--";
     if (npuMemoryEl) npuMemoryEl.textContent = data.npu_memory_usage || "--";
-    if (npuDetailEl) npuDetailEl.textContent = data.npu_utilization_by_device || "--";
-    if (engineImageEl) engineImageEl.textContent = data.engine_image || "--";
+    if (npuDetailEl) {
+        npuDetailEl.textContent = data.npu_utilization_by_device || "--";
+        npuDetailEl.title = npuDetailEl.textContent;
+    }
+    if (engineImageEl) {
+        engineImageEl.textContent = data.engine_image || "--";
+        engineImageEl.title = engineImageEl.textContent;
+    }
 
     // LLM metrics
     const requestCount = toCountNumber(data.llm_request_count);
