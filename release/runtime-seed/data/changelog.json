@@ -1,5 +1,15 @@
 [
   {
+    "version": "v4.6.22",
+    "date": "2026-08-15",
+    "summary": "SAGE 运行时依赖自修复",
+    "highlights": [
+      "基础安装固定包含 SAGE 与 SageANNS，不再依赖机器上残留的 ANNS 插件",
+      "启动时按项目依赖契约自动补齐轻量 NeuroMem collection 运行时与按需 SageVDB 栈",
+      "SageANNS 缺失时返回明确的依赖修复提示"
+    ]
+  },
+  {
     "version": "v4.6.19",
     "date": "2026-08-13",
     "summary": "研究规划快路径",

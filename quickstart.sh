@@ -628,6 +628,7 @@ else
 		warn "Falling back to base install"
 		run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root"
 	fi
+	ensure_neuromem_collection_runtime "$repo_root" "$python_bin"
 
 	if [[ -d "$parent_dir/sageVDB" ]]; then
 		log "Repairing sageVDB native extension wiring"

@@ -402,6 +402,10 @@ class NeuroMemConversationStore:
                 )
             return "segment"
 
+        ready, reason = _check_index_readiness(configured)
+        if not ready:
+            raise RuntimeError(reason.format(index_type=configured))
+
         if configured and not _is_candidate_declared(configured):
             if available:
                 raise ValueError(
@@ -413,9 +417,6 @@ class NeuroMemConversationStore:
                 f"'{configured}'."
             )
 
-        ready, reason = _check_index_readiness(configured)
-        if not ready:
-            raise RuntimeError(reason.format(index_type=configured))
         return configured
 
     def _resolve_conversation_collection_type(self) -> str:
