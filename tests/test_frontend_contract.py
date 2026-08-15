@@ -13,6 +13,17 @@ from pathlib import Path
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
+
+def test_chat_stop_control_cancels_http_and_server_request() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    styles = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert 'chatSubmitButton.dataset.mode = loading ? "stop" : "send"' in app_js
+    assert 'activeChatAbortController?.abort("user-cancelled")' in app_js
+    assert "/chat/cancel?request_id=" in app_js
+    assert 'globalThis.addEventListener("pagehide"' in app_js
+    assert ".send-button.is-sending .send-button-spinner" in styles
+
 # Each entry: (endpoint, list_of_dom_ids_used_in_payload)
 # These IDs are read by app.js to construct JSON POST bodies.
 API_PAYLOAD_CONTRACTS = [

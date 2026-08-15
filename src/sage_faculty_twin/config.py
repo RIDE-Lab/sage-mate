@@ -140,7 +140,7 @@ class AppSettings(BaseSettings):
             "a retryable 429 instead of timing out at the edge."
         ),
     )
-    chat_sse_keepalive_seconds: float = Field(default=15.0, ge=1.0, le=90.0)
+    chat_sse_keepalive_seconds: float = Field(default=1.0, ge=1.0, le=90.0)
     stream_chat_answer: bool = Field(
         default=False,
         description="Use upstream streaming transport internally; public delivery remains validated-answer-only.",

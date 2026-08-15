@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 
 from .models import ChatRequestTiming, ChatResponse
+from .request_context import RequestRuntimeDiagnostics
 
 
 @dataclass(slots=True)
@@ -14,6 +15,9 @@ class RequestTimingLedger:
     budget_seconds: float
     started_at: float = field(default_factory=perf_counter)
     stage_durations_ms: dict[str, float] = field(default_factory=dict)
+    runtime_diagnostics: RequestRuntimeDiagnostics = field(
+        default_factory=RequestRuntimeDiagnostics
+    )
 
     @property
     def deadline_at(self) -> float:
@@ -34,6 +38,8 @@ class RequestTimingLedger:
         trace_ms = sum(
             step.duration_ms or 0 for step in response.workflow_trace
         )
+        accounted_ms = min(total_ms, sum(self.stage_durations_ms.values()))
+        runtime = self.runtime_diagnostics.snapshot()
         return ChatRequestTiming(
             trace_id=self.trace_id,
             route=route,
@@ -42,6 +48,9 @@ class RequestTimingLedger:
             remaining_budget_ms=round(self.remaining_seconds() * 1000.0, 3),
             stage_durations_ms=dict(self.stage_durations_ms),
             workflow_trace_reported_ms=trace_ms,
+            accounted_duration_ms=round(accounted_ms, 3),
+            unattributed_duration_ms=round(max(0.0, total_ms - accounted_ms), 3),
+            **runtime,
         )
 
     def attach(self, response: ChatResponse, *, route: str) -> ChatResponse:

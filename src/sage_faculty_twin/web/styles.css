@@ -5584,7 +5584,7 @@ select {
 }
 
 .send-button.is-sending {
-    cursor: wait;
+    cursor: pointer;
     opacity: 1;
     box-shadow: 0 0 0 0 rgba(47, 111, 237, 0.28);
     animation: send-button-pulse 1200ms ease-in-out infinite;
@@ -5602,7 +5602,12 @@ select {
 .send-button.is-sending .send-button-spinner {
     opacity: 1;
     transform: scale(1);
-    animation: send-spinner-spin 780ms linear infinite;
+    width: 14px;
+    height: 14px;
+    border: 0;
+    border-radius: 3px;
+    background: currentColor;
+    animation: none;
 }
 
 @keyframes send-return-nudge {

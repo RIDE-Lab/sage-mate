@@ -6,9 +6,12 @@ import hashlib
 import json
 import logging
 import re
+import socket
 import threading
 import time
 from collections import OrderedDict, deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from time import perf_counter
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -33,8 +36,13 @@ from .interaction_policy import (
 from .models import InteractionIntent
 from .request_context import (
     bounded_request_timeout,
+    RequestCancelledError,
     raise_if_request_cancelled,
+    register_request_cancel_callback,
+    request_has_cancellation_controller,
     request_remaining_seconds,
+    request_runtime_diagnostics,
+    request_was_cancelled,
 )
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
@@ -187,15 +195,7 @@ class VllmChatClient:
 
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
-        self._client = httpx.Client(
-            base_url=self._settings.llm_base_url,
-            headers={
-                "Authorization": f"Bearer {self._settings.api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=float(self._settings.llm_timeout_seconds),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
+        self._client = self._build_completion_client()
         # Intent classification client: use a smaller/faster model when configured.
         intent_base_url = self._settings.intent_llm_base_url or self._settings.llm_base_url
         self._intent_client = httpx.Client(
@@ -207,6 +207,7 @@ class VllmChatClient:
             timeout=30.0,
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
+
         # Auto-detect model name from the connected LLM if not explicitly configured.
         self.model_name: str = self._settings.model_name
         if not self.model_name:
@@ -275,6 +276,68 @@ class VllmChatClient:
         # "last_request_at": float, "last_vllm_uptime_s": float}
         self._session_kv_anchors: dict[str, dict[str, Any]] = {}
         self._last_vllm_start_time_s: float = 0.0
+
+    def _build_completion_client(self) -> httpx.Client:
+        return httpx.Client(
+            base_url=self._settings.llm_base_url,
+            headers={
+                "Authorization": f"Bearer {self._settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(self._settings.llm_timeout_seconds),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+
+    @staticmethod
+    def _interrupt_completion_client(client: httpx.Client) -> None:
+        """Abort an active sync HTTP exchange, including pre-header reads.
+
+        ``httpx.Client.close()`` does not interrupt a synchronous request that
+        is blocked waiting for response headers.  httpx/httpcore expose no
+        public synchronous cancellation hook, so first shut down any active
+        request-owned sockets and then close the client.  Attribute access is
+        deliberately guarded so an httpcore layout change degrades to normal
+        close semantics instead of breaking requests.
+        """
+
+        try:
+            transport = getattr(client, "_transport", None)
+            pool = getattr(transport, "_pool", None)
+            connections = tuple(getattr(pool, "connections", ()) or ())
+            for connection in connections:
+                protocol = getattr(connection, "_connection", None)
+                stream = getattr(protocol, "_network_stream", None)
+                sock = getattr(stream, "_sock", None)
+                if sock is None:
+                    continue
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        finally:
+            client.close()
+
+    @contextmanager
+    def _request_completion_client(self) -> Iterator[httpx.Client]:
+        """Yield an interruptible, request-owned model connection when scoped."""
+
+        if not request_has_cancellation_controller():
+            yield self._client
+            return
+        client = self._build_completion_client()
+        unregister = register_request_cancel_callback(
+            lambda: self._interrupt_completion_client(client)
+        )
+        try:
+            raise_if_request_cancelled()
+            yield client
+        finally:
+            unregister()
+            client.close()
 
     @property
     def supports_native_tool_calling(self) -> bool:
@@ -1208,6 +1271,9 @@ class VllmChatClient:
         cache_key = self._cache_key(cache_payload, namespace=payload.get("_cache_ns"))
         semantic_key = self._semantic_cache_key(cache_payload, namespace=payload.get("_cache_ns"))
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
+        diagnostics = request_runtime_diagnostics()
+        if diagnostics is not None:
+            diagnostics.record_cache_lookup(hit=cached is not None)
         if cached is not None:
             self._record_cache_hit(hit_type or "exact")
             try:
@@ -1227,9 +1293,12 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             collected: list[str] = []
+            first_token_recorded = False
             try:
                 raise_if_request_cancelled(minimum_remaining_seconds=0.1)
-                with self._client.stream(
+                if diagnostics is not None:
+                    diagnostics.record_llm_call()
+                with self._request_completion_client() as request_client, request_client.stream(
                     "POST",
                     "/chat/completions",
                     json=payload,
@@ -1303,6 +1372,11 @@ class VllmChatClient:
                             continue
                         text = str(delta_content)
                         collected.append(text)
+                        if diagnostics is not None and not first_token_recorded:
+                            diagnostics.record_llm_ttft(
+                                (perf_counter() - started_at) * 1000.0
+                            )
+                            first_token_recorded = True
                         try:
                             token_callback(text)
                         except Exception:  # pragma: no cover - defensive
@@ -1317,13 +1391,22 @@ class VllmChatClient:
                 if attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
+                if diagnostics is not None:
+                    diagnostics.record_llm_retry()
                 self._sleep_before_retry(attempt + 1)
             except EmptyStreamingResponseError:
+                raise
+            except (httpx.ReadError, httpx.WriteError) as exc:
+                if request_was_cancelled():
+                    raise RequestCancelledError("model request interrupted after cancellation") from exc
+                self._record_request_error(exc)
                 raise
             except Exception as exc:
                 self._record_request_error(exc)
                 raise
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        if diagnostics is not None:
+            diagnostics.record_llm_complete(elapsed_ms)
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1377,6 +1460,9 @@ class VllmChatClient:
         cache_key = self._cache_key(payload, namespace=cache_ns)
         semantic_key = self._semantic_cache_key(payload, namespace=cache_ns)
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
+        diagnostics = request_runtime_diagnostics()
+        if diagnostics is not None:
+            diagnostics.record_cache_lookup(hit=cached is not None)
         if cached is not None:
             self._record_cache_hit(hit_type or "exact")
             return cached
@@ -1390,11 +1476,14 @@ class VllmChatClient:
         for attempt in range(max_retries + 1):
             try:
                 raise_if_request_cancelled(minimum_remaining_seconds=0.1)
-                response = self._client.post(
-                    "/chat/completions",
-                    json=payload,
-                    **self._request_timeout_kwargs(),
-                )
+                if diagnostics is not None:
+                    diagnostics.record_llm_call()
+                with self._request_completion_client() as request_client:
+                    response = request_client.post(
+                        "/chat/completions",
+                        json=payload,
+                        **self._request_timeout_kwargs(),
+                    )
                 response.raise_for_status()
 
                 data = response.json()
@@ -1423,11 +1512,21 @@ class VllmChatClient:
                 if attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
+                if diagnostics is not None:
+                    diagnostics.record_llm_retry()
                 self._sleep_before_retry(attempt + 1)
+            except (httpx.ReadError, httpx.WriteError) as exc:
+                if request_was_cancelled():
+                    raise RequestCancelledError("model request interrupted after cancellation") from exc
+                self._record_request_error(exc)
+                raise
             except Exception as exc:
                 self._record_request_error(exc)
                 raise
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        if diagnostics is not None:
+            diagnostics.record_llm_ttft(elapsed_ms)
+            diagnostics.record_llm_complete(elapsed_ms)
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1459,10 +1558,12 @@ class VllmChatClient:
 
             continuation_payload = dict(payload)
             continuation_payload["messages"] = continuation_messages
-            continuation_response = self._client.post(
-                "/chat/completions",
-                json=continuation_payload,
-            )
+            with self._request_completion_client() as request_client:
+                continuation_response = request_client.post(
+                    "/chat/completions",
+                    json=continuation_payload,
+                    **self._request_timeout_kwargs(),
+                )
             continuation_response.raise_for_status()
             data = continuation_response.json()
             choices = data.get("choices", [])
@@ -1514,11 +1615,12 @@ class VllmChatClient:
         started_at = perf_counter()
         try:
             raise_if_request_cancelled(minimum_remaining_seconds=0.1)
-            response = self._client.post(
-                "/chat/completions",
-                json=payload,
-                **self._request_timeout_kwargs(),
-            )
+            with self._request_completion_client() as request_client:
+                response = request_client.post(
+                    "/chat/completions",
+                    json=payload,
+                    **self._request_timeout_kwargs(),
+                )
             response.raise_for_status()
             data = response.json()
         except httpx.TimeoutException:

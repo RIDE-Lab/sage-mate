@@ -1,12 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from sage_faculty_twin.vllm_openai_proxy import ProxySettings, create_app
+from sage_faculty_twin.vllm_openai_proxy import (
+    ProxySettings,
+    _enter_upstream_until_disconnect,
+    _iter_upstream_with_keepalive,
+    create_app,
+)
 
 
 class _FakeStreamResponse:
@@ -52,6 +58,58 @@ class _FakeAsyncClient:
 class _FailingAsyncClient(_FakeAsyncClient):
     def stream(self, method: str, url: str, **kwargs):
         raise httpx.ConnectError("connection refused")
+
+
+class _SlowStreamResponse:
+    async def aiter_raw(self):
+        await asyncio.Event().wait()
+        yield b"unreachable"
+
+
+class _SlowEnterStream:
+    def __init__(self) -> None:
+        self.cancelled = False
+
+    async def __aenter__(self):
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+
+
+class _DisconnectedRequest:
+    async def receive(self) -> dict[str, str]:
+        return {"type": "http.disconnect"}
+
+
+def test_proxy_cancels_pre_header_upstream_when_downstream_disconnects() -> None:
+    stream = _SlowEnterStream()
+
+    async def run() -> tuple[object | None, bool]:
+        return await _enter_upstream_until_disconnect(
+            stream,
+            _DisconnectedRequest(),  # type: ignore[arg-type]
+        )
+
+    upstream, disconnected = asyncio.run(run())
+    assert upstream is None
+    assert disconnected is True
+    assert stream.cancelled is True
+
+
+def test_streaming_proxy_emits_keepalive_before_slow_upstream_first_token() -> None:
+    async def collect() -> bytes:
+        stream = _iter_upstream_with_keepalive(
+            _SlowStreamResponse(),  # type: ignore[arg-type]
+            keepalive_seconds=0.01,
+        )
+        try:
+            return await asyncio.wait_for(stream.__anext__(), timeout=0.5)
+        finally:
+            await stream.aclose()
+
+    assert asyncio.run(collect()) == b": proxy-keepalive\n\n"
 
 
 def test_proxy_requires_a_real_api_key() -> None:

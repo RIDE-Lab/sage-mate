@@ -26,8 +26,6 @@ from .analytics_store import ConversationAnalyticsStore
 from .request_context import (
     RequestCancelledError,
     raise_if_request_cancelled as _raise_if_request_cancelled,
-    request_cancellation_scope,
-    request_was_cancelled as _request_was_cancelled,
 )
 from .artifact_memory_draft_store import (
     ArtifactMemoryDraftRecord,
@@ -95,7 +93,6 @@ from .interaction_policy import (
 from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
 from .knowledge_authority import (
     IDENTITY_FLOOR_TITLES,
-    OWNER_PROFILE_TITLE,
     OWNER_SYSTEM_OVERVIEW_TITLE,
     PUBLIC_COURSE_TAGS,
     is_owner_profile_source,
@@ -5113,7 +5110,6 @@ class FacultyTwinWorkflowSupport:
         factual and should be grounded in the canonical overview before any
         model synthesis is attempted.
         """
-        lowered = str(question or "").lower()
         if not contains_marker(question, SYSTEM_PROJECT_MARKERS):
             return []
         preferred_titles = (

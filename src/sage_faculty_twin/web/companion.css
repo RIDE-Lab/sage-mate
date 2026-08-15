@@ -356,6 +356,7 @@ body.onboarding-active .sage-companion,
     position: absolute;
     right: 0;
     bottom: calc(100% + 12px);
+    box-sizing: border-box;
     width: var(--sage-companion-panel-width);
     max-height: var(--sage-companion-panel-max-height, min(560px, calc(100dvh - 32px)));
     display: flex;

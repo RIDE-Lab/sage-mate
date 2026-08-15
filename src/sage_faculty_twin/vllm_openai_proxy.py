@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, Callable
+from typing import Any, AsyncIterator, Callable
 
 import httpx
 from fastapi import FastAPI, Request
@@ -162,6 +163,70 @@ def _validate_settings(proxy_settings: ProxySettings) -> None:
         )
 
 
+async def _iter_upstream_with_keepalive(
+    upstream: httpx.Response,
+    *,
+    keepalive_seconds: float = 1.0,
+) -> AsyncIterator[bytes]:
+    """Relay upstream bytes while probing the downstream socket every second.
+
+    ASGI 2.4 streaming responses detect a disconnected client only during a
+    send.  vLLM can spend many seconds before its first token, so an SSE
+    comment keeps the proxy's downstream send active without changing the
+    OpenAI event stream observed by clients.
+    """
+
+    iterator = upstream.aiter_raw().__aiter__()
+    next_chunk = asyncio.create_task(iterator.__anext__())
+    try:
+        while True:
+            done, _ = await asyncio.wait({next_chunk}, timeout=keepalive_seconds)
+            if not done:
+                yield b": proxy-keepalive\n\n"
+                continue
+            try:
+                chunk = next_chunk.result()
+            except StopAsyncIteration:
+                break
+            if chunk:
+                yield chunk
+            next_chunk = asyncio.create_task(iterator.__anext__())
+    finally:
+        if not next_chunk.done():
+            next_chunk.cancel()
+            await asyncio.gather(next_chunk, return_exceptions=True)
+
+
+async def _enter_upstream_until_disconnect(
+    stream_cm: Any,
+    request: Request,
+) -> tuple[httpx.Response | None, bool]:
+    """Open the upstream stream unless the downstream socket closes first."""
+
+    async def wait_for_disconnect() -> None:
+        while True:
+            message = await request.receive()
+            if message.get("type") == "http.disconnect":
+                return
+
+    enter_task = asyncio.create_task(stream_cm.__aenter__())
+    disconnect_task = asyncio.create_task(wait_for_disconnect())
+    try:
+        done, _ = await asyncio.wait(
+            {enter_task, disconnect_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if enter_task in done:
+            return enter_task.result(), False
+        enter_task.cancel()
+        await asyncio.gather(enter_task, return_exceptions=True)
+        return None, True
+    finally:
+        if not disconnect_task.done():
+            disconnect_task.cancel()
+        await asyncio.gather(disconnect_task, return_exceptions=True)
+
+
 def create_app(
     settings: ProxySettings | None = None,
     client_factory: Callable[[ProxySettings], httpx.AsyncClient] | None = None,
@@ -266,16 +331,20 @@ def create_app(
                 content=body if body else None,
                 params=request.query_params,
             )
-            upstream = await stream_cm.__aenter__()
+            upstream, downstream_disconnected = await _enter_upstream_until_disconnect(
+                stream_cm,
+                request,
+            )
+            if downstream_disconnected or upstream is None:
+                return Response(status_code=499)
             response_headers = _normalize_headers(upstream.headers)
 
             if streaming_requested and upstream.status_code < 400:
 
                 async def body_iter() -> AsyncIterator[bytes]:
                     try:
-                        async for chunk in upstream.aiter_raw():
-                            if chunk:
-                                yield chunk
+                        async for chunk in _iter_upstream_with_keepalive(upstream):
+                            yield chunk
                     finally:
                         await stream_cm.__aexit__(None, None, None)
 
