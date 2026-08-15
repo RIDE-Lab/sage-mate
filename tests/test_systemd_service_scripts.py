@@ -287,6 +287,7 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
         "nonexistent-test-container" in diagnostics
         or "docker not found on PATH" in diagnostics
         or "vLLM-HUST dev-hub submodule launcher not found" in diagnostics
+        or "VLLM_ENGINE_NPU_DEVICES" in diagnostics
         or "not executable in the container" in diagnostics
     )
 
