@@ -76,10 +76,20 @@ def _body(expected: OperationalExpectedFacts, *, answer: str | None = None) -> d
         f"quantization {expected.quantization}; execution {expected.graph_mode}; "
         f"speculative decoding {'enabled' if enabled else 'not enabled'} "
         f"({expected.speculative_method})."
+        + (
+            " This is the configured deployment target and is not evidence that the engine "
+            "is currently serving."
+            if not expected.runtime_available
+            else ""
+        )
     )
     return {
         "answer": rendered,
-        "used_model": expected.model,
+        "used_model": (
+            expected.model
+            if expected.runtime_available
+            else "runtime-identity-provider"
+        ),
         "decision_mode": "runtime_identity",
         "knowledge_hits": [
             {
@@ -127,6 +137,7 @@ def test_production_renderer_passes_independent_fixture_gate(health: dict) -> No
         source="fixture",
         collected_at="2026-08-15T00:00:00+00:00",
         served_model=expected.model,
+        serving_available=expected.runtime_available,
         checkpoint_family="fixture-family",
         architecture=expected.architecture,
         accelerator_model=expected.accelerator,
@@ -190,7 +201,7 @@ def test_no_runtime_requires_explicit_uncertainty_not_gpu_guess() -> None:
         {"runtime_identity_status": "unknown"}
     )
     body = _body(expected, answer="当前运行时身份无法读取，我不会猜测模型和硬件。")
-    body["used_model"] = "configured-client-model"
+    body["used_model"] = "runtime-identity-provider"
     result = evaluate_operational_response(
         question="当前模型是什么？",
         expected=expected,

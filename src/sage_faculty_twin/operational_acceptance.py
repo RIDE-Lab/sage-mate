@@ -60,6 +60,7 @@ class OperationalExpectedFacts:
     speculative_enabled: str
     speculative_method: str
     speculative_reason: str
+    runtime_status: str = "live"
     runtime_available: bool = True
     forbidden_facts: tuple[str, ...] = ()
 
@@ -86,7 +87,8 @@ class OperationalExpectedFacts:
             speculative_enabled=_text(health.get("runtime_speculative_enabled")),
             speculative_method=_text(health.get("runtime_speculative_method")),
             speculative_reason=_text(health.get("runtime_speculative_reason")),
-            runtime_available=status in {"live", "receipt"},
+            runtime_status=status,
+            runtime_available=status == "live",
             forbidden_facts=forbidden,
         )
 
@@ -102,13 +104,13 @@ class OperationalExpectedFacts:
         return cls(**values)
 
     def required_aliases(self) -> dict[str, tuple[str, ...]]:
-        if not self.runtime_available:
+        if self.runtime_status == "unknown":
             return {
                 "uncertainty": ("unavailable", "unknown", "无法", "未知", "不会猜测")
             }
         ep = self.expert_parallel_enabled.lower()
         speculative = self.speculative_enabled.lower()
-        return {
+        aliases = {
             "model": _aliases(self.model),
             "architecture": _aliases(self.architecture),
             "accelerator": _aliases(
@@ -135,6 +137,15 @@ class OperationalExpectedFacts:
                 self.speculative_method,
             ),
         }
+        if not self.runtime_available:
+            aliases["availability"] = (
+                "configured deployment target",
+                "not evidence that the engine is currently serving",
+                "部署锁定目标",
+                "不代表引擎当前正在提供推理",
+                "不可用或尚未验证",
+            )
+        return aliases
 
 
 def _normalize(value: object) -> str:
@@ -190,7 +201,9 @@ def evaluate_operational_response(
     ]
     support_ok = bool(runtime_hits and body.get("answer_basis"))
     used_model_ok = (
-        body.get("used_model") == expected.model if expected.runtime_available else True
+        body.get("used_model") == expected.model
+        if expected.runtime_available
+        else body.get("used_model") == "runtime-identity-provider"
     )
     route_ok = body.get("decision_mode") == "runtime_identity"
     timing = body.get("request_timing") or {}

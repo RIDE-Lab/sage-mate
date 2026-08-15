@@ -1363,8 +1363,10 @@ class FacultyTwinWorkflowSupport:
                 receipt_hit = self._deployment_receipt_store.knowledge_hit()
                 if receipt_hit is not None:
                     context.knowledge_hits.append(receipt_hit)
-            if identity.served_model != "unknown":
+            if identity.serving_available and identity.served_model != "unknown":
                 context.used_model = identity.served_model
+            else:
+                context.used_model = "runtime-identity-provider"
             self._append_trace(
                 context,
                 key="knowledge_retrieve",
@@ -6500,8 +6502,13 @@ class FacultyTwinWorkflowSupport:
     def _build_knowledge_basis_item(self, hit: KnowledgeSearchHit) -> AnswerBasisItem:
         if "runtime" in {tag.lower() for tag in hit.tags}:
             collected_at = hit.metadata.get("collected_at", "unknown")
+            serving_available = (
+                str(hit.metadata.get("serving_available") or "").lower() == "true"
+            )
             return AnswerBasisItem(
-                basis_label="实时运行状态",
+                basis_label=(
+                    "实时运行状态" if serving_available else "部署配置与可用性"
+                ),
                 title=self._clip_basis_text(hit.title, 256),
                 source_label=self._clip_basis_text(
                     f"{hit.source_name or 'runtime'} · {collected_at}", 256
@@ -10229,6 +10236,9 @@ class DigitalTwinService:
                 "runtime_identity_status": runtime_identity.status,
                 "runtime_identity_source": runtime_identity.source,
                 "runtime_identity_collected_at": runtime_identity.collected_at,
+                "runtime_serving_available": str(
+                    runtime_identity.serving_available
+                ).lower(),
                 "runtime_checkpoint_family": runtime_identity.checkpoint_family,
                 "runtime_architecture": runtime_identity.architecture,
                 "runtime_engine": runtime_identity.engine,

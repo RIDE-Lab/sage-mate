@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.6.32 - 2026-08-15
+
+- Separated live serving availability from deployment-lock identity so an
+  unavailable inference endpoint is reported as a configured target rather
+  than falsely described as currently serving.
+- Aligned deterministic runtime answers, `used_model`, Support labels, health
+  metadata, and operational acceptance gates around the same availability
+  snapshot, including timeout and missing-runtime cases.
+
 ## v4.6.31 - 2026-08-15
 
 - Added a trusted-main-only Ascend host regression workflow backed by a

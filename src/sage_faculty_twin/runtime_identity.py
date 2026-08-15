@@ -61,6 +61,7 @@ class RuntimeIdentity:
     status: str
     source: str
     collected_at: str
+    serving_available: bool = False
     served_model: str = "unknown"
     checkpoint_family: str = "unknown"
     architecture: str = "unknown"
@@ -107,8 +108,11 @@ class RuntimeIdentity:
             if self.speculative_enabled
             else f"未启用（能力：{self.speculative_capability}；原因：{self.speculative_reason}）"
         )
+        model_role = "served" if self.serving_available else "configured"
+        availability = "live" if self.serving_available else "unavailable-or-unverified"
         return (
-            f"served model={self.served_model}；checkpoint={self.checkpoint_family} / "
+            f"{model_role} model={self.served_model}；availability={availability}；"
+            f"checkpoint={self.checkpoint_family} / "
             f"{self.architecture}；engine={self.engine} {self.engine_version}；"
             f"plugin={self.plugin_version}；accelerator={devices}；{parallel}；"
             f"quantization={self.quantization}；execution={self.graph_mode}；"
@@ -125,6 +129,7 @@ class RuntimeIdentity:
             source_name=f"runtime:{self.source}",
             metadata={
                 "runtime_status": self.status,
+                "serving_available": str(self.serving_available).lower(),
                 "collected_at": self.collected_at,
                 "source_kind": self.source,
             },
@@ -224,6 +229,7 @@ class RuntimeIdentityProvider:
             status=status,
             source=source,
             collected_at=now,
+            serving_available=bool(live_model),
             served_model=served_model or "unknown",
             checkpoint_family=family or "unknown",
             architecture=architecture,
@@ -375,6 +381,72 @@ def render_runtime_identity_answer(identity: RuntimeIdentity, *, english: bool =
             "hardware, or engine; please retry after the serving endpoint recovers."
             if english
             else "当前无法读取实时运行时身份。我不会猜测模型、硬件或引擎；请在推理服务恢复后重试。"
+        )
+    if not identity.serving_available:
+        configured_devices = (
+            f"{identity.device_count}× {identity.accelerator_model}"
+            if identity.device_count
+            else f"unknown× {identity.accelerator_model}"
+        )
+        configured_tp = identity.tensor_parallel_size or "unknown"
+        configured_dp = identity.data_parallel_size or "unknown"
+        configured_ep = (
+            "on"
+            if identity.expert_parallel_enabled is True
+            else "off"
+            if identity.expert_parallel_enabled is False
+            else "unknown"
+        )
+        configured_speculative = (
+            f"enabled ({identity.speculative_method})"
+            if identity.speculative_enabled
+            else f"not enabled ({identity.speculative_reason})"
+        )
+        configured_accelerator_lower = identity.accelerator_model.lower()
+        configured_is_ascend = any(
+            marker in configured_accelerator_lower
+            for marker in ("ascend", "910", "npu")
+        )
+        if english:
+            platform_relation = (
+                "the Ascend plugin maps engine execution to the NPU runtime"
+                if configured_is_ascend
+                else "the selected platform backend maps engine execution to the accelerator runtime"
+            )
+            return (
+                f"The configured deployment target is **{identity.served_model}** with "
+                f"{identity.engine}, but the live serving endpoint is currently unavailable "
+                f"or has not been verified. The recorded target describes "
+                f"{identity.checkpoint_family} / {identity.architecture} on {configured_devices}, "
+                f"with TP={configured_tp}, DP={configured_dp}, EP={configured_ep}, "
+                f"quantization={identity.quantization}, execution={identity.graph_mode}, and "
+                f"speculative decoding {configured_speculative}. In the configured architecture, "
+                f"SAGE orchestrates the application workflow, vLLM-HUST is the serving engine, "
+                f"and {platform_relation}. These are deployment configuration facts from "
+                f"{identity.source}, not evidence that the engine is currently serving. "
+                f"Collected at {identity.collected_at}."
+            )
+        configured_speculative_zh = (
+            f"已启用（{identity.speculative_method}）"
+            if identity.speculative_enabled
+            else f"未启用（{identity.speculative_reason}）"
+        )
+        configured_platform_relation_zh = (
+            "Ascend 插件把引擎执行映射到 NPU 运行时"
+            if configured_is_ascend
+            else "所选平台后端把引擎执行映射到加速器运行时"
+        )
+        return (
+            f"当前无法从实时 serving endpoint 确认推理引擎在线。部署锁定目标是 "
+            f"**{identity.served_model}**，引擎类型为 {identity.engine}；记录的检查点族/架构为 "
+            f"{identity.checkpoint_family} / {identity.architecture}，目标硬件配置为 {configured_devices}，"
+            f"TP={configured_tp}、DP={configured_dp}、EP={configured_ep}，量化方式为 "
+            f"{identity.quantization}，执行模式为 {identity.graph_mode}，记录中的 speculative "
+            f"decoding {configured_speculative_zh}。在该配置架构中，SAGE 组织应用工作流，"
+            f"vLLM-HUST 是推理服务引擎，{configured_platform_relation_zh}。"
+            f"这些信息来自 {identity.source} 的部署配置，"
+            f"不代表引擎当前正在提供推理；当前状态是不可用或尚未验证。"
+            f"采集时间为 {identity.collected_at}。"
         )
     devices = f"{identity.device_count}× {identity.accelerator_model}" if identity.device_count else "unknown"
     tp = identity.tensor_parallel_size or "unknown"
