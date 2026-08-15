@@ -1,5 +1,16 @@
 # Changelog
 
+## v4.6.29 - 2026-08-15
+
+- Unified public chat, Support, status, settings, account, onboarding, and
+  operational state colors behind one light/dark semantic token contract.
+- Split info/success/warning/error foreground, surface, and opaque border roles
+  so components cannot accidentally reuse a background token as text.
+- Added a browser release gate for computed alpha-composited contrast across
+  desktop and 390x844, plus checked-in visual baselines and CI diff artifacts.
+- Fixed previously untested low-contrast borders on recommendation chips and
+  settings cards, and added an explicit accessible name to account settings.
+
 ## Unreleased
 
 ## v4.6.28 - 2026-08-15
