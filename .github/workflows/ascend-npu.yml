@@ -1,0 +1,64 @@
+name: Ascend NPU Host Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify_engine:
+        description: Require the already-managed inference engine health endpoint
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sage-mate-ascend-npu-host
+  cancel-in-progress: false
+
+jobs:
+  host-regression:
+    if: >-
+      github.repository == 'SAGE-Research/sage-mate' &&
+      github.ref == 'refs/heads/main' &&
+      github.event_name == 'workflow_dispatch'
+    environment: ascend-npu
+    runs-on:
+      group: sage-mate-ascend
+      labels:
+        - self-hosted
+        - Linux
+        - ARM64
+        - ascend
+        - sage-mate-ephemeral
+    timeout-minutes: 20
+    steps:
+      - name: Check out the trusted main revision
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Verify trusted dispatch context
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          test "$GITHUB_REPOSITORY" = SAGE-Research/sage-mate
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "${SAGE_ASCEND_CI_EPHEMERAL:-}" = 1
+
+      - name: Run non-destructive Ascend host regression
+        env:
+          VERIFY_ENGINE: ${{ inputs.verify_engine }}
+          REPORT_PATH: ${{ runner.temp }}/ascend-host-report.json
+        run: bash tools/verify_ascend_ci_host.sh
+
+      - name: Upload public-safe host report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ascend-host-regression-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 14
+          path: ${{ runner.temp }}/ascend-host-report.json
