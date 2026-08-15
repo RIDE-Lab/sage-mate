@@ -27,6 +27,29 @@ In particular, an Ascend launch requires `VLLM_ENGINE_MODEL_PATH` and
 release installer can choose currently idle NPUs, while the lower-level launcher deliberately
 fails instead of guessing.
 
+### Trusted one-shot Ascend CI
+
+Pull requests always use GitHub-hosted runners. The public repository must not
+attach a persistent NPU host to `pull_request` jobs. Hardware regression is a
+separate `workflow_dispatch` workflow on `main`, routed through the
+workflow-restricted `sage-mate-ascend` runner group and the `ascend-npu`
+environment.
+
+An operator starts one ephemeral runner and dispatches one job with:
+
+```bash
+SAGE_ASCEND_CI_CONTAINER_IMAGE=<locally-installed-ascend-image> \
+  tools/run_ascend_ci_once.sh
+```
+
+The job checks the trusted revision, Ascend device/control nodes, `npu-smi`,
+non-interactive Docker access, container device binding, graph-mode launcher
+contracts, and application health. It does not start or replace the managed
+model service. Set `VERIFY_ENGINE=true` only when an already-managed engine is
+expected to be healthy. The runner deregisters after its single job and its
+temporary work directory is removed; diagnostics are retained under the
+operator's XDG cache directory.
+
 The loopback addresses and ports shown in `.env.example` are editable sample configuration, not
 values embedded in generated systemd units. To move the deployment, copy its secret material
 separately and generate a new `.env` for the destination host.

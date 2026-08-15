@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sage-mate"
-version = "4.6.30"
+version = "4.6.31"
 description = "Sage Mate multi-profile local and hosted assistant built on SAGE and vllm-hust"
 readme = "README.md"
 license = {file = "LICENSE"}

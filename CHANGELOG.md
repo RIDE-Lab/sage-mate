@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.6.31 - 2026-08-15
+
+- Added a trusted-main-only Ascend host regression workflow backed by a
+  workflow-restricted, one-job ephemeral runner instead of exposing the NPU
+  host to public pull-request code.
+- Added non-destructive ARM64/NPU, Docker device-binding, graph-mode, app
+  health, runner cleanup, and public-safe report gates plus an operator wrapper
+  that registers, dispatches, watches, and removes one runner automatically.
+
 ## v4.6.30 - 2026-08-15
 
 - Fixed returning-visitor first paint so the welcome identity and three
