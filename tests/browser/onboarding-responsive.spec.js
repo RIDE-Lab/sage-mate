@@ -28,11 +28,11 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "index.html", "text/html; charset=utf-8");
     return;
   }
-  if (pathname === "/styles.4219.css" || pathname === "/styles.css") {
+  if (pathname === "/styles.4220.css" || pathname === "/styles.css") {
     sendFile(response, "styles.css", "text/css; charset=utf-8");
     return;
   }
-  if (pathname === "/app.4219.js" || pathname === "/app.js") {
+  if (pathname === "/app.4220.js" || pathname === "/app.js") {
     sendFile(response, "app.js", "text/javascript; charset=utf-8");
     return;
   }
@@ -42,6 +42,39 @@ function handleFixtureRequest(request, response) {
   }
   if (pathname === "/companion.css") {
     sendFile(response, "companion.css", "text/css; charset=utf-8");
+    return;
+  }
+  if (pathname === "/health") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({
+      status: "ok",
+      app_version: "4.6.26",
+      model_name: "vllm-ascend/DeepSeek-V4-Flash-w8a8-mtp",
+      engine_image: "vllm-ascend-hust:graph-runtime",
+      npu_devices: "0,1,2,3,4,5,6,7",
+      npu_active_count: "8",
+      npu_utilization: "42%",
+      npu_memory_usage: "378 / 488 GiB",
+      npu_utilization_by_device: "0:40% · 1:43% · 2:41% · 3:44% · 4:40% · 5:43% · 6:41% · 7:44%",
+      registered_user_accounts: "12",
+      conversation_memory_records: "850",
+      llm_status: "healthy",
+      llm_request_count: "20",
+      llm_avg_latency_ms: "1250",
+      llm_app_cache_hit_rate: "0.4",
+      llm_request_throughput_rps: "1.5",
+    }));
+    return;
+  }
+  if (pathname === "/auth/user/session") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({ is_authenticated: false, mode: "public" }));
     return;
   }
   if (pathname === "/chat/workflow-events") {
@@ -242,6 +275,107 @@ test("shared icons render from valid symbols on phone and desktop", async ({ pag
     await expect(page.locator('.pill-toggle-label use[href="#icon-brain"]')).toBeVisible();
     await expect(page.locator('.pill-toggle-label use[href="#icon-globe-search"]')).toBeVisible();
     await expect(page.locator('.send-button use[href="#icon-send"]')).toBeVisible();
+  }
+});
+
+test("system status remains readable in both themes and responsive viewports", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+      await page.evaluate((selectedTheme) => {
+        localStorage.setItem("sageMateTheme", selectedTheme);
+        localStorage.setItem("sageOnboardingCompleted", "true");
+        localStorage.setItem("sageOnboardingDismissed", "true");
+      }, theme);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      if (viewport.width <= 720) {
+        await page.getByRole("button", { name: "打开菜单" }).click();
+      }
+      await page.getByRole("button", { name: "系统状态" }).click();
+      await expect(page.locator("#view-model-name .status-value")).toContainText("DeepSeek-V4");
+
+      const audit = await page.evaluate(() => {
+        const parseColor = (value) => {
+          const values = value.match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+          return { r: values[0], g: values[1], b: values[2], a: values[3] ?? 1 };
+        };
+        const blend = (front, back) => ({
+          r: front.r * front.a + back.r * (1 - front.a),
+          g: front.g * front.a + back.g * (1 - front.a),
+          b: front.b * front.a + back.b * (1 - front.a),
+          a: 1,
+        });
+        const background = (element) => {
+          const layers = [];
+          for (let node = element; node; node = node.parentElement) {
+            layers.push(parseColor(getComputedStyle(node).backgroundColor));
+          }
+          return layers.reverse().reduce(
+            (result, layer) => (layer.a > 0 ? blend(layer, result) : result),
+            { r: 255, g: 255, b: 255, a: 1 },
+          );
+        };
+        const luminance = ({ r, g, b }) => {
+          const channels = [r, g, b].map((value) => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+          });
+          return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+        };
+        const contrast = (foreground, backdrop) => {
+          const first = luminance(foreground);
+          const second = luminance(backdrop);
+          return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+        };
+        const sample = (selector) => {
+          const element = document.querySelector(selector);
+          const style = getComputedStyle(element);
+          const backdrop = background(element);
+          return {
+            selector,
+            color: style.color,
+            background: style.backgroundColor,
+            border: style.borderTopColor,
+            textContrast: contrast(parseColor(style.color), backdrop),
+          };
+        };
+        const card = document.querySelector("#view-model-name");
+        const cardStyle = getComputedStyle(card);
+        const cardBackdrop = background(card);
+        const pageWidth = {
+          clientWidth: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+        };
+        return {
+          theme: document.documentElement.dataset.theme,
+          state: document.querySelector("#status-view").dataset.state,
+          samples: [
+            sample(".chat-view-title"),
+            sample(".status-section-title"),
+            sample("#view-model-name .status-label"),
+            sample("#view-model-name .status-value"),
+            sample(".app-stack-chip"),
+            sample(".app-version-badge"),
+          ],
+          cardBorder: cardStyle.borderTopColor,
+          cardBackground: cardStyle.backgroundColor,
+          cardBorderContrast: contrast(parseColor(cardStyle.borderTopColor), cardBackdrop),
+          footerBorderContrasts: [".app-stack-chip", ".app-version-badge"].map((selector) => {
+            const element = document.querySelector(selector);
+            return contrast(parseColor(getComputedStyle(element).borderTopColor), background(element));
+          }),
+          pageWidth,
+        };
+      });
+
+      expect(audit.theme).toBe(theme);
+      expect(audit.state).toBe("ready");
+      expect(audit.samples.every((sample) => sample.textContrast >= 4.5)).toBe(true);
+      expect(audit.cardBorderContrast).toBeGreaterThanOrEqual(3);
+      expect(audit.footerBorderContrasts.every((value) => value >= 3)).toBe(true);
+      expect(audit.pageWidth.scrollWidth).toBeLessThanOrEqual(audit.pageWidth.clientWidth);
+    }
   }
 });
 
