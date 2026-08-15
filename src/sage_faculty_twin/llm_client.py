@@ -344,10 +344,10 @@ class VllmChatClient:
         """Whether tool schemas may be sent directly to the upstream server."""
         return self._settings.llm_tool_calling_mode == "native"
 
-    def _detect_model_name(self) -> str:
+    def _detect_model_name(self, *, timeout_seconds: float = 10.0) -> str:
         """Query the connected LLM's /models endpoint to discover the served model name."""
         try:
-            response = self._client.get("/models", timeout=10.0)
+            response = self._client.get("/models", timeout=timeout_seconds)
             response.raise_for_status()
             data = response.json()
             models = data.get("data", [])
@@ -364,6 +364,40 @@ class VllmChatClient:
             logger.warning("Failed to auto-detect model name from %s: %s",
                            self._settings.llm_base_url, exc)
         return ""
+
+    def probe_runtime_model_name(self) -> str:
+        """Probe the serving endpoint without falling back to configured memory."""
+        detected = self._detect_model_name(timeout_seconds=2.0)
+        if detected:
+            self.model_name = detected
+            self._intent_model_name = self._settings.intent_model_name or detected
+        return detected
+
+    def probe_runtime_model_metadata(self) -> dict[str, Any]:
+        """Return the live public model card needed by runtime identity."""
+        try:
+            response = self._client.get("/models", timeout=2.0)
+            response.raise_for_status()
+            models = response.json().get("data", [])
+            if not models or not isinstance(models[0], dict):
+                return {}
+            record = models[0]
+            model_name = str(record.get("id") or "").strip()
+            if model_name:
+                self.model_name = model_name
+                self._intent_model_name = self._settings.intent_model_name or model_name
+            capability = record.get("speculative_capability")
+            return {
+                "id": model_name,
+                "speculative_capability": capability if isinstance(capability, dict) else {},
+            }
+        except Exception as exc:
+            logger.warning(
+                "Failed to probe runtime model metadata from %s: %s",
+                self._settings.llm_base_url,
+                exc,
+            )
+            return {}
 
     def refresh_runtime_model_name(self) -> str:
         """Refresh the displayed model from the serving endpoint.
@@ -777,6 +811,7 @@ class VllmChatClient:
                 max_latency_ms = avg_latency_ms
 
             return {
+                "model_name": getattr(self, "model_name", ""),
                 "llm_status": last_status,
                 "llm_request_count": str(eff_request_count),
                 "llm_success_count": str(eff_success_count),

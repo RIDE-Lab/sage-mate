@@ -27,6 +27,12 @@ from .request_context import (
     RequestCancelledError,
     raise_if_request_cancelled as _raise_if_request_cancelled,
 )
+from .runtime_identity import (
+    is_runtime_identity_query,
+    render_runtime_identity_answer,
+    RuntimeIdentity,
+    RuntimeIdentityProvider,
+)
 from .artifact_memory_draft_store import (
     ArtifactMemoryDraftRecord,
     ArtifactMemoryDraftStore,
@@ -367,6 +373,31 @@ def _resolve_vllm_hust_version() -> str:
     return "unknown"
 
 
+def _resolve_vllm_ascend_version() -> str:
+    """Resolve the Ascend plugin version, including the pinned source commit."""
+    source_version = _resolve_source_version(
+        "vllm-ascend-hust",
+        pip_names=("vllm-ascend-hust", "vllm-ascend"),
+        expect_name="vllm-ascend-hust",
+    )
+    if source_version != "unknown":
+        return source_version
+    vendored = Path(__file__).resolve().parents[2] / "deps" / "vllm-ascend-hust"
+    try:
+        import subprocess
+
+        commit = subprocess.check_output(
+            ["git", "-C", str(vendored), "rev-parse", "--short", "HEAD"],
+            text=True,
+            timeout=2,
+        ).strip()
+        if commit:
+            return f"git-{commit}"
+    except Exception:
+        pass
+    return "unknown"
+
+
 def build_stack_versions_payload() -> dict[str, str]:
     """Resolve all stack component versions from local source checkouts."""
     return {
@@ -378,6 +409,7 @@ def build_stack_versions_payload() -> dict[str, str]:
             "neuromem", pip_names=("isage-neuromem",), expect_name="isage-neuromem",
         ),
         "stack_version_vllm_hust": _resolve_vllm_hust_version(),
+        "stack_version_vllm_ascend": _resolve_vllm_ascend_version(),
         "stack_version_sagevdb": _resolve_source_version(
             "sageVDB", pip_names=("isage-vdb",), expect_name="isage-vdb",
         ),
@@ -808,6 +840,7 @@ class ChatWorkflowContext:
     intake: ChatIntake | None = None
     interaction_decision: InteractionDecision | None = None
     evidence_bundle: EvidenceBundle | None = None
+    runtime_identity: RuntimeIdentity | None = None
     prompt_envelope: PromptEnvelope | None = None
     is_admin_request: bool = False
     admin_username: str | None = None
@@ -897,6 +930,7 @@ class FacultyTwinWorkflowSupport:
         llm_client: VllmChatClient,
         email_notifier: BookingEmailNotifier,
         digest_store: ConversationDigestStore | None = None,
+        runtime_identity_provider: RuntimeIdentityProvider | None = None,
         admin_session_payload: dict[str, Any] | None = None,
         trace_callback: WorkflowTraceCallback | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
@@ -920,6 +954,13 @@ class FacultyTwinWorkflowSupport:
         self._meeting_service = meeting_service
         self._calendar_bridge = CalendarBridgeClient(settings)
         self._llm_client = llm_client
+        probe = getattr(llm_client, "probe_runtime_model_name", lambda: "")
+        self._runtime_identity_provider = runtime_identity_provider or RuntimeIdentityProvider(
+            settings,
+            model_probe=probe,
+            versions_provider=build_stack_versions_payload,
+            hardware_provider=build_hardware_payload,
+        )
         self._email_notifier = email_notifier
         self._digest_store = digest_store
         self._admin_session_payload = admin_session_payload
@@ -1307,6 +1348,25 @@ class FacultyTwinWorkflowSupport:
                 title="知识入库",
                 summary=summary,
                 detail=detail,
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
+
+        if context.route == "answer" and is_runtime_identity_query(context.request.question):
+            identity = self._runtime_identity_provider.snapshot()
+            context.runtime_identity = identity
+            context.knowledge_hits = [identity.to_knowledge_hit()]
+            if identity.served_model != "unknown":
+                context.used_model = identity.served_model
+            self._append_trace(
+                context,
+                key="knowledge_retrieve",
+                title="读取运行时身份",
+                summary=f"已读取 {identity.status} 运行状态。",
+                detail=(
+                    "已通过结构化 runtime identity provider 获取模型、引擎、NPU、"
+                    "并行、量化、执行与 speculative 状态；未使用模型自我描述。"
+                ),
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
@@ -2216,6 +2276,28 @@ class FacultyTwinWorkflowSupport:
             return context
         if context.prompt_envelope is None:
             raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
+
+        if context.runtime_identity is not None:
+            lowered = context.request.question.lower()
+            english = any(
+                marker in lowered
+                for marker in ("what", "which", "current", "running", "model", "engine", "hardware")
+            ) and not any("\u4e00" <= char <= "\u9fff" for char in context.request.question)
+            context.answer = render_runtime_identity_answer(
+                context.runtime_identity,
+                english=english,
+            )
+            context.workflow_action = "answer"
+            context.decision_mode = "runtime_identity"
+            self._append_trace(
+                context,
+                key="llm_answer",
+                title="生成运行状态回答",
+                summary="已依据权威运行状态生成回答。",
+                detail="回答仅渲染结构化公开字段，未调用模型参数记忆补写运行事实。",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
 
         relevance_question = self._build_answer_relevance_question(context)
         explicit_deep = self._is_explicit_deep_request(context.request)
@@ -6409,6 +6491,16 @@ class FacultyTwinWorkflowSupport:
         return hits
 
     def _build_knowledge_basis_item(self, hit: KnowledgeSearchHit) -> AnswerBasisItem:
+        if "runtime" in {tag.lower() for tag in hit.tags}:
+            collected_at = hit.metadata.get("collected_at", "unknown")
+            return AnswerBasisItem(
+                basis_label="实时运行状态",
+                title=self._clip_basis_text(hit.title, 256),
+                source_label=self._clip_basis_text(
+                    f"{hit.source_name or 'runtime'} · {collected_at}", 256
+                ),
+                detail=self._clip_basis_text(hit.excerpt, 1000),
+            )
         if self._looks_like_gap_draft_hit(hit):
             return AnswerBasisItem(
                 basis_label="常见问题整理",
@@ -7631,6 +7723,12 @@ class DigitalTwinService:
         self._settings = settings
         self._delivery_gate = delivery_gate or ChatDeliveryGate()
         self._llm_client = VllmChatClient(settings)
+        self._runtime_identity_provider = RuntimeIdentityProvider(
+            settings,
+            model_probe=self._llm_client.probe_runtime_model_metadata,
+            versions_provider=build_stack_versions_payload,
+            hardware_provider=build_hardware_payload,
+        )
         self._knowledge_store = LocalKnowledgeStore(settings)
         self._conversation_store = NeuroMemConversationStore(settings)
         self._analytics_store = ConversationAnalyticsStore(settings, self._conversation_store)
@@ -10003,13 +10101,7 @@ class DigitalTwinService:
         raise ValueError(f"Unsupported service action: {action}")
 
     def health(self) -> dict[str, str]:
-        refresh_model = getattr(self._llm_client, "refresh_runtime_model_name", None)
-        if callable(refresh_model):
-            try:
-                refresh_model()
-            except Exception:
-                # Health must remain available while the engine is restarting.
-                pass
+        runtime_identity = self._runtime_identity_provider.snapshot()
         due_follow_ups = self._follow_up_store.list_due_actions()
         presence_snapshot = self._online_presence_store.snapshot(
             window_seconds=self._settings.online_presence_window_seconds
@@ -10104,11 +10196,29 @@ class DigitalTwinService:
         }
         runtime_snapshot = getattr(self._llm_client, "runtime_snapshot", None)
         payload.update(build_stack_versions_payload())
-        # build_stack_versions_payload reads the configured environment value,
-        # which may be stale after the engine resolves a different model. Keep
-        # the health contract authoritative: report the model actually used by
-        # this client after the runtime refresh above.
-        payload["model_name"] = self._llm_client.model_name
+        payload.update(
+            {
+                "runtime_identity_status": runtime_identity.status,
+                "runtime_identity_source": runtime_identity.source,
+                "runtime_identity_collected_at": runtime_identity.collected_at,
+                "runtime_checkpoint_family": runtime_identity.checkpoint_family,
+                "runtime_architecture": runtime_identity.architecture,
+                "runtime_engine": runtime_identity.engine,
+                "runtime_engine_version": runtime_identity.engine_version,
+                "runtime_plugin_version": runtime_identity.plugin_version,
+                "runtime_accelerator": runtime_identity.accelerator_model,
+                "runtime_device_count": str(runtime_identity.device_count),
+                "runtime_device_ids": ",".join(runtime_identity.device_ids),
+                "runtime_tp_size": str(runtime_identity.tensor_parallel_size or "unknown"),
+                "runtime_dp_size": str(runtime_identity.data_parallel_size or "unknown"),
+                "runtime_ep_enabled": str(runtime_identity.expert_parallel_enabled).lower(),
+                "runtime_quantization": runtime_identity.quantization,
+                "runtime_graph_mode": runtime_identity.graph_mode,
+                "runtime_speculative_capability": runtime_identity.speculative_capability,
+                "runtime_speculative_method": runtime_identity.speculative_method,
+                "runtime_speculative_enabled": str(runtime_identity.speculative_enabled).lower(),
+            }
+        )
         if callable(runtime_snapshot):
             payload.update(runtime_snapshot())
         else:
@@ -10140,6 +10250,7 @@ class DigitalTwinService:
                     "llm_last_error_at": "",
                 }
             )
+        payload["model_name"] = runtime_identity.served_model
         return payload
 
     def stack_versions(self) -> dict[str, str]:
@@ -10200,6 +10311,7 @@ class DigitalTwinService:
             self._llm_client,
             self._email_notifier,
             self._digest_store,
+            runtime_identity_provider=self._runtime_identity_provider,
             admin_session_payload=admin_session_payload,
             trace_callback=trace_callback,
             answer_chunk_callback=answer_chunk_callback,
