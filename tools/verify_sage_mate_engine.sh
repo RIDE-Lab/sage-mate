@@ -105,10 +105,14 @@ if [[ -n "$container" ]] && command -v docker >/dev/null 2>&1; then
       exit 1
     fi
   done
-  import_origins="$("${docker_cmd[@]}" exec \
+  installed_modules_json="${VLLM_ENGINE_INSTALLED_MODULES_JSON:-}"
+  if [[ -z "$installed_modules_json" ]]; then
+    installed_modules_json='{}'
+  fi
+  import_origin_output="$("${docker_cmd[@]}" exec \
     --env "PYTHONPATH=$runtime_pythonpath" \
     --env "SAGE_MATE_DECLARED_PYTHONPATH=$declared_pythonpath" \
-    --env "VLLM_ENGINE_INSTALLED_MODULES_JSON=${VLLM_ENGINE_INSTALLED_MODULES_JSON:-{}}" \
+    --env "VLLM_ENGINE_INSTALLED_MODULES_JSON=$installed_modules_json" \
     "$container" sh -c '
     pid=$(ps -eo pid=,args= | awk "/vllm serve/ {print \$1; exit}")
     exe=$(readlink "/proc/$pid/exe")
@@ -203,6 +207,8 @@ for module_name in ("vllm", "vllm_ascend"):
     )
 PY
   ')"
+  import_origins="$(printf '%s\n' "$import_origin_output" \
+    | awk '/^(vllm|vllm_ascend)=/')"
   [[ "$(wc -l <<< "$import_origins")" == "2" ]] || {
     echo "ERROR: could not verify vllm and vllm_ascend import origins" >&2
     exit 1
