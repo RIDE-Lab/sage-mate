@@ -11049,6 +11049,15 @@ async function initializePage() {
     applyStoredVisitorProfile();
     applyVisitorProfilePresentation({ syncCourseContext: true });
     updateChatEmptyState();
+    // Returning visitors should never wait for health/session APIs before the
+    // static landing content becomes useful. New visitors still keep the
+    // existing onboarding-first behavior below.
+    if (
+        !isCodeAssistantProfile()
+        && (hasCompletedOnboarding() || isOnboardingDismissed())
+    ) {
+        showDefaultLandingContent();
+    }
     markPresentationReady();
     startOnlinePresenceHeartbeat();
     startStatusAutoRefresh();

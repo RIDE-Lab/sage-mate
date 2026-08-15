@@ -1269,7 +1269,7 @@ async def home() -> FileResponse:
 
 @llm_app.api_route("/styles.css", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/styles.4217.css", methods=["GET", "HEAD"], include_in_schema=False)
-@llm_app.api_route("/styles.4221.css", methods=["GET", "HEAD"], include_in_schema=False)
+@llm_app.api_route("/styles.4222.css", methods=["GET", "HEAD"], include_in_schema=False)
 async def styles() -> FileResponse:
     return frontend_asset("styles.css")
 
@@ -1284,7 +1284,7 @@ async def homepage_redirect() -> RedirectResponse:
 @llm_app.api_route("/app.js", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/app.4217.js", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/app.4218.js", methods=["GET", "HEAD"], include_in_schema=False)
-@llm_app.api_route("/app.4221.js", methods=["GET", "HEAD"], include_in_schema=False)
+@llm_app.api_route("/app.4222.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def app_js() -> FileResponse:
     return frontend_asset("app.js")
 
