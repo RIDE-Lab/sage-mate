@@ -909,7 +909,10 @@ body.onboarding-active .sage-companion,
 }
 
 @keyframes sage-companion-panel-enter {
-    from { opacity: 0; transform: translateY(10px) scale(0.96); }
+    /* Scale around the edge adjacent to the companion. Translating the whole
+       panel can temporarily move an otherwise clamped panel outside a short
+       mobile viewport while its taller customize tab is opening. */
+    from { opacity: 0; transform: scale(0.96); }
     to { opacity: 1; transform: translateY(0) scale(1); }
 }
 

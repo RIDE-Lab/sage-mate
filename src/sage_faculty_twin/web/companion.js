@@ -513,8 +513,14 @@
             if (this.scrollArea) {
                 this.scrollArea.scrollTop = 0;
             }
+            // The customize panel can be taller than the companion panel,
+            // especially with fallback fonts. Recompute the available outer
+            // height synchronously so a fast test/user click cannot observe a
+            // stale geometry before the next animation frame.
+            this.syncPanelPlacement();
             globalThis.requestAnimationFrame(() => {
                 this.syncPlacement();
+                this.syncPanelPlacement();
                 this.syncScrollCue();
             });
         }
