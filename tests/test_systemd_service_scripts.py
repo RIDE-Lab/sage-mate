@@ -310,11 +310,13 @@ def test_engine_example_disables_foreign_pythonpath_inheritance() -> None:
 
 
 def test_engine_verifier_checks_runtime_import_origins() -> None:
-    """Verification must reject undeclared engine/plugin source trees."""
+    """Verification must accept only declared sources or exact owned wheels."""
 
     script = (REPO_ROOT / "tools" / "verify_sage_mate_engine.sh").read_text(
         encoding="utf-8"
     )
     assert "undeclared engine/plugin source found in runtime PYTHONPATH" in script
-    assert "engine/plugin imported from undeclared source" in script
+    assert "VLLM_ENGINE_INSTALLED_MODULES_JSON" in script
+    assert "distribution.version != expected_version" in script
+    assert "is not owned by" in script
     assert "import_origins=" in script

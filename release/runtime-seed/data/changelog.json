@@ -1,5 +1,26 @@
 [
   {
+    "version": "v4.6.24",
+    "date": "2026-08-15",
+    "summary": "运行时来源与能力状态收敛",
+    "highlights": [
+      "同步 vLLM-HUST 已合并的 TP8 图尺寸 LCM 对齐修复",
+      "源码与精确 wheel 均经过模块归属和版本验收",
+      "保持 graph mode 且不使用 enforce-eager",
+      "DSpark proposer 与 KV cache 连续内存预算尚在研究，未通过验证前不标记为已启用"
+    ]
+  },
+  {
+    "version": "v4.6.23",
+    "date": "2026-08-15",
+    "summary": "Speculative capability 合约",
+    "highlights": [
+      "区分 DeepSeek-V4 DSpark 与 legacy MTP 检查点",
+      "能力状态统一暴露到启动日志、模型接口与运行指标",
+      "补充 drafted、accepted、rejected token 与 proposer/verification 延迟指标"
+    ]
+  },
+  {
     "version": "v4.6.22",
     "date": "2026-08-15",
     "summary": "SAGE 运行时依赖自修复",

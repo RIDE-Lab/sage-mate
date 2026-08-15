@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v4.6.24 - 2026-08-15
+
+### Changed
+
+- 同步已合并的 vLLM-HUST TP8 图尺寸 LCM 对齐修复和 dev-hub 运行时来源校验；部署继续保持 graph mode，禁止 `enforce-eager` 回退。
+- DSpark speculative 与 KV cache 连续内存预算仍作为独立研究问题跟踪；在 proposer 和分配策略通过验证前不会被发布配置错误启用。
+
+### Fixed
+
+- 运行时来源验收同时支持固定源码目录与精确 wheel 合约，并核对模块文件确由声明的 distribution/version 所有，不再误拒绝正确安装的原生 Ascend wheel。
+- 版本更新日志补齐 v4.6.23 与 v4.6.24 的公开展示记录，并区分“能力识别”“已启用”和“研究中”三种状态。
+
 ## v4.6.23 - 2026-08-15
 
 ### Changed
