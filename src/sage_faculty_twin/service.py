@@ -10245,6 +10245,7 @@ class DigitalTwinService:
                 "runtime_speculative_capability": runtime_identity.speculative_capability,
                 "runtime_speculative_method": runtime_identity.speculative_method,
                 "runtime_speculative_enabled": str(runtime_identity.speculative_enabled).lower(),
+                "runtime_speculative_reason": runtime_identity.speculative_reason,
             }
         )
         if callable(runtime_snapshot):
