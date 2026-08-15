@@ -37,6 +37,7 @@ Run the gate with:
 
 ```bash
 npm ci
+sudo apt-get install fonts-noto-cjk
 npx playwright install firefox
 npx playwright test tests/browser/onboarding-responsive.spec.js
 ```
