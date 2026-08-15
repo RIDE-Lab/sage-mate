@@ -51,6 +51,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Initialize shared deployment receipt contract
+        run: |
+          git config --global url."https://github.com/".insteadOf git@github.com:
+          git submodule update --init deps/vllm-hust-dev-hub
       - name: Install OS test dependencies
         run: sudo apt-get update && sudo apt-get install -y ripgrep
       - uses: actions/setup-python@v5
