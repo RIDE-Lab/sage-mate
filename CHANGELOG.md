@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## v4.6.23 - 2026-08-15
+
+### Changed
+
+- 将固定的 vLLM-HUST core 更新到可从远端 main 复现的提交，并纳入 checkpoint-aware speculative capability 合约。
+- DeepSeek-V4 DSpark 检查点现在会与 legacy MTP 明确区分；能力状态可由配置、启动日志、`/v1/models` 与运行指标统一读取。
+
+### Added
+
+- speculative decoding 指标补充 drafted/accepted/rejected token、接受率、proposer/verification 延迟与每次 target forward 的实际提交 token 数。
+
 ## v4.6.22 - 2026-08-15
 
 ### Fixed
