@@ -6,12 +6,16 @@
     --surface-soft: rgba(20, 43, 77, 0.84);
     --surface-hover: rgba(31, 61, 105, 0.92);
     --surface-muted: #122847;
+    --surface-raised: #102542;
+    --surface-inset: #09182d;
     --ink: #f4f7ff;
     --text-primary: #f4f7ff;
     --text-secondary: #c3d0e5;
     --muted: #9dafc9;
     --line: rgba(166, 201, 255, 0.18);
     --line-strong: rgba(166, 201, 255, 0.32);
+    --control-border: #7892b8;
+    --focus-ring: #27d5e9;
     --accent: #6d7cff;
     --accent-deep: #4656dc;
     --accent-2: #27d5e9;
@@ -22,14 +26,16 @@
     --user: #172f54;
     --success-surface: rgba(35, 211, 160, 0.14);
     --success-text: #7ff2ca;
+    --success-border: #4e9e83;
     --warning-surface: rgba(245, 184, 75, 0.16);
     --warning-text: #ffd98a;
+    --warning-border: #b88937;
     --error-surface: rgba(255, 107, 138, 0.15);
     --error-text: #ffb1c3;
-    /* Compatibility aliases: these names are backgrounds, not foregrounds. */
-    --success: var(--success-surface);
-    --warning: var(--warning-surface);
-    --error: var(--error-surface);
+    --error-border: #bd6177;
+    --info-surface: #132f5e;
+    --info-text: #c8d9ff;
+    --info-border: #7892b8;
     --shadow: 0 18px 46px rgba(0, 0, 0, 0.26);
     --shadow-strong: 0 24px 68px rgba(0, 0, 0, 0.36);
     --glow: 0 0 28px rgba(109, 124, 255, 0.22);
@@ -72,12 +78,16 @@ html[data-theme="light"] {
     --surface-soft: #f4f8fd;
     --surface-hover: #e7f0fb;
     --surface-muted: #dce8f6;
+    --surface-raised: #ffffff;
+    --surface-inset: #e7eef8;
     --ink: #13243d;
     --text-primary: #13243d;
     --text-secondary: #3b506d;
     --muted: #5d718d;
     --line: rgba(42, 77, 119, 0.16);
     --line-strong: rgba(42, 77, 119, 0.3);
+    --control-border: #607894;
+    --focus-ring: #087f9f;
     --accent: #4d5ee5;
     --accent-deep: #3649c7;
     --accent-2: #087f9f;
@@ -88,13 +98,16 @@ html[data-theme="light"] {
     --user: #e2edfb;
     --success-surface: #e4f8f1;
     --success-text: #087657;
+    --success-border: #4b8d76;
     --warning-surface: #fff4d9;
     --warning-text: #8a5b00;
+    --warning-border: #987127;
     --error-surface: #ffebef;
     --error-text: #a52f4b;
-    --success: var(--success-surface);
-    --warning: var(--warning-surface);
-    --error: var(--error-surface);
+    --error-border: #a9586d;
+    --info-surface: #e4ecff;
+    --info-text: #3045a8;
+    --info-border: #607894;
     --shadow: 0 18px 46px rgba(40, 68, 106, 0.14);
     --shadow-strong: 0 24px 68px rgba(40, 68, 106, 0.2);
     --glow: 0 0 28px rgba(77, 94, 229, 0.16);
@@ -2894,8 +2907,9 @@ body.drawer-pinned .history-rail {
     min-height: 22px;
     padding: 0 9px;
     border-radius: 999px;
-    background: rgba(184, 107, 56, 0.12);
-    color: var(--warm-accent);
+    background: var(--info-surface);
+    color: var(--info-text);
+    border: 1px solid var(--info-border);
     font-size: 0.72rem;
     font-weight: 700;
     letter-spacing: 0.08em;
@@ -2915,13 +2929,13 @@ body.drawer-pinned .history-rail {
 }
 
 .notification-card-sent {
-    border-color: rgba(53, 127, 84, 0.14);
-    background: rgba(239, 250, 243, 0.86);
+    border-color: var(--success-border);
+    background: var(--success-surface);
 }
 
 .notification-card-failed {
-    border-color: rgba(167, 53, 53, 0.18);
-    background: rgba(255, 241, 239, 0.92);
+    border-color: var(--error-border);
+    background: var(--error-surface);
 }
 
 .notification-card-skipped {
@@ -2949,8 +2963,9 @@ body.drawer-pinned .history-rail {
     border-radius: 999px;
     font-size: 0.78rem;
     font-weight: 700;
-    color: var(--accent-deep);
-    background: rgba(31, 122, 224, 0.1);
+    color: var(--info-text);
+    background: var(--info-surface);
+    border: 1px solid var(--info-border);
 }
 
 .notification-card-summary,
@@ -2995,8 +3010,8 @@ body.drawer-pinned .history-rail {
     gap: 4px;
     padding: 10px 12px;
     border-radius: 14px;
-    border: 1px dashed rgba(22, 35, 56, 0.12);
-    background: rgba(255, 252, 246, 0.72);
+    border: 1px dashed var(--control-border);
+    background: var(--surface-raised);
 }
 
 .message-knowledge-item span {
@@ -3042,8 +3057,9 @@ body.drawer-pinned .history-rail {
     min-height: 24px;
     padding: 0 10px;
     border-radius: 999px;
-    background: rgba(39, 213, 233, 0.14);
-    color: var(--accent-2);
+    background: var(--info-surface);
+    color: var(--info-text);
+    border: 1px solid var(--info-border);
     font-size: 0.78rem;
     font-weight: 600;
 }
@@ -3118,7 +3134,7 @@ body.drawer-pinned .history-rail {
     padding: 12px 14px;
     border-top: 1px dashed var(--line);
     border-radius: 16px;
-    background: rgba(255, 255, 255, 0.42);
+    background: var(--surface-soft);
 }
 
 .message-feedback-actions {
@@ -3379,7 +3395,7 @@ html[data-theme="light"] .inline-status-error { background: var(--error-surface)
 .chat-shell.chat-empty .seed-chip {
     min-height: 38px;
     padding: 8px 15px;
-    border-color: var(--line-strong);
+    border-color: var(--control-border);
     background: var(--surface-solid);
 }
 
@@ -3776,9 +3792,9 @@ body.onboarding-active .chat-shell .onboarding-done {
     margin: 16px auto 0;
     padding: 20px 22px;
     border-radius: 16px;
-    background: linear-gradient(135deg, rgba(248, 248, 252, 0.92), rgba(243, 244, 251, 0.95));
-    border: 1.5px solid rgba(99, 102, 241, 0.15);
-    box-shadow: 0 4px 20px rgba(99, 102, 241, 0.1);
+    background: var(--surface-raised);
+    border: 1.5px solid var(--control-border);
+    box-shadow: var(--shadow);
     animation: onboarding-fade-in 0.3s ease;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
@@ -3803,8 +3819,9 @@ body.onboarding-active .chat-shell .onboarding-done {
 .onboarding-badge {
     font-size: 0.7rem;
     font-weight: 600;
-    color: #6366f1;
-    background: rgba(99, 102, 241, 0.1);
+    color: var(--info-text);
+    background: var(--info-surface);
+    border: 1px solid var(--info-border);
     padding: 3px 10px;
     border-radius: 999px;
     letter-spacing: 0.02em;
@@ -3814,7 +3831,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 .onboarding-progress {
     flex: 1;
     height: 4px;
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--surface-inset);
     border-radius: 999px;
     overflow: hidden;
 }
@@ -3829,7 +3846,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 
 .onboarding-step-label {
     font-size: 0.75rem;
-    color: rgba(0, 0, 0, 0.4);
+    color: var(--muted);
     font-weight: 500;
     white-space: nowrap;
 }
@@ -3842,7 +3859,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 
 .onboarding-step-copy {
     font-size: 0.85rem;
-    color: rgba(0, 0, 0, 0.55);
+    color: var(--text-secondary);
     margin: 0;
     font-weight: 500;
 }
@@ -3852,8 +3869,8 @@ body.onboarding-active .chat-shell .onboarding-done {
 }
 
 .onboarding-question-card {
-    background: #fff;
-    border: 1px solid rgba(0, 0, 0, 0.08);
+    background: var(--surface-soft);
+    border: 1px solid var(--control-border);
     border-radius: 12px;
     padding: 14px 16px;
     display: flex;
@@ -3867,7 +3884,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 
 .onboarding-question-text {
     font-size: 0.9rem;
-    color: rgba(0, 0, 0, 0.8);
+    color: var(--text-primary);
     margin: 0;
     line-height: 1.5;
     font-weight: 500;
@@ -3875,7 +3892,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 
 .onboarding-question-hint {
     font-size: 0.78rem;
-    color: rgba(99, 102, 241, 0.7);
+    color: var(--info-text);
     margin: 0;
     font-style: italic;
     transition: opacity 0.3s ease;
@@ -3891,9 +3908,9 @@ body.onboarding-active .chat-shell .onboarding-done {
     gap: 6px;
     padding: 8px 14px;
     border-radius: 999px;
-    border: 1.5px solid rgba(99, 102, 241, 0.35);
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.07), rgba(99, 102, 241, 0.13));
-    color: #6366f1;
+    border: 1.5px solid var(--info-border);
+    background: var(--info-surface);
+    color: var(--info-text);
     font-size: 0.82rem;
     font-weight: 600;
     cursor: pointer;
@@ -3903,9 +3920,9 @@ body.onboarding-active .chat-shell .onboarding-done {
 }
 
 .onboarding-random-btn:hover {
-    background: linear-gradient(135deg, rgba(99, 102, 241, 0.12), rgba(99, 102, 241, 0.2));
-    border-color: rgba(99, 102, 241, 0.55);
-    box-shadow: 0 2px 8px rgba(99, 102, 241, 0.18);
+    background: var(--surface-hover);
+    border-color: var(--focus-ring);
+    box-shadow: 0 0 0 3px var(--action-ring);
     transform: translateY(-1px);
 }
 
@@ -3941,7 +3958,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 
 .onboarding-cta {
     font-size: 0.8rem;
-    color: rgba(0, 0, 0, 0.45);
+    color: var(--muted);
     margin: 4px 0 0 0;
     font-style: italic;
 }
@@ -4019,13 +4036,13 @@ body.onboarding-active .chat-shell .onboarding-done {
 .onboarding-done-title {
     font-size: 1rem;
     font-weight: 600;
-    color: #6366f1;
+    color: var(--info-text);
     margin: 0;
 }
 
 .onboarding-done-copy {
     font-size: 0.82rem;
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--text-secondary);
     margin: 0;
 }
 
@@ -4034,7 +4051,7 @@ body.onboarding-active .chat-shell .onboarding-done {
     align-items: center;
     gap: 7px;
     font-size: 0.8rem;
-    color: rgba(0, 0, 0, 0.55);
+    color: var(--text-secondary);
     cursor: pointer;
     margin-top: 6px;
     user-select: none;
@@ -4044,7 +4061,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 .onboarding-dismiss-label input[type="checkbox"] {
     width: 14px;
     height: 14px;
-    accent-color: #6366f1;
+    accent-color: var(--accent);
     cursor: pointer;
     flex-shrink: 0;
 }
@@ -4066,18 +4083,18 @@ body.onboarding-active .chat-shell .onboarding-done {
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: rgba(0, 0, 0, 0.6);
+    color: var(--text-secondary);
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
 
 .mobile-sidebar-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: rgba(0, 0, 0, 0.85);
+    background: var(--surface-hover);
+    color: var(--text-primary);
 }
 
 .mobile-sidebar-btn:active {
-    background: rgba(0, 0, 0, 0.10);
+    background: var(--surface-muted);
 }
 
 /* Backdrop overlay (hidden by default) */
@@ -4206,7 +4223,8 @@ body.onboarding-active .chat-shell .onboarding-done {
     display: flex;
     gap: 0.25rem;
     padding: 0.25rem;
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--surface-inset);
+    border: 1px solid var(--line-strong);
     border-radius: 0.5rem;
     margin-bottom: 1.25rem;
 }
@@ -4217,7 +4235,7 @@ body.onboarding-active .chat-shell .onboarding-done {
     border: none;
     border-radius: 0.375rem;
     background: transparent;
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--text-secondary);
     font-weight: 500;
     font-size: 0.9rem;
     cursor: pointer;
@@ -4225,12 +4243,14 @@ body.onboarding-active .chat-shell .onboarding-done {
 }
 
 .account-tab:hover {
-    color: rgba(0, 0, 0, 0.8);
+    color: var(--text-primary);
+    background: var(--surface-hover);
 }
 
 .account-tab.active {
-    background: #6366f1;
-    color: #fff;
+    background: var(--accent-deep);
+    color: #ffffff;
+    box-shadow: inset 0 0 0 1px var(--focus-ring);
 }
 
 .account-tab-panel {
@@ -4240,9 +4260,9 @@ body.onboarding-active .chat-shell .onboarding-done {
 .account-link-card {
     margin-top: 1rem;
     padding: 1rem;
-    border: 1px solid rgba(0, 0, 0, 0.08);
+    border: 1px solid var(--control-border);
     border-radius: 8px;
-    background: rgba(255, 255, 255, 0.78);
+    background: var(--surface-raised);
 }
 
 .account-link-card-head {
@@ -4260,7 +4280,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 .account-link-card p,
 .account-link-steps {
     margin: 0;
-    color: rgba(0, 0, 0, 0.58);
+    color: var(--text-secondary);
     font-size: 0.86rem;
 }
 
@@ -4268,7 +4288,9 @@ body.onboarding-active .chat-shell .onboarding-done {
     margin: 0.85rem 0;
     padding: 0.75rem;
     border-radius: 8px;
-    background: rgba(0, 0, 0, 0.05);
+    background: var(--surface-inset);
+    color: var(--text-primary);
+    border: 1px solid var(--line-strong);
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 1.25rem;
     letter-spacing: 0;
@@ -4294,7 +4316,7 @@ body.onboarding-active .chat-shell .onboarding-done {
 /* Restyle drawer content inside chat-view for clean look */
 .chat-view .drawer-card {
     background: var(--surface-solid);
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--control-border);
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 8px;
@@ -5466,7 +5488,7 @@ input,
 textarea,
 select {
     width: 100%;
-    border: 1px solid var(--line);
+    border: 1px solid var(--control-border);
     border-radius: 16px;
     background: var(--surface-solid);
     padding: 13px 14px;
@@ -5483,10 +5505,11 @@ textarea::placeholder,
 }
 
 input:focus,
-textarea:focus {
+textarea:focus,
+select:focus {
     outline: none;
-    border-color: rgba(31, 122, 224, 0.45);
-    box-shadow: 0 0 0 4px rgba(31, 122, 224, 0.12);
+    border-color: var(--focus-ring);
+    box-shadow: 0 0 0 4px var(--action-ring);
 }
 
 textarea {
@@ -6141,9 +6164,9 @@ label span {
     padding: 7px 12px;
     font-size: 0.82rem;
     font-weight: 600;
-    color: var(--accent-deep);
-    background: rgba(31, 122, 224, 0.08);
-    border: 1px solid rgba(31, 122, 224, 0.12);
+    color: var(--info-text);
+    background: var(--info-surface);
+    border: 1px solid var(--info-border);
 }
 
 .drawer-group {
@@ -6154,8 +6177,8 @@ label span {
 .drawer-card {
     padding: 14px;
     border-radius: 18px;
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    background: linear-gradient(180deg, rgba(255, 252, 246, 0.94), rgba(244, 238, 229, 0.94));
+    border: 1px solid var(--control-border);
+    background: var(--surface-raised);
 }
 
 .drawer-group-head {
@@ -6189,8 +6212,9 @@ label span {
 }
 
 .drawer-card .ghost-button.drawer-button {
-    border-color: rgba(22, 35, 56, 0.1);
-    background: rgba(255, 255, 255, 0.6);
+    border-color: var(--control-border);
+    background: var(--surface-soft);
+    color: var(--text-primary);
 }
 
 .drawer-card .primary-button.drawer-button {
@@ -7588,17 +7612,17 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .workflow-step-completed {
-    border-color: rgba(53, 127, 84, 0.12);
+    border-color: var(--success-border);
 }
 
 .workflow-step-completed .workflow-step-index {
-    background: rgba(53, 127, 84, 0.12);
-    color: #25603d;
-    box-shadow: 0 0 0 6px rgba(53, 127, 84, 0.08);
+    background: var(--success-surface);
+    color: var(--success-text);
+    box-shadow: 0 0 0 6px var(--success-surface);
 }
 
 .workflow-step-skipped {
-    background: #fffdf5;
+    background: var(--surface-muted);
 }
 
 .workflow-step-active {
@@ -7607,8 +7631,8 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .workflow-step-current {
-    border-color: rgba(31, 122, 224, 0.38);
-    background: linear-gradient(180deg, rgba(226, 237, 251, 0.92), rgba(248, 244, 237, 0.94));
+    border-color: var(--info-border);
+    background: var(--info-surface);
     box-shadow: var(--shadow-strong);
 }
 
@@ -7623,19 +7647,20 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .workflow-step-current .workflow-step-title {
-    color: var(--accent-deep);
+    color: var(--info-text);
 }
 
 .workflow-step-current .workflow-step-summary {
-    color: #35516f;
+    color: var(--text-secondary);
 }
 
 .workflow-step-pending {
-    background: #fbfcfe;
+    background: var(--surface-soft);
 }
 
 .workflow-step-error {
-    background: var(--error);
+    background: var(--error-surface);
+    border-color: var(--error-border);
 }
 
 .workflow-step-empty .workflow-step-index {
@@ -7659,19 +7684,19 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .inline-status-success {
-    border-color: rgba(35, 211, 160, 0.42);
+    border-color: var(--success-border);
     background: var(--success-surface);
     color: var(--success-text);
 }
 
 .inline-status-error {
-    border-color: rgba(255, 107, 138, 0.44);
+    border-color: var(--error-border);
     background: var(--error-surface);
     color: var(--error-text);
 }
 
 .inline-status-warning {
-    border-color: rgba(245, 184, 75, 0.42);
+    border-color: var(--warning-border);
     background: var(--warning-surface);
     color: var(--warning-text);
 }
@@ -7689,9 +7714,9 @@ body.profile-code-assistant .composer-tools-row {
     position: relative;
     border-radius: 16px;
     padding: 16px;
-    background: linear-gradient(180deg, rgba(255, 252, 246, 0.96), rgba(245, 239, 231, 0.96));
-    border: 1px solid rgba(22, 35, 56, 0.08);
-    box-shadow: 0 12px 24px rgba(33, 42, 56, 0.05);
+    background: var(--surface-raised);
+    border: 1px solid var(--control-border);
+    box-shadow: var(--shadow);
     display: grid;
     gap: 10px;
     overflow: hidden;
@@ -7718,11 +7743,12 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .list-card-booking-pending {
-    background: linear-gradient(180deg, rgba(247, 251, 243, 0.98), rgba(239, 247, 241, 0.98));
+    background: var(--success-surface);
+    border-color: var(--success-border);
 }
 
 .list-card-booking-resolved {
-    background: linear-gradient(180deg, rgba(251, 248, 242, 0.96), rgba(243, 238, 230, 0.96));
+    background: var(--surface-muted);
 }
 
 .list-card-suggestion::before {
@@ -7730,7 +7756,8 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .list-card-suggestion {
-    background: linear-gradient(180deg, rgba(248, 252, 255, 0.98), rgba(246, 239, 231, 0.98));
+    background: var(--info-surface);
+    border-color: var(--info-border);
 }
 
 .list-card-memory::before {
@@ -7742,11 +7769,12 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .list-card-escalation-pending {
-    background: linear-gradient(180deg, rgba(255, 247, 237, 0.98), rgba(255, 241, 228, 0.98));
+    background: var(--warning-surface);
+    border-color: var(--warning-border);
 }
 
 .list-card-escalation-resolved {
-    background: linear-gradient(180deg, rgba(250, 245, 238, 0.96), rgba(243, 237, 230, 0.96));
+    background: var(--surface-muted);
 }
 
 .list-card-analytics::before {
@@ -7754,23 +7782,28 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .list-card-analytics-cluster {
-    background: linear-gradient(180deg, rgba(239, 246, 255, 0.98), rgba(231, 240, 252, 0.98));
+    background: var(--info-surface);
+    border-color: var(--info-border);
 }
 
 .list-card-analytics-gap {
-    background: linear-gradient(180deg, rgba(255, 247, 237, 0.98), rgba(252, 239, 225, 0.98));
+    background: var(--warning-surface);
+    border-color: var(--warning-border);
 }
 
 .list-card-analytics-unresolved {
-    background: linear-gradient(180deg, rgba(254, 242, 242, 0.98), rgba(252, 231, 231, 0.98));
+    background: var(--error-surface);
+    border-color: var(--error-border);
 }
 
 .list-card-analytics-handoff {
-    background: linear-gradient(180deg, rgba(255, 251, 235, 0.98), rgba(254, 243, 199, 0.98));
+    background: var(--warning-surface);
+    border-color: var(--warning-border);
 }
 
 .list-card-analytics-draft {
-    background: linear-gradient(180deg, rgba(245, 243, 255, 0.98), rgba(237, 233, 254, 0.98));
+    background: var(--info-surface);
+    border-color: var(--info-border);
 }
 
 .list-card h3 {
@@ -7799,7 +7832,7 @@ body.profile-code-assistant .composer-tools-row {
     gap: 12px;
     flex-wrap: wrap;
     padding-top: 10px;
-    border-top: 1px dashed rgba(22, 35, 56, 0.12);
+    border-top: 1px dashed var(--control-border);
 }
 
 .inline-action-button {
@@ -7877,37 +7910,37 @@ body.profile-code-assistant .composer-tools-row {
 .status-badge-pending {
     background: var(--warning-surface);
     color: var(--warning-text);
-    border-color: rgba(245, 184, 75, 0.42);
+    border-color: var(--warning-border);
 }
 
 .status-badge-confirmed {
     background: var(--success-surface);
     color: var(--success-text);
-    border-color: rgba(35, 211, 160, 0.42);
+    border-color: var(--success-border);
 }
 
 .status-badge-rejected {
     background: var(--error-surface);
     color: var(--error-text);
-    border-color: rgba(255, 107, 138, 0.44);
+    border-color: var(--error-border);
 }
 
 .status-badge-review {
-    background: rgba(31, 122, 224, 0.1);
-    color: var(--accent-deep);
-    border-color: rgba(31, 122, 224, 0.16);
+    background: var(--info-surface);
+    color: var(--info-text);
+    border-color: var(--info-border);
 }
 
 .status-badge-info {
-    background: var(--accent-soft);
-    color: var(--accent-deep);
-    border-color: rgba(36, 90, 166, 0.14);
+    background: var(--info-surface);
+    color: var(--info-text);
+    border-color: var(--info-border);
 }
 
 .status-badge-handoff {
-    background: #fff4db;
-    color: #8a5a16;
-    border-color: rgba(181, 126, 36, 0.18);
+    background: var(--warning-surface);
+    color: var(--warning-text);
+    border-color: var(--warning-border);
 }
 
 .availability-grid {
@@ -8634,7 +8667,8 @@ body.profile-code-assistant .composer-tools-row {
     display: flex;
     gap: 0.25rem;
     padding: 0.25rem;
-    background: rgba(0, 0, 0, 0.04);
+    background: var(--surface-inset);
+    border: 1px solid var(--line-strong);
     border-radius: 0.5rem;
     margin-bottom: 1.25rem;
 }
@@ -8645,7 +8679,7 @@ body.profile-code-assistant .composer-tools-row {
     border: none;
     border-radius: 0.375rem;
     background: transparent;
-    color: rgba(0, 0, 0, 0.5);
+    color: var(--text-secondary);
     font-weight: 500;
     font-size: 0.9rem;
     cursor: pointer;
@@ -8653,12 +8687,14 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .auth-tab:hover {
-    color: rgba(0, 0, 0, 0.8);
+    color: var(--text-primary);
+    background: var(--surface-hover);
 }
 
 .auth-tab.active {
-    background: #6366f1;
-    color: #fff;
+    background: var(--accent-deep);
+    color: #ffffff;
+    box-shadow: inset 0 0 0 1px var(--focus-ring);
 }
 
 .auth-panels {
@@ -8699,15 +8735,15 @@ body.profile-code-assistant .composer-tools-row {
     border: none;
     border-radius: 10px;
     background: transparent;
-    color: rgba(0, 0, 0, 0.6);
+    color: var(--text-secondary);
     cursor: pointer;
     flex-shrink: 0;
     transition: background 0.15s ease, color 0.15s ease;
 }
 
 .sidebar-toggle-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: rgba(0, 0, 0, 0.85);
+    background: var(--surface-hover);
+    color: var(--text-primary);
 }
 
 /* Sidebar quick action buttons */
@@ -8716,7 +8752,7 @@ body.profile-code-assistant .composer-tools-row {
     flex-direction: column;
     gap: 0.25rem;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+    border-bottom: 1px solid var(--line-strong);
 }
 
 .sidebar-action-btn {
@@ -8727,7 +8763,7 @@ body.profile-code-assistant .composer-tools-row {
     border: none;
     border-radius: 0.5rem;
     background: transparent;
-    color: rgba(0, 0, 0, 0.7);
+    color: var(--text-secondary);
     font-size: 0.875rem;
     font-weight: 500;
     cursor: pointer;
@@ -8737,7 +8773,8 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .sidebar-action-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
+    background: var(--surface-hover);
+    color: var(--text-primary);
 }
 
 .history-section-title {
@@ -8745,7 +8782,7 @@ body.profile-code-assistant .composer-tools-row {
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: rgba(0, 0, 0, 0.4);
+    color: var(--muted);
     padding: 1rem 1rem 0.5rem;
 }
 
@@ -8802,7 +8839,7 @@ body.profile-code-assistant .composer-tools-row {
     align-items: center;
     gap: 6px;
     padding: 7px 14px;
-    border: 1px solid var(--line-strong);
+    border: 1px solid var(--control-border);
     border-radius: 999px;
     background: var(--surface-solid);
     color: var(--text-secondary);

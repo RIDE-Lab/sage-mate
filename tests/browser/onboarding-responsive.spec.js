@@ -28,11 +28,11 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "index.html", "text/html; charset=utf-8");
     return;
   }
-  if (pathname === "/styles.4220.css" || pathname === "/styles.css") {
+  if (pathname === "/styles.4221.css" || pathname === "/styles.css") {
     sendFile(response, "styles.css", "text/css; charset=utf-8");
     return;
   }
-  if (pathname === "/app.4220.js" || pathname === "/app.js") {
+  if (pathname === "/app.4221.js" || pathname === "/app.js") {
     sendFile(response, "app.js", "text/javascript; charset=utf-8");
     return;
   }
@@ -51,7 +51,7 @@ function handleFixtureRequest(request, response) {
     });
     response.end(JSON.stringify({
       status: "ok",
-      app_version: "4.6.26",
+      app_version: "4.6.29",
       model_name: "vllm-ascend/DeepSeek-V4-Flash-w8a8-mtp",
       engine_image: "vllm-ascend-hust:graph-runtime",
       npu_devices: "0,1,2,3,4,5,6,7",
@@ -83,7 +83,16 @@ function handleFixtureRequest(request, response) {
       "content-type": "text/event-stream; charset=utf-8",
     });
     response.end([
-      `data: ${JSON.stringify({ type: "answer_done", response: { answer: "这是测试回答。" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "answer_done", response: {
+        answer: "这是测试回答，包含可核验的公开资料。",
+        answer_basis: [{
+          basis_label: "公开资料",
+          source_label: "研究主页",
+          title: "研究方向与公开项目",
+          detail: "依据公开主页与项目文档整理。",
+        }],
+        knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+      } })}\n\n`,
       `data: ${JSON.stringify({ type: "complete" })}\n\n`,
     ].join(""));
     return;
@@ -94,12 +103,17 @@ function handleFixtureRequest(request, response) {
       "content-type": "application/json; charset=utf-8",
     });
     response.end(JSON.stringify({
-      answer: "这是测试回答。",
+      answer: "这是测试回答，包含可核验的公开资料。",
       conversation_id: "fixture-conversation",
       workflow_trace: [],
-      answer_basis: [],
+      answer_basis: [{
+        basis_label: "公开资料",
+        source_label: "研究主页",
+        title: "研究方向与公开项目",
+        detail: "依据公开主页与项目文档整理。",
+      }],
       follow_up_actions: [],
-      knowledge_hits: [],
+      knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
     }));
     return;
   }
@@ -134,7 +148,16 @@ async function openOnboarding(page, viewport) {
     contentType: "text/event-stream; charset=utf-8",
     headers: { "cache-control": "no-store" },
     body: [
-      `data: ${JSON.stringify({ type: "answer_done", response: { answer: "这是测试回答。" } })}\n\n`,
+      `data: ${JSON.stringify({ type: "answer_done", response: {
+        answer: "这是测试回答，包含可核验的公开资料。",
+        answer_basis: [{
+          basis_label: "公开资料",
+          source_label: "研究主页",
+          title: "研究方向与公开项目",
+          detail: "依据公开主页与项目文档整理。",
+        }],
+        knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+      } })}\n\n`,
       `data: ${JSON.stringify({ type: "complete" })}\n\n`,
     ].join(""),
   }));
@@ -143,12 +166,17 @@ async function openOnboarding(page, viewport) {
     contentType: "application/json; charset=utf-8",
     headers: { "cache-control": "no-store" },
     body: JSON.stringify({
-      answer: "这是测试回答。",
+      answer: "这是测试回答，包含可核验的公开资料。",
       conversation_id: "fixture-conversation",
       workflow_trace: [],
-      answer_basis: [],
+      answer_basis: [{
+        basis_label: "公开资料",
+        source_label: "研究主页",
+        title: "研究方向与公开项目",
+        detail: "依据公开主页与项目文档整理。",
+      }],
       follow_up_actions: [],
-      knowledge_hits: [],
+      knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
     }),
   }));
   await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
@@ -563,4 +591,202 @@ test("active chat exposes a usable stop control and sends server cancellation", 
   await expect(page.getByText("已停止生成。你可以修改问题后重新发送。")).toBeVisible();
   await expect(page.getByRole("button", { name: "发送问题" })).toHaveAttribute("data-mode", "send");
   expect(cancelRequestUrl).toContain("/chat/cancel?request_id=");
+});
+
+async function openThemeFixture(page, theme, viewport) {
+  await page.setViewportSize(viewport);
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate((selectedTheme) => {
+    localStorage.setItem("sageMateTheme", selectedTheme);
+    localStorage.setItem("sageOnboardingCompleted", "true");
+    localStorage.setItem("sageOnboardingDismissed", "true");
+  }, theme);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+}
+
+async function openRailView(page, buttonName, viewport) {
+  if (viewport.width <= 720) {
+    const menu = page.getByRole("button", { name: "打开菜单" });
+    if (await menu.isVisible()) {
+      await menu.click();
+    }
+  }
+  const target = buttonName === "账号设置"
+    ? page.locator("#sidebar-user-icon")
+    : page.getByRole("button", { name: buttonName });
+  await target.click();
+}
+
+async function auditThemeSelectors(page, selectors) {
+  return page.evaluate((requestedSelectors) => {
+    const parseColor = (value) => {
+      const values = String(value || "").match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+      return { r: values[0], g: values[1], b: values[2], a: values[3] ?? 1 };
+    };
+    const blend = (front, back) => ({
+      r: front.r * front.a + back.r * (1 - front.a),
+      g: front.g * front.a + back.g * (1 - front.a),
+      b: front.b * front.a + back.b * (1 - front.a),
+      a: 1,
+    });
+    const backdrop = (element, includeSelf = true) => {
+      const layers = [];
+      for (let node = includeSelf ? element : element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        layers.push({ color: parseColor(style.backgroundColor), opacity: Number(style.opacity || 1) });
+      }
+      return layers.reverse().reduce((result, layer) => {
+        const color = { ...layer.color, a: layer.color.a * layer.opacity };
+        return color.a > 0 ? blend(color, result) : result;
+      }, { r: 255, g: 255, b: 255, a: 1 });
+    };
+    const luminance = ({ r, g, b }) => {
+      const channels = [r, g, b].map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const contrast = (firstColor, secondColor) => {
+      const first = luminance(firstColor);
+      const second = luminance(secondColor);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    return requestedSelectors.map((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return { selector, missing: true };
+      }
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const hidden = style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || bounds.height === 0;
+      const ownBackdrop = backdrop(element);
+      const outsideBackdrop = backdrop(element, false);
+      const foreground = blend(parseColor(style.color), ownBackdrop);
+      const border = blend(parseColor(style.borderTopColor), outsideBackdrop);
+      return {
+        selector,
+        hidden,
+        color: style.color,
+        background: style.backgroundColor,
+        border: style.borderTopColor,
+        textContrast: contrast(foreground, ownBackdrop),
+        borderContrast: style.borderTopStyle === "none" || Number.parseFloat(style.borderTopWidth) === 0
+          ? null
+          : contrast(border, outsideBackdrop),
+      };
+    });
+  }, selectors);
+}
+
+function expectThemeAuditPasses(audit, { requireBorders = [] } = {}) {
+  expect(audit.filter((sample) => sample.missing || sample.hidden)).toEqual([]);
+  for (const sample of audit) {
+    expect(sample.textContrast, `${sample.selector} text contrast`).toBeGreaterThanOrEqual(4.5);
+    if (requireBorders.includes(sample.selector)) {
+      expect(sample.borderContrast, `${sample.selector} border contrast`).toBeGreaterThanOrEqual(3);
+    }
+  }
+}
+
+test("semantic theme contract covers chat, Support, status, account, settings, and feedback states", async ({ page }) => {
+  const viewports = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of viewports) {
+      await openThemeFixture(page, theme, viewport);
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".greeting-text",
+        ".greeting-subtitle",
+        ".seed-chips-label",
+        ".seed-chip",
+        "#chat-question",
+        ".composer-pill-toggle .pill-toggle-label",
+        "#lucky-question-button",
+        ".token-usage-toggle",
+      ]), { requireBorders: [".seed-chip", "#lucky-question-button", ".token-usage-toggle"] });
+
+      await page.locator("#chat-question").fill("请介绍研究方向并给出依据");
+      await page.getByRole("button", { name: "发送问题" }).click();
+      await expect(page.locator(".message-ready")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".message-ready .message-body",
+        ".message-section-title",
+        ".message-basis-copy",
+        ".message-basis-tag",
+        ".message-basis-title",
+        ".message-basis-detail",
+      ]), { requireBorders: [".message-basis-tag"] });
+
+      await openRailView(page, "系统状态", viewport);
+      await expect(page.locator("#status-view")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".chat-view-title",
+        ".status-section-title",
+        "#view-model-name .status-label",
+        "#view-model-name .status-value",
+      ]));
+
+      await openRailView(page, "账号设置", viewport);
+      await expect(page.locator("#settings-view")).toBeVisible();
+      await page.locator("#settings-view-body").evaluate((element) => {
+        const states = document.createElement("section");
+        states.id = "theme-contract-states";
+        states.innerHTML = `
+          <p class="inline-status inline-status-success">成功状态：操作已完成</p>
+          <p class="inline-status inline-status-warning">警告状态：需要确认</p>
+          <p class="inline-status inline-status-error">错误状态：请重试</p>
+        `;
+        element.prepend(states);
+      });
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        "#settings-view .chat-view-title",
+        "#settings-view .drawer-card",
+        ".inline-status-success",
+        ".inline-status-warning",
+        ".inline-status-error",
+      ]), {
+        requireBorders: [
+          "#settings-view .drawer-card",
+          ".inline-status-success",
+          ".inline-status-warning",
+          ".inline-status-error",
+        ],
+      });
+
+      await page.locator("#open-user-register").click();
+      await expect(page.locator("#account-view")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        "#account-view .chat-view-title",
+        "#account-view .chat-view-desc",
+        ".account-tab.active",
+        ".account-tab:not(.active)",
+        "#user-register-name",
+        "#user-register-profile-select",
+      ]), { requireBorders: ["#user-register-name", "#user-register-profile-select"] });
+
+      const pageWidth = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }));
+      expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.clientWidth);
+    }
+  }
+});
+
+test("theme release screenshots remain stable across light, dark, desktop, and narrow layouts", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await openThemeFixture(page, theme, viewport);
+      await openRailView(page, "系统状态", viewport);
+      await expect(page.locator("#status-view")).toBeVisible();
+      await expect(page).toHaveScreenshot(`theme-${theme}-${viewport.width}x${viewport.height}-status.png`, {
+        animations: "disabled",
+        caret: "hide",
+        fullPage: true,
+        maxDiffPixelRatio: 0.005,
+      });
+    }
+  }
 });

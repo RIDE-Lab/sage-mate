@@ -344,3 +344,22 @@ def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:
     assert "right: auto;" in responsive_css
     assert "bottom: auto;" in responsive_css
     assert "minmax(280px" not in responsive_css
+
+
+def test_cross_route_theme_contract_uses_split_semantic_roles() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    for role in ("info", "success", "warning", "error"):
+        assert f"--{role}-surface:" in css
+        assert f"--{role}-text:" in css
+        assert f"--{role}-border:" in css
+    assert "--control-border:" in css
+    assert "--focus-ring:" in css
+    assert "--success:" not in css
+    assert "--warning:" not in css
+    assert "--error:" not in css
+    assert 'id="sidebar-user-icon" class="rail-user rail-btn" title="账号设置"' in html
+    assert 'aria-label="账号设置"' in html
+    assert 'href="./styles.4221.css"' in html
+    assert 'src="./app.4221.js"' in html
