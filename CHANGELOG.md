@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.6.30 - 2026-08-15
+
+- Fixed returning-visitor first paint so the welcome identity and three
+  suggested questions appear immediately instead of waiting behind remote
+  health, version, and session initialization.
+- Added desktop and 390x844 browser gates that deliberately hold the versions
+  endpoint and require the useful landing content to remain visible.
+
 ## v4.6.29 - 2026-08-15
 
 - Unified public chat, Support, status, settings, account, onboarding, and

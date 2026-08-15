@@ -28,11 +28,11 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "index.html", "text/html; charset=utf-8");
     return;
   }
-  if (pathname === "/styles.4221.css" || pathname === "/styles.css") {
+  if (pathname === "/styles.4222.css" || pathname === "/styles.css") {
     sendFile(response, "styles.css", "text/css; charset=utf-8");
     return;
   }
-  if (pathname === "/app.4221.js" || pathname === "/app.js") {
+  if (pathname === "/app.4222.js" || pathname === "/app.js") {
     sendFile(response, "app.js", "text/javascript; charset=utf-8");
     return;
   }
@@ -51,7 +51,7 @@ function handleFixtureRequest(request, response) {
     });
     response.end(JSON.stringify({
       status: "ok",
-      app_version: "4.6.29",
+      app_version: "4.6.30",
       model_name: "vllm-ascend/DeepSeek-V4-Flash-w8a8-mtp",
       engine_image: "vllm-ascend-hust:graph-runtime",
       npu_devices: "0,1,2,3,4,5,6,7",
@@ -608,6 +608,40 @@ async function openThemeFixture(page, theme, viewport) {
   }, theme);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`returning visitor ${viewport.name} landing does not wait for remote status initialization`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      localStorage.setItem("sageOnboardingCompleted", "true");
+      localStorage.setItem("sageOnboardingDismissed", "true");
+    });
+
+    let releaseVersions;
+    const versionsReleased = new Promise((resolve) => {
+      releaseVersions = resolve;
+    });
+    await page.route("**/stack/versions", async (route) => {
+      await versionsReleased;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({ app_version: "4.6.30" }),
+      });
+    });
+
+    await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#welcome-greeting")).toBeVisible({ timeout: 750 });
+    await expect(page.locator("#seed-chips")).toBeVisible({ timeout: 750 });
+    await expect(page.locator("#seed-chips-list .seed-chip")).toHaveCount(3);
+
+    releaseVersions();
+    await expect(page.locator("#app-version-badge")).toHaveText("v4.6.30");
+  });
 }
 
 async function openRailView(page, buttonName, viewport) {
