@@ -17,6 +17,7 @@ deps/.faculty-twin-primary-model
 deps/.sage-mate-primary-model
 deps/.sage-mate-runtime-logs
 output/
+artifacts/
 findings.md
 progress.md
 task_plan.md

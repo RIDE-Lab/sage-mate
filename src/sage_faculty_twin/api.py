@@ -41,7 +41,12 @@ from .auth import (
 )
 from .config import settings
 from .chat_delivery import DeliveredChatResponse
-from .request_context import RequestCancelledError
+from .request_context import (
+    RequestCancellationController,
+    RequestCancelledError,
+    RequestRuntimeDiagnostics,
+    request_cancellation_scope,
+)
 from .request_timing import RequestTimingLedger
 from .models import (
     AdminLoginRequest,
@@ -122,7 +127,6 @@ from .service import (
     DigitalTwinService,
     build_stack_versions_payload,
     build_hardware_payload,
-    request_cancellation_scope,
 )
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
@@ -222,6 +226,8 @@ async def _run_chat_with_cancellation(
     *,
     timeout_seconds: float,
     deadline_at: float | None = None,
+    runtime_diagnostics: RequestRuntimeDiagnostics | None = None,
+    active_request_id: str | None = None,
     **answer_kwargs,
 ) -> ChatResponse:
     """Run one chat request while propagating disconnect/timeout to workers.
@@ -231,11 +237,13 @@ async def _run_chat_with_cancellation(
     retries after the HTTP request has gone away.  The context-scoped event is
     checked before every retry and post-answer branch.
     """
-    cancel_event = threading.Event()
+    cancellation = RequestCancellationController(diagnostics=runtime_diagnostics)
+    if active_request_id:
+        active_chat_request_registry.register(active_request_id, cancellation)
     request_payload = answer_kwargs.pop("payload")
 
     async def _run_answer():
-        with request_cancellation_scope(cancel_event, deadline_at=deadline_at):
+        with request_cancellation_scope(cancellation, deadline_at=deadline_at):
             return await service.answer(request_payload, **answer_kwargs)
 
     answer_task = asyncio.create_task(_run_answer())
@@ -267,24 +275,24 @@ async def _run_chat_with_cancellation(
                 return answer_task.result()
             except RequestCancelledError as exc:
                 raise asyncio.TimeoutError from exc
-        cancel_event.set()
+        cancellation.cancel()
         answer_task.cancel()
         await asyncio.gather(answer_task, return_exceptions=True)
         if watcher_task in done:
             raise HTTPException(status_code=499, detail="客户端已断开，已停止后续模型重试。")
         raise asyncio.TimeoutError
     except asyncio.TimeoutError:
-        cancel_event.set()
+        cancellation.cancel()
         answer_task.cancel()
         await asyncio.gather(answer_task, return_exceptions=True)
         raise
     except asyncio.CancelledError:
-        cancel_event.set()
+        cancellation.cancel()
         answer_task.cancel()
         await asyncio.gather(answer_task, return_exceptions=True)
         raise
     finally:
-        cancel_event.set()
+        cancellation.cancel()
         if not answer_task.done():
             answer_task.cancel()
         if watcher_task is not None and not watcher_task.done():
@@ -292,6 +300,8 @@ async def _run_chat_with_cancellation(
         await asyncio.gather(answer_task, return_exceptions=True)
         if watcher_task is not None:
             await asyncio.gather(watcher_task, return_exceptions=True)
+        if active_request_id:
+            active_chat_request_registry.unregister(active_request_id, cancellation)
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
@@ -341,6 +351,41 @@ SUPPORTED_CHAT_ATTACHMENT_MEDIA_TYPES = {
 }
 
 
+class ActiveChatRequestRegistry:
+    """Maps public request IDs to the controller that owns downstream work."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._controllers: dict[str, RequestCancellationController] = {}
+
+    def register(self, request_id: str, controller: RequestCancellationController) -> None:
+        with self._lock:
+            previous = self._controllers.get(request_id)
+            self._controllers[request_id] = controller
+        if previous is not None and previous is not controller:
+            previous.cancel()
+
+    def unregister(
+        self,
+        request_id: str,
+        controller: RequestCancellationController,
+    ) -> None:
+        with self._lock:
+            if self._controllers.get(request_id) is controller:
+                self._controllers.pop(request_id, None)
+
+    def cancel(self, request_id: str) -> bool:
+        with self._lock:
+            controller = self._controllers.pop(request_id, None)
+        if controller is None:
+            return False
+        controller.cancel()
+        return True
+
+
+active_chat_request_registry = ActiveChatRequestRegistry()
+
+
 class WorkflowEventBroker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -349,12 +394,18 @@ class WorkflowEventBroker:
             tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, object] | None]],
         ] = {}
 
-    async def stream(self, request_id: str) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        request_id: str,
+        *,
+        on_disconnect: Callable[[], None] | None = None,
+    ) -> AsyncIterator[str]:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
         with self._lock:
             self._streams[request_id] = (loop, queue)
 
+        closed_by_server = False
         try:
             while True:
                 # Chat Latency Optimizations Task 4: emit a keepalive event
@@ -374,6 +425,7 @@ class WorkflowEventBroker:
                     )
                     continue
                 if payload is None:
+                    closed_by_server = True
                     break
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
@@ -381,6 +433,8 @@ class WorkflowEventBroker:
                 current = self._streams.get(request_id)
                 if current is not None and current[1] is queue:
                     self._streams.pop(request_id, None)
+            if not closed_by_server and on_disconnect is not None:
+                on_disconnect()
 
     def publish_step(self, request_id: str, step: object) -> None:
         payload = {
@@ -1618,7 +1672,10 @@ async def chat_workflow_events(
     request_id: str = Query(min_length=1, max_length=128),
 ) -> StreamingResponse:
     return StreamingResponse(
-        workflow_event_broker.stream(request_id),
+        workflow_event_broker.stream(
+            request_id,
+            on_disconnect=lambda: active_chat_request_registry.cancel(request_id),
+        ),
         media_type="text/event-stream",
         headers={
             **NO_STORE_HEADERS,
@@ -1626,6 +1683,14 @@ async def chat_workflow_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@llm_app.post("/chat/cancel", include_in_schema=False)
+async def cancel_chat_request(
+    request_id: str = Query(min_length=1, max_length=128),
+) -> dict[str, bool | str]:
+    cancelled = active_chat_request_registry.cancel(request_id)
+    return {"request_id": request_id, "cancelled": cancelled}
 
 
 @llm_app.post("/slack/commands/twin", include_in_schema=False)
@@ -1876,9 +1941,12 @@ async def chat(
                 raw_request,
                 timeout_seconds=timing.remaining_seconds(),
                 deadline_at=timing.deadline_at,
+                runtime_diagnostics=timing.runtime_diagnostics,
+                active_request_id=timing.trace_id,
                 payload=payload,
                 admin_session_token=admin_session_token,
                 trace_callback=lambda _step: None,
+                answer_chunk_callback=lambda _delta: None,
             )
             timing.record("sage_workflow", stage_started)
             return timing.attach(response, route="sage_workflow")
@@ -1932,6 +2000,8 @@ async def chat(
             raw_request,
             timeout_seconds=timing.remaining_seconds(),
             deadline_at=timing.deadline_at,
+            runtime_diagnostics=timing.runtime_diagnostics,
+            active_request_id=timing.trace_id,
             payload=payload,
             admin_session_token=admin_session_token,
             trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),

@@ -373,3 +373,60 @@ test("Sage companion tabs support keyboard navigation and reduced motion", async
   expect(reducedMotion.animationName).toBe("none");
   expect(reducedMotion.indicatorTransition).toBe("0s");
 });
+
+test("active chat exposes a usable stop control and sends server cancellation", async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 659 });
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.route("**/chat/workflow-events**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream; charset=utf-8",
+    body: `data: ${JSON.stringify({ type: "keepalive" })}\n\n`,
+  }));
+  await page.route("**/chat?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        answer: "不应在取消后显示",
+        conversation_id: "cancel-test",
+        workflow_trace: [],
+        answer_basis: [],
+        follow_up_actions: [],
+        knowledge_hits: [],
+      }),
+    });
+  });
+  let cancelRequestUrl = "";
+  await page.route("**/chat/cancel?**", async (route) => {
+    cancelRequestUrl = route.request().url();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({ cancelled: true }),
+    });
+  });
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    localStorage.setItem("sageOnboardingCompleted", "true");
+    localStorage.setItem("sageOnboardingDismissed", "true");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  await page.locator("#chat-question").fill("请开始一个需要较长时间的深度分析");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  const stopButton = page.getByRole("button", { name: "停止生成" });
+  await expect(stopButton).toBeEnabled();
+  await expect(stopButton).toHaveAttribute("data-mode", "stop");
+  const stopGlyph = await stopButton.locator(".send-button-spinner").evaluate((element) => ({
+    opacity: getComputedStyle(element).opacity,
+    borderRadius: getComputedStyle(element).borderRadius,
+  }));
+  expect(stopGlyph.opacity).toBe("1");
+  expect(stopGlyph.borderRadius).toBe("3px");
+
+  await stopButton.click();
+  await expect(page.getByText("已停止生成。你可以修改问题后重新发送。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送问题" })).toHaveAttribute("data-mode", "send");
+  expect(cancelRequestUrl).toContain("/chat/cancel?request_id=");
+});

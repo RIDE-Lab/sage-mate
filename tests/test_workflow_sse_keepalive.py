@@ -111,3 +111,27 @@ def test_workflow_stream_keepalive_does_not_clobber_real_events(
     assert events[0]["step"] == {"key": "demo", "title": "Demo"}
     # The second event must be a keepalive (no other publish happened).
     assert events[1] == {"type": "keepalive"}
+
+
+def test_workflow_stream_client_close_triggers_request_cancellation() -> None:
+    request_id = "req-client-disconnect"
+    broker = api_module.WorkflowEventBroker()
+    disconnected: list[str] = []
+
+    async def driver() -> None:
+        agen = broker.stream(
+            request_id,
+            on_disconnect=lambda: disconnected.append(request_id),
+        ).__aiter__()
+        first = asyncio.create_task(agen.__anext__())
+        for _ in range(5):
+            await asyncio.sleep(0)
+            with broker._lock:  # type: ignore[attr-defined]
+                if request_id in broker._streams:  # type: ignore[attr-defined]
+                    break
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await agen.aclose()
+
+    asyncio.run(driver())
+    assert disconnected == [request_id]

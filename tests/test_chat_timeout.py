@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from sage_faculty_twin import api as api_module
 from sage_faculty_twin.api import app, service
+from sage_faculty_twin.request_context import RequestCancellationController
 
 client = TestClient(app)
 
@@ -149,3 +150,16 @@ def test_fast_chat_exposes_request_boundary_timing() -> None:
     assert timing["total_duration_ms"] <= timing["budget_ms"]
     assert "request_parse" in timing["stage_durations_ms"]
     assert "fast_path_probe" in timing["stage_durations_ms"]
+
+
+def test_explicit_cancel_endpoint_interrupts_registered_request() -> None:
+    request_id = "cancel-endpoint-test"
+    controller = RequestCancellationController()
+    api_module.active_chat_request_registry.register(request_id, controller)
+
+    response = client.post("/chat/cancel", params={"request_id": request_id})
+
+    assert response.status_code == 200
+    assert response.json() == {"request_id": request_id, "cancelled": True}
+    assert controller.is_cancelled()
+    assert api_module.active_chat_request_registry.cancel(request_id) is False

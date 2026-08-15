@@ -243,7 +243,7 @@ function setChatSubmitLoading(isLoading) {
         return;
     }
     const loading = Boolean(isLoading);
-    chatSubmitButton.disabled = loading;
+    chatSubmitButton.disabled = false;
     chatSubmitButton.classList.toggle("is-sending", loading);
     if (loading) {
         chatSubmitButton.classList.remove("is-launching");
@@ -254,8 +254,16 @@ function setChatSubmitLoading(isLoading) {
         chatSubmitButton.classList.remove("is-launching");
     }
     chatSubmitButton.setAttribute("aria-busy", String(loading));
-    chatSubmitButton.setAttribute("aria-label", loading ? "正在发送问题" : "发送问题");
+    chatSubmitButton.dataset.mode = loading ? "stop" : "send";
+    chatSubmitButton.setAttribute("aria-label", loading ? "停止生成" : "发送问题");
+    chatSubmitButton.setAttribute("title", loading ? "停止生成" : "发送问题");
 }
+
+chatSubmitButton?.addEventListener("click", (event) => {
+    if (!activeChatAbortController) return;
+    event.preventDefault();
+    void cancelActiveChatRequest();
+});
 
 const sageCompanionController = globalThis.SageCompanion?.create({
     chatForm,
@@ -453,6 +461,8 @@ let activeConversationId = createConversationId();
 let sessionTokenTotal = 0;
 let activeWorkflowStream = null;
 let activeWorkflowRequestId = null;
+let activeChatAbortController = null;
+let activeChatUserCancelled = false;
 let lastAutoChatQuestion = chatQuestion?.value?.trim() || "";
 let lastAutoCourseContext = courseContextInput?.value?.trim() || "";
 let lastHardwareSnapshot = null;
@@ -2789,6 +2799,11 @@ userLoginForm?.addEventListener("submit", async (event) => {
 chatForm.addEventListener("submit", async (event) => {
     event.preventDefault();
 
+    if (activeChatAbortController) {
+        await cancelActiveChatRequest();
+        return;
+    }
+
     const question = document.getElementById("chat-question").value.trim();
     if (!question) {
         return;
@@ -2839,6 +2854,9 @@ chatForm.addEventListener("submit", async (event) => {
         sizeBytes: file.size,
     }));
     const workflowRequestId = createConversationId();
+    const requestController = new AbortController();
+    activeChatAbortController = requestController;
+    activeChatUserCancelled = false;
 
     appendMessage("user", payload.student_name || "学生", question, {
         emphasis: "user",
@@ -2874,6 +2892,7 @@ chatForm.addEventListener("submit", async (event) => {
                 method: "POST",
                 body: requestBody,
                 timeoutMs: 120000,
+                abortController: requestController,
             });
             activeConversationId = data.conversation_id || activeConversationId;
             stopWorkflowTraceStream();
@@ -2906,6 +2925,22 @@ chatForm.addEventListener("submit", async (event) => {
             sageCompanionController?.recordAnswerCompleted();
             break;
         } catch (error) {
+            if (error?.cancelled || activeChatUserCancelled) {
+                stopWorkflowTraceStream();
+                renderWorkflowTraceError("已停止生成。");
+                renderAssistantMessage(
+                    pendingMessage,
+                    "已停止生成。你可以修改问题后重新发送。",
+                    [], [], [], null, true, null, activeWorkflowSteps
+                );
+                sageCompanionController?.setRequestActive(false);
+                sageCompanionController?.setState(
+                    "idle",
+                    "这次生成已停止，想好后可以重新问我。",
+                    { resetAfterMs: 3200 }
+                );
+                break;
+            }
             // Retry on transient failures: admission throttling (429), gateway
             // timeout (504), or network
             // errors (fetch threw, no HTTP status — common on mobile when
@@ -2951,6 +2986,10 @@ chatForm.addEventListener("submit", async (event) => {
     }
     setChatSubmitLoading(false);
     setDeepThinkingProcessing(false);
+    if (activeChatAbortController === requestController) {
+        activeChatAbortController = null;
+    }
+    activeChatUserCancelled = false;
 
     // Auto-advance onboarding after chat response completes
     if (wasOnboarding && onboardingActive) {
@@ -6343,9 +6382,9 @@ async function resolveApiOrigin() {
 }
 
 async function apiRequest(path, options = {}) {
-    const { timeoutMs = 15000, ...fetchOptions } = options;
-    const controller = new AbortController();
-    const timeoutId = globalThis.setTimeout(() => controller.abort(), timeoutMs);
+    const { timeoutMs = 15000, abortController = null, ...fetchOptions } = options;
+    const controller = abortController || new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort("timeout"), timeoutMs);
     const apiOrigin = await resolveApiOrigin();
     const requestUrl = buildApiUrl(path, apiOrigin);
     const requestHeaders = new Headers(fetchOptions.headers || {});
@@ -6363,7 +6402,13 @@ async function apiRequest(path, options = {}) {
         });
     } catch (error) {
         if (error instanceof DOMException && error.name === "AbortError") {
-            throw new Error("请求超时，请稍后重试。", { cause: error });
+            const cancelled = controller.signal.reason === "user-cancelled";
+            const abortError = new Error(
+                cancelled ? "已停止生成。" : "请求超时，请稍后重试。",
+                { cause: error }
+            );
+            abortError.cancelled = cancelled;
+            throw abortError;
         }
         throw new Error("网络连接失败，请检查网络后重试。如果问题持续，请确认后端服务已启动。", { cause: error });
     } finally {
@@ -6389,6 +6434,36 @@ async function apiRequest(path, options = {}) {
 
     return response.json();
 }
+
+async function cancelActiveChatRequest() {
+    const requestId = activeWorkflowRequestId;
+    activeChatUserCancelled = true;
+    activeChatAbortController?.abort("user-cancelled");
+    stopWorkflowTraceStream();
+    if (!requestId) return;
+    try {
+        const apiOrigin = await resolveApiOrigin();
+        await fetch(
+            buildApiUrl(`/chat/cancel?request_id=${encodeURIComponent(requestId)}`, apiOrigin),
+            { method: "POST", credentials: "include", keepalive: true }
+        );
+    } catch {
+        // Closing the workflow SSE is an independent cancellation signal.
+    }
+}
+
+globalThis.addEventListener("pagehide", () => {
+    if (!activeChatAbortController || !activeWorkflowRequestId) return;
+    const requestId = activeWorkflowRequestId;
+    const apiOrigin = resolvedApiOrigin || normalizeOrigin(globalThis.location?.origin || "");
+    activeChatUserCancelled = true;
+    activeChatAbortController.abort("user-cancelled");
+    globalThis.navigator?.sendBeacon?.(
+        buildApiUrl(`/chat/cancel?request_id=${encodeURIComponent(requestId)}`, apiOrigin),
+        new Blob([])
+    );
+    stopWorkflowTraceStream();
+});
 
 function renderLocalCodeConfig(data) {
     if (!data || !localCodeConfigPanel) return;

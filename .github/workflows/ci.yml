@@ -115,4 +115,8 @@ jobs:
           grep -q 'VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES' tools/run_vllm_engine.sh
           grep -q 'VLLM_ENGINE_ENFORCE_EAGER=0' tools/lock_sage_mate_engine.sh
           grep -q '/health' tools/verify_sage_mate_engine.sh
-          ! grep -q 'self-hosted' .github/workflows/ci.yml
+          awk '
+            BEGIN { invalid = 0 }
+            /^[[:space:]]*runs-on:/ && /self-hosted/ { invalid = 1 }
+            END { exit invalid }
+          ' .github/workflows/ci.yml

@@ -214,6 +214,14 @@ class ChatRequestTiming(BaseModel):
     remaining_budget_ms: float = Field(ge=0)
     stage_durations_ms: dict[str, float] = Field(default_factory=dict)
     workflow_trace_reported_ms: float = Field(default=0, ge=0)
+    accounted_duration_ms: float = Field(default=0, ge=0)
+    unattributed_duration_ms: float = Field(default=0, ge=0)
+    llm_call_count: int = Field(default=0, ge=0)
+    llm_retry_count: int = Field(default=0, ge=0)
+    llm_ttft_ms: float | None = Field(default=None, ge=0)
+    llm_total_duration_ms: float = Field(default=0, ge=0)
+    llm_cache_hits: int = Field(default=0, ge=0)
+    llm_cache_misses: int = Field(default=0, ge=0)
 
 
 class ChatResponse(BaseModel):

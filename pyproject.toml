@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sage-mate"
-version = "4.6.20"
+version = "4.6.21"
 description = "Sage Mate multi-profile local and hosted assistant built on SAGE and vllm-hust"
 readme = "README.md"
 license = {file = "LICENSE"}
@@ -23,7 +23,7 @@ classifiers = [
 ]
 dependencies = [
   "fastapi>=0.115.0,<1.0.0",
-  "httpx>=0.28.0,<1.0.0",
+  "httpx[http2]>=0.28.0,<1.0.0",
   "numpy>=1.24.0",
   "pydantic>=2.9.0,<3.0.0",
   "pydantic-settings>=2.5.0,<3.0.0",
