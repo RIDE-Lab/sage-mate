@@ -580,12 +580,16 @@ test("active chat exposes a usable stop control and sends server cancellation", 
   const stopButton = page.getByRole("button", { name: "停止生成" });
   await expect(stopButton).toBeEnabled();
   await expect(stopButton).toHaveAttribute("data-mode", "stop");
-  const stopGlyph = await stopButton.locator(".send-button-spinner").evaluate((element) => ({
-    opacity: getComputedStyle(element).opacity,
-    borderRadius: getComputedStyle(element).borderRadius,
-  }));
-  expect(stopGlyph.opacity).toBe("1");
-  expect(stopGlyph.borderRadius).toBe("3px");
+  await expect.poll(
+    () => stopButton.locator(".send-button-spinner").evaluate(
+      (element) => getComputedStyle(element).opacity,
+    ),
+  ).toBe("1");
+  await expect.poll(
+    () => stopButton.locator(".send-button-spinner").evaluate(
+      (element) => getComputedStyle(element).borderRadius,
+    ),
+  ).toBe("3px");
 
   await stopButton.click();
   await expect(page.getByText("已停止生成。你可以修改问题后重新发送。")).toBeVisible();
