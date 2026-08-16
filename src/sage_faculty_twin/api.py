@@ -679,11 +679,21 @@ def _resolve_effective_chat_visitor_profile(
 ) -> str | None:
     session_token = raw_request.cookies.get(USER_COOKIE_NAME)
     if not session_token:
-        return requested_visitor_profile
+        # Public profile hints may tailor course answers, but a client-owned
+        # request field must never grant access to team-only knowledge.
+        return (
+            "general_visitor"
+            if requested_visitor_profile == "lab_member"
+            else requested_visitor_profile
+        )
     user_session = service.get_user_session(session_token)
     if user_session.is_authenticated and user_session.account is not None:
         return user_session.account.visitor_profile
-    return requested_visitor_profile
+    return (
+        "general_visitor"
+        if requested_visitor_profile == "lab_member"
+        else requested_visitor_profile
+    )
 
 
 def _require_user_account(raw_request: Request):

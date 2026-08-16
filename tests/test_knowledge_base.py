@@ -158,6 +158,34 @@ def test_knowledge_store_backfills_metadata_for_legacy_records(tmp_path: Path) -
     assert loaded_record.metadata["material_type"] == "lecture"
 
 
+def test_knowledge_store_loads_reviewed_curated_metadata(tmp_path: Path) -> None:
+    record = {
+        "document_id": "curated-team-policy",
+        "title": "课题组制度｜测试规则",
+        "content": "这是一条仅供课题组成员查询的制度。",
+        "tags": ["team-policy", "audience:team"],
+        "source_name": "wps-national-project:team-policy/test",
+        "metadata": {
+            "visibility": "team",
+            "source_files": ["制度.docx"],
+            "redactions": ["个人明细"],
+        },
+        "created_at": datetime.now(UTC).isoformat(),
+        "review_status": "reviewed",
+        "freshness_status": "current",
+        "reviewed_at": datetime.now(UTC).isoformat(),
+    }
+    (tmp_path / "curated-team-policy.json").write_text(
+        __import__("json").dumps(record, ensure_ascii=False), encoding="utf-8"
+    )
+
+    loaded = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path)).list_documents()[0]
+
+    assert loaded.review_status == "reviewed"
+    assert loaded.freshness_status == "current"
+    assert loaded.metadata["source_files"] == ["制度.docx"]
+
+
 def test_knowledge_store_supports_sagevdb_backend(tmp_path: Path) -> None:
     if find_spec("sagevdb") is None:
         pytest.skip("sagevdb is not installed in this environment")
@@ -890,6 +918,23 @@ def test_knowledge_store_enforces_audience_visibility_by_visitor_profile(
         }
 
 
+def test_team_visibility_is_authoritative_and_requires_lab_member(tmp_path: Path) -> None:
+    store = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path))
+    store.add_document(
+        KnowledgeDocumentCreate(
+            title="课题组制度｜内部评分规则",
+            content="内部评分规则采用二十分制。",
+            tags=["team-policy", "audience:public"],
+            source_name="wps-national-project:team-policy/scoring",
+            metadata={"visibility": "team"},
+        )
+    )
+
+    assert not store.search("内部评分规则", visitor_profile="general_visitor")
+    hits = store.search("内部评分规则", visitor_profile="lab_member")
+    assert hits and hits[0].title == "课题组制度｜内部评分规则"
+
+
 def test_infer_default_audience_restricts_sensitive_sources(
     tmp_path: Path,
 ) -> None:
@@ -1057,6 +1102,38 @@ def test_service_prompt_keeps_private_materials_out_of_materialized_prefix(
     assert "Reusable retrieved materials" not in prompt
     assert "Relevant owner materials:" in prompt
     assert "内部账号记录" in prompt
+
+
+def test_service_prompt_enforces_team_knowledge_answer_boundary(tmp_path: Path) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    prompt = service._build_student_prompt(
+        request=type(
+            "Request",
+            (),
+            {
+                "student_name": "Member",
+                "course_context": None,
+                "visitor_profile": "lab_member",
+                "question": "Copilot 报销分几档？",
+            },
+        )(),
+        knowledge_hits=[
+            KnowledgeSearchHit(
+                document_id="team-policy",
+                title="课题组制度｜报销规则",
+                excerpt="普通成员可查询通用报销档位。",
+                score=10.0,
+                tags=["team-policy", "audience:team"],
+                source_name="wps-national-project:team-policy/reimbursement",
+                metadata={"visibility": "team"},
+            )
+        ],
+    )
+
+    assert "Team-knowledge safety boundary" in prompt
+    assert "Never provide or infer individual performance" in prompt
+    assert "does not authorize Internet" in prompt
+    assert "responsible project lead must confirm" in prompt
 
 
 def test_service_materialized_context_uses_stable_hit_order(tmp_path: Path) -> None:

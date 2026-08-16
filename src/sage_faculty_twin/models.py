@@ -360,11 +360,17 @@ class KnowledgeDocumentRecord(BaseModel):
     content: str
     tags: list[str] = Field(default_factory=list)
     source_name: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    # Runtime-private manifests retain structured provenance such as source
+    # file and redaction lists.  Preserve that audited JSON shape.
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     is_feedback_web: bool = False
-    review_status: str = Field(default="unknown", pattern="^(unknown|pending|approved|stale)$")
-    freshness_status: str = Field(default="unknown", pattern="^(unknown|web|stale)$")
+    review_status: str = Field(
+        default="unknown", pattern="^(unknown|pending|approved|reviewed|stale)$"
+    )
+    freshness_status: str = Field(
+        default="unknown", pattern="^(unknown|current|web|stale)$"
+    )
     reviewed_at: datetime | None = None
     reviewable: bool = False
 
@@ -374,14 +380,18 @@ class KnowledgeDocumentRecord(BaseModel):
         tags = {str(tag).lower() for tag in self.tags}
         is_feedback_web = source_name.startswith("feedback-web:") or "feedback-web" in tags
 
-        review_status = str(self.metadata.get("review_status") or "").strip().lower()
-        if review_status not in {"unknown", "pending", "approved", "stale"}:
+        review_status = str(
+            self.metadata.get("review_status") or self.review_status or ""
+        ).strip().lower()
+        if review_status not in {"unknown", "pending", "approved", "reviewed", "stale"}:
             review_status = "pending" if is_feedback_web else "unknown"
         if not review_status:
             review_status = "pending" if is_feedback_web else "unknown"
 
-        freshness_status = str(self.metadata.get("freshness_status") or "").strip().lower()
-        if freshness_status not in {"unknown", "web", "stale"}:
+        freshness_status = str(
+            self.metadata.get("freshness_status") or self.freshness_status or ""
+        ).strip().lower()
+        if freshness_status not in {"unknown", "current", "web", "stale"}:
             freshness_status = (
                 "web"
                 if review_status == "approved"
@@ -438,7 +448,7 @@ class KnowledgeSearchHit(BaseModel):
     score: float
     tags: list[str] = Field(default_factory=list)
     source_name: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class KnowledgeSearchResponse(BaseModel):

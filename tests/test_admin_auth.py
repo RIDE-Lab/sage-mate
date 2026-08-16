@@ -492,6 +492,39 @@ def test_chat_uses_authenticated_visitor_profile_over_client_payload(monkeypatch
     assert callable(captured["answer_chunk_callback"])
 
 
+def test_chat_downgrades_unauthenticated_lab_member_claim(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_answer(
+        request,
+        admin_session_token=None,
+        trace_callback=None,
+        answer_chunk_callback=None,
+    ):
+        captured["request"] = request
+        return ChatResponse(
+            answer="ok",
+            owner_name="张书豪",
+            used_model="mock-model",
+            conversation_id=request.conversation_id,
+        )
+
+    monkeypatch.setattr(service, "answer", fake_answer)
+    client.cookies.clear()
+
+    response = client.post(
+        "/chat",
+        json={
+            "student_name": "Anonymous",
+            "visitor_profile": "lab_member",
+            "question": "请查询组内制度。",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["request"].visitor_profile == "general_visitor"
+
+
 def test_chat_rejects_unsupported_upload_type() -> None:
     response = client.post(
         "/chat",

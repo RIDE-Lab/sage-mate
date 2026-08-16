@@ -4669,6 +4669,21 @@ class FacultyTwinWorkflowSupport:
         prompt_hits = self._select_prompt_knowledge_hits(
             request.question, knowledge_hits, interaction_intent
         )
+        team_knowledge_boundary = ""
+        if any(
+            str(hit.metadata.get("visibility") or "").strip().lower() == "team"
+            for hit in prompt_hits
+        ):
+            team_knowledge_boundary = (
+                "Team-knowledge safety boundary: These retrieved materials are available only to an "
+                "authenticated ordinary research-group member. Answer only general policies, scoring "
+                "rules, deadlines, reimbursement tiers, or reusable templates. Never provide or infer "
+                "individual performance, actual ranking names, personal reimbursement details, contact "
+                "or account mappings, payment evidence, unpublished project/funding/partner details, or "
+                "internal meeting contents. The team visibility label does not authorize Internet or "
+                "public-repository publication. If the materials do not establish an answer or approval "
+                "is required, say that the responsible project lead must confirm it.\n"
+            )
         materializable_hits, residual_prompt_hits = self._split_materializable_knowledge_hits(
             request,
             prompt_hits,
@@ -4732,6 +4747,7 @@ class FacultyTwinWorkflowSupport:
             f"Student name: {request.student_name}\n"
             f"{course_hint}"
             f"{visitor_hint}"
+            f"{team_knowledge_boundary}"
             f"{intent_guidance}"
             f"{profile_grounding_guidance}"
             f"{fast_answer_guidance}"

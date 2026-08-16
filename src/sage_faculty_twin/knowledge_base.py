@@ -1093,7 +1093,7 @@ class LocalKnowledgeStore:
         title = ((document.title + " ") * 3).strip()
         tags = " ".join(document.tags + document.tags)
         tag_aliases = " ".join(_expand_document_aliases(document))
-        metadata_text = " ".join(document.metadata.values())
+        metadata_text = " ".join(str(value) for value in document.metadata.values())
         source_tokens = _normalize_retrieval_text(document.source_name or "")
         return f"{title} {tags} {tag_aliases} {metadata_text} {source_tokens} {document.content}".strip()
 
@@ -1386,7 +1386,11 @@ class LocalKnowledgeStore:
             linked_sources = (doc.metadata or {}).get("linked_source_names", "")
             if not linked_sources:
                 continue
-            for src_name in linked_sources.split("|"):
+            if isinstance(linked_sources, list):
+                source_values = (str(item) for item in linked_sources)
+            else:
+                source_values = str(linked_sources).split("|")
+            for src_name in source_values:
                 src_name = src_name.strip()
                 if src_name and src_name in source_to_id:
                     target_id = source_to_id[src_name]
@@ -1644,7 +1648,7 @@ _AUDIENCE_ALIASES = {
         "paper-writing-student",
         "postgraduate",
     },
-    "lab_member": {"group", "internal", "lab_member", "lab-member", "member"},
+    "lab_member": {"group", "internal", "lab_member", "lab-member", "member", "team"},
     "manager": {"manager", "management", "staff_manager"},
     "admin": {"admin", "administrator", "super_admin", "super-admin"},
 }
@@ -1691,6 +1695,9 @@ _TEACHING_ALIAS_MAP = {
     "meeting": ("meeting", "预约", "office hour", "沟通"),
     "preparation": ("preparation", "准备", "提前准备", "材料"),
     "policy": ("policy", "建议", "要求", "规范"),
+    "team-policy": ("课题组制度", "组内制度", "绩效", "报销", "执行规则"),
+    "performance": ("绩效", "有效贡献", "贡献认定", "计入绩效", "自评"),
+    "knowledge-boundary": ("知识边界", "可见性", "互联网公开", "对外发布"),
     "qa": ("qa", "答疑", "提问", "问题"),
     "course:llm-inference": (
         "大模型推理基础设施",
@@ -1727,6 +1734,12 @@ _TEACHING_ALIAS_MAP = {
 # use informal or colloquial phrasings (e.g. "KV部分复用" instead of
 # "KV Cache partial reuse").
 _QUERY_SYNONYM_GROUPS: list[frozenset[str]] = [
+    frozenset({
+        "计入绩效", "纳入绩效", "有效贡献", "贡献认定", "可纳入的工作",
+    }),
+    frozenset({
+        "发布到互联网", "互联网公开", "公开发布", "对外公开", "是否可以发布",
+    }),
     # KV Cache family
     frozenset({
         "KV Cache", "KV缓存", "KV cache", "kv cache",
@@ -2041,10 +2054,10 @@ def _document_course_ids(document: KnowledgeDocumentRecord) -> frozenset[str]:
     return frozenset(course_ids)
 
 
-def _normalize_audience_label(value: str | None) -> str | None:
+def _normalize_audience_label(value: object | None) -> str | None:
     if not value:
         return None
-    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     for canonical, aliases in _AUDIENCE_ALIASES.items():
         if normalized == canonical or normalized in aliases:
             return canonical
@@ -2052,6 +2065,12 @@ def _normalize_audience_label(value: str | None) -> str | None:
 
 
 def _document_visibility_audiences(document: KnowledgeDocumentRecord) -> frozenset[str]:
+    # Explicit runtime visibility is authoritative. Combining it with stale
+    # tags could otherwise widen a team-only document back to public access.
+    metadata_visibility = _normalize_audience_label(document.metadata.get("visibility"))
+    if metadata_visibility:
+        return frozenset({metadata_visibility})
+
     audiences: set[str] = set()
     metadata_audience = _normalize_audience_label(document.metadata.get("audience"))
     if metadata_audience:
