@@ -259,6 +259,16 @@ def test_app_runtime_auto_installs_enabled_sage_anns_backend() -> None:
     assert '"$conversation_index" == "sagedb_ann"' in script
 
 
+def test_engine_lock_waits_for_ascend_namespace_release_with_a_finite_bound() -> None:
+    script = ENGINE_LOCK_SCRIPT.read_text(encoding="utf-8")
+
+    assert "VLLM_ENGINE_DEVICE_RELEASE_TIMEOUT_SECONDS" in script
+    assert "VLLM_ENGINE_DEVICE_RELEASE_POLL_SECONDS" in script
+    assert 'release_deadline=$((SECONDS + release_timeout))' in script
+    assert "while ! \"$python_bin\" \"$repo_root/tools/select_idle_npus.py\"" in script
+    assert "configured NPU devices did not become idle within" in script
+
+
 def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None:
     """Engine launcher fails fast when the Docker container is not found."""
     env = os.environ.copy()

@@ -159,12 +159,38 @@ if [[ "${VLLM_ENGINE_CONTAINER:-}" != "$previous_engine_container" ]]; then
   cleanup_managed_container "${VLLM_ENGINE_CONTAINER:-}"
 fi
 
-# Validate ownership after stopping the old service; this catches accidental
-# overlap with another workload before any container is recreated.
-if ! "$python_bin" "$repo_root/tools/select_idle_npus.py" --devices "$physical_devices" >/dev/null; then
-  echo "ERROR: configured NPU devices are not idle: $physical_devices" >&2
-  exit 3
-fi
+# Validate ownership after stopping the old service. Ascend's UDA driver can
+# retain the previous container namespace briefly after its last worker exits;
+# launching a replacement during that window surfaces as device_count=0 plus
+# "Conflict open udevid" even though all /dev nodes are mounted correctly.
+# Wait for real process/HBM release, with a finite operator-configurable bound.
+release_timeout="${VLLM_ENGINE_DEVICE_RELEASE_TIMEOUT_SECONDS:-60}"
+release_poll_interval="${VLLM_ENGINE_DEVICE_RELEASE_POLL_SECONDS:-2}"
+[[ "$release_timeout" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: VLLM_ENGINE_DEVICE_RELEASE_TIMEOUT_SECONDS must be a positive integer" >&2
+  exit 2
+}
+[[ "$release_poll_interval" =~ ^[1-9][0-9]*$ ]] || {
+  echo "ERROR: VLLM_ENGINE_DEVICE_RELEASE_POLL_SECONDS must be a positive integer" >&2
+  exit 2
+}
+release_probe="$(mktemp)"
+trap 'rm -f "$release_probe"' EXIT
+release_deadline=$((SECONDS + release_timeout))
+release_attempt=0
+while ! "$python_bin" "$repo_root/tools/select_idle_npus.py" \
+  --devices "$physical_devices" >/dev/null 2>"$release_probe"; do
+  if (( SECONDS >= release_deadline )); then
+    cat "$release_probe" >&2
+    echo "ERROR: configured NPU devices did not become idle within ${release_timeout}s: $physical_devices" >&2
+    exit 3
+  fi
+  release_attempt=$((release_attempt + 1))
+  echo "[sage-mate-lock] waiting for Ascend device namespace release (attempt=$release_attempt devices=$physical_devices)"
+  sleep "$release_poll_interval"
+done
+rm -f "$release_probe"
+trap - EXIT
 
 umask 077
 {
