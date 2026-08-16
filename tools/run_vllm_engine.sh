@@ -285,10 +285,9 @@ elif [[ -n "${VLLM_ENGINE_MODEL_FAMILY:-}" ]]; then
 else
     default_served_model="${default_served_model##*/}"
 fi
-container_suffix="${USER:-user}-$(basename "$repo_root")"
-container_suffix="$(printf '%s' "$container_suffix" | tr -cs '[:alnum:]_.-' '-')"
-
-export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-sage-mate-vllm-${container_suffix}}"
+# shellcheck source=tools/lib/vllm_container_identity.sh
+source "$repo_root/tools/lib/vllm_container_identity.sh"
+normalize_vllm_engine_container_name "$repo_root"
 export VLLM_ENGINE_MODEL_PATH
 resolved_served_name="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-$default_served_model}}"
 export VLLM_ENGINE_SERVED_MODEL_NAME="$resolved_served_name"

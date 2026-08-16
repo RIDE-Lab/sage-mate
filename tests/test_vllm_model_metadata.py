@@ -13,6 +13,7 @@ SCRIPT = REPO_ROOT / "tools" / "inspect_vllm_model.py"
 ENGINE_SCRIPT = REPO_ROOT / "tools" / "run_vllm_engine.sh"
 LOCK_SCRIPT = REPO_ROOT / "tools" / "lock_sage_mate_engine.sh"
 METADATA_LIBRARY = REPO_ROOT / "tools" / "lib" / "vllm_model_metadata.sh"
+CONTAINER_LIBRARY = REPO_ROOT / "tools" / "lib" / "vllm_container_identity.sh"
 
 
 def test_explicit_checkpoint_metadata_comes_from_config_not_name_rules(
@@ -83,3 +84,18 @@ def test_engine_launcher_has_bounded_logs_and_run_boundaries() -> None:
     assert "vllm_model_metadata.sh" in script
     assert "vllm_model_metadata.sh" in lock_script
     assert "inspect_vllm_model.py" in metadata_library
+
+
+def test_lock_launcher_and_verifier_share_portable_container_identity() -> None:
+    library = CONTAINER_LIBRARY.read_text(encoding="utf-8")
+    launcher = ENGINE_SCRIPT.read_text(encoding="utf-8")
+    lock = LOCK_SCRIPT.read_text(encoding="utf-8")
+    verifier = (REPO_ROOT / "tools" / "verify_sage_mate_engine.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "default_vllm_engine_container_name" in library
+    assert "VLLM_ENGINE_MODEL" not in library
+    for consumer in (launcher, lock, verifier):
+        assert "vllm_container_identity.sh" in consumer
+        assert "normalize_vllm_engine_container_name" in consumer

@@ -50,6 +50,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   export "$line"
 done < "$env_file"
 
+# shellcheck source=tools/lib/vllm_container_identity.sh
+source "$repo_root/tools/lib/vllm_container_identity.sh"
+normalize_vllm_engine_container_name "$repo_root"
+
 configured_served_name="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-${DIGITAL_TWIN_MODEL_NAME:-}}}"
 if [[ -z "$configured_served_name" && -n "${VLLM_ENGINE_MODEL_PATH:-}" ]]; then
   configured_served_name="${VLLM_ENGINE_MODEL_PATH%/}"

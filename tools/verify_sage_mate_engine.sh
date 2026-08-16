@@ -23,6 +23,14 @@ if [[ -f "$env_file" ]]; then
   api_key="${VLLM_HUST_API_KEY:-${VLLM_ENGINE_API_KEY:-${DIGITAL_TWIN_API_KEY:-$api_key}}}"
 fi
 
+# An empty machine-local override means "use the portable deployment-role name";
+# verification must resolve the same identity as the launcher rather than silently
+# skipping container, NPU, argv, and import-origin gates.
+# shellcheck source=tools/lib/vllm_container_identity.sh
+source "$repo_root/tools/lib/vllm_container_identity.sh"
+normalize_vllm_engine_container_name "$repo_root"
+container="$VLLM_ENGINE_CONTAINER"
+
 echo "[sage-mate-verify] unit=$unit status=$(systemctl --user is-active "$unit" 2>/dev/null || true)"
 systemctl --user is-active --quiet "$unit" || { systemctl --user status "$unit" --no-pager || true; exit 1; }
 
