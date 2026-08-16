@@ -130,6 +130,7 @@ import importlib.metadata
 import json
 import os
 import pathlib
+import warnings
 
 declared_roots = [
     pathlib.Path(entry).resolve()
@@ -148,7 +149,16 @@ if not isinstance(installed_contract, dict):
     raise SystemExit("ERROR: VLLM_ENGINE_INSTALLED_MODULES_JSON must be an object")
 
 for module_name in ("vllm", "vllm_ascend"):
-    module = importlib.import_module(module_name)
+    with warnings.catch_warnings():
+        # Source checkouts intentionally lack the generated vllm._version module.
+        # This probe validates import ownership, not package-build metadata.
+        if module_name == "vllm":
+            warnings.filterwarnings(
+                "ignore",
+                message=r"Failed to read commit hash:.*",
+                category=RuntimeWarning,
+            )
+        module = importlib.import_module(module_name)
     origin = pathlib.Path(module.__file__).resolve()
     source_root = next(
         (

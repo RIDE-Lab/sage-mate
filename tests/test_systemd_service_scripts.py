@@ -317,6 +317,8 @@ def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None
     env["VLLM_ENGINE_REPLACE_EXISTING"] = "false"
     env["VLLM_HUST_API_KEY"] = "test-api-key"
     env["VLLM_ENGINE_MODEL_PATH"] = "/tmp/nonexistent-test-model"
+    env["DIGITAL_TWIN_RUNTIME_DIR"] = str(tmp_path / "runtime")
+    env["VLLM_ENGINE_CONTAINER_LOG_FILE"] = str(tmp_path / "engine.log")
     idle_probe = _make_fake_python(tmp_path / "idle-probe", has_uvicorn=True)
     env["PYTHON_BIN"] = str(idle_probe)
 
@@ -384,3 +386,5 @@ def test_engine_verifier_checks_runtime_import_origins() -> None:
     assert "distribution.version != expected_version" in script
     assert "is not owned by" in script
     assert "import_origins=" in script
+    assert "warnings.catch_warnings()" in script
+    assert 'message=r"Failed to read commit hash:.*"' in script
