@@ -8,6 +8,7 @@ from conftest import available_knowledge_backends, requires_neuromem_model
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import (
+    ChatRequest,
     InteractionIntent,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRecord,
@@ -1134,6 +1135,55 @@ def test_service_prompt_enforces_team_knowledge_answer_boundary(tmp_path: Path) 
     assert "Never provide or infer individual performance" in prompt
     assert "does not authorize Internet" in prompt
     assert "responsible project lead must confirm" in prompt
+
+
+def test_structured_team_policy_fast_response_is_member_only_and_cited(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    hit = KnowledgeSearchHit(
+        document_id="team-policy",
+        title="课题组制度｜季度奖励",
+        excerpt="季度奖项规则。",
+        score=20.0,
+        tags=["team-policy", "audience:team"],
+        source_name="wps-national-project:team-policy/quarterly-ranking",
+        metadata={
+            "visibility": "team",
+            "qa_pairs": [
+                {
+                    "match_all": ["季度"],
+                    "match_any": ["奖项", "奖励"],
+                    "answer": "特别贡献奖、一等奖、二等奖、三等奖。",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [hit])
+
+    member = service.try_fast_answer(
+        ChatRequest(student_name="Member", visitor_profile="lab_member", question="季度有哪些奖项？")
+    )
+    guest = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="季度有哪些奖项？",
+        )
+    )
+
+    assert member is not None
+    assert member.answer == "特别贡献奖、一等奖、二等奖、三等奖。"
+    assert member.used_model == "sage-policy-fast-path"
+    assert member.knowledge_hits == [hit]
+    assert member.answer_basis[0].source_label == hit.source_name
+    assert guest is None
+
+
+def test_token_expense_question_is_not_treated_as_credential_exfiltration() -> None:
+    request = ChatRequest(student_name="Member", question="Copilot 和 Token 报销分几档？")
+
+    assert DigitalTwinService._check_sensitive_boundary_request(request) is None
 
 
 def test_service_materialized_context_uses_stable_hit_order(tmp_path: Path) -> None:

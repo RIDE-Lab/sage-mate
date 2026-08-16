@@ -8222,7 +8222,72 @@ class DigitalTwinService:
         fast_response = self._build_lightweight_chat_response(request)
         if fast_response is not None:
             return fast_response
+        policy_response = self._build_structured_team_policy_response(request)
+        if policy_response is not None:
+            return policy_response
         return self._build_lightweight_fact_response(request)
+
+    def _build_structured_team_policy_response(
+        self, request: ChatRequest
+    ) -> ChatResponse | None:
+        """Return reviewed policy facts declared by private knowledge records.
+
+        The matching vocabulary and answer text live with the audited record,
+        not in application conditionals.  This keeps exact policy facts fast
+        and citation-backed while allowing policy owners to update them through
+        the private runtime repository.
+        """
+        if request.visitor_profile != "lab_member" or not self._is_light_request(request):
+            return None
+        question = re.sub(r"[\s，。！？、,.!?;；:：()（）]+", "", request.question).lower()
+        hits = self._knowledge_store.search(
+            request.question,
+            top_k=12,
+            visitor_profile=request.visitor_profile,
+        )
+        for hit in hits:
+            if str(hit.metadata.get("visibility") or "").strip().lower() != "team":
+                continue
+            qa_pairs = hit.metadata.get("qa_pairs")
+            if not isinstance(qa_pairs, list):
+                continue
+            for pair in qa_pairs:
+                if not isinstance(pair, dict):
+                    continue
+                match_all = [
+                    re.sub(r"\s+", "", str(term)).lower()
+                    for term in pair.get("match_all", [])
+                    if str(term).strip()
+                ]
+                match_any = [
+                    re.sub(r"\s+", "", str(term)).lower()
+                    for term in pair.get("match_any", [])
+                    if str(term).strip()
+                ]
+                if not all(term in question for term in match_all):
+                    continue
+                if match_any and not any(term in question for term in match_any):
+                    continue
+                answer = str(pair.get("answer") or "").strip()
+                if not answer:
+                    continue
+                basis = AnswerBasisItem(
+                    basis_label="组内制度",
+                    title=hit.title,
+                    source_label=hit.source_name or "课题组私有知识库",
+                    detail=hit.excerpt[:500] or "经审核的课题组制度条目",
+                )
+                return ChatResponse(
+                    answer=answer,
+                    owner_name=self._settings.owner_name,
+                    used_model="sage-policy-fast-path",
+                    knowledge_hits=[hit],
+                    answer_basis=[basis],
+                    conversation_id=request.conversation_id or str(uuid4()),
+                    workflow_action="answer",
+                    decision_mode="local_evidence_fast_path",
+                )
+        return None
 
     def persist_fast_answer(
         self, request: ChatRequest, response: ChatResponse
@@ -8438,7 +8503,7 @@ class DigitalTwinService:
         lowered = question.lower()
         markers = (
             "系统提示词", "system prompt", "内部密钥", "api key", "apikey",
-            "访问令牌", "token", "管理员密码", "admin password", "密码",
+            "访问令牌", "管理员密码", "admin password", "密码",
             "secret", "credential",
         )
         if not any(marker in question or marker in lowered for marker in markers):
