@@ -293,8 +293,10 @@ export VLLM_ENGINE_MODEL_PATH
 resolved_served_name="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-$default_served_model}}"
 export VLLM_ENGINE_SERVED_MODEL_NAME="$resolved_served_name"
 export DIGITAL_TWIN_MODEL_NAME="$resolved_served_name"
-export VLLM_ENGINE_MODEL_SOURCE="${VLLM_ENGINE_MODEL_SOURCE:-auto}"
-export VLLM_ENGINE_MODEL_FAMILY="${VLLM_ENGINE_MODEL_FAMILY:-unknown}"
+# shellcheck source=tools/lib/vllm_model_metadata.sh
+source "$repo_root/tools/lib/vllm_model_metadata.sh"
+normalize_vllm_model_metadata \
+    "$repo_root" "$selector_python" "$VLLM_ENGINE_MODEL_PATH" "$resolved_served_name"
 export VLLM_ENGINE_HOST="${VLLM_ENGINE_HOST:-0.0.0.0}"
 export VLLM_ENGINE_CONNECT_HOST="${VLLM_ENGINE_CONNECT_HOST:-${VLLM_ENGINE_HOST:-127.0.0.1}}"
 resolved_engine_port="$(resolve_engine_port "${VLLM_ENGINE_PORT:-8000}" "$VLLM_ENGINE_CONNECT_HOST")" || exit 1
@@ -337,6 +339,36 @@ else
         fi
     fi
 fi
+
+rotate_engine_log() {
+    local log_file="$1"
+    local max_bytes="${VLLM_ENGINE_LOG_MAX_BYTES:-67108864}"
+    local backup_count="${VLLM_ENGINE_LOG_BACKUP_COUNT:-3}"
+    [[ "$max_bytes" =~ ^[1-9][0-9]*$ ]] || {
+        echo "ERROR: VLLM_ENGINE_LOG_MAX_BYTES must be a positive integer." >&2
+        exit 2
+    }
+    [[ "$backup_count" =~ ^[0-9]+$ ]] || {
+        echo "ERROR: VLLM_ENGINE_LOG_BACKUP_COUNT must be a non-negative integer." >&2
+        exit 2
+    }
+    local current_bytes
+    current_bytes="$(stat -c '%s' "$log_file" 2>/dev/null || echo 0)"
+    (( current_bytes < max_bytes )) && return 0
+    if (( backup_count == 0 )); then
+        : >"$log_file"
+        return 0
+    fi
+    local index
+    for ((index = backup_count; index >= 2; index--)); do
+        [[ -f "${log_file}.$((index - 1))" ]] &&
+            mv -f "${log_file}.$((index - 1))" "${log_file}.${index}"
+    done
+    mv -f "$log_file" "${log_file}.1"
+    : >"$log_file"
+}
+
+rotate_engine_log "$VLLM_ENGINE_CONTAINER_LOG_FILE"
 export VLLM_ENGINE_AUTO_CREATE_CONTAINER="${VLLM_ENGINE_AUTO_CREATE_CONTAINER:-true}"
 export VLLM_ENGINE_REPLACE_EXISTING="${VLLM_ENGINE_REPLACE_EXISTING:-true}"
 export VLLM_ENGINE_CONTAINER_NON_INTERACTIVE="${VLLM_ENGINE_CONTAINER_NON_INTERACTIVE:-1}"
@@ -501,9 +533,12 @@ ensure_container_runtime_log_visibility
 
 echo "[sage-mate] delegating vLLM-HUST launch to $launcher"
 {
+  printf '\n=== Sage Mate engine launch %s pid=%s container=%s ===\n' \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$$" "$VLLM_ENGINE_CONTAINER"
   echo "[sage-mate] model family=${VLLM_ENGINE_MODEL_FAMILY:-unknown}"
-  echo "[sage-mate] model source=${VLLM_ENGINE_MODEL_SOURCE:-auto}"
+  echo "[sage-mate] model source=${VLLM_ENGINE_MODEL_SOURCE:-configured}"
   echo "[sage-mate] model id=${VLLM_ENGINE_ACTUAL_MODEL_ID:-unknown}"
+  echo "[sage-mate] architecture=${VLLM_ENGINE_ARCHITECTURE:-unknown}"
   echo "[sage-mate] model served name=${VLLM_ENGINE_SERVED_MODEL_NAME:-unknown}"
   echo "[sage-mate] quantization=${VLLM_ENGINE_QUANTIZATION:-none}"
   echo "[sage-mate] npu devices=${VLLM_ENGINE_NPU_DEVICES}"

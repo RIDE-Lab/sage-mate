@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.6.33 - 2026-08-16
+
+- Removed vLLM API credentials from engine process arguments across both shared
+  dev-hub launch paths; authentication now uses vLLM's native environment contract.
+- Made the canonical deployment lock's help path non-mutating and rejected all
+  unsupported arguments before reading host configuration or touching systemd.
+- Normalized explicit checkpoint provenance from `config.json`, added bounded
+  engine-log rotation and per-run boundaries, and replaced stale model-specific
+  container/log identities with stable deployment-role names.
+- Graduated the shared Ascend `/etc/hccn.conf` mount fix and secret-safe dev-hub
+  launcher to their canonical `main` branches before updating parent pins.
+
 ## v4.6.32 - 2026-08-15
 
 - Separated live serving availability from deployment-lock identity so an

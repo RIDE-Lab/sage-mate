@@ -269,6 +269,44 @@ def test_engine_lock_waits_for_ascend_namespace_release_with_a_finite_bound() ->
     assert "configured NPU devices did not become idle within" in script
 
 
+def test_engine_lock_help_is_non_mutating_and_unknown_args_fail(tmp_path: Path) -> None:
+    fake_bin_dir = tmp_path / "bin"
+    fake_bin_dir.mkdir()
+    systemctl_log = tmp_path / "systemctl.log"
+    _make_fake_systemctl(fake_bin_dir / "systemctl")
+    env = os.environ.copy()
+    env.update(
+        {
+            "PATH": f"{fake_bin_dir}:{env['PATH']}",
+            "SYSTEMCTL_LOG": str(systemctl_log),
+        }
+    )
+
+    help_result = subprocess.run(
+        ["bash", str(ENGINE_LOCK_SCRIPT), "--help"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert help_result.returncode == 0
+    assert "Apply the machine-local" in help_result.stdout
+    assert not systemctl_log.exists()
+
+    invalid_result = subprocess.run(
+        ["bash", str(ENGINE_LOCK_SCRIPT), "--unexpected"],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert invalid_result.returncode == 2
+    assert "unsupported argument" in invalid_result.stderr
+    assert not systemctl_log.exists()
+
+
 def test_run_vllm_engine_script_errors_without_container(tmp_path: Path) -> None:
     """Engine launcher fails fast when the Docker container is not found."""
     env = os.environ.copy()
@@ -311,6 +349,21 @@ def test_engine_lock_clears_stale_kv_cache_contract() -> None:
     )[0]
     assert "VLLM_ENGINE_KV_CACHE_DTYPE" in unset_block
     assert "VLLM_ENGINE_KV_CACHE_MEMORY_BYTES" in unset_block
+
+
+def test_engine_lock_records_configured_model_provenance() -> None:
+    script = ENGINE_LOCK_SCRIPT.read_text(encoding="utf-8")
+    receipt_block = script.split("umask 077", 1)[1].split("> \"$lock_file\"", 1)[0]
+
+    for key in (
+        "VLLM_ENGINE_MODEL_PATH",
+        "VLLM_ENGINE_SERVED_MODEL_NAME",
+        "VLLM_ENGINE_ACTUAL_MODEL_ID",
+        "VLLM_ENGINE_MODEL_SOURCE",
+        "VLLM_ENGINE_MODEL_FAMILY",
+        "VLLM_ENGINE_ARCHITECTURE",
+    ):
+        assert key in receipt_block
 
 
 def test_engine_example_disables_foreign_pythonpath_inheritance() -> None:

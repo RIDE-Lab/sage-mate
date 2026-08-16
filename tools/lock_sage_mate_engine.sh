@@ -9,6 +9,30 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+
+usage() {
+  cat <<'EOF'
+Usage: tools/lock_sage_mate_engine.sh [--help]
+
+Apply the machine-local Sage Mate Ascend engine contract and restart the managed
+engine service. The command takes no deployment options; configure the host in
+the repository's machine-local .env file.
+
+Options:
+  -h, --help  Show this help and exit without reading configuration or changing state.
+EOF
+}
+
+if (( $# > 0 )); then
+  if (( $# == 1 )) && [[ "$1" == "-h" || "$1" == "--help" ]]; then
+    usage
+    exit 0
+  fi
+  echo "ERROR: unsupported argument(s): $*" >&2
+  usage >&2
+  exit 2
+fi
+
 env_file="$repo_root/.env"
 unit="${SAGE_MATE_ENGINE_UNIT:-sage-mate-vllm-engine.service}"
 runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
@@ -25,6 +49,17 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
   export "$line"
 done < "$env_file"
+
+configured_served_name="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-${DIGITAL_TWIN_MODEL_NAME:-}}}"
+if [[ -z "$configured_served_name" && -n "${VLLM_ENGINE_MODEL_PATH:-}" ]]; then
+  configured_served_name="${VLLM_ENGINE_MODEL_PATH%/}"
+  configured_served_name="${configured_served_name##*/}"
+fi
+# shellcheck source=tools/lib/vllm_model_metadata.sh
+source "$repo_root/tools/lib/vllm_model_metadata.sh"
+normalize_vllm_model_metadata \
+  "$repo_root" "$python_bin" "${VLLM_ENGINE_MODEL_PATH:-}" "$configured_served_name"
+unset configured_served_name
 
 runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
 lock_file="$runtime_root/engine-deployment.lock.env"
@@ -124,7 +159,7 @@ if command -v systemctl >/dev/null 2>&1; then
     VLLM_ENGINE_COMPILATION_CONFIG VLLM_ENGINE_REQUIRED_FAMILIES \
     COMPILE_CUSTOM_KERNELS \
     VLLM_ENGINE_MODEL_PATH VLLM_ENGINE_SERVED_MODEL_NAME VLLM_ENGINE_ACTUAL_MODEL_ID \
-    VLLM_ENGINE_MODEL_SOURCE VLLM_ENGINE_MODEL_FAMILY VLLM_ENGINE_AUTO_RESOLVE_MODEL \
+    VLLM_ENGINE_MODEL_SOURCE VLLM_ENGINE_MODEL_FAMILY VLLM_ENGINE_ARCHITECTURE VLLM_ENGINE_AUTO_RESOLVE_MODEL \
     VLLM_ENGINE_AUTO_DOWNLOAD VLLM_USE_V1 \
     VLLM_ENGINE_MAX_MODEL_LEN VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS VLLM_ENGINE_MAX_NUM_SEQS \
     VLLM_ENGINE_GPU_MEM_UTIL VLLM_ENGINE_DTYPE VLLM_ENGINE_QUANTIZATION \
@@ -201,6 +236,12 @@ umask 077
   printf 'VLLM_ENGINE_EXTRA_ARGS_JSON=%q\n' "$VLLM_ENGINE_EXTRA_ARGS_JSON"
   printf 'VLLM_ENGINE_CONTAINER_SHM_SIZE=%q\n' "${VLLM_ENGINE_CONTAINER_SHM_SIZE:-}"
   printf 'VLLM_ENGINE_CONTAINER=%q\n' "${VLLM_ENGINE_CONTAINER:-}"
+  printf 'VLLM_ENGINE_MODEL_PATH=%q\n' "${VLLM_ENGINE_MODEL_PATH:-}"
+  printf 'VLLM_ENGINE_SERVED_MODEL_NAME=%q\n' "${VLLM_ENGINE_SERVED_MODEL_NAME:-${DIGITAL_TWIN_MODEL_NAME:-}}"
+  printf 'VLLM_ENGINE_ACTUAL_MODEL_ID=%q\n' "${VLLM_ENGINE_ACTUAL_MODEL_ID:-}"
+  printf 'VLLM_ENGINE_MODEL_SOURCE=%q\n' "${VLLM_ENGINE_MODEL_SOURCE:-}"
+  printf 'VLLM_ENGINE_MODEL_FAMILY=%q\n' "${VLLM_ENGINE_MODEL_FAMILY:-}"
+  printf 'VLLM_ENGINE_ARCHITECTURE=%q\n' "${VLLM_ENGINE_ARCHITECTURE:-}"
   printf 'COMPILE_CUSTOM_KERNELS=1\n'
   printf 'REPO_ROOT=%q\n' "$repo_root"
   printf 'LOCKED_AT_UTC=%q\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"

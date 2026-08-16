@@ -20,7 +20,6 @@ import hashlib
 import json
 import math
 import os
-import re
 import statistics
 import time
 import urllib.error
