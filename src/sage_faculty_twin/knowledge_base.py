@@ -445,6 +445,30 @@ class LocalKnowledgeStore:
     def count_documents(self) -> int:
         return len(self._documents)
 
+    def indexed_document_count(self) -> int:
+        """Return how many documents are represented by the active search index."""
+
+        if self._backend == "sagevdb":
+            return len(self._document_id_to_vector_id)
+        if self._backend == "neuromem":
+            if self._neuromem_collection is None:
+                return 0
+            search_index = self._neuromem_collection.indexes.get("search")
+            if search_index is None:
+                return 0
+            for attribute in ("data_to_segment", "id_to_idx", "data_ids"):
+                entries = getattr(search_index, attribute, None)
+                if entries is not None:
+                    try:
+                        return len(entries)
+                    except TypeError:
+                        continue
+            return 0
+        return self.count_documents()
+
+    def index_is_complete(self) -> bool:
+        return self.indexed_document_count() == self.count_documents()
+
     def backend_name(self) -> str:
         return self._backend
 
@@ -1895,16 +1919,21 @@ def _build_query_profile(
         "做什么研究",
         "研究板块",
         "科研",
-        "研究",
         "flowrag",
         "libamm",
         "publication",
         "publications",
         "research",
     )
-    if any(marker in lowered for marker in research_markers) or any(
-        marker in query for marker in research_markers
-    ):
+    # “研究生课程/教学/招生” describes the audience, not a research-paper
+    # intent.  Only treat a bare 研究 occurrence outside 研究生 as research.
+    query_without_graduate = query.replace("研究生", "")
+    has_research_marker = (
+        any(marker in lowered for marker in research_markers)
+        or any(marker in query for marker in research_markers)
+        or "研究" in query_without_graduate
+    )
+    if has_research_marker:
         topic_domains.add("research")
         if any(
             marker in query

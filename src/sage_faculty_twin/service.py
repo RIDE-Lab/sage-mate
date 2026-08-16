@@ -10299,6 +10299,12 @@ class DigitalTwinService:
             "knowledge_backend": self._knowledge_store.backend_name(),
             "knowledge_embedding_backend": self._knowledge_store.embedding_backend_name(),
             "knowledge_documents": str(self._knowledge_store.count_documents()),
+            "knowledge_index_entries": str(
+                self._knowledge_store.indexed_document_count()
+            ),
+            "knowledge_index_complete": str(
+                self._knowledge_store.index_is_complete()
+            ).lower(),
             "conversation_memory_backend": self._conversation_store.backend_name(),
             "conversation_memory_records": str(self._conversation_store.count_records()),
             "conversation_memory_profiles": str(self._conversation_store.count_profiles()),

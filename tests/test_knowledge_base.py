@@ -2,6 +2,7 @@ import json
 from importlib.util import find_spec
 from pathlib import Path
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,34 @@ from sage_faculty_twin.models import (
     KnowledgeSearchHit,
 )
 from sage_faculty_twin.service import DigitalTwinService
+
+
+def test_index_completeness_reports_local_and_neuromem_counts(tmp_path: Path) -> None:
+    store = LocalKnowledgeStore(
+        AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local")
+    )
+    store.add_document(
+        KnowledgeDocumentCreate(
+            title="Indexed policy",
+            content="A record used to verify direct index accounting.",
+            tags=["policy"],
+            source_name="test:indexed-policy",
+        )
+    )
+
+    assert store.indexed_document_count() == 1
+    assert store.index_is_complete() is True
+
+    store._backend = "neuromem"
+    store._neuromem_collection = SimpleNamespace(
+        indexes={"search": SimpleNamespace(data_to_segment={"data-1": "segment-1"})}
+    )
+    assert store.indexed_document_count() == 1
+    assert store.index_is_complete() is True
+
+    store._neuromem_collection.indexes["search"].data_to_segment = {}
+    assert store.indexed_document_count() == 0
+    assert store.index_is_complete() is False
 
 
 def test_knowledge_store_adds_and_searches_documents(tmp_path: Path) -> None:
@@ -49,6 +78,16 @@ def test_project_policy_query_is_not_misclassified_as_teaching_experiment() -> N
     assert "teaching" not in policy_profile.topic_domains
     assert "experiment" in course_profile.document_types
     assert "teaching" in course_profile.topic_domains
+
+
+def test_graduate_course_query_is_not_misclassified_as_research() -> None:
+    course_profile = _build_query_profile("2026年研究生课程教学大纲")
+    research_profile = _build_query_profile("张老师的主要研究方向")
+
+    assert "research" not in course_profile.topic_domains
+    assert course_profile.research_focus is None
+    assert "research" in research_profile.topic_domains
+    assert research_profile.research_focus == "overview"
 
 
 def test_knowledge_store_caches_searches_and_invalidates_on_write(tmp_path: Path) -> None:
