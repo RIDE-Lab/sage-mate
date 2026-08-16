@@ -8237,7 +8237,7 @@ class DigitalTwinService:
         and citation-backed while allowing policy owners to update them through
         the private runtime repository.
         """
-        if request.visitor_profile != "lab_member" or not self._is_light_request(request):
+        if not self._is_light_request(request):
             return None
         question = re.sub(r"[\s，。！？、,.!?;；:：()（）]+", "", request.question).lower()
         hits = self._knowledge_store.search(
@@ -8246,36 +8246,25 @@ class DigitalTwinService:
             visitor_profile=request.visitor_profile,
         )
         for hit in hits:
-            if str(hit.metadata.get("visibility") or "").strip().lower() != "team":
+            audience = self._structured_hit_audience(hit)
+            if audience not in {"public", "team", "lab_member"}:
                 continue
-            qa_pairs = hit.metadata.get("qa_pairs")
-            if not isinstance(qa_pairs, list):
+            if audience in {"team", "lab_member"} and request.visitor_profile != "lab_member":
                 continue
-            for pair in qa_pairs:
-                if not isinstance(pair, dict):
-                    continue
-                match_all = [
-                    re.sub(r"\s+", "", str(term)).lower()
-                    for term in pair.get("match_all", [])
-                    if str(term).strip()
-                ]
-                match_any = [
-                    re.sub(r"\s+", "", str(term)).lower()
-                    for term in pair.get("match_any", [])
-                    if str(term).strip()
-                ]
-                if not all(term in question for term in match_all):
-                    continue
-                if match_any and not any(term in question for term in match_any):
+            for pair in self._structured_hit_qa_pairs(hit):
+                if not self._structured_pair_matches(pair, question):
                     continue
                 answer = str(pair.get("answer") or "").strip()
                 if not answer:
                     continue
+                is_member_only = audience in {"team", "lab_member"}
                 basis = AnswerBasisItem(
-                    basis_label="组内制度",
+                    basis_label="组内制度" if is_member_only else "公开资料",
                     title=hit.title,
-                    source_label=hit.source_name or "课题组私有知识库",
-                    detail=hit.excerpt[:500] or "经审核的课题组制度条目",
+                    source_label=hit.source_name
+                    or ("课题组私有知识库" if is_member_only else "公开知识库"),
+                    detail=hit.excerpt[:500]
+                    or ("经审核的课题组制度条目" if is_member_only else "经审核的公开资料"),
                 )
                 return ChatResponse(
                     answer=answer,
@@ -8287,7 +8276,76 @@ class DigitalTwinService:
                     workflow_action="answer",
                     decision_mode="local_evidence_fast_path",
                 )
+        if request.visitor_profile != "lab_member":
+            member_hits = self._knowledge_store.search(
+                request.question,
+                top_k=12,
+                visitor_profile="lab_member",
+            )
+            for hit in member_hits:
+                if self._structured_hit_audience(hit) not in {"team", "lab_member"}:
+                    continue
+                if any(
+                    self._structured_pair_matches(pair, question)
+                    for pair in self._structured_hit_qa_pairs(hit)
+                ):
+                    return ChatResponse(
+                        answer=(
+                            "该问题涉及仅向已认证课题组成员开放的内部制度或模板。"
+                            "我不能向公开访客提供或推断具体内容；如果你是组内成员，"
+                            "请先登录，否则请向项目负责人确认。"
+                        ),
+                        owner_name=self._settings.owner_name,
+                        used_model="sage-policy-access-boundary",
+                        conversation_id=request.conversation_id or str(uuid4()),
+                        workflow_action="answer",
+                        decision_mode="local_evidence_fast_path",
+                    )
         return None
+
+    @staticmethod
+    def _structured_hit_audience(hit: KnowledgeSearchHit) -> str:
+        audience = str(
+            hit.metadata.get("audience") or hit.metadata.get("visibility") or ""
+        ).strip().lower()
+        if audience:
+            return audience
+        audience_tags = {
+            str(tag).split(":", 1)[1].strip().lower()
+            for tag in hit.tags
+            if str(tag).lower().startswith("audience:")
+        }
+        return next(iter(audience_tags), "")
+
+    @staticmethod
+    def _structured_hit_qa_pairs(hit: KnowledgeSearchHit) -> list[dict[str, object]]:
+        qa_pairs: object = hit.metadata.get("qa_pairs")
+        if not isinstance(qa_pairs, list):
+            encoded_pairs = hit.metadata.get("qa_pairs_json")
+            if isinstance(encoded_pairs, str):
+                try:
+                    qa_pairs = json.loads(encoded_pairs)
+                except json.JSONDecodeError:
+                    qa_pairs = None
+        if not isinstance(qa_pairs, list):
+            return []
+        return [pair for pair in qa_pairs if isinstance(pair, dict)]
+
+    @staticmethod
+    def _structured_pair_matches(pair: dict[str, object], question: str) -> bool:
+        match_all = [
+            re.sub(r"\s+", "", str(term)).lower()
+            for term in pair.get("match_all", [])
+            if str(term).strip()
+        ]
+        match_any = [
+            re.sub(r"\s+", "", str(term)).lower()
+            for term in pair.get("match_any", [])
+            if str(term).strip()
+        ]
+        return all(term in question for term in match_all) and (
+            not match_any or any(term in question for term in match_any)
+        )
 
     def persist_fast_answer(
         self, request: ChatRequest, response: ChatResponse

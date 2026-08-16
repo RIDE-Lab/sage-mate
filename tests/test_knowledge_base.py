@@ -1,3 +1,4 @@
+import json
 from importlib.util import find_spec
 from pathlib import Path
 from datetime import UTC, datetime
@@ -6,7 +7,7 @@ import pytest
 
 from conftest import available_knowledge_backends, requires_neuromem_model
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
+from sage_faculty_twin.knowledge_base import LocalKnowledgeStore, _build_query_profile
 from sage_faculty_twin.models import (
     ChatRequest,
     InteractionIntent,
@@ -36,6 +37,18 @@ def test_knowledge_store_adds_and_searches_documents(tmp_path: Path) -> None:
     assert len(store.list_documents()) == 1
     assert hits
     assert hits[0].title == "Lab onboarding policy"
+
+
+def test_project_policy_query_is_not_misclassified_as_teaching_experiment() -> None:
+    policy_profile = _build_query_profile(
+        "SAGE项目劳务津贴怎么考评", visitor_profile="lab_member"
+    )
+    course_profile = _build_query_profile("课程项目实验说明")
+
+    assert "experiment" not in policy_profile.document_types
+    assert "teaching" not in policy_profile.topic_domains
+    assert "experiment" in course_profile.document_types
+    assert "teaching" in course_profile.topic_domains
 
 
 def test_knowledge_store_caches_searches_and_invalidates_on_write(tmp_path: Path) -> None:
@@ -1177,7 +1190,96 @@ def test_structured_team_policy_fast_response_is_member_only_and_cited(
     assert member.used_model == "sage-policy-fast-path"
     assert member.knowledge_hits == [hit]
     assert member.answer_basis[0].source_label == hit.source_name
-    assert guest is None
+    assert guest is not None
+    assert guest.used_model == "sage-policy-access-boundary"
+    assert guest.knowledge_hits == []
+
+
+def test_structured_knowledge_fast_response_supports_strict_string_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    member_hit = KnowledgeSearchHit(
+        document_id="member-policy",
+        title="固定学术交流安排",
+        excerpt="每周三下午学术路线交流。",
+        score=20.0,
+        tags=["audience:lab_member"],
+        source_name="wps-curated:member-schedule",
+        metadata={
+            "audience": "lab_member",
+            "qa_pairs_json": json.dumps(
+                [
+                    {
+                        "match_all": ["交流"],
+                        "match_any": ["时间", "固定"],
+                        "answer": "学术路线每周三下午14:00交流。",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        },
+    )
+    public_hit = KnowledgeSearchHit(
+        document_id="public-job",
+        title="系统研发工程师招聘",
+        excerpt="公开招聘系统研发工程师。",
+        score=20.0,
+        tags=["audience:public"],
+        source_name="wps-curated:public-job",
+        metadata={
+            "audience": "public",
+            "qa_pairs_json": json.dumps(
+                [
+                    {
+                        "match_all": ["工程师"],
+                        "match_any": ["招聘"],
+                        "answer": "公开招聘系统研发工程师3名。",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        },
+    )
+
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [member_hit])
+    member = service.try_fast_answer(
+        ChatRequest(
+            student_name="Member",
+            visitor_profile="lab_member",
+            question="固定交流时间？",
+            deep_thinking=False,
+        )
+    )
+    guest = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="固定交流时间？",
+            deep_thinking=False,
+        )
+    )
+
+    assert member is not None
+    assert member.answer == "学术路线每周三下午14:00交流。"
+    assert guest is not None
+    assert guest.used_model == "sage-policy-access-boundary"
+    assert "不能向公开访客提供或推断" in guest.answer
+    assert guest.knowledge_hits == []
+
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [public_hit])
+    public = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="系统研发工程师招聘",
+            deep_thinking=False,
+        )
+    )
+
+    assert public is not None
+    assert public.answer == "公开招聘系统研发工程师3名。"
+    assert public.answer_basis[0].basis_label == "公开资料"
 
 
 def test_token_expense_question_is_not_treated_as_credential_exfiltration() -> None:

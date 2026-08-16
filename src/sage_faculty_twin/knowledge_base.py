@@ -1859,12 +1859,27 @@ def _build_query_profile(
     ):
         document_types.add("lecture")
         topic_domains.add("teaching")
+    project_is_teaching = (
+        ("project" in lowered or "项目" in query)
+        and any(
+            marker in lowered
+            for marker in (
+                "course",
+                "课程",
+                "教学",
+                "实验",
+                "作业",
+                "tutorial",
+                "lecture",
+                "workshop",
+            )
+        )
+    )
     if (
         "experiment" in lowered
         or "lab" in lowered
         or "实验" in query
-        or "project" in lowered
-        or "项目" in query
+        or project_is_teaching
     ):
         document_types.add("experiment")
         topic_domains.add("teaching")
