@@ -605,7 +605,7 @@ EOF
 if $mode_no_siblings; then
 	log "Skipping sibling repo cloning (--no-siblings)"
 else
-	clone_if_missing SAGE      https://github.com/intellistream/SAGE.git
+	clone_if_missing SAGE      https://github.com/RIDE-Lab/SAGE.git
 	clone_if_missing neuromem  https://github.com/intellistream/neuromem.git
 	clone_if_missing sageVDB   https://github.com/intellistream/sageVDB.git
 	$mode_with_vllm && clone_if_missing vllm-hust https://github.com/intellistream/vllm-hust.git
