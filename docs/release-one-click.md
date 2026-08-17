@@ -129,7 +129,7 @@ FACULTY_TWIN_SECRETS_KEY_FILE=~/.config/sage-mate/release-secrets.key \
 ## 4. 服务器命令行一键安装
 
 ```bash
-curl -fsSL https://github.com/SAGE-Research/sage-mate/releases/download/v4.6.1/hosted-web.sh \
+curl -fsSL https://github.com/RIDE-Lab/sage-mate/releases/download/v4.6.1/hosted-web.sh \
   -o /tmp/hosted-web.sh
 
 FACULTY_TWIN_SECRETS_KEY_FILE="$HOME/.config/sage-mate/release-secrets.key" \
@@ -138,7 +138,7 @@ FACULTY_TWIN_SECRETS_KEY_FILE="$HOME/.config/sage-mate/release-secrets.key" \
 
 脚本会自动：
 
-- clone / 更新 `SAGE-Research/sage-mate`
+- clone / 更新 `RIDE-Lab/sage-mate`
 - 同步 pinned submodules
 - 只配置 hosted/web 模式
 - 自动识别 NVIDIA 或 Ascend

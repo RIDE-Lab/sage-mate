@@ -1,12 +1,12 @@
 # Deployment Guide
 
-This document describes the generic deployment shape for `sage-mate` after moving the
-repository into the SAGE-Research organization.
+This document describes the generic deployment shape for `sage-mate` in the RIDE Lab
+organization.
 
 For a fresh-machine bring-up, the fastest path is:
 
 ```bash
-git clone https://github.com/SAGE-Research/sage-mate.git
+git clone https://github.com/RIDE-Lab/sage-mate.git
 cd sage-mate
 ./quickstart.sh --target hosted-web
 ./quickstart.sh --with-vllm      # also pull and editable-install vllm-hust

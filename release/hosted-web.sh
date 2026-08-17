@@ -8,8 +8,8 @@
 set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
-repo_url="${FACULTY_TWIN_REPO_URL:-git@github.com:SAGE-Research/sage-mate.git}"
-https_repo_url="${FACULTY_TWIN_HTTPS_REPO_URL:-https://github.com/SAGE-Research/sage-mate.git}"
+repo_url="${FACULTY_TWIN_REPO_URL:-git@github.com:RIDE-Lab/sage-mate.git}"
+https_repo_url="${FACULTY_TWIN_HTTPS_REPO_URL:-https://github.com/RIDE-Lab/sage-mate.git}"
 branch="${FACULTY_TWIN_BRANCH:-main}"
 parent_dir="${FACULTY_TWIN_PARENT_DIR:-$HOME}"
 repo_dir="${FACULTY_TWIN_DIR:-$parent_dir/sage-mate}"

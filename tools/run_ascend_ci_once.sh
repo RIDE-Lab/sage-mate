@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-repository="${SAGE_ASCEND_CI_REPOSITORY:-SAGE-Research/sage-mate}"
+repository="${SAGE_ASCEND_CI_REPOSITORY:-RIDE-Lab/sage-mate}"
 organization="${repository%%/*}"
 runner_group="${SAGE_ASCEND_CI_RUNNER_GROUP:-sage-mate-ascend}"
 workflow="${SAGE_ASCEND_CI_WORKFLOW:-ascend-npu.yml}"

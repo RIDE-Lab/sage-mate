@@ -23,7 +23,7 @@ from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
-DEFAULT_ORGS = ("intellistream", "SAGE-Research", "datasys")
+DEFAULT_ORGS = ("intellistream", "RIDE-Lab", "datasys")
 MAX_README_CHARS = 16_000
 
 

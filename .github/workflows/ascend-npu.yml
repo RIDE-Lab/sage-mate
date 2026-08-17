@@ -18,7 +18,7 @@ concurrency:
 jobs:
   host-regression:
     if: >-
-      github.repository == 'SAGE-Research/sage-mate' &&
+      github.repository == 'RIDE-Lab/sage-mate' &&
       github.ref == 'refs/heads/main' &&
       github.event_name == 'workflow_dispatch'
     environment: ascend-npu
@@ -44,7 +44,7 @@ jobs:
         run: |
           test "$GITHUB_EVENT_NAME" = workflow_dispatch
           test "$GITHUB_REF" = refs/heads/main
-          test "$GITHUB_REPOSITORY" = SAGE-Research/sage-mate
+          test "$GITHUB_REPOSITORY" = RIDE-Lab/sage-mate
           test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
           test "${SAGE_ASCEND_CI_EPHEMERAL:-}" = 1
 

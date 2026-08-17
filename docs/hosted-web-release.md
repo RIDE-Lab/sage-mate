@@ -11,13 +11,13 @@ From a fresh server:
 
 ```bash
 mkdir -p "$HOME"
-curl -fsSL https://raw.githubusercontent.com/SAGE-Research/sage-mate/main/release/hosted-web.sh \
+curl -fsSL https://raw.githubusercontent.com/RIDE-Lab/sage-mate/main/release/hosted-web.sh \
   -o /tmp/hosted-web.sh
 FACULTY_TWIN_SECRETS_KEY_FILE="$HOME/.config/sage-mate/release-secrets.key" \
   bash /tmp/hosted-web.sh --no-tunnel --yes
 ```
 
-The installer clones or fast-forwards `SAGE-Research/sage-mate`, initializes submodules,
+The installer clones or fast-forwards `RIDE-Lab/sage-mate`, initializes submodules,
 configures hosted/web safety defaults, installs pinned runtime dependencies for the selected
 accelerator, installs systemd user units, starts the stack, configures the Cloudflare tunnel when
 credentials are available, and runs `./manage.sh verify-hosted-web`.
