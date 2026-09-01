@@ -4,10 +4,10 @@
 	branch = main
 [submodule "deps/vllm-hust"]
 	path = deps/vllm-hust
-	url = git@github.com:intellistream/vllm-hust-legacy-20260831.git
+	url = git@github.com:vLLM-HUST/vllm-hust.git
 [submodule "deps/vllm-ascend-hust"]
 	path = deps/vllm-ascend-hust
-	url = git@github.com:intellistream/vllm-ascend-hust-legacy-20260831.git
+	url = git@github.com:vLLM-HUST/vllm-ascend-hust.git
 [submodule "deps/ascend-runtime-manager"]
 	path = deps/ascend-runtime-manager
 	url = git@github.com:vLLM-HUST/ascend-runtime-manager.git
