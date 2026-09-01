@@ -3766,6 +3766,10 @@ function updateStatusDrawer(data) {
     const npuMemoryEl = document.querySelector("#view-npu-memory .status-value");
     const npuDetailEl = document.querySelector("#view-npu-detail .status-value");
     const engineImageEl = document.querySelector("#view-engine-image .status-value");
+    const runtimeCompatibilityEl = document.querySelector("#view-runtime-compatibility .status-value");
+    const runtimeCoreSourceEl = document.querySelector("#view-runtime-core-source .status-value");
+    const runtimePluginSourceEl = document.querySelector("#view-runtime-plugin-source .status-value");
+    const engineImageIdEl = document.querySelector("#view-engine-image-id .status-value");
     const llmStatusEl = document.querySelector("#view-llm-status .status-value");
     const llmLatencyEl = document.querySelector("#view-llm-latency .status-value");
     const llmCacheEl = document.querySelector("#view-llm-cache .status-value");
@@ -3782,6 +3786,10 @@ function updateStatusDrawer(data) {
         if (npuMemoryEl) npuMemoryEl.textContent = "未知";
         if (npuDetailEl) npuDetailEl.textContent = "未知";
         if (engineImageEl) engineImageEl.textContent = "未知";
+        if (runtimeCompatibilityEl) runtimeCompatibilityEl.textContent = "未知";
+        if (runtimeCoreSourceEl) runtimeCoreSourceEl.textContent = "未知";
+        if (runtimePluginSourceEl) runtimePluginSourceEl.textContent = "未知";
+        if (engineImageIdEl) engineImageIdEl.textContent = "未知";
         if (llmStatusEl) llmStatusEl.textContent = "--";
         if (llmLatencyEl) llmLatencyEl.textContent = "--";
         if (llmCacheEl) llmCacheEl.textContent = "--";
@@ -3814,6 +3822,38 @@ function updateStatusDrawer(data) {
     if (engineImageEl) {
         engineImageEl.textContent = data.engine_image || "--";
         engineImageEl.title = engineImageEl.textContent;
+    }
+    if (runtimeCompatibilityEl) {
+        runtimeCompatibilityEl.textContent = data.runtime_compatibility_base || "--";
+    }
+    if (runtimeCoreSourceEl) {
+        const version = data.runtime_core_source_version || data.runtime_engine_version || "--";
+        const commit = String(data.runtime_core_commit || data.runtime_engine_version || "")
+            .replace(/^git-/, "")
+            .slice(0, 12);
+        runtimeCoreSourceEl.textContent = commit && !version.includes(commit)
+            ? `${version} · ${commit}`
+            : version;
+        runtimeCoreSourceEl.title = runtimeCoreSourceEl.textContent;
+    }
+    if (runtimePluginSourceEl) {
+        const version = data.runtime_plugin_source_version || data.runtime_plugin_version || "--";
+        const commit = String(data.runtime_plugin_commit || data.runtime_plugin_version || "")
+            .replace(/^git-/, "")
+            .slice(0, 12);
+        runtimePluginSourceEl.textContent = commit && !version.includes(commit)
+            ? `${version} · ${commit}`
+            : version;
+        runtimePluginSourceEl.title = runtimePluginSourceEl.textContent;
+    }
+    if (engineImageIdEl) {
+        const imageId = String(data.engine_image_id || "").replace(/^sha256:/, "");
+        const shortId = imageId && imageId !== "unknown" ? `sha256:${imageId.slice(0, 12)}` : "--";
+        const builtAt = data.engine_image_build_time && data.engine_image_build_time !== "unknown"
+            ? data.engine_image_build_time
+            : "构建时间未知";
+        engineImageIdEl.textContent = `${shortId} · ${builtAt}`;
+        engineImageIdEl.title = data.engine_image_id || "";
     }
 
     // LLM metrics

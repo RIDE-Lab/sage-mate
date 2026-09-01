@@ -54,6 +54,7 @@ macOS 用户安装:
 - Auto Scientist 只在本地模式使用 allowlisted workspace；默认生成科研计划和 propose-only 代码建议，不直接修改真实仓库。
 - macOS 本地模型使用我们的 `vllm-metal-hust` fork，并基于仓库固定的 `deps/vllm-hust` core。
 - Linux Ascend 使用仓库固定的 `deps/vllm-hust-dev-hub`、`deps/vllm-hust`、`deps/vllm-ascend-hust`、`deps/ascend-runtime-manager`。
+- Linux Ascend 的正式升级必须把兼容基座、core/plugin 精确源码版本和不可变镜像身份分层记录；详见 [部署指南](docs/deployment.md#ascend-生产运行时身份)。
 - token、私有 runtime 数据、Cloudflare 配置不要提交到仓库；运行时数据默认放在 `DIGITAL_TWIN_RUNTIME_DIR`。
 
 ## 常用配置

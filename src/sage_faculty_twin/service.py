@@ -421,6 +421,37 @@ def build_stack_versions_payload() -> dict[str, str]:
         or os.environ.get("VLLM_HUST_MODEL", "").strip()
         or "unknown",
         "engine_image": os.environ.get("VLLM_ENGINE_IMAGE", "").strip() or "unknown",
+        # Keep the stable compatibility line separate from the moving source
+        # snapshots and the immutable local image identity.  A single release
+        # tag cannot truthfully describe all three layers.
+        "runtime_compatibility_base": os.environ.get(
+            "VLLM_ENGINE_COMPATIBILITY_BASE", ""
+        ).strip()
+        or "unknown",
+        "runtime_core_source_version": os.environ.get(
+            "VLLM_ENGINE_CORE_SOURCE_VERSION", ""
+        ).strip()
+        or "unknown",
+        "runtime_core_commit": os.environ.get(
+            "VLLM_ENGINE_CORE_COMMIT", ""
+        ).strip()
+        or "unknown",
+        "runtime_plugin_source_version": os.environ.get(
+            "VLLM_ENGINE_PLUGIN_SOURCE_VERSION", ""
+        ).strip()
+        or "unknown",
+        "runtime_plugin_commit": os.environ.get(
+            "VLLM_ENGINE_PLUGIN_COMMIT", ""
+        ).strip()
+        or "unknown",
+        "engine_image_id": os.environ.get(
+            "VLLM_ENGINE_EXPECTED_IMAGE_ID", ""
+        ).strip()
+        or "unknown",
+        "engine_image_build_time": os.environ.get(
+            "VLLM_ENGINE_IMAGE_BUILD_TIME", ""
+        ).strip()
+        or "unknown",
         "npu_devices": os.environ.get("ASCEND_VISIBLE_DEVICES", "").strip()
         or os.environ.get("VLLM_ENGINE_NPU_DEVICES", "").strip()
         or "unknown",

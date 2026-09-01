@@ -54,6 +54,30 @@ The loopback addresses and ports shown in `.env.example` are editable sample con
 values embedded in generated systemd units. To move the deployment, copy its secret material
 separately and generate a new `.env` for the destination host.
 
+### Ascend 生产运行时身份
+
+线上页面和运维收据必须分开显示以下三层，不能用一个 `v0.23.0`
+概括整个推理栈：
+
+- `VLLM_ENGINE_COMPATIBILITY_BASE`：官方镜像/依赖的稳定兼容基座；
+- `VLLM_ENGINE_CORE_SOURCE_VERSION`、`VLLM_ENGINE_CORE_COMMIT`、
+  `VLLM_ENGINE_PLUGIN_SOURCE_VERSION`、`VLLM_ENGINE_PLUGIN_COMMIT`：实际挂载并运行的
+  core/plugin 源码快照；
+- `VLLM_ENGINE_IMAGE`、`VLLM_ENGINE_EXPECTED_IMAGE_ID`、
+  `VLLM_ENGINE_IMAGE_BUILD_TIME`：本机实际运行的派生镜像身份。
+
+这些值属于每台机器的部署合同，应写入 ignored `.env`，不得硬编码进应用。
+`/stack/versions` 和系统状态抽屉会按上述语义展示它们。版本化 deployment receipt
+负责记录模型、源码 commits、拓扑、图模式和推测解码状态；镜像 ID、构建时间和源码
+package version 由运行时合同补足。dev-hub 中的
+[`docs/sage-mate-production-runtime.md`](../deps/vllm-hust-dev-hub/docs/sage-mate-production-runtime.md)
+说明 production lock 字段、OCI labels、构建、验收和回滚流程。
+
+升级时先保留旧 image ID、gitlinks 和 receipt，再构建新候选；只有新候选完成两次
+冷启动、health/models、真实 completion、并发、取消和公网问答后才能切换。失败时
+恢复记录的旧 image ID 与 gitlinks，并仍通过 `tools/lock_sage_mate_engine.sh` 受管
+重启，禁止留下临时后台进程。
+
 ## Deployment Targets
 
 `quickstart.sh` is the single installer entry point, but it has separate targets for the two
