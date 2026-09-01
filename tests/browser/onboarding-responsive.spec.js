@@ -211,17 +211,18 @@ for (const viewport of VIEWPORTS) {
     const shellDisplay = await page.locator(".chat-shell").evaluate(
       (element) => getComputedStyle(element).display,
     );
+    expect(shellDisplay).toBe("flex");
     if (viewport.width <= 920) {
-      expect(shellDisplay).toBe("flex");
       await page.getByRole("button", { name: "下一步" }).click();
       await expect(page.locator("#onboarding-step-label")).toHaveText("2 / 2");
       await expectInsideViewport(page, viewport);
     } else {
-      expect(shellDisplay).toBe("grid");
-      const columns = await page.locator(".chat-shell").evaluate(
-        (element) => getComputedStyle(element).gridTemplateColumns,
-      );
-      expect(columns.trim().split(/\s+/)).toHaveLength(2);
+      const cardBox = await page.locator("#onboarding-card").boundingBox();
+      const chatShellBox = await page.locator(".chat-shell").boundingBox();
+      expect(cardBox.width).toBeLessThanOrEqual(640.5);
+      expect(Math.abs(
+        (cardBox.x + cardBox.width / 2) - (chatShellBox.x + chatShellBox.width / 2),
+      )).toBeLessThanOrEqual(1);
     }
   });
 }

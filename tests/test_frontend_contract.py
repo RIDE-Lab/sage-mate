@@ -299,17 +299,16 @@ def test_empty_chat_onboarding_sits_before_chat_stream() -> None:
     assert "width: min(100%, var(--content-column-max));" in css
 
 
-def test_active_onboarding_keeps_chat_stream_visible() -> None:
+def test_active_onboarding_hides_empty_stream_to_keep_guidance_focused() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     selector = "body.onboarding-active .chat-shell .chat-stream"
     block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
 
     assert block_match, f"Missing CSS block for {selector}"
-    assert "display: none;" not in block_match.group(1)
-    assert "display: flex;" in block_match.group(1)
+    assert "display: none;" in block_match.group(1)
 
 
-def test_active_onboarding_uses_left_column_even_after_chat_starts() -> None:
+def test_active_onboarding_uses_centered_bounded_guidance_panel() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     shell_selector = "body.onboarding-active .chat-shell"
     selector = "body.onboarding-active .chat-shell .onboarding-card"
@@ -317,11 +316,13 @@ def test_active_onboarding_uses_left_column_even_after_chat_starts() -> None:
     block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
 
     assert shell_block, f"Missing CSS block for {shell_selector}"
-    assert "display: grid;" in shell_block.group(1)
-    assert "grid-template-columns:" in shell_block.group(1)
+    assert "display: flex;" in shell_block.group(1)
+    assert "flex-direction: column;" in shell_block.group(1)
+    assert "align-items: center;" in shell_block.group(1)
     assert block_match, f"Missing CSS block for {selector}"
-    assert "grid-column: 1;" in block_match.group(1)
-    assert "grid-row: 1 / 3;" in block_match.group(1)
+    assert "width: min(100%, 640px);" in block_match.group(1)
+    assert "max-height: min(58vh, 560px);" in block_match.group(1)
+    assert "margin: 0 auto 20px;" in block_match.group(1)
 
 
 def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:

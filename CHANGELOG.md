@@ -1,5 +1,18 @@
 # Changelog
 
+## v4.6.34 - 2026-09-01
+
+- Refocused the public first screen around the academic-twin identity, a compact
+  welcome block, curated starter questions, and the composer instead of leaving
+  returning visitors in a large empty split layout.
+- Reworked onboarding into a centered, bounded guidance card that keeps the
+  composer available without competing with an empty chat column.
+- Unified onboarding and global ghost controls with the semantic day/night
+  surface, text, border, focus, and active states; the selected theme control now
+  remains clearly visible in midnight mode.
+- Added desktop and 390x844 visual regression coverage for the new hierarchy,
+  theme persistence, action-control contrast, and deep-thinking feedback states.
+
 ## v4.6.33 - 2026-08-16
 
 - Removed vLLM API credentials from engine process arguments across both shared
