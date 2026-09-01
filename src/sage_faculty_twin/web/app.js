@@ -3616,7 +3616,9 @@ function renderPoweredByVersions(data) {
         poweredByNeuromemVersion.textContent = normalizePoweredByVersion(data?.stack_version_neuromem);
     }
     if (poweredByVllmVersion) {
-        poweredByVllmVersion.textContent = normalizePoweredByVersion(data?.stack_version_vllm_hust);
+        poweredByVllmVersion.textContent = normalizePoweredByVersion(
+            data?.runtime_core_source_version || data?.stack_version_vllm_hust,
+        );
     }
     if (poweredBySagevdbVersion) {
         poweredBySagevdbVersion.textContent = normalizePoweredByVersion(data?.stack_version_sagevdb);
