@@ -35,6 +35,10 @@
     z-index: 60;
 }
 
+.sage-companion.is-conversation-docked {
+    z-index: 28;
+}
+
 .sage-companion[data-appearance="mint"] {
     --companion-accent: #0d9488;
     --companion-accent-strong: #0f766e;
@@ -92,6 +96,19 @@ body.onboarding-active .sage-companion,
 }
 
 .sage-companion-toggle:active { transform: translateY(0) scale(0.94); }
+
+.sage-companion.is-conversation-docked .sage-companion-toggle {
+    box-shadow: 0 10px 26px color-mix(in srgb, var(--companion-accent-strong) 14%, transparent);
+}
+
+@media (max-width: 720px) {
+    /* A 390px transcript has no true side gutter. Keep the pet available on
+       the landing page and through the sidebar, but never float it over an
+       active answer or the composer. */
+    .sage-companion.is-conversation-docked {
+        display: none;
+    }
+}
 
 .sage-companion.is-dragging .sage-companion-toggle {
     cursor: grabbing;

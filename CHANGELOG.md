@@ -1,5 +1,17 @@
 # Changelog
 
+## v4.6.35 - 2026-09-01
+
+- Kept the Sage companion roaming on the landing page while docking it outside
+  the desktop transcript column once a conversation begins; narrow screens now
+  remove the floating layer during a conversation and retain the sidebar entry.
+- Replaced opacity-only deep-thinking disabled styling with explicit semantic
+  surfaces, text, dashed borders, and focus-safe state treatment.
+- Moved context-compression loading, success, error, disabled, and focus states
+  onto the shared light/dark action and feedback token system.
+- Added Chromium regression coverage for desktop gutter docking, mobile long
+  answers, zero horizontal overflow, theme contrast, and companion access.
+
 ## v4.6.34 - 2026-09-01
 
 - Refocused the public first screen around the academic-twin identity, a compact

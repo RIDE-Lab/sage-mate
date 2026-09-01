@@ -486,6 +486,12 @@ test("Sage companion records one learning footprint per completed request", asyn
 
   await page.locator("#chat-question").fill("用一句话解释测试驱动开发");
   await page.getByRole("button", { name: "发送问题" }).click();
+  await expect(page.locator("#sage-companion")).toHaveClass(/is-conversation-docked/);
+  const dockedToggleBox = await page.locator("#sage-companion-toggle").boundingBox();
+  const contentColumnBox = await page.locator(".composer-inner").boundingBox();
+  expect(dockedToggleBox).not.toBeNull();
+  expect(contentColumnBox).not.toBeNull();
+  expect(dockedToggleBox.x).toBeGreaterThanOrEqual(contentColumnBox.x + contentColumnBox.width + 12);
   await page.locator("#sage-companion-toggle").click();
   await expect(page.locator("#sage-companion-answers")).toHaveText("1");
   await expect(page.locator("#sage-companion-streak")).toHaveText("1 天");
@@ -509,6 +515,24 @@ test("Sage companion records one learning footprint per completed request", asyn
   });
   expect(stored).not.toHaveProperty("question");
   expect(stored).not.toHaveProperty("answer");
+});
+
+test("mobile conversation hides the floating companion without losing its sidebar entry", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.locator("#chat-question").fill("介绍一下主要研究方向");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await expect(page.locator(".message-ready")).toBeVisible();
+  await expect(page.locator("#sage-companion")).toHaveClass(/is-conversation-docked/);
+  await expect(page.locator("#sage-companion")).toBeHidden();
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await expect(page.getByRole("button", { name: /电子伙伴/ })).toBeVisible();
 });
 
 test("Sage companion tabs support keyboard navigation and reduced motion", async ({ page }) => {
@@ -661,7 +685,16 @@ async function openRailView(page, buttonName, viewport) {
 async function auditThemeSelectors(page, selectors) {
   return page.evaluate((requestedSelectors) => {
     const parseColor = (value) => {
-      const values = String(value || "").match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+      const serialized = String(value || "").trim();
+      const values = serialized.match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+      if (serialized.startsWith("color(srgb")) {
+        return {
+          r: values[0] * 255,
+          g: values[1] * 255,
+          b: values[2] * 255,
+          a: values[3] ?? 1,
+        };
+      }
       return { r: values[0], g: values[1], b: values[2], a: values[3] ?? 1 };
     };
     const blend = (front, back) => ({
@@ -723,7 +756,7 @@ async function auditThemeSelectors(page, selectors) {
 function expectThemeAuditPasses(audit, { requireBorders = [] } = {}) {
   expect(audit.filter((sample) => sample.missing || sample.hidden)).toEqual([]);
   for (const sample of audit) {
-    expect(sample.textContrast, `${sample.selector} text contrast`).toBeGreaterThanOrEqual(4.5);
+    expect(sample.textContrast, `${sample.selector} text contrast ${JSON.stringify(sample)}`).toBeGreaterThanOrEqual(4.5);
     if (requireBorders.includes(sample.selector)) {
       expect(sample.borderContrast, `${sample.selector} border contrast`).toBeGreaterThanOrEqual(3);
     }
@@ -735,6 +768,13 @@ test("semantic theme contract covers chat, Support, status, account, settings, a
   for (const theme of ["dark", "light"]) {
     for (const viewport of viewports) {
       await openThemeFixture(page, theme, viewport);
+      if (viewport.width <= 720) {
+        const composerBackground = await page.locator(".composer-shell").evaluate(
+          (element) => getComputedStyle(element).backgroundImage,
+        );
+        expect(composerBackground).not.toContain("247, 247, 248");
+        expect(composerBackground).not.toContain("7, 18, 37");
+      }
       expectThemeAuditPasses(await auditThemeSelectors(page, [
         ".greeting-text",
         ".greeting-subtitle",

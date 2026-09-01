@@ -52,6 +52,9 @@
     --action-disabled-surface: #1b3154;
     --action-disabled-ink: #9dafc9;
     --action-disabled-border: #7892b8;
+    --mode-disabled-surface: #152a49;
+    --mode-disabled-ink: #aebdd4;
+    --mode-disabled-border: #7188a9;
     --status-card-border: #5d7aa4;
     --status-chip-surface: #122847;
     --status-chip-ink: #d7e5fb;
@@ -124,6 +127,9 @@ html[data-theme="light"] {
     --action-disabled-surface: #dce5f0;
     --action-disabled-ink: #536a86;
     --action-disabled-border: #607894;
+    --mode-disabled-surface: #e2eaf4;
+    --mode-disabled-ink: #536a86;
+    --mode-disabled-border: #607894;
     --status-card-border: #7186a0;
     --status-chip-surface: #f4f8fd;
     --status-chip-ink: #29496d;
@@ -5161,8 +5167,12 @@ body.sidebar-expanded .rail-user {
 .composer-pill-toggle[aria-disabled="true"],
 .deep-thinking-toggle[aria-disabled="true"] {
     cursor: not-allowed;
-    opacity: 0.48;
-    filter: saturate(0.55);
+    opacity: 1;
+    background: var(--mode-disabled-surface);
+    border-color: var(--mode-disabled-border);
+    border-style: dashed;
+    color: var(--mode-disabled-ink);
+    filter: none;
     box-shadow: none;
     transform: none;
 }
@@ -8008,7 +8018,12 @@ body.profile-code-assistant .composer-tools-row {
         right: 0;
         z-index: 10;
         padding: 10px 12px calc(10px + var(--safe-bottom));
-        background: linear-gradient(180deg, rgba(247, 247, 248, 0) 0%, rgba(247, 247, 248, 0.96) 18%, rgba(247, 247, 248, 1) 100%);
+        background: linear-gradient(
+            180deg,
+            transparent 0%,
+            color-mix(in srgb, var(--bg) 96%, transparent) 18%,
+            var(--bg) 100%
+        );
     }
 
     .chat-stream {
@@ -8029,14 +8044,14 @@ body.profile-code-assistant .composer-tools-row {
     }
 
     .modal-overlay {
-        background: rgba(15, 23, 42, 0.48);
+        background: color-mix(in srgb, var(--bg-deep) 62%, transparent);
         backdrop-filter: blur(10px);
     }
 
     .side-drawer,
     .modal-panel,
     .modal-panel-wide {
-        background: rgba(255, 255, 255, 0.98);
+        background: var(--surface-solid);
         backdrop-filter: blur(8px);
     }
 
@@ -8536,9 +8551,9 @@ body.profile-code-assistant .composer-tools-row {
     padding: 5px 12px;
     font-size: 0.74rem;
     font-weight: 500;
-    color: #475569;
-    background: rgba(59, 130, 246, 0.06);
-    border: 1px solid rgba(59, 130, 246, 0.12);
+    color: var(--action-ink);
+    background: var(--action-surface);
+    border: 1px solid var(--action-border);
     border-radius: 8px;
     cursor: pointer;
     transition: all 160ms ease;
@@ -8546,19 +8561,24 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .context-compress-btn:hover:not(:disabled) {
-    background: rgba(59, 130, 246, 0.12);
-    border-color: rgba(59, 130, 246, 0.22);
-    color: #2563eb;
+    background: var(--action-surface-hover);
+    border-color: var(--action-border-hover);
+    color: var(--text-primary);
+    box-shadow: 0 0 0 3px var(--action-ring);
 }
 
 .context-compress-btn:disabled {
-    opacity: 0.55;
+    opacity: 1;
     cursor: not-allowed;
+    color: var(--action-disabled-ink);
+    background: var(--action-disabled-surface);
+    border-color: var(--action-disabled-border);
 }
 
 .context-compress-btn.compress-loading {
-    color: #64748b;
-    background: rgba(100, 116, 139, 0.06);
+    color: var(--info-text);
+    background: var(--info-surface);
+    border-color: var(--info-border);
 }
 
 .context-compress-btn.compress-loading svg {
@@ -8566,15 +8586,25 @@ body.profile-code-assistant .composer-tools-row {
 }
 
 .context-compress-btn.compress-success {
-    color: #16a34a;
-    background: rgba(22, 163, 74, 0.07);
-    border-color: rgba(22, 163, 74, 0.18);
+    color: var(--success-text);
+    background: var(--success-surface);
+    border-color: var(--success-border);
 }
 
 .context-compress-btn.compress-error {
-    color: #dc2626;
-    background: rgba(220, 38, 38, 0.05);
-    border-color: rgba(220, 38, 38, 0.14);
+    color: var(--error-text);
+    background: var(--error-surface);
+    border-color: var(--error-border);
+}
+
+.context-compress-btn:focus-visible {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 3px;
+}
+
+.context-compress-btn .ui-icon {
+    color: inherit;
+    stroke: currentColor;
 }
 
 @keyframes compress-spin {
@@ -8765,7 +8795,7 @@ body.profile-code-assistant .composer-tools-row {
 
 .seed-chips-label {
     font-size: 0.8rem;
-    color: var(--muted);
+    color: var(--text-secondary);
     margin: 0;
 }
 
