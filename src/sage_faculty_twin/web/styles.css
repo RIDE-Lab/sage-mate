@@ -2030,6 +2030,13 @@ body.drawer-pinned .history-rail {
     max-width: min(100%, 980px);
 }
 
+/* Pending work is a readable process surface, not an intrinsic-width status
+   chip. Keep it aligned with the answer column while allowing narrow screens
+   to use their full available width. */
+.message-assistant.message-pending .message-bubble {
+    width: min(100%, 800px);
+}
+
 .message-frame {
     display: grid;
     gap: 14px;

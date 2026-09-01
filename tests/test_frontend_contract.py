@@ -308,6 +308,15 @@ def test_active_onboarding_hides_empty_stream_to_keep_guidance_focused() -> None
     assert "display: none;" in block_match.group(1)
 
 
+def test_pending_assistant_process_surface_uses_answer_column_width() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    selector = ".message-assistant.message-pending .message-bubble"
+    block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
+
+    assert block_match, f"Missing CSS block for {selector}"
+    assert "width: min(100%, 800px);" in block_match.group(1)
+
+
 def test_active_onboarding_uses_centered_bounded_guidance_panel() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     shell_selector = "body.onboarding-active .chat-shell"
