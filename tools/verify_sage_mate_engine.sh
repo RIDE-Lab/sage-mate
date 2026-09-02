@@ -90,8 +90,16 @@ if [[ -n "$container" ]] && command -v docker >/dev/null 2>&1; then
   }
   runtime_pythonpath="$(sed -n 's/^PYTHONPATH=//p' <<< "$runtime_env" | head -n1)"
   declared_pythonpath="${VLLM_ENGINE_PYTHONPATH:-${VLLM_ENGINE_BASE_PYTHONPATH:-}}"
-  [[ -n "$runtime_pythonpath" && -n "$declared_pythonpath" ]] || {
-    echo "ERROR: runtime or declared engine PYTHONPATH is empty" >&2
+  installed_modules_json="${VLLM_ENGINE_INSTALLED_MODULES_JSON:-}"
+  if [[ -z "$installed_modules_json" ]]; then
+    installed_modules_json='{}'
+  fi
+  [[ -n "$runtime_pythonpath" ]] || {
+    echo "ERROR: runtime PYTHONPATH is empty" >&2
+    exit 1
+  }
+  [[ -n "$declared_pythonpath" || "$installed_modules_json" != '{}' ]] || {
+    echo "ERROR: neither declared source roots nor installed distributions are configured" >&2
     exit 1
   }
   IFS=: read -r -a declared_roots <<< "$declared_pythonpath"
@@ -113,10 +121,6 @@ if [[ -n "$container" ]] && command -v docker >/dev/null 2>&1; then
       exit 1
     fi
   done
-  installed_modules_json="${VLLM_ENGINE_INSTALLED_MODULES_JSON:-}"
-  if [[ -z "$installed_modules_json" ]]; then
-    installed_modules_json='{}'
-  fi
   import_origin_output="$("${docker_cmd[@]}" exec \
     --env "PYTHONPATH=$runtime_pythonpath" \
     --env "SAGE_MATE_DECLARED_PYTHONPATH=$declared_pythonpath" \

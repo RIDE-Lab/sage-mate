@@ -314,9 +314,13 @@ export VLLM_ENGINE_RUNTIME_VISIBLE_DEVICES="$runtime_visible_devices"
 export VLLM_ENGINE_HOST_VISIBLE_NPU_DEVICES="$engine_devices"
 export ASCEND_RT_VISIBLE_DEVICES="$runtime_visible_devices"
 export ASCEND_VISIBLE_DEVICES="$runtime_visible_devices"
-export VLLM_ENGINE_CONDA_ENV="${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}"
+export VLLM_ENGINE_CONDA_ENV="${VLLM_ENGINE_CONDA_ENV-vllm-hust-dev}"
 export VLLM_ENGINE_BIN="${VLLM_ENGINE_BIN:-vllm-hust}"
-export VLLM_ENGINE_BASE_PYTHONPATH="${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
+# An explicitly empty value selects an immutable-wheel runtime. Use `-`
+# rather than `:-` so the launcher does not silently shadow installed wheels
+# with mounted source trees, while retaining source checkouts as the default
+# for developer profiles where the variable is genuinely unset.
+export VLLM_ENGINE_BASE_PYTHONPATH="${VLLM_ENGINE_BASE_PYTHONPATH-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
 runtime_log_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/runtime}/logs"
 mkdir -p "$runtime_log_root" 2>/dev/null || true
 if [[ -z "${VLLM_ENGINE_CONTAINER_LOG_FILE:-}" ]]; then

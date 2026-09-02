@@ -375,6 +375,19 @@ def test_engine_example_disables_foreign_pythonpath_inheritance() -> None:
     assert "VLLM_ENGINE_INHERIT_PYTHONPATH=0" in example
 
 
+def test_engine_launcher_preserves_explicit_immutable_wheel_profile() -> None:
+    """Empty conda/source-path values must not be replaced by dev defaults."""
+
+    script = ENGINE_SCRIPT.read_text(encoding="utf-8")
+    assert '${VLLM_ENGINE_CONDA_ENV-vllm-hust-dev}' in script
+    assert (
+        '${VLLM_ENGINE_BASE_PYTHONPATH-/workspace/vllm-hust:/workspace/vllm-ascend-hust}'
+        in script
+    )
+    assert '${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}' not in script
+    assert '${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}' not in script
+
+
 def test_engine_verifier_checks_runtime_import_origins() -> None:
     """Verification must accept only declared sources or exact owned wheels."""
 
@@ -388,3 +401,14 @@ def test_engine_verifier_checks_runtime_import_origins() -> None:
     assert "import_origins=" in script
     assert "warnings.catch_warnings()" in script
     assert 'message=r"Failed to read commit hash:.*"' in script
+
+
+def test_engine_verifier_accepts_immutable_wheels_without_source_roots() -> None:
+    """An explicit wheel contract must not require a source PYTHONPATH."""
+
+    script = (REPO_ROOT / "tools" / "verify_sage_mate_engine.sh").read_text(
+        encoding="utf-8"
+    )
+    assert '[[ -n "$runtime_pythonpath" ]]' in script
+    assert '[[ -n "$declared_pythonpath" || "$installed_modules_json" != \'{}\' ]]' in script
+    assert "runtime or declared engine PYTHONPATH is empty" not in script
