@@ -6897,6 +6897,22 @@ chatScrollThumb?.addEventListener("pointercancel", (event) => {
     showChatScrollRail();
 });
 window.addEventListener("resize", syncChatScrollRail);
+// Reserve the actual composer height on narrow layouts. Mode feedback,
+// wrapped tools, attachments and multiline input can all change it.
+function syncComposerClearance() {
+    if (!chatForm || !chatStream) return;
+    const height = Math.ceil(chatForm.getBoundingClientRect().height);
+    document.documentElement.style.setProperty("--chat-composer-height", `${height}px`);
+    const shellHeight = chatForm.closest(".chat-shell")?.clientHeight || window.innerHeight;
+    document.documentElement.style.setProperty(
+        "--onboarding-available-height", `${Math.max(100, shellHeight - height - 32)}px`
+    );
+}
+if (chatForm && typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(syncComposerClearance).observe(chatForm);
+}
+window.addEventListener("resize", syncComposerClearance);
+requestAnimationFrame(syncComposerClearance);
 if (chatStream) {
     new MutationObserver(() => requestAnimationFrame(syncChatScrollRail)).observe(chatStream, {
         childList: true,
@@ -6932,8 +6948,10 @@ function updateWelcomeGreeting() {
         if (greetingText) greetingText.textContent = "你好";
         if (railUserAvatar) {
             railUserAvatar.innerHTML = uiIconSvg("user");
-            railUserAvatar.style.background = "rgba(0, 0, 0, 0.08)";
-            railUserAvatar.style.color = "rgba(0, 0, 0, 0.4)";
+            // Guest appearance belongs to the shared theme tokens, not inline
+            // black-on-black colors that override the night stylesheet.
+            railUserAvatar.style.removeProperty("background");
+            railUserAvatar.style.removeProperty("color");
         }
         if (sidebarUserName) sidebarUserName.textContent = "访客模式";
     }

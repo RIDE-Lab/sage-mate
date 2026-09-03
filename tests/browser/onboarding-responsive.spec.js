@@ -869,3 +869,70 @@ test("theme release screenshots remain stable across light, dark, desktop, and n
     }
   }
 });
+
+test("composer modes retain native keyboard focus and visible boundaries", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    await openThemeFixture(page, theme, { width: 1280, height: 800 });
+    const deep = page.locator("#deep-thinking-checkbox");
+    await page.getByRole("button", { name: "发送问题" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(deep).toBeFocused();
+    const label = page.locator(".composer-pill-toggle").first();
+    expect(await label.evaluate(el => getComputedStyle(el).outlineStyle)).toBe("solid");
+    await page.keyboard.press("Space");
+    await expect(deep).toBeChecked();
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#web-search-checkbox")).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(page.locator("#web-search-checkbox")).toBeChecked();
+    await deep.focus();
+    await page.keyboard.press("Space");
+    await expect(deep).not.toBeChecked();
+    await expect(label).not.toHaveClass(/is-active/);
+    await page.locator("#web-search-checkbox").focus();
+    await page.keyboard.press("Space");
+    await expect(page.locator("#web-search-checkbox")).not.toBeChecked();
+    // Sample the settled unselected foreground, not an in-flight CSS transition.
+    await expect.poll(() => label.evaluate(el => getComputedStyle(el).color))
+      .toBe(theme === "dark" ? "rgb(195, 208, 229)" : "rgb(59, 80, 109)");
+    expectThemeAuditPasses(await auditThemeSelectors(page, [
+      ".composer-pill-toggle", ".rail-user-avatar",
+    ]), { requireBorders: [".composer-pill-toggle", ".rail-user-avatar"] });
+  }
+});
+
+test("mobile long answers and citations stay inside the message and clear the composer", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    await openThemeFixture(page, theme, { width: 390, height: 844 });
+    // Mode status adds a composer row; test the largest actual composer.
+    await page.locator(".composer-pill-toggle").first().click();
+    await page.locator("#chat-question").fill("请解释长上下文实验");
+    await page.getByRole("button", { name: "发送问题" }).click();
+    await expect(page.locator(".message-ready")).toBeVisible();
+    // Reproduce mixed prose/list intrinsic grid sizing, not just body.scrollWidth:
+    // the shell intentionally clips horizontal overflow, masking a broken child.
+    await page.locator(".message-ready .message-body").first().evaluate(el => {
+      const list = document.createElement("ul");
+      for (let i = 0; i < 18; i++) {
+        const item = document.createElement("li");
+        item.textContent = `检查 ${i}: baseline_${"long_context_".repeat(12)} 公平对比与关键消融`;
+        list.append(item);
+      }
+      el.replaceChildren(list);
+    });
+    const geometry = await page.locator(".message-ready").evaluate(el => {
+      const frame = el.getBoundingClientRect();
+      return [...el.querySelectorAll(".message-frame, .message-main-copy, .message-body, .message-section, li")]
+        .map(child => ({ name: child.className || child.tagName, right: child.getBoundingClientRect().right, limit: frame.right }));
+    });
+    for (const box of geometry) expect(box.right, JSON.stringify(box)).toBeLessThanOrEqual(box.limit + 1);
+    await page.locator(".chat-stream").evaluate(el => { el.scrollTop = el.scrollHeight; });
+    const bottom = await page.evaluate(() => ({
+      reply: document.querySelector(".message-ready").getBoundingClientRect().bottom,
+      composer: document.querySelector("#chat-form").getBoundingClientRect().top,
+      width: document.documentElement.scrollWidth,
+    }));
+    expect(bottom.width).toBeLessThanOrEqual(390);
+    expect(bottom.reply).toBeLessThanOrEqual(bottom.composer + 1);
+  }
+});
