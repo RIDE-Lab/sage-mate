@@ -45,6 +45,11 @@ tools/verify_sage_mate_engine.sh
   the optional uncached `BAAI/bge-small-zh-v1.5`; no network model download was
   hidden in a test.
 - Final verifier/systemd/runtime-identity/receipt regression:81passed.
+- Clean-checkout key regression: 239 passed, zero failures. The broader clean
+  regression: 355 passed, six skipped (five uncached embedding-model tests and
+  one optional sagevdb integration). Unlike the 357-pass working-tree run, this
+  checkout excludes the user's uncommitted API/streaming test and local sagevdb
+  wiring. No unpublished API change is needed for these integration gates.
 - dev-hub lock and receipt regression:12passed.
 - Final Ascend native allocation and Mamba binding:11passed in a networkless
   container without NPU device mounts. Host driver libraries were mounted
@@ -59,6 +64,19 @@ Hook setup initially timed out downloading Go dependencies. The default hook
 also downloaded an x86 gitleaks binary unsuitable for ARM; an ARM build from
 pinned Go module v8.24.2, with checksum verification enabled, resolved that
 environment failure. These failed attempts are not counted as passing gates.
+
+The extra clean-checkout gate exposed two setup issues. Eight receipt tests
+initially failed because the dev-hub submodule was not initialized; normal
+initialization of the pinned remote commit fixed collection. Two systemd unit
+rendering tests also depended on the production `.env` and sibling repositories,
+causing a real SAGE clone on a clean machine. The fixture now copies only the
+installer, helper libraries and unit templates into a temporary checkout, uses
+synthetic configuration, mocks external commands, runs `--systemd-only`, asserts
+that git is not invoked and bounds the subprocess to ten seconds. It neither
+reads deployment secrets nor modifies the live runtime or services. The first
+isolated attempt exposed a missing HOME variable; the fixture now preserves the
+inherited value while explicitly redirecting its writable config/runtime paths.
+All 15 installer tests and both final clean-checkout gates pass.
 
 User-owned `api.py`, `tests/test_chat_streaming.py` and unrelated dev-hub runtime
 artifacts remain untouched and excluded. Their existence is reported, not
@@ -89,14 +107,21 @@ compile-time benchmark. The verifier passed and wrote receipt
   and cache hits, three Support sources/five knowledge hits. It provided two
   clearly labelled inferred groupings and distinguished them from the three
   source-defined research areas; no engine or application fallback was used.
-- Public deep QA remains **unverified**: stalled connection, response-header
-  timeout despite an application200, then Cloudflare502. Local health stayed
-  healthy. Public health did return the correct final plugin/image/receipt.
-  These failures are preserved, not rewritten as successful public acceptance.
+- Early public deep QA attempts failed: stalled connection, response-header
+  timeout despite an application 200, then Cloudflare 502. Local health stayed
+  healthy. Public health returned the correct final plugin/image/receipt.
+- Final bounded public deep QA at 08:17 UTC passed: HTTP 200, client 36.57s /
+  application 27.36s, one native model call, zero retries/cache hits, three
+  Support sources and five knowledge hits. It distinguishes inferred research
+  groupings from the source-defined areas. No services were restarted between
+  these public probes. The earlier failed attempts remain evidence of intermittent
+  transport trouble; a successful probe is not a sustained availability or
+  latency guarantee.
 
 Evidence artifacts are under `output/main-consolidation-*`, including the
 engine verification log, engine probe JSON, public-normal JSON and FAILED.txt
-records, final Cloudflare502 page, and local-deep JSON. These outputs are not
+records, Cloudflare 502 page, local-deep JSON and
+`main-consolidation-public-final-deep.json`. These outputs are not
 part of the source commit. The old Qwen image5e7f82c7 and a600-mode environment
 backup under the private runtime backups directory remain for managed rollback.
 
