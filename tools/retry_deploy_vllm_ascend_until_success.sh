@@ -2,6 +2,8 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation reconcile
 
 # Compatibility shim: retries used to mutate systemd-user environment and
 # introduce conflicting physical/logical NPU mappings. Keep the old filename

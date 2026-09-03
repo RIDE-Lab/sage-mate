@@ -36,6 +36,8 @@ load_dotenv() {
 }
 
 load_dotenv "$repo_root/.env"
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation serve
 # Older Ascend images have an unstable V1 worker path for several model
 # families; keep the engine mode explicit and configurable per machine.
 export VLLM_USE_V1="${VLLM_USE_V1:-0}"

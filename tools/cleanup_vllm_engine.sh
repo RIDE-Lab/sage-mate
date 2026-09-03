@@ -20,6 +20,8 @@ load_dotenv() {
 }
 
 load_dotenv "$repo_root/.env"
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation cleanup
 
 export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-faculty_twin_vllm_hust}"
 export VLLM_ENGINE_PORT="${VLLM_ENGINE_PORT:-8000}"

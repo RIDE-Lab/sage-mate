@@ -212,6 +212,13 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# Installation rewrites units and launch configuration. For enrolled instances,
+# require a separately approved profile migration instead of reinstalling live.
+if ! $mode_check; then
+	source "$repo_root/tools/lib/instance_control.sh"
+	sage_mate_route_instance_operation install
+fi
+
 if $local_target_hint && [[ "$install_target" == "hosted-web" ]]; then
 	install_target="local-mac-app"
 fi

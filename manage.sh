@@ -216,6 +216,15 @@ stop_legacy_conflicting_services() {
 }
 
 # ── Execute action ───────────────────────────────────────────────────────────
+if $include_engine && [[ "$action" != "status" ]]; then
+    source "$repo_root/tools/lib/instance_control.sh"
+    # Enrolled operations cannot silently include a proxy/app/tunnel restart.
+    if (( ${#service_units[@]} != 1 )); then
+        sage_mate_route_instance_operation mixed-services
+    else
+        sage_mate_route_instance_operation "$action"
+    fi
+fi
 if [[ "$action" != "status" ]]; then
     if [[ "$action" == "start" || "$action" == "restart" ]]; then
         stop_legacy_conflicting_services

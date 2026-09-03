@@ -50,6 +50,9 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   export "$line"
 done < "$env_file"
 
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation reconcile
+
 # shellcheck source=tools/lib/vllm_container_identity.sh
 source "$repo_root/tools/lib/vllm_container_identity.sh"
 normalize_vllm_engine_container_name "$repo_root"
