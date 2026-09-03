@@ -551,7 +551,7 @@ def test_request_chat_completion_retries_timeout_then_succeeds(
     assert snapshot["llm_last_error"] == ""
 
 
-def test_request_chat_completion_accepts_reasoning_content_fallback() -> None:
+def test_request_chat_completion_never_uses_private_reasoning_as_answer() -> None:
     settings = AppSettings(
         llm_cache_ttl_seconds=0,
         llm_cache_max_entries=0,
@@ -562,9 +562,8 @@ def test_request_chat_completion_accepts_reasoning_content_fallback() -> None:
     )
     client = _build_retry_test_client(settings, transport)
 
-    answer = client._request_chat_completion_sync({"model": "demo", "messages": []})
-
-    assert answer == "reasoning fallback"
+    with pytest.raises(RuntimeError, match="empty chat message"):
+        client._request_chat_completion_sync({"model": "demo", "messages": []})
     assert len(transport.calls) == 1
 
 
@@ -1236,7 +1235,7 @@ def test_answer_question_retries_without_thinking_budget_after_server_error() ->
     assert "thinking_token_budget" not in transport.calls[1][1]
 
 
-def test_model_supports_thinking_budget_only_for_qwen3_by_default() -> None:
+def test_thinking_budget_is_an_explicit_server_capability_not_a_model_name() -> None:
     client = object.__new__(VllmChatClient)
     client._settings = AppSettings(
         model_name="zai-org/GLM-4-32B-0414",
@@ -1252,6 +1251,8 @@ def test_model_supports_thinking_budget_only_for_qwen3_by_default() -> None:
     )
     client.model_name = "Qwen/Qwen3-32B"
 
+    assert client._model_supports_thinking_budget() is False
+    client._settings.llm_thinking_budget_supported = True
     assert client._model_supports_thinking_budget() is True
 
 

@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -285,6 +286,25 @@ class AppSettings(BaseSettings):
     planner_metrics_dir: Path | None = Field(default=None)
     thinking_token_budget: int | None = Field(
         default=2048, ge=64, le=4096,
+    )
+    llm_thinking_mode: Literal["auto", "native", "application"] = Field(
+        default="auto",
+        description="Native thinking first. auto probes the served tokenizer; native is an "
+        "operator-verified capability; application declares that native thinking is unsupported.",
+    )
+    llm_tokenize_url: str = Field(
+        default="",
+        description="Optional trusted tokenizer endpoint for CPU-only capability detection. "
+        "Uses the same API credentials as the LLM; never point at an untrusted service.",
+    )
+    llm_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = Field(default="medium")
+    llm_thinking_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    llm_thinking_top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    llm_thinking_top_k: int | None = Field(default=None, ge=1)
+    llm_thinking_budget_supported: bool = Field(
+        default=False,
+        description="Enable thinking_token_budget only when the server explicitly supports it; "
+        "native reasoning alone does not imply support for this optional extension.",
     )
     auto_disable_thinking_intents: str = Field(
         default="general,booking",

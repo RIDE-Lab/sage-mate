@@ -76,6 +76,8 @@ from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
 from .escalation_store import EscalationQueueStore
 from .evidence_policy import (
+    comparison_subjects,
+    rank_comparison_evidence,
     has_query_evidence,
     has_unsupported_source_quote,
     matches_document_purpose,
@@ -1458,11 +1460,27 @@ class FacultyTwinWorkflowSupport:
                 visitor_profile=context.request.visitor_profile,
                 admin_role=self._resolve_admin_role(),
             )
+            # A top-k list dominated by one named subject cannot ground a
+            # comparison. Retrieve a bounded per-subject supplement through
+            # the same permission-aware store, then apply the same filters.
+            subject_hits = []
+            subjects = comparison_subjects(context.request.question)
+            for subject in subjects:
+                subject_hits.extend(self._knowledge_store.search(
+                    subject,
+                    top_k=6,
+                    visitor_profile=context.request.visitor_profile,
+                    admin_role=self._resolve_admin_role(),
+                ))
+            if subject_hits:
+                raw_hits = list({hit.document_id: hit for hit in subject_hits + raw_hits}.values())
             context.knowledge_hits = self._filter_knowledge_hits_by_intent(
                 raw_hits,
                 interaction_intent,
                 question=context.request.question,
             )
+            if subjects:
+                context.knowledge_hits = rank_comparison_evidence(context.knowledge_hits, subjects)[:6]
             # Identity/research questions get a small deterministic floor of
             # canonical public profile sections. Keep these in the response
             # evidence as well as in the prompt so every stated research
@@ -1953,10 +1971,18 @@ class FacultyTwinWorkflowSupport:
         if len(detail) > 480:
             detail = detail[:480] + "…"
 
+        prompt_stage_title = "构造回答上下文"
+        if self._is_explicit_deep_request(context.request):
+            prompt_stage_title = (
+                "模型原生思考 · 上下文已就绪"
+                if self._model_supports_native_thinking()
+                else "应用层深度分析 · 上下文已就绪"
+            )
+
         self._append_trace(
             context,
             key="prompt_build",
-            title="构造回答上下文",
+            title=prompt_stage_title,
             summary=(
                 "已组装回答上下文（已截断）。" if context.prompt_truncated else "已组装回答上下文。"
             ),
@@ -2351,6 +2377,8 @@ class FacultyTwinWorkflowSupport:
 
         relevance_question = self._build_answer_relevance_question(context)
         explicit_deep = self._is_explicit_deep_request(context.request)
+        enable_thinking = self._should_enable_deep_thinking(context)
+        native_thinking = enable_thinking and self._model_supports_native_thinking()
         output_constraints = AnswerConstraints.from_question(context.request.question)
         curated_direction = self._should_use_curated_direction_evaluation(relevance_question)
         # The fact renderer selects/mutates evidence. Do not run it speculatively
@@ -2359,6 +2387,7 @@ class FacultyTwinWorkflowSupport:
             self._build_grounded_fact_answer(context)
             if not curated_direction and not output_constraints.has_limits
             and not self._is_benchmark_request(context.request)
+            and not native_thinking
             else None
         )
         if (
@@ -2415,7 +2444,7 @@ class FacultyTwinWorkflowSupport:
         # their adapters can inspect the assembled profile/evidence prompt;
         # deterministic production guidance would otherwise bypass the LLM
         # and make those regression checks meaningless.
-        if self._is_benchmark_request(context.request):
+        if self._is_benchmark_request(context.request) or native_thinking:
             use_curated_answer = False
         if use_curated_answer and not output_constraints.has_limits:
             context.answer = self._build_deterministic_fallback_answer(context)
@@ -2430,7 +2459,6 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
-        enable_thinking = self._should_enable_deep_thinking(context)
         answer_prompt = context.prompt_envelope
         answer_system_prompt = answer_prompt.system_prompt
         answer_user_prompt = answer_prompt.user_prompt
@@ -2531,7 +2559,11 @@ class FacultyTwinWorkflowSupport:
         self._append_trace(
             context,
             key="llm_answer",
-            title="生成回答",
+            title=(
+                "模型原生思考 · 回答已生成" if native_thinking
+                else "应用层深度分析 · 回答已生成" if enable_thinking
+                else "生成回答"
+            ),
             summary=(
                 "已完成深度分析并生成结构化回复。"
                 if explicit_deep
@@ -3051,9 +3083,8 @@ class FacultyTwinWorkflowSupport:
                     user_prompt=compact_user_prompt,
                     temperature=0.2 if deep_recovery else 0.0,
                     max_tokens=(
-                        min(
-                            int(self._settings.llm_deep_answer_max_tokens),
-                            int(self._settings.llm_policy_output_max_tokens_cap),
+                        self._deep_completion_budget(
+                            deep_recovery and self._model_supports_native_thinking()
                         )
                         if deep_recovery or structured_recovery
                         else (384 if attempt == 0 else 320)
@@ -3062,6 +3093,7 @@ class FacultyTwinWorkflowSupport:
                         f"{context.conversation_id or 'compact'}:compact-retry:"
                         f"{retry_id}:{attempt}"
                     ),
+                    enable_thinking=deep_recovery and self._model_supports_native_thinking(),
                 )
             except RuntimeError as exc:
                 if isinstance(exc, RequestCancelledError):
@@ -3109,6 +3141,7 @@ class FacultyTwinWorkflowSupport:
         temperature: float,
         max_tokens: int,
         cache_namespace: str,
+        enable_thinking: bool = False,
     ) -> str:
         answer_fn = self._llm_client.answer_question_sync
         parameters = inspect.signature(answer_fn).parameters
@@ -3116,7 +3149,7 @@ class FacultyTwinWorkflowSupport:
             "token_callback": None,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "enable_thinking": False,
+            "enable_thinking": enable_thinking,
             "use_reuse_hints": False,
             "continue_on_length": False,
             "cache_namespace": cache_namespace,
@@ -3499,15 +3532,10 @@ class FacultyTwinWorkflowSupport:
         model_name = str(getattr(self._llm_client, "model_name", "") or "").lower()
         reliable_streaming = "glm-4" not in model_name
 
-        # Qwen3/vLLM-HUST can emit empty streaming chunks or content-only
-        # <think> blocks when engine thinking is enabled. In hosted/web, keep
-        # the user's "deep thinking" intent in the prompt but use normal
-        # answer generation so the request stays inside the web timeout.
-        engine_thinking = False
+        engine_thinking = enable_thinking and self._model_supports_native_thinking()
         if (
             token_callback is not None
             and "token_callback" in signature.parameters
-            and not enable_thinking
             and reliable_streaming
         ):
             kwargs["token_callback"] = token_callback
@@ -3518,7 +3546,7 @@ class FacultyTwinWorkflowSupport:
         if "continue_on_length" in signature.parameters:
             kwargs["continue_on_length"] = continue_on_length
         if engine_thinking and "thinking_token_budget" in signature.parameters:
-            kwargs["thinking_token_budget"] = 256
+            kwargs["thinking_token_budget"] = self._settings.thinking_token_budget
         if "deadline_class" in signature.parameters:
             kwargs["deadline_class"] = policy_context["deadline_class"]
         if "request_priority" in signature.parameters:
@@ -3527,10 +3555,7 @@ class FacultyTwinWorkflowSupport:
             kwargs["target_e2e_ms"] = policy_context["target_e2e_ms"]
         if "max_tokens" in signature.parameters:
             if enable_thinking:
-                kwargs["max_tokens"] = min(
-                    int(self._settings.llm_deep_answer_max_tokens),
-                    int(self._settings.llm_policy_output_max_tokens_cap),
-                )
+                kwargs["max_tokens"] = self._deep_completion_budget(engine_thinking)
                 if "continue_on_length" in signature.parameters:
                     # Do not recursively continue a deep response. On a
                     # low-throughput NPU that turns one bounded request into
@@ -3548,6 +3573,20 @@ class FacultyTwinWorkflowSupport:
             )
 
         return answer_fn(system_prompt, user_prompt, **kwargs)
+
+    def _model_supports_native_thinking(self) -> bool:
+        # Adapters without a native capability use application analysis. The
+        # production client distinguishes unknown capability from unsupported.
+        return bool(getattr(getattr(self, "_llm_client", None), "supports_native_thinking", False))
+
+    def _deep_completion_budget(self, native: bool) -> int:
+        # Native reasoning and the final answer share max_tokens. Reserve both
+        # within the configured cap; do not steal the answer budget for CoT.
+        return min(
+            int(self._settings.llm_deep_answer_max_tokens)
+            + (int(self._settings.thinking_token_budget or 0) if native else 0),
+            int(self._settings.llm_policy_output_max_tokens_cap),
+        )
 
     def _build_llm_serving_policy_context(self, context: ChatWorkflowContext) -> dict[str, Any]:
         interaction_intent = context.interaction_intent

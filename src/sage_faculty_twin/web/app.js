@@ -309,8 +309,8 @@ function syncDeepThinkingPresentation() {
     toggle?.setAttribute(
         "title",
         active
-            ? "已开启：使用完整上下文、更高回答预算和结构化权衡分析"
-            : "开启完整上下文、结构化权衡分析和更高回答预算"
+            ? "已开启：优先使用模型原生 thinking；不支持时使用应用层深度分析"
+            : "优先使用模型原生 thinking；不支持时使用应用层深度分析"
     );
     deepThinkingCheckbox.setAttribute(
         "aria-label",
@@ -320,7 +320,7 @@ function syncDeepThinkingPresentation() {
         composerModeStatus.hidden = !active;
         composerModeStatus.dataset.state = active ? "ready" : "off";
         composerModeStatus.textContent = active
-            ? "深度思考已开启 · 回答完成后可展开结构化过程"
+            ? "深度思考已开启 · 优先使用模型原生推理"
             : "";
     }
 }
@@ -336,7 +336,7 @@ function setDeepThinkingProcessing(processing) {
     composerModeStatus.dataset.state = processing ? "processing" : "ready";
     composerModeStatus.textContent = processing
         ? "深度思考进行中 · 正在整理完整上下文和权衡分析"
-        : "深度思考已开启 · 回答完成后可展开结构化过程";
+        : "深度思考已开启 · 优先使用模型原生推理";
 }
 
 deepThinkingCheckbox?.addEventListener("change", syncDeepThinkingPresentation);

@@ -28,6 +28,7 @@ bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 from sage.serving.integrations import policy as serving_policy
 
 from .config import AppSettings
+from .thinking_policy import ThinkingCapability, VisibleAnswerFilter, capability_from_tokenization, configured_capability
 from .interaction_policy import (
     asks_for_booking_information,
     requires_faculty_review,
@@ -231,6 +232,8 @@ class VllmChatClient:
                 self.model_name = detected_model
         self._intent_model_name = self._settings.intent_model_name or self.model_name
         self._runtime_model_refresh_at = 0.0
+        self._thinking_capability_model = ""
+        self._refresh_thinking_capability()
         self._cache_lock = threading.Lock()
         self._response_cache: OrderedDict[str, tuple[float, str, str]] = OrderedDict()
         self._metrics_lock = threading.Lock()
@@ -245,10 +248,7 @@ class VllmChatClient:
         self._last_success_at: float | None = None
         self._last_error_at: float | None = None
         self._last_error_message: str | None = None
-        # Auto-detected: set to False when the connected vllm instance does
-        # not support --reasoning-config. Start conservatively for non-reasoning
-        # model families so the first hosted/web deep request does not discover
-        # support by failing in production.
+        # Optional server extension, separate from native model reasoning.
         self._supports_thinking_budget = self._model_supports_thinking_budget()
         self._recent_success_timestamps: deque[float] = deque()
         self._recent_completion_token_samples: deque[tuple[float, int]] = deque()
@@ -368,6 +368,43 @@ class VllmChatClient:
             logger.warning("Failed to auto-detect model name from %s: %s",
                            self._settings.llm_base_url, exc)
         return ""
+
+    def _refresh_thinking_capability(self) -> None:
+        # Initialization / model changes only: no per-question template parsing
+        # or capability-generation request on the NPU.
+        if (getattr(self, "_thinking_capability_model", None) == self.model_name
+                and hasattr(self, "_thinking_capability")):
+            return
+        capability = configured_capability(self._settings.llm_thinking_mode)
+        if capability.supported is None:
+            try:
+                url = self._settings.llm_tokenize_url or self._settings.llm_base_url.removesuffix("/v1").rstrip("/") + "/tokenize"
+                rendered = []
+                for enabled in (False, True):
+                    response = self._client.post(url, timeout=2.0, json={
+                        "model": self.model_name,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "add_generation_prompt": True,
+                        "return_token_strs": True,
+                        "chat_template_kwargs": {"enable_thinking": enabled},
+                    })
+                    response.raise_for_status()
+                    rendered.append(response.json())
+                capability = capability_from_tokenization(*rendered)
+            except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+                capability = ThinkingCapability(None, "tokenizer_probe_unavailable")
+        self._thinking_capability = capability
+        self._thinking_capability_model = self.model_name
+
+    @property
+    def supports_native_thinking(self) -> bool:
+        self._refresh_thinking_capability()
+        if self._thinking_capability.supported is None:
+            raise RuntimeError(
+                "Native thinking capability is unknown; configure a trusted tokenizer endpoint "
+                "or declare the verified DIGITAL_TWIN_LLM_THINKING_MODE."
+            )
+        return self._thinking_capability.supported
 
     def probe_runtime_model_name(self) -> str:
         """Probe the serving endpoint without falling back to configured memory."""
@@ -1153,12 +1190,20 @@ class VllmChatClient:
             "presence_penalty": presence_penalty,
             "repetition_penalty": repetition_penalty,
         }
-        if not enable_thinking:
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-            # Without thinking, we don't need as many tokens
-            if max_tokens is not None and max_tokens > 2048:
-                max_tokens = 2048
-        else:
+        # True must also be explicit: the server may default to non-thinking.
+        payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        if enable_thinking:
+            payload["chat_template_kwargs"]["reasoning_effort"] = self._settings.llm_reasoning_effort
+            # Answer anti-repetition penalties also affect private reasoning;
+            # applying them there can corrupt the model's analytical output.
+            payload.update(frequency_penalty=0.0, presence_penalty=0.0, repetition_penalty=1.0)
+            for key, value in {
+                "temperature": self._settings.llm_thinking_temperature,
+                "top_p": self._settings.llm_thinking_top_p,
+                "top_k": self._settings.llm_thinking_top_k,
+            }.items():
+                if value is not None:
+                    payload[key] = value
             # B2: Cap thinking tokens to reduce wasted CoT generation.
             # Uses vllm-hust's thinking_token_budget parameter.
             # Only send when the server supports --reasoning-config.
@@ -1267,10 +1312,7 @@ class VllmChatClient:
         return local_base and model_name.startswith("mlx-community/")
 
     def _model_supports_thinking_budget(self) -> bool:
-        if self._is_local_mlx_model():
-            return False
-        model_name = (self._settings.model_name or self.model_name or "").strip().lower()
-        return "qwen3" in model_name
+        return self._settings.llm_thinking_budget_supported
 
     def _is_thinking_budget_unsupported(self, exc: httpx.HTTPStatusError) -> bool:
         """Return True when the 400 error indicates the vllm instance
@@ -1332,6 +1374,7 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             collected: list[str] = []
+            visible_filter = VisibleAnswerFilter()
             finish_reason = ""
             first_token_recorded = False
             try:
@@ -1406,12 +1449,13 @@ class VllmChatClient:
                         message = choices[0].get("message") or {}
                         delta_content = (
                             delta.get("content")
-                            or delta.get("reasoning_content")
                             or message.get("content")
                         )
                         if not delta_content:
                             continue
-                        text = str(delta_content)
+                        text = visible_filter.feed(str(delta_content))
+                        if not text:
+                            continue
                         collected.append(text)
                         if diagnostics is not None and not first_token_recorded:
                             diagnostics.record_llm_ttft(
@@ -1422,7 +1466,7 @@ class VllmChatClient:
                             token_callback(text)
                         except Exception:  # pragma: no cover - defensive
                             pass
-                answer = "".join(collected)
+                answer = "".join(collected) + visible_filter.finish()
                 if finish_reason == "length":
                     raise IncompleteCompletionError("streaming answer reached token limit")
                 if not answer:
@@ -1541,12 +1585,14 @@ class VllmChatClient:
                 message = choices[0].get("message", {})
                 content = (
                     message.get("content")
-                    or message.get("reasoning_content")
                     or choices[0].get("text")
                 )
                 if not content:
                     raise RuntimeError("vllm-hust returned an empty chat message")
-                answer = str(content)
+                visible_filter = VisibleAnswerFilter()
+                answer = visible_filter.feed(str(content)) + visible_filter.finish()
+                if not answer.strip():
+                    raise RuntimeError("vllm-hust returned an empty chat message")
                 finish_reason = str(choices[0].get("finish_reason") or "").strip().lower()
                 if finish_reason == "length" and continue_on_length:
                     answer = self._continue_truncated_answer(payload, answer)
@@ -2110,6 +2156,8 @@ class VllmChatClient:
                 for existing_key, (expires_at, value, existing_semantic_key) in self._response_cache.items():
                     if expires_at <= now:
                         continue
+                    if semantic_key.split("|", 1)[0] != existing_semantic_key.split("|", 1)[0]:
+                        continue
                     score = difflib.SequenceMatcher(
                         None,
                         semantic_key,
@@ -2186,7 +2234,11 @@ class VllmChatClient:
         if system_text:
             normalized_system = re.sub(r"[\s\W_]+", "", system_text.lower())
             system_finger = normalized_system[:80]
-        merged = user_merged + "|" + system_finger
+        # Never fuzzily reuse a non-thinking answer for a native-thinking call
+        # (or an answer from another model / decoding contract).
+        generation_contract = {key: value for key, value in payload.items() if key != "messages"}
+        contract_hash = hashlib.sha256(json.dumps(generation_contract, sort_keys=True).encode()).hexdigest()
+        merged = contract_hash + "|" + user_merged + "|" + system_finger
         if namespace:
             merged = f"{namespace}::{merged}"
         if len(merged) > 2400:
@@ -2449,7 +2501,10 @@ class VllmChatClient:
 
         # Low-congestion path: keep the requested token budget (no shaping),
         # but still enforce a global policy ceiling to avoid pathological long outputs.
-        if not self._is_high_congestion(snapshot):
+        # Admission/deadlines govern waiting. Shrinking native reasoning to a
+        # prose-only congestion cap can consume every token before the answer.
+        native_thinking = (payload.get("chat_template_kwargs") or {}).get("enable_thinking") is True
+        if native_thinking or not self._is_high_congestion(snapshot):
             payload["max_tokens"] = int(min(requested_max_tokens, policy_max_tokens_cap))
             return
 

@@ -692,8 +692,9 @@ def test_deterministic_fallback_handles_research_innovation_question() -> None:
     assert "背景、目标、约束和评估指标" not in answer
 
 
-def test_hosted_web_deep_call_does_not_enable_engine_thinking(tmp_path: Path) -> None:
+def test_hosted_web_deep_call_prefers_supported_engine_thinking(tmp_path: Path) -> None:
     class FakeLlmClient:
+        supports_native_thinking = True
         def __init__(self) -> None:
             self.kwargs: dict[str, object] | None = None
 
@@ -727,8 +728,8 @@ def test_hosted_web_deep_call_does_not_enable_engine_thinking(tmp_path: Path) ->
 
     assert answer == "OK"
     assert fake_llm.kwargs is not None
-    assert fake_llm.kwargs["enable_thinking"] is False
-    assert "thinking_token_budget" not in fake_llm.kwargs
+    assert fake_llm.kwargs["enable_thinking"] is True
+    assert fake_llm.kwargs["thinking_token_budget"] == service._settings.thinking_token_budget
 
 
 def test_compact_call_can_disable_vllm_reuse_hints(tmp_path: Path) -> None:

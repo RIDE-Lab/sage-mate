@@ -7,6 +7,28 @@ import re
 from .models import KnowledgeSearchHit
 
 
+def comparison_subjects(question: str) -> list[str]:
+    """Bounded entity coverage for comparisons; no product-name allowlist."""
+    if not re.search(r"比较|对比|区别|差异|\b(?:compare|versus|vs\.?)\b", question, re.I):
+        return []
+    subjects = list(dict.fromkeys(
+        token.casefold() for token in re.findall(r"[A-Za-z][A-Za-z0-9_.-]{2,}", question)
+        if token.casefold() not in {
+            "compare", "please", "versus", "between", "with", "and", "the",
+            "what", "are", "how", "does", "their", "difference", "differences", "explain",
+        }
+    ))
+    return subjects[:3] if len(subjects) >= 2 else []
+
+
+def rank_comparison_evidence(hits: list[KnowledgeSearchHit], subjects: list[str]) -> list[KnowledgeSearchHit]:
+    """Prefer joint coverage, not a high rank for only one side of a comparison."""
+    patterns = [re.compile(r"(?<![a-z0-9])" + re.escape(subject) + r"(?![a-z0-9])", re.I) for subject in subjects]
+    return sorted(hits, key=lambda hit: -sum(
+        bool(pattern.search(hit.title + "\n" + hit.excerpt)) for pattern in patterns
+    ))
+
+
 def is_public_evidence_hit(hit: KnowledgeSearchHit) -> bool:
     metadata = {
         str(key).lower(): str(value).lower()
@@ -20,7 +42,7 @@ def is_public_evidence_hit(hit: KnowledgeSearchHit) -> bool:
 
 def is_research_hit(hit: KnowledgeSearchHit) -> bool:
     tags = {str(tag).lower() for tag in hit.tags}
-    if tags & {"research", "publication", "paper-digest", "overview", "profile"}:
+    if tags & {"research", "publication", "paper-digest", "overview", "profile", "public-repository", "systems", "achievement"}:
         return True
     source_name = (hit.source_name or "").lower()
     return "研究" in hit.title or "publications" in source_name or "research_papers" in source_name
