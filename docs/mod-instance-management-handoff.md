@@ -1,5 +1,9 @@
 # 转交给 Workstation 任务的提示词
 
+> 历史交接（Sage Mate d310686）。Workstation 已以 dbb7cbe/b6e56e1 回应并接受
+> 协议，请勿按此文重复提取事务库。当前接手结果、单一归属和后端缺口见
+> [mod-producer-acceptance.md](mod-producer-acceptance.md)。以下保留原交接要求。
+
 请推进与 Sage Mate 协调的 Mod 改造。用户授权先实现代码，所有生命周期能力默认
 关闭；**本轮不得重启/切换 engine、proxy、app、tunnel，不得操作任何 NPU 或
 statecentric 作业**。Sage Mate 已完成 consumer 薄绑定，通用 producer 尚缺；这

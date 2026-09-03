@@ -1,4 +1,8 @@
-"""Hermetic owner-binding contracts. Fake producer is NOT lifecycle acceptance."""
+"""Hermetic owner-binding contracts, including the real pinned closed-gate producer.
+
+No shared service is called. Neither fake adapters nor the installed closed gate
+are evidence of production lifecycle qualification.
+"""
 
 from __future__ import annotations
 
@@ -438,3 +442,148 @@ def test_combined_restart_and_device_mutation_fail_closed(checkout, entry, args)
     assert result.returncode == 2
     assert "unsupported operation" in result.stderr
     assert (checkout / ".env").read_bytes() == before
+
+
+@pytest.fixture
+def real_producer_checkout(checkout):
+    """Use exact Git objects, not copied/mocked producer code or sibling paths.
+
+    The override is only for reviewing a fetched candidate BEFORE updating the live
+    parent gitlink. Normal CI resolves the committed parent's pin and never fetches.
+    """
+    source = ROOT / control.SUBMODULE
+    pin = (
+        os.environ.get("SAGE_MATE_TEST_PRODUCER_REVISION")
+        or run_git(ROOT, "ls-tree", "HEAD", "--", control.SUBMODULE).split()[2]
+    )
+    pin = run_git(source, "rev-parse", "--verify", f"{pin}^{{commit}}")
+    module = checkout / control.SUBMODULE
+    module.rename(checkout.parent / "unused-fake-producer")
+    run_git(checkout, "clone", "--shared", "--no-checkout", str(source), str(module))
+    run_git(module, "checkout", "--detach", pin)
+    run_git(
+        checkout, "update-index", "--cacheinfo", f"160000,{pin},{control.SUBMODULE}"
+    )
+    run_git(checkout, "commit", "-qm", "pin real producer for isolated acceptance")
+    assert run_git(module, "rev-parse", "HEAD") == pin
+    assert (module / control.MANIFEST).is_file(), (
+        "initialize the committed dev-hub producer"
+    )
+    return checkout
+
+
+def closed_gate_command(repo, args):
+    """Deny legacy service/network commands and isolate all writable runtime roots."""
+    sandbox = repo.parent / "sandbox"
+    sandbox.mkdir()
+    denied = repo.parent / "deny-bin"
+    denied.mkdir()
+    for name in ("systemctl", "docker", "sudo", "npu-smi", "curl", "ps"):
+        executable = denied / name
+        executable.write_text("#!/bin/sh\necho FORBIDDEN_HOST_COMMAND >&2\nexit 73\n")
+        executable.chmod(0o755)
+    dotenv_before = (repo / ".env").read_bytes()
+    result = command(
+        repo,
+        args,
+        {
+            "PATH": f"{denied}:{os.environ['PATH']}",
+            "HOME": str(sandbox),
+            "TMPDIR": str(sandbox),
+            "XDG_RUNTIME_DIR": str(sandbox),
+            "DBUS_SESSION_BUS_ADDRESS": f"unix:path={sandbox}/no-bus",
+            "DIGITAL_TWIN_RUNTIME_DIR": str(sandbox),
+            "DIGITAL_TWIN_API_KEY": "SECRET_CANARY",
+            "INVOCATION_ID": "a" * 32,
+        },
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert json.loads(result.stderr) == {
+        "protocol": control.PROTOCOL,
+        "error": "production_backend_not_qualified",
+        "lifecycleAvailable": False,
+    }
+    assert result.stdout == ""
+    assert "FORBIDDEN_HOST_COMMAND" not in result.stderr
+    assert "SECRET_CANARY" not in result.stderr
+    assert (repo / ".env").read_bytes() == dotenv_before
+    assert list(sandbox.iterdir()) == []
+    assert not list(repo.rglob("authority.sqlite3"))
+
+
+@pytest.mark.parametrize("flag", ["0", "1"])
+@pytest.mark.parametrize("action", sorted(control.ACTIONS))
+def test_real_producer_rejects_every_owner_action(real_producer_checkout, flag, action):
+    repo = real_producer_checkout
+    enroll(repo, enabled=flag)
+    closed_gate_command(
+        repo,
+        [
+            sys.executable,
+            "-I",
+            "tools/sage_mate_instance_control.py",
+            "--action",
+            action,
+        ],
+    )
+
+
+@pytest.mark.parametrize("flag", ["0", "1"])
+@pytest.mark.parametrize(
+    ("entry", "args"),
+    [
+        ("tools/run_vllm_engine.sh", []),
+        ("tools/lock_sage_mate_engine.sh", []),
+        ("tools/cleanup_vllm_engine.sh", []),
+        ("tools/monitor_twin_inference.sh", []),
+        ("tools/retry_deploy_vllm_ascend_until_success.sh", []),
+        ("manage.sh", ["start", "--with-vllm-engine"]),
+        ("manage.sh", ["stop", "--with-vllm-engine"]),
+        ("manage.sh", ["restart", "--with-vllm-engine"]),
+    ],
+)
+def test_real_producer_never_falls_back_from_owner_scripts(
+    real_producer_checkout, flag, entry, args
+):
+    repo = real_producer_checkout
+    enroll(repo, enabled=flag)
+    closed_gate_command(repo, ["bash", entry, *args])
+
+
+def test_real_producer_description_does_not_imply_approval(real_producer_checkout):
+    repo = real_producer_checkout
+    enroll(repo)
+    result = command(
+        repo,
+        [sys.executable, "-I", "tools/sage_mate_instance_control.py", "--describe"],
+    )
+    assert result.returncode == 0
+    status = json.loads(result.stdout)
+    assert status["producerInstalled"] is True
+    assert status["lifecycleAvailable"] is False
+    assert not list(repo.rglob("authority.sqlite3"))
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "deployment_spec",
+        "generation",
+        "fence",
+        "approved",
+        "peer_uid",
+        "executor_id",
+        "quiescence_receipt",
+    ],
+)
+def test_real_binding_cannot_inject_authority_state(real_producer_checkout, field):
+    repo = real_producer_checkout
+    binding = enroll(repo)
+    data = json.loads(binding.read_text())
+    data[field] = "UNTRUSTED_AUTHORITY_CANARY"
+    binding.write_text(json.dumps(data))
+    result = shell_route(repo, "serve")
+    assert result.returncode == 2
+    assert json.loads(result.stderr)["error"] == "unsupported registration schema"
+    assert "CANARY" not in result.stderr and "LEGACY" not in result.stdout
+    assert not list(repo.rglob("authority.sqlite3"))

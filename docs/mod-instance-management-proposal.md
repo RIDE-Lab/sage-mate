@@ -1,14 +1,15 @@
-# Mod 实例管理：分工与默认关闭契约（待双向确认）
+# Mod 实例管理：分工与默认关闭契约
 
-日期：2026-09-03。状态：**Sage Mate 默认关闭的薄绑定已实现；通用 producer
-尚未接入，未启用；Workstation 尚未确认契约**。
+日期：2026-09-03。状态：**双方已确认 v1；默认关闭的 producer 接手验收见
+[mod-producer-acceptance.md](mod-producer-acceptance.md)。尚无生产生命周期能力**。
 
 用户先要求协调，随后授权先实施 Sage Mate 一侧并提供转交提示词；仍不授权
 重启、接管或切换共享服务。
 已读取 Workstation 任务及其现有 `docs/mod-runtime-integration.md`、
 `scripts/mod_deployment.py`、`src/lib/modRuntimeTypes.ts`。跨任务发送工具
 返回旧接口停用，替代 `codex_app` MCP server 不可用，因此消息没有送达；
-不能把文档方向一致当作对方接受本提案。
+当时不能把文档方向一致当作对方接受本提案。随后 Workstation `dbb7cbe` 的
+正式交接明确接受协议，协调任务也确认了单一写入分工；以最新验收文档为准。
 
 ## 1. 建议分工和唯一代码归属
 
@@ -169,7 +170,8 @@ producer 必须在父仓 **HEAD gitlink 固定的** `deps/vllm-hust-dev-hub` 中
 
 消费者校验 gitlink/checkout HEAD 一致、无 tracked dirty、以上两个文件是固定提交
 中可核验的普通文件；不接受 local-only shim、重定向文件或不匹配协议。
-当前 pin `bc9ca7a` 不包含 producer；因此打开开关也不能获得生命周期能力。
+初始 pin `bc9ca7a` 不包含 producer；本次接受的 `b6e56e1` 已包含协议入口，但
+入口明确返回 `production_backend_not_qualified`，打开偏好也不会获得变更权限。
 
 随后通过相同解释器 `python -I` **exec** producer，从 stdin 传一个 JSON 对象后 EOF：
 
@@ -191,7 +193,7 @@ ExecStart/ExecStopPost 嵌套也需专门验证不会死锁。
 
 ### 尚未完成的启用门槛
 
-- producer 与 Workstation 双向契约确认；应用/停用/回滚和故障恢复测试。
+- 双向契约与隔离事务测试已交付；真实应用/停用/回滚和故障恢复仍未验收。
 - 所有宿主写入者的共同 fencing，特别是外部 `systemctl`/Docker、release 安装器
   在进入 quickstart 前的 `.env`/checkout 修改，以及其他 owner/开机启动路径。
   本提交的入口拦截不是 OS 沙箱；**在这些入口完成宿主侧权限约束前不得启用**。
@@ -206,13 +208,14 @@ deployment receipts、runtime identity 共 **130 项通过**；Ruff 检查通过
 关闭、协议/版本漂移、非法登记、隐私过滤、退出码、stdin/exec 和实际脚本路由。
 所有服务命令在 fixture 中禁用；这不是真实原子接管、Mod 执行或 NPU 验收。
 
-## 待 Workstation 明确回复
+## 历史确认项（已由 Workstation 交接回应）
 
 - 接受或修改第 1 节单一写入方分工；由谁在 dev-hub 提取通用协调器？
 - 确认 owner 协议如何覆盖原启动器/恢复入口，以及原子审批消费和 fencing。
 - 确认冻结 DeploymentSpec、审批身份、disable 和恢复关闭语义。
 - 确认第 7 节 consumer 协议或提出显式版本化调整；按各仓文件范围完成 producer。
 
-本轮仅改 Sage Mate 薄绑定、入口、示例配置和测试/文档；未改 live `.env`、
-submodule/gitlink、Workstation 或任何服务状态。转交提示见
-[mod-instance-management-handoff.md](mod-instance-management-handoff.md)。
+上轮仅改 Sage Mate 薄绑定、入口、示例配置和测试/文档，未改 live `.env` 或服务。
+本轮接手新增真实 producer 隔离契约测试并接受 gitlink；仍未登记、启用或重启。
+历史转交提示保留在 [mod-instance-management-handoff.md](mod-instance-management-handoff.md)，
+当前结论与下一阶段接口反馈见 [mod-producer-acceptance.md](mod-producer-acceptance.md)。
