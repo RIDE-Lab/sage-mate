@@ -1100,15 +1100,17 @@ class LocalKnowledgeStore:
 
     def _build_excerpt(self, content: str, query_tokens: set[str]) -> str:
         compact = " ".join(content.split())
-        lowercase = compact.lower()
-        hit_index = min(
-            (lowercase.find(token) for token in query_tokens if token in lowercase), default=-1
-        )
-        if hit_index == -1:
-            return compact[:220]
-        start = max(hit_index - 60, 0)
-        end = min(hit_index + 160, len(compact))
-        return compact[start:end]
+        # Earliest-hit snippets usually stop at a PDF's title/author list.
+        # Rank bounded windows by the same non-overlapping anchors used by the
+        # retriever, so the model and Support receive the supporting passage.
+        window = 480
+        # Fixed overlapping windows keep the scan linear in document length;
+        # evaluating a new window for every frequent-token hit is quadratic.
+        starts = range(0, max(1, len(compact)), window // 2)
+        start = max(starts, key=lambda pos: _span_overlap_score(
+            compact[pos:pos + window], query_tokens
+        ))
+        return compact[start:start + window]
 
     def _tokenize(self, text: str) -> set[str]:
         return _tokenize_text(_expand_query_synonyms(text))

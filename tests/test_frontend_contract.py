@@ -14,6 +14,28 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_no_evidence_answer_explains_absence_instead_of_hiding_support() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    renderer = app_js[app_js.index("function renderAssistantMessage("):]
+    assert 'title: "本次未引用可核验材料"' in renderer
+    assert 'count: 0' in renderer
+    assert '不应当作已核实的事实或文献结论' in renderer
+
+
+def test_mobile_source_scroll_targets_respect_composer_clearance() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "scroll-padding-bottom: calc(var(--chat-composer-height, 140px) + 12px)" in css
+
+
+def test_long_source_identifiers_cannot_widen_support_grid() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    grid = css.split(".message-basis-list {", 1)[1].split("}", 1)[0]
+    card = css.split(".message-basis-item {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr)" in grid
+    assert "min-width: 0" in card
+    assert "overflow-wrap: anywhere" in card
+
+
 def test_chat_stop_control_cancels_http_and_server_request() -> None:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     styles = (WEB_DIR / "styles.css").read_text(encoding="utf-8")

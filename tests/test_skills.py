@@ -401,6 +401,9 @@ class TestSkillToolRegistry:
         mock_store = MagicMock()
         mock_hit = MagicMock()
         mock_hit.title = "Test Document"
+        mock_hit.document_id = "test-document"
+        mock_hit.source_name = "test-source"
+        mock_hit.metadata = {"visibility": "public"}
         mock_hit.score = 0.95
         mock_hit.excerpt = "This is a test excerpt."
         mock_hit.tags = ["test"]

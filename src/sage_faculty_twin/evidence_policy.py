@@ -28,7 +28,8 @@ def is_research_hit(hit: KnowledgeSearchHit) -> bool:
 
 def is_teaching_hit(hit: KnowledgeSearchHit) -> bool:
     tags = {str(tag).lower() for tag in hit.tags}
-    return bool(tags & {"teaching", "courseware", "tutorial", "lecture", "experiment", "pdf", "resources"})
+    # File format is not subject matter: research PDFs are not courseware.
+    return bool(tags & {"teaching", "courseware", "tutorial", "lecture", "experiment"})
 
 
 def has_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
@@ -57,9 +58,38 @@ def has_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
         (
             hit.title or "",
             hit.excerpt or "",
-            hit.source_name or "",
-            " ".join(hit.tags or []),
-            " ".join(f"{key} {value}" for key, value in (hit.metadata or {}).items()),
+            # Provenance/visibility metadata can match words such as “公开”,
+            # but cannot support a factual claim. Only document text counts.
         )
     ).lower()
     return any(anchor in searchable for anchor in anchors)
+
+
+def matches_document_purpose(question: str, hit: KnowledgeSearchHit) -> bool:
+    """A shared author/technical term does not turn a job ad into research evidence.
+
+    Honor the KB's document-purpose tags even when the planner leaves retrieval
+    scopes empty. This is independent of rank/score and never grants visibility.
+    """
+    tags = {tag.casefold() for tag in hit.tags}
+    if tags & {"recruitment", "job-opening"}:
+        return bool(re.search(
+            r"招聘|岗位|求职|应聘|招收|招生|加入|工作机会|实习|职位|工程师|"
+            r"\b(?:job|hiring|recruitment|career|internship|vacanc\w*)\b", question,
+            re.IGNORECASE,
+        ))
+    return True
+
+
+def has_unsupported_source_quote(answer: str, excerpts: list[str]) -> bool:
+    """Check literal attributions, not general semantic entailment."""
+    quotes = re.findall(
+        r"(?:论文|文献|资料|附件|原文)[^。！？\n“”]{0,20}"
+        r"(?:提到|指出|强调|写道|表示|认为)[^。！？\n“”]{0,8}“([^”]+)”", answer,
+    )
+
+    def normalize(value: str) -> str:
+        return re.sub(r"\s+", "", value).casefold()
+
+    sources = [normalize(excerpt) for excerpt in excerpts]
+    return any(not any(normalize(quote) in source for source in sources) for quote in quotes)

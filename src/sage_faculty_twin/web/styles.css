@@ -3041,6 +3041,7 @@ body.drawer-pinned .history-rail {
 
 .message-basis-list {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
     gap: 10px;
     margin-top: 10px;
 }
@@ -3057,6 +3058,8 @@ body.drawer-pinned .history-rail {
 }
 
 .message-basis-item {
+    min-width: 0;
+    overflow-wrap: anywhere;
     padding: 12px 14px;
     border-radius: 14px;
     background: var(--surface-soft);
@@ -8051,6 +8054,7 @@ body.profile-code-assistant .composer-tools-row {
 
     .chat-stream {
         padding-bottom: calc(var(--chat-composer-height, 140px) + 12px);
+        scroll-padding-bottom: calc(var(--chat-composer-height, 140px) + 12px);
     }
 
     .message {

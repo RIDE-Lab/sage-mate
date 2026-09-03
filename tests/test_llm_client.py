@@ -1,6 +1,7 @@
 import json
 import threading
 from collections import OrderedDict
+from contextlib import nullcontext
 from pathlib import Path
 
 import httpx
@@ -11,7 +12,7 @@ from sage_faculty_twin.benchmark_adapter import (
     load_local_lamp_scenarios,
 )
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.llm_client import VllmChatClient
+from sage_faculty_twin.llm_client import IncompleteCompletionError, VllmChatClient
 from sage_faculty_twin.models import InteractionIntent
 
 
@@ -644,7 +645,7 @@ def test_request_chat_completion_continues_when_finish_reason_is_length() -> Non
     assert "继续" in second_payload["messages"][-1]["content"]
 
 
-def test_request_chat_completion_can_keep_bounded_truncated_answer() -> None:
+def test_request_chat_completion_rejects_bounded_truncation_without_retry_or_cache() -> None:
     settings = AppSettings(
         llm_cache_ttl_seconds=0,
         llm_cache_max_entries=0,
@@ -655,20 +656,20 @@ def test_request_chat_completion_can_keep_bounded_truncated_answer() -> None:
     )
     client = _build_retry_test_client(settings, transport)
 
-    answer = client._request_chat_completion_sync(
-        {
-            "model": "demo",
-            "messages": [{"role": "user", "content": "请简要回答"}],
-            "max_tokens": 256,
-        },
-        continue_on_length=False,
-    )
-
-    assert answer == "已经包含足够信息。"
+    with pytest.raises(IncompleteCompletionError):
+        client._request_chat_completion_sync(
+            {
+                "model": "demo",
+                "messages": [{"role": "user", "content": "请简要回答"}],
+                "max_tokens": 256,
+            },
+            continue_on_length=False,
+        )
     assert len(transport.calls) == 1
+    assert not client._response_cache
 
 
-def test_request_chat_completion_marks_truncation_when_continuation_fails() -> None:
+def test_request_chat_completion_rejects_truncation_when_continuation_fails() -> None:
     settings = AppSettings(
         llm_cache_ttl_seconds=0,
         llm_cache_max_entries=0,
@@ -681,16 +682,50 @@ def test_request_chat_completion_marks_truncation_when_continuation_fails() -> N
     )
     client = _build_retry_test_client(settings, transport)
 
-    answer = client._request_chat_completion_sync(
-        {
-            "model": "demo",
-            "messages": [{"role": "user", "content": "请给建议"}],
-            "max_tokens": 256,
-        }
-    )
+    with pytest.raises(IncompleteCompletionError):
+        client._request_chat_completion_sync(
+            {
+                "model": "demo",
+                "messages": [{"role": "user", "content": "请给建议"}],
+                "max_tokens": 256,
+            }
+        )
+    assert not client._response_cache
 
-    assert "第一段回答未完" in answer
-    assert "[回答因长度限制被截断]" in answer
+
+def test_stream_length_finish_cannot_be_cached_as_success():
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"未完成"}}]}'
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}'
+            yield 'data: [DONE]'
+
+    class Transport:
+        def stream(self, *args, **kwargs):
+            return nullcontext(Response())
+
+    client = _build_retry_test_client(AppSettings(_env_file=None, llm_retry_attempts=0), Transport())
+    client._ensure_runtime_state()
+    client._request_completion_client = lambda: nullcontext(client._client)
+    with pytest.raises(IncompleteCompletionError):
+        client._request_chat_completion_stream({"model": "test", "messages": [], "stream": True}, lambda _: None)
+    assert not client._response_cache
+
+
+def test_cancellation_during_continuation_is_not_a_length_repair(monkeypatch):
+    from sage_faculty_twin.request_context import RequestCancelledError
+
+    client = _build_retry_test_client(AppSettings(_env_file=None), None)
+
+    def cancel(**kwargs):
+        raise RequestCancelledError("cancelled")
+
+    monkeypatch.setattr("sage_faculty_twin.llm_client.raise_if_request_cancelled", cancel)
+    with pytest.raises(RequestCancelledError):
+        client._continue_truncated_answer({"messages": [{"role": "user", "content": "test"}]}, "partial")
 
 
 def test_cache_namespace_scopes_responses_per_conversation() -> None:

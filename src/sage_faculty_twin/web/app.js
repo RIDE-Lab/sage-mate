@@ -7755,7 +7755,14 @@ function renderAssistantMessage(
                     </div>
                 `,
             })
-            : "";
+            : isError ? "" : buildCollapsibleSupportSectionHtml({
+                kicker: "Support",
+                title: "本次未引用可核验材料",
+                copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
+                count: 0,
+                defaultExpanded: true,
+                contentHtml: '<p class="message-basis-detail">本回答未附可核验来源，不应当作已核实的事实或文献结论。可开启联网检索，或指定需要查询的资料。</p>',
+            });
     const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
         ? buildCollapsibleSupportSectionHtml({
             kicker: "Next",

@@ -382,14 +382,14 @@ def test_medical_segmentation_is_a_general_technical_question(tmp_path: Path) ->
     assert "clinical validation" in guidance
 
 
-def test_general_question_ignores_incidental_knowledge_hits(tmp_path: Path) -> None:
+def test_general_question_preserves_selected_knowledge_hits(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context()
     context.request.question = "如何优化大模型推理？"
     context.knowledge_hits = [object()]  # type: ignore[list-item]
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
 def test_explicit_deep_question_keeps_full_path_with_incidental_memory_hits(tmp_path: Path) -> None:
@@ -558,7 +558,7 @@ def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     assert "不得编造论文" in system_prompt
     assert "先明确判断" not in system_prompt
     assert "背景：科研指导" in user_prompt
-    assert kwargs["max_tokens"] == 256
+    assert kwargs["max_tokens"] == service._settings.llm_deep_answer_max_tokens
     assert kwargs["temperature"] == 0.2
     assert kwargs["enable_thinking"] is False
 

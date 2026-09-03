@@ -15,6 +15,8 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 from .chat_delivery import answer_quality_issues
+from .models import KnowledgeSearchHit
+from .request_context import RequestCancelledError, raise_if_request_cancelled
 from .skills import SkillContext, SkillDefinition, SkillResult, SkillToolDefinition
 
 if TYPE_CHECKING:
@@ -93,8 +95,10 @@ class SkillRunner:
         # Multi-turn tool-calling loop
         tool_calls_made = 0
         turns_used = 0
+        knowledge_hits: dict[str, KnowledgeSearchHit] = {}
 
         for turn in range(skill.max_turns):
+            raise_if_request_cancelled()
             turns_used = turn + 1
             try:
                 response = self._llm.chat_with_tools_sync(
@@ -105,6 +109,8 @@ class SkillRunner:
                     tool_choice="auto",
                 )
             except Exception as exc:
+                if isinstance(exc, RequestCancelledError):
+                    raise
                 logger.warning(
                     "Skill %s LLM call failed on turn %d: %s", skill.skill_id, turn, exc
                 )
@@ -169,6 +175,9 @@ class SkillRunner:
                         }
                     )
                     tool_results.append((call_id, result))
+                    if tool_def is not None and tool_def.handler == "knowledge_search":
+                        for hit in self._knowledge_evidence(result):
+                            knowledge_hits[hit.document_id] = hit
 
                 messages.append(
                     {
@@ -188,7 +197,7 @@ class SkillRunner:
             else:
                 # No tool calls - we have our final answer
                 final_answer = content or ""
-                if answer_quality_issues(context.question, final_answer):
+                if response.get("finish_reason") == "length" or answer_quality_issues(context.question, final_answer):
                     return SkillResult(
                         skill_id=skill.skill_id,
                         success=False,
@@ -205,6 +214,7 @@ class SkillRunner:
                 return SkillResult(
                     skill_id=skill.skill_id,
                     answer=final_answer,
+                    knowledge_hits=list(knowledge_hits.values()),
                     tool_calls_made=tool_calls_made,
                     turns_used=turns_used,
                     output_format=skill.output_format,
@@ -263,6 +273,11 @@ class SkillRunner:
             )
 
         executed_results = self._execute_prepared_tools(prepared_tools, context)
+        knowledge_hits: dict[str, KnowledgeSearchHit] = {}
+        for (tool_def, _arguments), result in zip(prepared_tools, executed_results, strict=True):
+            if tool_def.handler == "knowledge_search":
+                for hit in self._knowledge_evidence(result):
+                    knowledge_hits[hit.document_id] = hit
         tool_results = [
             {
                 "name": tool_def.name,
@@ -292,6 +307,7 @@ class SkillRunner:
         answer = ""
         attempts_used = 0
         for attempt in range(2):
+            raise_if_request_cancelled()
             attempts_used = attempt + 1
             attempt_prompt = synthesis_prompt
             if attempt:
@@ -317,6 +333,8 @@ class SkillRunner:
                     continue_on_length=False,
                 )
             except Exception as exc:
+                if isinstance(exc, RequestCancelledError):
+                    raise
                 logger.warning(
                     "Skill %s compatibility synthesis failed on attempt %d: %s",
                     skill.skill_id,
@@ -358,6 +376,7 @@ class SkillRunner:
         return SkillResult(
             skill_id=skill.skill_id,
             answer=answer,
+            knowledge_hits=list(knowledge_hits.values()),
             tool_calls_made=len(tool_results),
             turns_used=attempts_used,
             output_format=skill.output_format,
@@ -476,6 +495,23 @@ class SkillRunner:
             validated[name] = value
         return validated
 
+    @staticmethod
+    def _knowledge_evidence(result: str) -> list[KnowledgeSearchHit]:
+        """Only executed KB-tool results carry provenance, never model text."""
+        try:
+            records = json.loads(result).get("results", [])
+        except (ValueError, AttributeError):
+            return []
+        hits = []
+        for record in records:
+            try:
+                hit = KnowledgeSearchHit.model_validate(record)
+            except ValueError:
+                continue
+            if hit.document_id:
+                hits.append(hit)
+        return hits
+
     def _run_no_tools(
         self,
         skill: SkillDefinition,
@@ -511,6 +547,8 @@ class SkillRunner:
                 success=True,
             )
         except Exception as exc:
+            if isinstance(exc, RequestCancelledError):
+                raise
             logger.warning("Skill %s no-tools call failed: %s", skill.skill_id, exc)
             return SkillResult(
                 skill_id=skill.skill_id,

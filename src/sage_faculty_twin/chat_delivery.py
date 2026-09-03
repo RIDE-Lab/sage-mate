@@ -171,6 +171,13 @@ class AnswerConstraints:
 
     @classmethod
     def from_question(cls, question: str) -> AnswerConstraints:
+        # Item-local limits must never become limits on the entire response.
+        # In particular, “三项，每项用一句话” does not mean “one sentence total”.
+        question = re.sub(
+            r"每(?:一)?(?:项|条|点|步|个[^，。；;\n]{0,8}?)[^，。；;\n]*",
+            "",
+            question,
+        )
         char_match = re.search(r"(\d{1,5})\s*(?:个)?字(?:符)?(?:以?内|以下)", question)
         sentence_match = re.search(
             r"([零一二两三四五六七八九十\d]{1,3})\s*(?:句|句话)(?:以?内|以下)?",
@@ -196,7 +203,31 @@ def _parse_small_number(value: str) -> int:
 
 
 def _sentence_count(text: str) -> int:
-    return len([part for part in re.split(r"[。！？.!?]+", text) if part.strip()])
+    return len(split_answer_sentences(text))
+
+
+def split_answer_sentences(text: str) -> list[str]:
+    """Sentence boundaries, not Markdown list numbers, decimals or URL dots."""
+    return [part.strip() for part in re.split(
+        r"(?<=[。！？!?])\s*|(?<=[A-Za-z]\.)(?=\s+[A-Z])", text
+    ) if part.strip()]
+
+
+def requested_list_size(question: str) -> int | None:
+    """Extract explicit list cardinality, not arbitrary numbers in the topic."""
+    match = re.search(
+        r"(?:列(?:出)?|给出|提出|提供|归纳|整理|排成)[^。！？\n]{0,20}?"
+        r"([一二两三四五六七八九十\d]{1,2})\s*(?:项|条|点|步|个(?:问题|要点|行动|建议))",
+        question,
+    )
+    return _parse_small_number(match.group(1)) if match else None
+
+
+def answer_list_size(answer: str) -> int:
+    return len(re.findall(
+        r"(?m)^\s*(?:[-*•]\s+|\d+[.、)）]\s*|[（(]\d+[)）]\s*|[一二三四五六七八九十]+[、.])\S",
+        answer,
+    ))
 
 
 class ChatDeliveryGate:

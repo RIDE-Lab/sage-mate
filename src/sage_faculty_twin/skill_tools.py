@@ -186,9 +186,16 @@ class SkillToolRegistry:
             results = []
             for hit in hits[:limit]:
                 result_item = {
+                    "document_id": getattr(hit, "document_id", ""),
                     "title": hit.title or "Untitled",
                     "score": hit.score,
                     "excerpt": (hit.excerpt or "")[:500],
+                    "tags": list(hit.tags or []),
+                    "source_name": getattr(hit, "source_name", None),
+                    "metadata": {
+                        key: value for key, value in (getattr(hit, "metadata", {}) or {}).items()
+                        if key in {"visibility", "audience", "source_url", "url"}
+                    },
                 }
                 if tags:
                     tag_list = [t.strip() for t in tags.split(",")]

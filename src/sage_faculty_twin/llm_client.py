@@ -171,6 +171,10 @@ class StreamingServerError(RuntimeError):
         self.status_code = status_code
 
 
+class IncompleteCompletionError(RuntimeError):
+    """A token-limited generation is not a completed/cacheable answer."""
+
+
 class EmptyStreamingResponseError(RuntimeError):
     """Raised when an SSE chat response completes without answer content."""
 
@@ -1328,6 +1332,7 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             collected: list[str] = []
+            finish_reason = ""
             first_token_recorded = False
             try:
                 raise_if_request_cancelled(minimum_remaining_seconds=0.1)
@@ -1396,6 +1401,7 @@ class VllmChatClient:
                             )
                         if not choices:
                             continue
+                        finish_reason = choices[0].get("finish_reason") or finish_reason
                         delta = choices[0].get("delta") or {}
                         message = choices[0].get("message") or {}
                         delta_content = (
@@ -1417,6 +1423,8 @@ class VllmChatClient:
                         except Exception:  # pragma: no cover - defensive
                             pass
                 answer = "".join(collected)
+                if finish_reason == "length":
+                    raise IncompleteCompletionError("streaming answer reached token limit")
                 if not answer:
                     raise EmptyStreamingResponseError(
                         "vllm-hust returned an empty streaming chat message"
@@ -1542,6 +1550,8 @@ class VllmChatClient:
                 finish_reason = str(choices[0].get("finish_reason") or "").strip().lower()
                 if finish_reason == "length" and continue_on_length:
                     answer = self._continue_truncated_answer(payload, answer)
+                elif finish_reason == "length":
+                    raise IncompleteCompletionError("answer reached token limit")
                 break
             except httpx.TimeoutException as exc:
                 if attempt >= max_retries:
@@ -1578,9 +1588,10 @@ class VllmChatClient:
 
     def _continue_truncated_answer(self, payload: dict[str, Any], partial_answer: str) -> str:
         try:
+            raise_if_request_cancelled(minimum_remaining_seconds=0.1)
             messages = list(payload.get("messages") or [])
             if not messages:
-                return partial_answer
+                raise IncompleteCompletionError("cannot continue without messages")
 
             continuation_messages = list(messages)
             continuation_messages.append({"role": "assistant", "content": partial_answer})
@@ -1603,14 +1614,18 @@ class VllmChatClient:
             data = continuation_response.json()
             choices = data.get("choices", [])
             if not choices:
-                return partial_answer + "\n\n[回答因长度限制被截断]"
+                raise IncompleteCompletionError("empty continuation")
+            if choices[0].get("finish_reason") == "length":
+                raise IncompleteCompletionError("continuation reached token limit")
             message = choices[0].get("message", {})
             continuation_text = str(message.get("content") or "").strip()
             if not continuation_text:
-                return partial_answer + "\n\n[回答因长度限制被截断]"
+                raise IncompleteCompletionError("empty continuation")
             return partial_answer.rstrip() + "\n" + continuation_text
-        except Exception:
-            return partial_answer + "\n\n[回答因长度限制被截断]"
+        except RequestCancelledError:
+            raise
+        except Exception as exc:
+            raise IncompleteCompletionError("answer continuation did not complete") from exc
 
     def chat_with_tools_sync(
         self,
