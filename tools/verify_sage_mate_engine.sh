@@ -36,30 +36,32 @@ systemctl --user is-active --quiet "$unit" || { systemctl --user status "$unit" 
 
 health_url="http://$host:$port/health"
 models_url="http://$host:$port/v1/models"
-curl_auth=()
-if [[ -n "$api_key" ]]; then
-  curl_auth+=(--header "Authorization: Bearer $api_key")
-fi
-curl --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_TIMEOUT_SECONDS:-20}" "${curl_auth[@]}" "$health_url" >/dev/null
-models="$(curl --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_TIMEOUT_SECONDS:-20}" "${curl_auth[@]}" "$models_url")"
+curl_engine() {
+  # Keep credentials out of curl's command line (and process listings).
+  if [[ -n "$api_key" ]]; then
+    printf 'Authorization: Bearer %s\n' "$api_key" | curl --header @- "$@"
+  else
+    curl "$@"
+  fi
+}
+curl_engine --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_TIMEOUT_SECONDS:-20}" "$health_url" >/dev/null
+models="$(curl_engine --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_TIMEOUT_SECONDS:-20}" "$models_url")"
 echo "[sage-mate-verify] health=OK models=$models"
 
 if [[ "${SAGE_MATE_VERIFY_CHAT:-1}" != "0" ]]; then
-  chat_payload='{"model":"__MODEL__","messages":[{"role":"user","content":"Reply with exactly OK."}],"max_tokens":8,"temperature":0}'
-  model_id="$(MODEL_JSON="$models" python3 - <<'PY'
+  expected_model="${VLLM_ENGINE_SERVED_MODEL_NAME:-${VLLM_ENGINE_ACTUAL_MODEL_ID:-${DIGITAL_TWIN_MODEL_NAME:-}}}"
+  model_id="$(python3 "$repo_root/tools/validate_engine_chat.py" \
+    --list-models --model "$expected_model" <<< "$models")"
+  chat_payload="$(MODEL_ID="$model_id" python3 - <<'PY'
 import json
 import os
-data = json.loads(os.environ["MODEL_JSON"])
-items = data.get("data", [])
-print(items[0].get("id", "") if items else "")
+print(json.dumps({"model": os.environ["MODEL_ID"], "messages": [{"role": "user", "content": "Reply with exactly OK."}], "max_tokens": 64, "temperature": 0, "chat_template_kwargs": {"enable_thinking": False}}))
 PY
 )"
-  [[ -n "$model_id" ]] || { echo "ERROR: /v1/models returned no model id" >&2; exit 1; }
-  chat_payload="${chat_payload/__MODEL__/$model_id}"
-  chat_response="$(curl --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_CHAT_TIMEOUT_SECONDS:-90}" \
-    "${curl_auth[@]}" -H 'Content-Type: application/json' -d "$chat_payload" \
+  chat_response="$(curl_engine --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_CHAT_TIMEOUT_SECONDS:-90}" \
+    -H 'Content-Type: application/json' -d "$chat_payload" \
     "http://$host:$port/v1/chat/completions")"
-  [[ "$chat_response" == *'"content"'* ]] || { echo "ERROR: chat completion returned no content" >&2; exit 1; }
+  python3 "$repo_root/tools/validate_engine_chat.py" --model "$model_id" <<< "$chat_response"
   echo "[sage-mate-verify] chat=OK model=$model_id"
 fi
 
@@ -240,6 +242,10 @@ PY
 fi
 
 if [[ "${SAGE_MATE_WRITE_DEPLOYMENT_RECEIPT:-1}" != "0" ]]; then
+  [[ "${SAGE_MATE_VERIFY_CHAT:-1}" != "0" ]] || {
+    echo "ERROR: cannot publish a deployment receipt without a real chat probe" >&2
+    exit 1
+  }
   [[ -n "$import_origins" ]] || {
     echo "ERROR: cannot publish a deployment receipt without verified import origins" >&2
     exit 1
