@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import subprocess
 import sys
@@ -72,41 +73,72 @@ def _run_quickstart_install(
 ) -> tuple[subprocess.CompletedProcess, Path]:
     """Run ``quickstart.sh`` with the systemd install path active.
 
-    Sets up fake systemctl, PYTHON_BIN, and lets the script find the
-    existing repo .env so it skips .env bootstrap.
+    Exercise real unit rendering in a minimal checkout, without reading the
+    deployment's .env, installing packages, accessing hardware or the network.
     """
     fake_bin_dir = tmp_path / "bin"
     fake_bin_dir.mkdir(exist_ok=True)
     _make_fake_systemctl(fake_bin_dir / "systemctl")
+    network_log = tmp_path / "unexpected-network.log"
+    _write_executable(
+        fake_bin_dir / "git",
+        '#!/usr/bin/env bash\n'
+        'printf "%s\\n" "$*" >> "$UNEXPECTED_NETWORK_LOG"\nexit 1\n',
+    )
+    _write_executable(fake_bin_dir / "curl", '#!/usr/bin/env bash\nprintf 200\n')
+    for command in ("npu-smi", "nvidia-smi"):
+        _write_executable(fake_bin_dir / command, "#!/usr/bin/env bash\nexit 0\n")
+
+    checkout = tmp_path / "checkout"
+    checkout.mkdir(exist_ok=True)
+    for relative in ("quickstart.sh", "pyproject.toml"):
+        shutil.copyfile(REPO_ROOT / relative, checkout / relative)
+    for relative in ("tools/lib", "deploy/systemd/user"):
+        shutil.copytree(REPO_ROOT / relative, checkout / relative, dirs_exist_ok=True)
+    # Only synthetic configuration is allowed in this fixture. In particular,
+    # never copy production credentials or point at its private runtime data.
+    (checkout / ".env").write_text(
+        "VLLM_PROXY_CONNECT_HOST=127.0.0.1\n"
+        "VLLM_PROXY_PORT=18001\n"
+        "APP_HEALTH_HOST=127.0.0.1\n"
+        "APP_PORT=55601\n",
+        encoding="utf-8",
+    )
 
     systemctl_log = tmp_path / "systemctl.log"
     xdg_config_home = tmp_path / "xdg"
 
-    env = os.environ.copy()
-    env.update(
-        {
-            "HOME": str(tmp_path / "home"),
-            "XDG_CONFIG_HOME": str(xdg_config_home),
-            "PATH": f"{fake_bin_dir}:{env['PATH']}",
-            "SYSTEMCTL_LOG": str(systemctl_log),
-            "VLLM_NVIDIA_CONNECT_HOST": "127.0.0.1",
-        }
-    )
-    if python_bin is not None:
-        env["PYTHON_BIN"] = python_bin
+    env = {
+        "HOME": os.environ["HOME"],
+        "XDG_CONFIG_HOME": str(xdg_config_home),
+        "PATH": f"{fake_bin_dir}:{os.environ['PATH']}",
+        "SYSTEMCTL_LOG": str(systemctl_log),
+        "UNEXPECTED_NETWORK_LOG": str(network_log),
+        "FACULTY_TWIN_PARENT_DIR": str(tmp_path / "siblings"),
+        "DIGITAL_TWIN_RUNTIME_DIR": str(tmp_path / "runtime"),
+        "VLLM_NVIDIA_CONNECT_HOST": "127.0.0.1",
+        "PYTHON_BIN": python_bin or str(
+            _make_fake_python(fake_bin_dir / "python", has_uvicorn=True)
+        ),
+    }
 
-    args = ["bash", str(QUICKSTART_SCRIPT), "--target", "hosted-web"]
+    args = [
+        "bash", str(checkout / "quickstart.sh"),
+        "--target", "hosted-web", "--systemd-only",
+    ]
     if extra_args:
         args.extend(extra_args)
 
     result = subprocess.run(
         args,
-        cwd=REPO_ROOT,
+        cwd=checkout,
         env=env,
         capture_output=True,
         text=True,
         check=False,
+        timeout=10,
     )
+    assert not network_log.exists(), "Unit rendering unexpectedly invoked git"
     return result, systemctl_log
 
 
@@ -134,6 +166,10 @@ def test_quickstart_install_renders_service_units(tmp_path: Path) -> None:
     )
     assert f"Environment=PYTHON_BIN={good_python}" in rendered_app
     assert "__REPO_ROOT__" not in rendered_app
+    assert str(tmp_path / "checkout") in rendered_app
+    assert "Skipping Python dependency installation" in result.stdout
+    assert "Skipping sibling repo cloning" in result.stdout
+    assert (tmp_path / "runtime" / "data" / "changelog.json").is_file()
     assert "Wants=sage-mate-app.service" in rendered_site
     assert "Requires=sage-mate-app.service" not in rendered_site
     assert "Wants=sage-mate-site.service" in rendered_tunnel
