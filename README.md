@@ -1,5 +1,7 @@
 # Sage Mate
 
+当前版本：**4.7.0**。本次升级聚焦完整问答、真实引用与日夜交互；详见 [4.7 更新说明](docs/releases/4.7.0.md)。
+
 Sage Mate 是面向教师数字分身、本地代码助手和自动科研流程的多 profile 应用。Faculty Twin 是数字分身 profile，Code Assistant 是本地代码工作台 profile，Auto Scientist 会结合分身记忆和 CC-hust 代码节点启动科研流程。
 
 Sage Mate 是基于共同旗舰产品 SAGE（Streaming-Augmented Generative Execution）构建的代表性应用，并通过 vLLM-HUST 或用户显式配置的兼容服务执行模型推理。SAGE 核心仓库由 RIDE Lab 负责主要维护，但产品愿景属于整个 IntelliStream 研究生态。
