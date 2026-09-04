@@ -5,15 +5,18 @@
 接手来源：Workstation `dbb7cbe` 的 `docs/mod-instance-producer-handoff.md`。
 对方已明确接受 Sage Mate `d310686` 的分工与 owner-entry/v1，无 schema 变更。
 本次先接受 dev-hub `b6e56e1f7f1ae58ea15aa9994852f48290827a55`，随后复验并
-更新至 `bfcc0d5c2c083d6b633d2f0657a09c7f7712c74c`，均来自 canonical
-origin/main。第二次更新只新增 Backend protocol、foreground helper、设计文档
-和测试，没有修改
+更新至 `bfcc0d5c2c083d6b633d2f0657a09c7f7712c74c`，再复验并更新至
+`39521108c79a2c6217d44d1ed4189ebf6b87e308`；三者均来自 canonical
+origin/main。后两次更新依次新增 Backend protocol/foreground helper，以及
+durable host launch grant/peer identity/fencing receipt；没有修改
 推理启动脚本、production lock、模型、镜像或递归 gitlink。
 
-父仓 gitlink 固定整个 dev-hub commit，因而新增四文件也在不可变 source tree
+父仓 gitlink 固定整个 dev-hub commit，因而新增文件也在不可变 source tree
 范围内；运行时还拒绝任何 tracked dirty。验收逐文件对比 working-tree blob 与
 `<gitlink>:<path>`，并逐个篡改验证 owner entry 在执行 producer 前 fail closed。
-无需再复制一份可能漂移的文件哈希清单来削弱 gitlink 的完整树承诺。
+无需再复制一份可能漂移的文件哈希清单来削弱 gitlink 的完整树承诺。`3952110`
+没有改变 consumer wire schema；任何 caller 提供的 owner/peer/generation/fence/
+executor/grant 字段仍被拒绝，Sage 不负责构造 `PeerIdentity`。
 
 ## 单一写入归属（协调任务已确认）
 
@@ -43,11 +46,19 @@ origin/main。第二次更新只新增 Backend protocol、foreground helper、�
   在两个产品间自由转发**。
 - producer 事务测试独立覆盖冻结快照、CAS/并发审批、重放、身份漂移、逐阶段
   崩溃和恢复 fence。使用真实多进程 + 无设备后端，并非真实 Docker/NPU 原子性证据。
+- durable launch grant 只由 authority 在 `Controller.begin` 后签发，绑定完整
+  operation/fence/executor、目标 generation/spec、冻结命令哈希和登记 UID；一次
+  claim 后仅保留哈希及 lease。peer UID/PID 来自 Linux AF_UNIX `SO_PEERCRED`，
+  start ticks 来自 `/proc`，不能从 Web/JSON 构造；重启 Store 后仍拒绝 replay，
+  fence/generation/PID 漂移均会在 spawn/signal guard 前拒绝。
+- fencing receipt 的精确 writer inventory/digest 校验只证明声明格式和 CAS，不证明
+  OS 已落实 broker-only 权限。由于尚未安装 broker socket、ACL/cgroup、writer
+  排他策略或 Sage product adapter，生产 qualification 和 lifecycle gate 继续为 false。
 
 复现：初始化父仓固定的 dev-hub，然后执行：
 
-本次最终结果：Sage 接入/相关部署回归 **173 passed**（其中 owner **92 passed**），
-dev-hub foreground/事务/receipt/profile 回归 **52 passed, 37 subtests passed**；
+本次最终结果：Sage 接入/相关部署回归 **176 passed**（其中 owner **95 passed**），
+dev-hub foreground/事务/receipt/profile/host-authority 回归 **59 passed, 40 subtests passed**；
 两侧相关 Ruff 检查通过。dev-hub foreground 测试要求 Linux `pidfd_open`：项目
 Python 3.11 构建缺少该 OS binding 时有 6 项确定性的解释器能力失败，改用具备
 `pidfd_open` 的系统 Python 3.10 后全量通过；没有跳过或修改断言。测试没有使用
@@ -55,7 +66,7 @@ Python 3.11 构建缺少该 OS binding 时有 6 项确定性的解释器能力�
 
 ```bash
 .venv/bin/pytest -q tests/test_instance_control.py tests/test_systemd_service_scripts.py tests/test_engine_chat_probe.py tests/test_deployment_receipts.py tests/test_runtime_identity.py
-/usr/bin/python3 -m pytest -q deps/vllm-hust-dev-hub/tests/test_instance_foreground.py deps/vllm-hust-dev-hub/tests/test_instance_transactions.py deps/vllm-hust-dev-hub/tests/test_deployment_receipt.py deps/vllm-hust-dev-hub/tests/test_optimization_profile.py
+/usr/bin/python3 -m pytest -q deps/vllm-hust-dev-hub/tests/test_host_authority.py deps/vllm-hust-dev-hub/tests/test_instance_foreground.py deps/vllm-hust-dev-hub/tests/test_instance_transactions.py deps/vllm-hust-dev-hub/tests/test_deployment_receipt.py deps/vllm-hust-dev-hub/tests/test_optimization_profile.py
 .venv/bin/ruff check tools/sage_mate_instance_control.py tests/test_instance_control.py
 .venv/bin/python -I tools/sage_mate_instance_control.py --describe
 ```

@@ -25,9 +25,12 @@ control = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(control)
 GUARDED_PRODUCER_FILES = (
     "docs/instance-backend-contract-proposal.md",
+    "docs/host-integration-v1.md",
     "scripts/instance_control/backend.py",
     "scripts/instance_control/foreground.py",
+    "scripts/instance_control/host_authority.py",
     "tests/test_instance_foreground.py",
+    "tests/test_host_authority.py",
 )
 
 
