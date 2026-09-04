@@ -73,6 +73,8 @@ Python 3.11 构建缺少该 OS binding 时有 6 项确定性的解释器能力�
 - app/site/tunnel/engine/OpenAI proxy 五个用户服务均为 active。新日志只有上述正常
   200 和由主动取消产生的 504；没有 traceback 或持续请求重试。本轮没有重启、
   切换模型、修改 NPU、登记实例或打开 lifecycle gate。
+- 公网 `https://twin.sage.org.ai/` 与 `/health` 均为 HTTP 200；公网真实问答为
+  HTTP 200（2.91 秒），明确返回 Qwen3.8-27B、5 条知识命中和 3 条 Support。
 
 候选接手前，可仅在测试进程中设置 `SAGE_MATE_TEST_PRODUCER_REVISION=<已 fetch SHA>`；
 正常 CI 使用父仓 HEAD 中的 gitlink，不读取远端最新版本。所有真实 producer 测试
