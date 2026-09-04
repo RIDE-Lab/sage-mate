@@ -32,6 +32,8 @@ GUARDED_PRODUCER_FILES = (
     "scripts/instance_canary_worker.py",
     "scripts/install_instance_host_broker.sh",
     "scripts/instance_control/backend.py",
+    "scripts/instance_control/canary_coordinator.py",
+    "scripts/instance_control/controller.py",
     "scripts/instance_control/foreground.py",
     "scripts/instance_control/host_authority.py",
     "scripts/instance_control/host_broker.py",
@@ -43,6 +45,7 @@ GUARDED_PRODUCER_FILES = (
     "tests/test_instance_foreground.py",
     "tests/test_host_authority.py",
     "tests/test_host_broker.py",
+    "tests/test_instance_transactions.py",
 )
 
 

@@ -96,12 +96,24 @@ inactive、unit disabled、policy `enabled=false`、无 socket/进程残留。Sa
 接受该远端可达 SHA 并更新 gitlink；guard fixture 将 broker contract、unit、安装器、
 client/server、canary worker/gate 与相应测试一并纳入不可变源码校验。
 
-这仍不是正向生命周期资格。Workstation `09700bf` 的产品 consumer 目前只调用
-`describe`；`start/stop/restart` 完成管理员、身份、兼容和 readiness 检查后仍明确
-拒绝，尚未通过正式 controller/owner 路径签发及消费一次性 grant。Sage 不写 producer
-私有 Store、不伪造 operation/fence，也不绕过该缺口。因此真正的
-`start → PID/start_ticks/health → stop → 无残留 → replay 拒绝` 要等 Workstation
-发布可信执行路径后再做；当前 shared target 仍不得登记，所有新操作默认关闭。
+Workstation 随后发布 dev-hub
+`e7d1525d96ece424c993d9350dc69de3c84f2a5c` 和产品 consumer
+`1d6d274c6442e2a96609be693e64ed793a025b2b`，补齐仅限固定 CPU canary 的
+Controller → plan/approve/begin → broker 内部一次性 grant → 固定 owner execute →
+verify/commit 或 rollback 路径。Web 仅能提交固定 target、固定自检 Mod、start/stop
+和二次管理员确认；不能携带 grant、命令、镜像、owner 或部署字段。原始 grant 始终
+留在 broker 进程，响应含 grant 时 Workstation client 会拒绝。
+
+真实公网管理员 UI 验收已通过：start 将 generation 4→5，观测到 worker PID
+355161、start_ticks 752310002、health=true 和旧 grant replay 拒绝；stop 将
+generation 5→6，并证明该精确 worker 与 health socket 均消失。此前一次已提交但
+operation receipt 被 idle status 覆盖的响应问题在 `e7d1525` 修复后重跑通过，未将
+失败隐藏为成功。最终 broker inactive、unit disabled、policy `enabled=false`、
+control/canary socket 及 worker 均无残留，共享 Qwen 容器身份与启动时间未变化。
+
+Sage 只审计并 repin producer，不重复执行 canary，不写 producer 私有 Store，也不
+复制通用状态机。该证据仅证明惰性 CPU lifecycle 基础设施，`effective=false`；
+shared target 仍未登记，真实 Mod 仍不具备生产应用资格，所有新操作继续默认关闭。
 
 ### 当前三个真实 Mod 的正式兼容结论
 
