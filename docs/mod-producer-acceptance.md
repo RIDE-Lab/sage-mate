@@ -55,6 +55,67 @@ executor/grant 字段仍被拒绝，Sage 不负责构造 `PeerIdentity`。
   OS 已落实 broker-only 权限。由于尚未安装 broker socket、ACL/cgroup、writer
   排他策略或 Sage product adapter，生产 qualification 和 lifecycle gate 继续为 false。
 
+## Host broker 接手与 `7bff3cb7` repin
+
+Workstation 发布的 `2c1140b19675cf7604bc8a7345695af11e565836` 增加了
+canary-only AF_UNIX broker。Sage 审计确认请求不能注入命令、路径、环境、PID、
+UID 或 owner；peer 来自 `SO_PEERCRED` 与 `/proc` start ticks；一次性 grant 绑定
+operation/fence/executor/generation/spec/command digest/owner UID，Store 重开后旧 grant
+仍应拒绝。安装内容只登记 `inert-canary`，不包含 Docker、NPU 或共享推理目标。
+
+第一轮实机没有通过：
+
+1. 共享检出将 canary fixture materialize 为 `0775`，producer 正确拒绝可被组写的
+   artifact，导致新增 6 项测试在 policy load 处全部报
+   `untrusted_broker_configuration`。不能为通过测试而放宽 artifact 校验；fixture
+   应复制到私有、不可组写位置后再验证。
+1. 修正 fixture 后，producer 隔离回归为 65 passed、45 subtests。宿主已有的安装
+   确认 policy/code/artifact 均为 root-owned 固定哈希，broker 账号 UID 998、shell
+   `/usr/sbin/nologin`，策略默认关闭，服务 inactive/disabled。
+1. 单独批准 canary 窗口后临时启动 broker（未 enable 开机自启）。systemd 实际创建
+   `/run/vllm-hust-host-broker` 为 `vllm-hust-broker:vllm-hust-broker 0750`，而 policy
+   将控制 socket GID 固定为控制组 `1002`。控制用户 UID/GID 1002 无法穿越父目录，
+   `stat/connect` 在协议处理前得到 EACCES。期望最终状态是：父目录 owner 仍为
+   `vllm-hust-broker`、group 为安装时固定的 control group、mode `0750`；socket
+   owner 为 broker、group 为相同 control group、mode `0660`。
+1. 两次失败尝试均在 worker spawn 前结束；随后 broker 已停止，policy 恢复
+   `enabled=false`，`canary.sock` 不存在，`instance_canary_worker.py` 无残留进程。
+   Qwen3.8/core `762f85b3`/plugin `4e57439e`/TP4 graph/NPU0-3 未变化。
+
+发现问题后曾在单写者提醒到达前误向 dev-hub main 推送 `96de85b1`（fixture）及
+`6042d3c`（不能解决该实机顺序问题的 `ExecStartPre` 尝试）。此处完整披露；此后
+Sage 不再修改或推送 dev-hub，也不自行回滚共享 main。
+
+Workstation 随后以唯一 producer writer 身份发布并实机验证
+`7bff3cb7d98db5d51d4d26929e2f1768c567d576`。该版本让 systemd 原生以
+`vllm-hust-broker:<固定控制组>`、`0750` 创建 RuntimeDirectory，socket 为
+`vllm-hust-broker:<固定控制组>`、`0660`；不再使用特权 `ExecStartPre`，也不开放
+other traversal。root-only gate 工具在构造上只接受唯一 `inert-canary` target，
+不能登记共享服务。Workstation 已证明控制用户可 `describe`，并恢复 broker
+inactive、unit disabled、policy `enabled=false`、无 socket/进程残留。Sage 审计后
+接受该远端可达 SHA 并更新 gitlink；guard fixture 将 broker contract、unit、安装器、
+client/server、canary worker/gate 与相应测试一并纳入不可变源码校验。
+
+这仍不是正向生命周期资格。Workstation `09700bf` 的产品 consumer 目前只调用
+`describe`；`start/stop/restart` 完成管理员、身份、兼容和 readiness 检查后仍明确
+拒绝，尚未通过正式 controller/owner 路径签发及消费一次性 grant。Sage 不写 producer
+私有 Store、不伪造 operation/fence，也不绕过该缺口。因此真正的
+`start → PID/start_ticks/health → stop → 无残留 → replay 拒绝` 要等 Workstation
+发布可信执行路径后再做；当前 shared target 仍不得登记，所有新操作默认关闭。
+
+### 当前三个真实 Mod 的正式兼容结论
+
+- DiffSpec 固定实现要求 TP1、target eager、max-num-seqs=1、关闭 async scheduling，
+  与当前 TP4 graph 基线冲突。
+- LatchMoE 只适用于已验证 MoE 模型、单 NPU/max-num-seqs=1；当前 Qwen3.8-27B
+  为稠密 TP4，不存在真实效果路径。
+- BidKV native manifest 要求 `vllm.victim_selector` typed seam；精确生产 core
+  `762f85b3` 不包含该模块，活镜像中也没有 BidKV distribution/entry point。切换到
+  legacy monkey patch 或只改 manifest 都不算兼容修复。
+
+所以 canary 只能证明生命周期基础设施，始终 `effective=false`；在真正向前适配、
+runtime-effect probe 与 TP4 graph rollback 证据完成前，不允许声称任何真实 Mod 生效。
+
 复现：初始化父仓固定的 dev-hub，然后执行：
 
 本次最终结果：Sage 接入/相关部署回归 **176 passed**（其中 owner **95 passed**），

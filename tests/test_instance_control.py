@@ -24,13 +24,25 @@ assert SPEC and SPEC.loader
 control = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(control)
 GUARDED_PRODUCER_FILES = (
+    "config/host-broker-contract.json",
+    "config/instance-host-broker.example.json",
     "docs/instance-backend-contract-proposal.md",
+    "docs/host-broker-v1.md",
     "docs/host-integration-v1.md",
+    "scripts/instance_canary_worker.py",
+    "scripts/install_instance_host_broker.sh",
     "scripts/instance_control/backend.py",
     "scripts/instance_control/foreground.py",
     "scripts/instance_control/host_authority.py",
+    "scripts/instance_control/host_broker.py",
+    "scripts/instance_control/host_client.py",
+    "scripts/instance_host_broker.py",
+    "scripts/instance_host_client.py",
+    "scripts/set_inert_canary_gate.py",
+    "systemd/vllm-hust-host-broker.service",
     "tests/test_instance_foreground.py",
     "tests/test_host_authority.py",
+    "tests/test_host_broker.py",
 )
 
 
