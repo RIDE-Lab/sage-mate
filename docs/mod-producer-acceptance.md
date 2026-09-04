@@ -1,12 +1,19 @@
 # Mod producer 接手验收与产品 backend 边界
 
-日期：2026-09-03。阶段：**默认关闭的依赖/协议集成；不是生产启用**。
+日期：2026-09-04。阶段：**默认关闭的依赖/协议集成；不是生产启用**。
 
 接手来源：Workstation `dbb7cbe` 的 `docs/mod-instance-producer-handoff.md`。
 对方已明确接受 Sage Mate `d310686` 的分工与 owner-entry/v1，无 schema 变更。
-本次接受 dev-hub `b6e56e1f7f1ae58ea15aa9994852f48290827a55`，来自 canonical
-origin/main。相对旧 pin `bc9ca7a` 仅增加十个控制面/文档/测试文件，没有修改
+本次先接受 dev-hub `b6e56e1f7f1ae58ea15aa9994852f48290827a55`，随后复验并
+更新至 `bfcc0d5c2c083d6b633d2f0657a09c7f7712c74c`，均来自 canonical
+origin/main。第二次更新只新增 Backend protocol、foreground helper、设计文档
+和测试，没有修改
 推理启动脚本、production lock、模型、镜像或递归 gitlink。
+
+父仓 gitlink 固定整个 dev-hub commit，因而新增四文件也在不可变 source tree
+范围内；运行时还拒绝任何 tracked dirty。验收逐文件对比 working-tree blob 与
+`<gitlink>:<path>`，并逐个篡改验证 owner entry 在执行 producer 前 fail closed。
+无需再复制一份可能漂移的文件哈希清单来削弱 gitlink 的完整树承诺。
 
 ## 单一写入归属（协调任务已确认）
 
@@ -39,16 +46,33 @@ origin/main。相对旧 pin `bc9ca7a` 仅增加十个控制面/文档/测试文�
 
 复现：初始化父仓固定的 dev-hub，然后执行：
 
-本次结果：Sage 接入/相关部署回归 **168 passed**（其中 owner 87 项，38 项新增
-真实 producer/注入拒绝检查），dev-hub 事务及既有 receipt/profile 回归
-**39 passed**；两侧相关 Ruff 检查通过。测试没有使用共享服务或 NPU。
+本次最终结果：Sage 接入/相关部署回归 **173 passed**（其中 owner **92 passed**），
+dev-hub foreground/事务/receipt/profile 回归 **52 passed, 37 subtests passed**；
+两侧相关 Ruff 检查通过。dev-hub foreground 测试要求 Linux `pidfd_open`：项目
+Python 3.11 构建缺少该 OS binding 时有 6 项确定性的解释器能力失败，改用具备
+`pidfd_open` 的系统 Python 3.10 后全量通过；没有跳过或修改断言。测试没有使用
+共享服务或 NPU。
 
 ```bash
 .venv/bin/pytest -q tests/test_instance_control.py tests/test_systemd_service_scripts.py tests/test_engine_chat_probe.py tests/test_deployment_receipts.py tests/test_runtime_identity.py
-.venv/bin/python -m pytest -q deps/vllm-hust-dev-hub/tests/test_instance_transactions.py deps/vllm-hust-dev-hub/tests/test_deployment_receipt.py deps/vllm-hust-dev-hub/tests/test_optimization_profile.py
+/usr/bin/python3 -m pytest -q deps/vllm-hust-dev-hub/tests/test_instance_foreground.py deps/vllm-hust-dev-hub/tests/test_instance_transactions.py deps/vllm-hust-dev-hub/tests/test_deployment_receipt.py deps/vllm-hust-dev-hub/tests/test_optimization_profile.py
 .venv/bin/ruff check tools/sage_mate_instance_control.py tests/test_instance_control.py
 .venv/bin/python -I tools/sage_mate_instance_control.py --describe
 ```
+
+## 线上只读回归（未启用 Mod、未重启服务）
+
+- 普通问答：Qwen3.8-27B，HTTP 200，8.84 秒，5 条知识命中、3 条 Support，
+  1 次模型调用、0 重试；其中模型生成约 1.74 秒。
+- 深度问答：Qwen3.8-27B，HTTP 200，51.18 秒，2221 completion tokens，回答完整，
+  1 次模型调用、0 重试。问题是通用实验设计且本地知识命中为 0，因此没有伪造
+  Support。
+- SSE/取消：保持 workflow-events 在线时收到 trace-step、keepalive、error；显式
+  `/chat/cancel` 返回 `cancelled=true`，请求在 4.01 秒内结束。随后恢复问答 HTTP
+  200（8.49 秒），仍使用 Qwen3.8-27B，并返回 5 条知识命中、3 条 Support。
+- app/site/tunnel/engine/OpenAI proxy 五个用户服务均为 active。新日志只有上述正常
+  200 和由主动取消产生的 504；没有 traceback 或持续请求重试。本轮没有重启、
+  切换模型、修改 NPU、登记实例或打开 lifecycle gate。
 
 候选接手前，可仅在测试进程中设置 `SAGE_MATE_TEST_PRODUCER_REVISION=<已 fetch SHA>`；
 正常 CI 使用父仓 HEAD 中的 gitlink，不读取远端最新版本。所有真实 producer 测试

@@ -23,6 +23,12 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 control = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(control)
+GUARDED_PRODUCER_FILES = (
+    "docs/instance-backend-contract-proposal.md",
+    "scripts/instance_control/backend.py",
+    "scripts/instance_control/foreground.py",
+    "tests/test_instance_foreground.py",
+)
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -562,6 +568,31 @@ def test_real_producer_description_does_not_imply_approval(real_producer_checkou
     assert status["producerInstalled"] is True
     assert status["lifecycleAvailable"] is False
     assert not list(repo.rglob("authority.sqlite3"))
+
+
+def test_guarded_producer_additions_are_in_exact_gitlink(real_producer_checkout):
+    repo = real_producer_checkout
+    module = repo / control.SUBMODULE
+    pin = run_git(repo, "ls-tree", "HEAD", "--", control.SUBMODULE).split()[2]
+    assert run_git(module, "rev-parse", "HEAD") == pin
+    for relative in GUARDED_PRODUCER_FILES:
+        assert (module / relative).is_file()
+        assert run_git(module, "hash-object", "--", relative) == run_git(
+            module, "rev-parse", f"{pin}:{relative}"
+        )
+
+
+@pytest.mark.parametrize("relative", GUARDED_PRODUCER_FILES)
+def test_guarded_producer_addition_drift_blocks_owner_entry(
+    real_producer_checkout, relative
+):
+    repo = real_producer_checkout
+    enroll(repo)
+    (repo / control.SUBMODULE / relative).write_text("UNTRUSTED_LOCAL_REPLACEMENT\n")
+    result = shell_route(repo, "serve")
+    assert result.returncode == 2
+    assert "uncommitted tracked changes" in result.stderr
+    assert "LEGACY" not in result.stdout
 
 
 @pytest.mark.parametrize(
