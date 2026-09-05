@@ -264,9 +264,52 @@ if [[ -z "${runtime_visible_devices:-}" ]]; then
     runtime_device_count="$device_count"
 fi
 engine_tp_size="${VLLM_ENGINE_TP_SIZE:-$device_count}"
-if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ || "$engine_tp_size" -ne "$device_count" ]]; then
-    echo "ERROR: VLLM_ENGINE_TP_SIZE=$engine_tp_size must equal the configured device count ($device_count)." >&2
+engine_pp_size="${VLLM_ENGINE_PP_SIZE:-1}"
+if [[ ! "$engine_tp_size" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: VLLM_ENGINE_TP_SIZE=$engine_tp_size must be a positive integer." >&2
     exit 2
+fi
+if [[ ! "$engine_pp_size" =~ ^[1-9][0-9]*$ ]]; then
+    echo "ERROR: VLLM_ENGINE_PP_SIZE=$engine_pp_size must be a positive integer." >&2
+    exit 2
+fi
+if (( engine_tp_size * engine_pp_size != device_count )); then
+    echo "ERROR: TP${engine_tp_size} x PP${engine_pp_size} must equal the configured device count ($device_count)." >&2
+    exit 2
+fi
+
+if (( engine_pp_size > 1 )); then
+    export VLLM_ENGINE_EXTRA_ARGS_JSON="$($selector_python - "$engine_pp_size" <<'PY'
+import json
+import os
+import sys
+
+pp_size = int(sys.argv[1])
+raw = os.environ.get("VLLM_ENGINE_EXTRA_ARGS_JSON", "[]")
+try:
+    args = json.loads(raw)
+except json.JSONDecodeError as error:
+    raise SystemExit(f"ERROR: VLLM_ENGINE_EXTRA_ARGS_JSON is invalid JSON: {error}")
+if not isinstance(args, list) or not all(isinstance(item, str) for item in args):
+    raise SystemExit("ERROR: VLLM_ENGINE_EXTRA_ARGS_JSON must be an array of strings.")
+
+configured = None
+for index, item in enumerate(args):
+    if item == "--pipeline-parallel-size":
+        if index + 1 >= len(args):
+            raise SystemExit("ERROR: --pipeline-parallel-size requires a value.")
+        configured = args[index + 1]
+    elif item.startswith("--pipeline-parallel-size="):
+        configured = item.split("=", 1)[1]
+if configured is not None and configured != str(pp_size):
+    raise SystemExit(
+        "ERROR: VLLM_ENGINE_PP_SIZE conflicts with --pipeline-parallel-size."
+    )
+if configured is None:
+    args.extend(("--pipeline-parallel-size", str(pp_size)))
+print(json.dumps(args, separators=(",", ":")))
+PY
+)"
 fi
 
 npu_selector="$repo_root/tools/select_idle_npus.py"
@@ -306,6 +349,7 @@ export VLLM_ENGINE_CONNECT_PORT="${VLLM_ENGINE_CONNECT_PORT:-$VLLM_ENGINE_PORT}"
 export VLLM_PROXY_UPSTREAM_BASE_URL="${VLLM_PROXY_UPSTREAM_BASE_URL:-http://$VLLM_ENGINE_CONNECT_HOST:$VLLM_ENGINE_CONNECT_PORT/v1}"
 unset resolved_engine_port
 export VLLM_ENGINE_TP_SIZE="$engine_tp_size"
+export VLLM_ENGINE_PP_SIZE="$engine_pp_size"
 export VLLM_ENGINE_MAX_MODEL_LEN="${VLLM_ENGINE_MAX_MODEL_LEN:-32768}"
 export VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS="${VLLM_ENGINE_MAX_NUM_BATCHED_TOKENS:-$VLLM_ENGINE_MAX_MODEL_LEN}"
 export VLLM_ENGINE_GPU_MEM_UTIL="${VLLM_ENGINE_GPU_MEM_UTIL:-0.9}"
@@ -547,6 +591,7 @@ echo "[sage-mate] delegating vLLM-HUST launch to $launcher"
   echo "[sage-mate] model served name=${VLLM_ENGINE_SERVED_MODEL_NAME:-unknown}"
   echo "[sage-mate] quantization=${VLLM_ENGINE_QUANTIZATION:-none}"
   echo "[sage-mate] npu devices=${VLLM_ENGINE_NPU_DEVICES}"
+  echo "[sage-mate] topology=TP${VLLM_ENGINE_TP_SIZE}xPP${VLLM_ENGINE_PP_SIZE}"
   echo "[sage-mate] host=${VLLM_ENGINE_HOST:-0.0.0.0} port=${VLLM_ENGINE_PORT:-8000}"
 } >>"$VLLM_ENGINE_CONTAINER_LOG_FILE"
 exec "$launcher"
