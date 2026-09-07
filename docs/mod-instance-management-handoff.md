@@ -1,7 +1,9 @@
 # 转交给 Workstation 任务的提示词
 
 > 历史交接（Sage Mate d310686）。Workstation 已以 dbb7cbe/b6e56e1 回应并接受
-> 协议，请勿按此文重复提取事务库。当前接手结果、单一归属和后端缺口见
+> 协议；2026-09-07 Sage Mate 已继续接收 dev-hub `733268f` 的默认关闭
+> instance-control/v1 传输。请勿按此文重复提取事务库或另造控制面。当前接手结果、
+> 单一归属、已固定的控制动作和仍未满足的生产 backend/宿主权限门槛见
 > [mod-producer-acceptance.md](mod-producer-acceptance.md)。以下保留原交接要求。
 
 请推进与 Sage Mate 协调的 Mod 改造。用户授权先实现代码，所有生命周期能力默认

@@ -16,11 +16,26 @@ import subprocess
 import sys
 
 PROTOCOL = "vllm-hust.instance-owner-entry/v1"
+CONTROL_PROTOCOL = "vllm-hust.instance-control/v1"
 BINDING_SCHEMA = "sage-mate.instance-binding/v1"
 SUBMODULE = "deps/vllm-hust-dev-hub"
 BACKEND = "scripts/instance_owner_entry.py"
 MANIFEST = "config/instance-owner-contract.json"
+CONTROL_BACKEND = "scripts/instance_control_entry.py"
+CONTROL_MANIFEST = "config/instance-control-contract.json"
 ACTIONS = {"serve", "start", "stop", "restart", "reconcile", "cleanup", "monitor"}
+CONTROL_ACTIONS = {
+    "inspect",
+    "plan",
+    "approve",
+    "cancel_plan",
+    "apply",
+    "disable",
+    "rollback",
+    "operation_status",
+    "recover_approve",
+    "recover",
+}
 CONTROL_KEYS = {"SAGE_MATE_INSTANCE_CONTROL_ENABLED", "SAGE_MATE_INSTANCE_REGISTRATION"}
 SAFE_ENV_KEYS = {
     "PATH",
@@ -122,7 +137,7 @@ def backend_path(repo: Path, action: str | None = None) -> Path:
     if git(module, "status", "--porcelain", "--untracked-files=no"):
         raise BindingError("dev-hub has uncommitted tracked changes")
     # Require both files in the pinned commit, not an untracked local shim.
-    for relative in (MANIFEST, BACKEND):
+    for relative in (MANIFEST, BACKEND, CONTROL_MANIFEST, CONTROL_BACKEND):
         file = module / relative
         if not file.is_file() or file.resolve() != file:
             raise BindingError("dev-hub owner contract is not installed")
@@ -147,6 +162,20 @@ def backend_path(repo: Path, action: str | None = None) -> Path:
         raise BindingError(
             "dev-hub does not implement the requested owner protocol/action"
         )
+    try:
+        control_manifest = json.loads(
+            (module / CONTROL_MANIFEST).read_text(), object_pairs_hook=unique_object
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise BindingError("invalid dev-hub control contract") from exc
+    if (
+        not isinstance(control_manifest, dict)
+        or control_manifest.get("protocol") != CONTROL_PROTOCOL
+        or control_manifest.get("entrypoint") != CONTROL_BACKEND
+        or set(control_manifest.get("actions", [])) != CONTROL_ACTIONS
+        or control_manifest.get("productionBackendQualified") is not False
+    ):
+        raise BindingError("unsupported dev-hub control contract")
     return module / BACKEND
 
 
@@ -226,6 +255,9 @@ def main(argv: list[str] | None = None) -> int:
                         "enrolled": True,
                         "instanceId": binding["instance_id"],
                         "producerInstalled": True,
+                        "controlProtocol": CONTROL_PROTOCOL,
+                        "controlPlaneInstalled": True,
+                        "operationsAccepting": False,
                         "lifecycleAvailable": False,
                         "reason": "owner authorization and runtime qualification required",
                     }
