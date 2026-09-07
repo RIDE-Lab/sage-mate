@@ -19,7 +19,9 @@ APP_SCRIPT = REPO_ROOT / "tools" / "run_app_server.sh"
 DEPLOY_HELPERS = REPO_ROOT / "tools" / "lib" / "deploy_common.sh"
 
 
-def test_runtime_dependency_contract_separates_portable_core_from_full_neuromem() -> None:
+def test_runtime_dependency_contract_separates_portable_core_from_full_neuromem() -> (
+    None
+):
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
@@ -49,8 +51,7 @@ def _make_fake_python(path: Path, *, has_uvicorn: bool) -> Path:
     exit_code = "0" if has_uvicorn else "1"
     _write_executable(
         path,
-        "#!/usr/bin/env bash\n"
-        f"exit {exit_code}\n",
+        f"#!/usr/bin/env bash\nexit {exit_code}\n",
     )
     return path
 
@@ -58,9 +59,7 @@ def _make_fake_python(path: Path, *, has_uvicorn: bool) -> Path:
 def _make_fake_systemctl(path: Path) -> Path:
     _write_executable(
         path,
-        "#!/usr/bin/env bash\n"
-        "printf '%s\n' \"$*\" >>\"$SYSTEMCTL_LOG\"\n"
-        "exit 0\n",
+        '#!/usr/bin/env bash\nprintf \'%s\n\' "$*" >>"$SYSTEMCTL_LOG"\nexit 0\n',
     )
     return path
 
@@ -82,10 +81,10 @@ def _run_quickstart_install(
     network_log = tmp_path / "unexpected-network.log"
     _write_executable(
         fake_bin_dir / "git",
-        '#!/usr/bin/env bash\n'
+        "#!/usr/bin/env bash\n"
         'printf "%s\\n" "$*" >> "$UNEXPECTED_NETWORK_LOG"\nexit 1\n',
     )
-    _write_executable(fake_bin_dir / "curl", '#!/usr/bin/env bash\nprintf 200\n')
+    _write_executable(fake_bin_dir / "curl", "#!/usr/bin/env bash\nprintf 200\n")
     for command in ("npu-smi", "nvidia-smi"):
         _write_executable(fake_bin_dir / command, "#!/usr/bin/env bash\nexit 0\n")
 
@@ -117,14 +116,16 @@ def _run_quickstart_install(
         "FACULTY_TWIN_PARENT_DIR": str(tmp_path / "siblings"),
         "DIGITAL_TWIN_RUNTIME_DIR": str(tmp_path / "runtime"),
         "VLLM_NVIDIA_CONNECT_HOST": "127.0.0.1",
-        "PYTHON_BIN": python_bin or str(
-            _make_fake_python(fake_bin_dir / "python", has_uvicorn=True)
-        ),
+        "PYTHON_BIN": python_bin
+        or str(_make_fake_python(fake_bin_dir / "python", has_uvicorn=True)),
     }
 
     args = [
-        "bash", str(checkout / "quickstart.sh"),
-        "--target", "hosted-web", "--systemd-only",
+        "bash",
+        str(checkout / "quickstart.sh"),
+        "--target",
+        "hosted-web",
+        "--systemd-only",
     ]
     if extra_args:
         args.extend(extra_args)
@@ -155,12 +156,8 @@ def test_quickstart_install_renders_service_units(tmp_path: Path) -> None:
     )
 
     target_dir = tmp_path / "xdg" / "systemd" / "user"
-    rendered_app = (target_dir / "sage-mate-app.service").read_text(
-        encoding="utf-8"
-    )
-    rendered_site = (target_dir / "sage-mate-site.service").read_text(
-        encoding="utf-8"
-    )
+    rendered_app = (target_dir / "sage-mate-app.service").read_text(encoding="utf-8")
+    rendered_site = (target_dir / "sage-mate-site.service").read_text(encoding="utf-8")
     rendered_tunnel = (target_dir / "sage-mate-tunnel.service").read_text(
         encoding="utf-8"
     )
@@ -188,7 +185,10 @@ def test_release_installer_uses_multi_gpu_tp_for_qwen3_32b_awq() -> None:
     assert "default_nvidia_tensor_parallel_size" in script
     qwen32_case = script.split("qwen3-32b-awq)", 1)[1].split(";;", 1)[0]
     assert 'tp="${tp_override:-1}"' not in qwen32_case
-    assert 'tp="${tp_override:-$(default_nvidia_tensor_parallel_size "$gpus" "$min_mem")}"' in qwen32_case
+    assert (
+        'tp="${tp_override:-$(default_nvidia_tensor_parallel_size "$gpus" "$min_mem")}"'
+        in qwen32_case
+    )
 
 
 def test_quickstart_install_only_enables_optional_services_with_flags(
@@ -284,13 +284,16 @@ def test_app_runtime_auto_installs_enabled_sage_anns_backend() -> None:
     assert "version('isage-neuromem')" in script
     assert "from sage.neuromem import UnifiedCollection" in script
     assert '"$py" -m pip install --quiet -e "$repo_root"' in script
-    assert "ensure_neuromem_collection_runtime \"$repo_root\" \"$py\"" in script
+    assert 'ensure_neuromem_collection_runtime "$repo_root" "$py"' in script
     assert '"$python_bin" -m pip install --quiet --no-deps "$requirement"' in helpers
-    assert '"$uv_bin" pip install --python "$python_bin" --no-deps "$requirement"' in helpers
-    assert "ensure_neuromem_collection_runtime \"$repo_root\" \"$python_bin\"" in quickstart
+    assert (
+        '"$uv_bin" pip install --python "$python_bin" --no-deps "$requirement"'
+        in helpers
+    )
+    assert 'ensure_neuromem_collection_runtime "$repo_root" "$python_bin"' in quickstart
     assert '"$py" -m pip install --quiet -e "$repo_root[vdb-anns]"' in script
-    assert 'DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem' in script
-    assert 'DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE:-segment' in script
+    assert "DIGITAL_TWIN_KNOWLEDGE_BACKEND:-neuromem" in script
+    assert "DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE:-segment" in script
     assert '"$conversation_index" == "sage_vdb_ann"' in script
     assert '"$conversation_index" == "sagedb_ann"' in script
 
@@ -300,8 +303,8 @@ def test_engine_lock_waits_for_ascend_namespace_release_with_a_finite_bound() ->
 
     assert "VLLM_ENGINE_DEVICE_RELEASE_TIMEOUT_SECONDS" in script
     assert "VLLM_ENGINE_DEVICE_RELEASE_POLL_SECONDS" in script
-    assert 'release_deadline=$((SECONDS + release_timeout))' in script
-    assert "while ! \"$python_bin\" \"$repo_root/tools/select_idle_npus.py\"" in script
+    assert "release_deadline=$((SECONDS + release_timeout))" in script
+    assert 'while ! "$python_bin" "$repo_root/tools/select_idle_npus.py"' in script
     assert "configured NPU devices did not become idle within" in script
 
 
@@ -391,7 +394,7 @@ def test_engine_lock_clears_stale_kv_cache_contract() -> None:
 
 def test_engine_lock_records_configured_model_provenance() -> None:
     script = ENGINE_LOCK_SCRIPT.read_text(encoding="utf-8")
-    receipt_block = script.split("umask 077", 1)[1].split("> \"$lock_file\"", 1)[0]
+    receipt_block = script.split("umask 077", 1)[1].split('> "$lock_file"', 1)[0]
 
     for key in (
         "VLLM_ENGINE_MODEL_PATH",
@@ -415,13 +418,26 @@ def test_engine_launcher_preserves_explicit_immutable_wheel_profile() -> None:
     """Empty conda/source-path values must not be replaced by dev defaults."""
 
     script = ENGINE_SCRIPT.read_text(encoding="utf-8")
-    assert '${VLLM_ENGINE_CONDA_ENV-vllm-hust-dev}' in script
+    assert "${VLLM_ENGINE_CONDA_ENV-vllm-hust-dev}" in script
     assert (
-        '${VLLM_ENGINE_BASE_PYTHONPATH-/workspace/vllm-hust:/workspace/vllm-ascend-hust}'
+        "${VLLM_ENGINE_BASE_PYTHONPATH-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
         in script
     )
-    assert '${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}' not in script
-    assert '${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}' not in script
+    assert "${VLLM_ENGINE_CONDA_ENV:-vllm-hust-dev}" not in script
+    assert (
+        "${VLLM_ENGINE_BASE_PYTHONPATH:-/workspace/vllm-hust:/workspace/vllm-ascend-hust}"
+        not in script
+    )
+
+
+def test_engine_launcher_supports_product_validated_tp_pp_topology() -> None:
+    script = ENGINE_SCRIPT.read_text(encoding="utf-8")
+
+    assert 'engine_pp_size="${VLLM_ENGINE_PP_SIZE:-1}"' in script
+    assert "engine_tp_size * engine_pp_size != device_count" in script
+    assert 'args.extend(("--pipeline-parallel-size", str(pp_size)))' in script
+    assert 'export VLLM_ENGINE_PP_SIZE="$engine_pp_size"' in script
+    assert "VLLM_ENGINE_TP_SIZE=$engine_tp_size must equal" not in script
 
 
 def test_engine_verifier_checks_runtime_import_origins() -> None:
@@ -446,5 +462,8 @@ def test_engine_verifier_accepts_immutable_wheels_without_source_roots() -> None
         encoding="utf-8"
     )
     assert '[[ -n "$runtime_pythonpath" ]]' in script
-    assert '[[ -n "$declared_pythonpath" || "$installed_modules_json" != \'{}\' ]]' in script
+    assert (
+        '[[ -n "$declared_pythonpath" || "$installed_modules_json" != \'{}\' ]]'
+        in script
+    )
     assert "runtime or declared engine PYTHONPATH is empty" not in script
