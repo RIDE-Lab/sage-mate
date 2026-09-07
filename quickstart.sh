@@ -698,7 +698,7 @@ ensure_env_kv DIGITAL_TWIN_STREAM_CHAT_ANSWER       false
 ensure_env_kv DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS 80
 ensure_env_kv DIGITAL_TWIN_LLM_TIMEOUT_SECONDS       60
 ensure_env_kv DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS 15
-ensure_env_kv DIGITAL_TWIN_CHAT_PROMPT_SOFT_CAP_CHARS 12000
+ensure_env_kv DIGITAL_TWIN_PROMPT_SOFT_CAP          12000
 
 set_env_kv() {
 	local key="$1" value="$2"
