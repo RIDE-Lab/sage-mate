@@ -78,6 +78,7 @@ from .escalation_store import EscalationQueueStore
 from .evidence_policy import (
     comparison_subjects,
     rank_comparison_evidence,
+    has_named_query_evidence,
     has_query_evidence,
     has_unsupported_source_quote,
     matches_document_purpose,
@@ -6345,9 +6346,14 @@ class FacultyTwinWorkflowSupport:
                 and self._matches_intent_scopes(hit, interaction_intent.exclude_scopes)
             )
         ]
-        # An empty scoped result is a valid no-evidence result, not permission
-        # to substitute recruitment/policy documents or explicitly excluded hits.
-        candidates = scoped_hits
+        # Intent is advisory rather than an evidence veto. If an unfamiliar
+        # paper/system name was misclassified, retain only exact named-entity
+        # matches; ordinary lexical overlap is still not enough to cross scopes.
+        candidates = scoped_hits or (
+            [hit for hit in knowledge_hits if has_named_query_evidence(question, hit)]
+            if question
+            else []
+        )
 
         if question and interaction_intent.domain in {"general", "research", "teaching"}:
             return [
@@ -6396,8 +6402,12 @@ class FacultyTwinWorkflowSupport:
                 "lecture",
                 "experiment",
             },
-            "preparation": {"preparation", "qa", "policy", "meeting"},
-            "meeting_policy": {"meeting", "policy", "preparation", "qa"},
+            "preparation": {
+                "preparation", "qa", "policy", "meeting", "advising", "faq",
+            },
+            "meeting_policy": {
+                "meeting", "policy", "preparation", "qa", "advising", "faq",
+            },
         }
         for scope in scopes:
             allowed_tags = scope_map.get(scope, set())

@@ -6,7 +6,7 @@ import pytest
 
 from sage_faculty_twin.chat_delivery import AnswerConstraints, ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.evidence_policy import has_query_evidence
+from sage_faculty_twin.evidence_policy import has_named_query_evidence, has_query_evidence
 from sage_faculty_twin.models import ChatRequest, ChatResponse, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.skill_runner import SkillRunner
@@ -85,6 +85,17 @@ def test_document_purpose_applies_when_planner_leaves_scopes_empty():
 def test_metadata_overlap_does_not_establish_factual_relevance():
     document = hit("unrelated", ["public"], excerpt="会议预约政策", metadata={"note": "长上下文推理公平对比"})
     assert not has_query_evidence("长上下文推理公平对比", document)
+
+
+def test_exact_named_entity_can_recover_from_an_intent_scope_miss():
+    paper = hit("flowrag-paper", ["research", "publication"], excerpt="FlowRAG organizes retrieval and generation.")
+    paper = paper.model_copy(update={"title": "FlowRAG 论文解读"})
+    assert has_named_query_evidence("FlowRAG 主要做什么？", paper)
+
+
+def test_common_language_overlap_does_not_cross_intent_scopes():
+    paper = hit("generic-paper", ["research"], excerpt="A paper about preparation and systems research.")
+    assert not has_named_query_evidence("和老师约时间前应该准备什么？", paper)
 
 
 def test_excerpt_selects_supporting_passage_not_first_title_match():
