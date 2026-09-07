@@ -24,6 +24,8 @@ assert SPEC and SPEC.loader
 control = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(control)
 GUARDED_PRODUCER_FILES = (
+    "config/instance-control-contract.json",
+    "config/instance-control-host.example.json",
     "config/host-broker-contract.json",
     "config/instance-host-broker.example.json",
     "docs/instance-backend-contract-proposal.md",
@@ -38,15 +40,34 @@ GUARDED_PRODUCER_FILES = (
     "scripts/instance_control/host_authority.py",
     "scripts/instance_control/host_broker.py",
     "scripts/instance_control/host_client.py",
+    "scripts/instance_control/transport.py",
+    "scripts/instance_control_entry.py",
     "scripts/instance_host_broker.py",
     "scripts/instance_host_client.py",
     "scripts/set_inert_canary_gate.py",
     "systemd/vllm-hust-host-broker.service",
     "tests/test_instance_foreground.py",
+    "tests/test_instance_control_transport.py",
     "tests/test_host_authority.py",
     "tests/test_host_broker.py",
     "tests/test_instance_transactions.py",
 )
+
+CONTROL_PROTOCOL = "vllm-hust.instance-control/v1"
+CONTROL_ENTRY = "scripts/instance_control_entry.py"
+CONTROL_MANIFEST = "config/instance-control-contract.json"
+CONTROL_ACTIONS = {
+    "inspect",
+    "plan",
+    "approve",
+    "cancel_plan",
+    "apply",
+    "disable",
+    "rollback",
+    "operation_status",
+    "recover_approve",
+    "recover",
+}
 
 
 def run_git(root: Path, *args: str) -> str:
@@ -112,6 +133,19 @@ def checkout(tmp_path: Path) -> Path:
                 "protocol": control.PROTOCOL,
                 "entrypoint": control.BACKEND,
                 "actions": sorted(control.ACTIONS),
+            }
+        )
+    )
+    (module / control.CONTROL_BACKEND).write_text(
+        "raise SystemExit('GENERIC_CONTROL_MUST_NOT_RUN_FROM_OWNER_ENTRY')\n"
+    )
+    (module / control.CONTROL_MANIFEST).write_text(
+        json.dumps(
+            {
+                "protocol": control.CONTROL_PROTOCOL,
+                "entrypoint": control.CONTROL_BACKEND,
+                "actions": sorted(control.CONTROL_ACTIONS),
+                "productionBackendQualified": False,
             }
         )
     )
@@ -584,6 +618,9 @@ def test_real_producer_description_does_not_imply_approval(real_producer_checkou
     assert result.returncode == 0
     status = json.loads(result.stdout)
     assert status["producerInstalled"] is True
+    assert status["controlProtocol"] == CONTROL_PROTOCOL
+    assert status["controlPlaneInstalled"] is True
+    assert status["operationsAccepting"] is False
     assert status["lifecycleAvailable"] is False
     assert not list(repo.rglob("authority.sqlite3"))
 
@@ -598,6 +635,94 @@ def test_guarded_producer_additions_are_in_exact_gitlink(real_producer_checkout)
         assert run_git(module, "hash-object", "--", relative) == run_git(
             module, "rev-parse", f"{pin}:{relative}"
         )
+
+
+def _generic_control_request(repo: Path, request: dict) -> subprocess.CompletedProcess:
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if key in control.SAFE_ENV_KEYS
+    }
+    return subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            str(repo / control.SUBMODULE / CONTROL_ENTRY),
+        ],
+        input=json.dumps(request),
+        text=True,
+        capture_output=True,
+        timeout=5,
+        env=environment,
+    )
+
+
+def test_generic_control_contract_is_pinned_and_default_closed(real_producer_checkout):
+    repo = real_producer_checkout
+    module = repo / control.SUBMODULE
+    manifest = json.loads((module / CONTROL_MANIFEST).read_text(encoding="utf-8"))
+
+    assert manifest == {
+        "protocol": CONTROL_PROTOCOL,
+        "entrypoint": CONTROL_ENTRY,
+        "actions": [
+            "inspect",
+            "plan",
+            "approve",
+            "cancel_plan",
+            "apply",
+            "disable",
+            "rollback",
+            "operation_status",
+            "recover_approve",
+            "recover",
+        ],
+        "productionBackendQualified": False,
+    }
+    assert set(manifest["actions"]) == CONTROL_ACTIONS
+
+    inspected = _generic_control_request(
+        repo,
+        {
+            "schema": CONTROL_PROTOCOL,
+            "action": "inspect",
+            "instance_id": "sage-mate-production",
+        },
+    )
+    assert inspected.returncode == 0, inspected.stderr
+    assert json.loads(inspected.stdout) == {
+        "protocol": CONTROL_PROTOCOL,
+        "authorityAvailable": False,
+        "productionBackendQualified": False,
+        "operationsAccepting": False,
+        "instanceId": "sage-mate-production",
+        "reason": "control_configuration_required",
+    }
+    assert not list(repo.rglob("authority.sqlite3"))
+
+
+def test_generic_control_mutation_never_falls_back_without_host_authority(
+    real_producer_checkout,
+):
+    repo = real_producer_checkout
+    result = _generic_control_request(
+        repo,
+        {
+            "schema": CONTROL_PROTOCOL,
+            "action": "plan",
+            "instance_id": "sage-mate-production",
+            "candidate_id": "bidkv",
+            "deployment_action": "apply",
+        },
+    )
+    assert result.returncode == 2
+    assert result.stdout == ""
+    assert json.loads(result.stderr) == {
+        "protocol": CONTROL_PROTOCOL,
+        "error": "control_configuration_required",
+        "authorityAvailable": False,
+    }
+    assert not list(repo.rglob("authority.sqlite3"))
 
 
 @pytest.mark.parametrize("relative", GUARDED_PRODUCER_FILES)

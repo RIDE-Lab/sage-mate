@@ -1,6 +1,6 @@
 # Mod producer 接手验收与产品 backend 边界
 
-日期：2026-09-04。阶段：**默认关闭的依赖/协议集成；不是生产启用**。
+日期：2026-09-07。阶段：**默认关闭的依赖/协议集成；不是生产启用**。
 
 接手来源：Workstation `dbb7cbe` 的 `docs/mod-instance-producer-handoff.md`。
 对方已明确接受 Sage Mate `d310686` 的分工与 owner-entry/v1，无 schema 变更。
@@ -10,6 +10,20 @@
 origin/main。后两次更新依次新增 Backend protocol/foreground helper，以及
 durable host launch grant/peer identity/fencing receipt；没有修改
 推理启动脚本、production lock、模型、镜像或递归 gitlink。
+
+本轮继续接收 canonical dev-hub `main`
+`733268f33aedc2481d5e4a22297a552150428160`。其中 `d5c8422` 提供了独立的
+`vllm-hust.instance-control/v1` 本地控制传输，覆盖 inspect、plan、approve、
+cancel_plan、apply、disable、rollback、operation_status、recover_approve 和
+recover；事务、一次性审批、CAS、fencing 与恢复仍由 dev-hub 单一实现。Sage Mate
+只固定并校验该协议，不复制状态机，也不把 Web 身份、owner ID 或环境变量解释成
+授权。
+
+该传输依然有意要求宿主私有 0600 配置和由可信宿主代码注入的产品 backend。
+当前未安装 Sage Mate 生产 backend、未登记共享实例，manifest 中
+`productionBackendQualified=false`；无配置时 inspect 明确返回
+`authorityAvailable=false`，所有变更 fail closed。此次 repin 不修改 `.env`、
+systemd、容器、推理引擎、NPU 或 broker 状态。
 
 父仓 gitlink 固定整个 dev-hub commit，因而新增文件也在不可变 source tree
 范围内；运行时还拒绝任何 tracked dirty。验收逐文件对比 working-tree blob 与
@@ -159,6 +173,13 @@ Python 3.11 构建缺少该 OS binding 时有 6 项确定性的解释器能力�
   切换模型、修改 NPU、登记实例或打开 lifecycle gate。
 - 公网 `https://twin.sage.org.ai/` 与 `/health` 均为 HTTP 200；公网真实问答为
   HTTP 200（2.91 秒），明确返回 Qwen3.8-27B、5 条知识命中和 3 条 Support。
+
+2026-09-07 repin 的离线门槛为：Sage owner/control 契约 **117 passed**；固定
+dev-hub 的 control transport、事务、foreground、authority 与 broker 契约
+**101 passed, 47 subtests passed**。测试显式拒绝宿主服务、Docker、NPU 和网络
+副作用；同时验证未配置 authority 时不会创建 `authority.sqlite3`，也不会回落到
+历史启动/清理路径。这些结果只证明默认关闭和传输/事务契约，不是生产 Mod 生效
+或共享实例已接管的证据。
 
 候选接手前，可仅在测试进程中设置 `SAGE_MATE_TEST_PRODUCER_REVISION=<已 fetch SHA>`；
 正常 CI 使用父仓 HEAD 中的 gitlink，不读取远端最新版本。所有真实 producer 测试
