@@ -669,6 +669,104 @@ for (const viewport of [
   });
 }
 
+for (const viewport of [
+  { name: "phone-390", width: 390, height: 844 },
+  { name: "phone-430", width: 430, height: 932 },
+]) {
+  for (const theme of ["light", "dark"]) {
+    test(`mobile sidebar is a closed-by-default overlay at ${viewport.name} ${theme}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.route("https://fonts.**", (route) => route.abort());
+      await page.addInitScript((selectedTheme) => {
+        localStorage.setItem("sageMateTheme", selectedTheme);
+        localStorage.setItem("sageOnboardingCompleted", "true");
+        localStorage.setItem("sageOnboardingDismissed", "true");
+      }, theme);
+      await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+
+      const sidebar = page.locator("#primary-sidebar");
+      const menu = page.getByRole("button", { name: "打开菜单" });
+      const appShell = page.locator(".app-shell");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await expect(sidebar).toBeHidden();
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+      await expect(sidebar).toHaveAttribute("inert", "");
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+
+      const assertMainFits = async ({ controls = true } = {}) => {
+        const shellBox = await appShell.boundingBox();
+        expect(shellBox).not.toBeNull();
+        expect(shellBox.x).toBeGreaterThanOrEqual(0);
+        expect(shellBox.x + shellBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+        const layout = await page.evaluate(() => ({
+          clientWidth: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+        }));
+        expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+        if (!controls) return;
+        for (const selector of [
+          "#composer-upload-button",
+          "#voice-input-button",
+          '#chat-form button[type="submit"]',
+          "#lucky-question-button",
+          ".token-usage-toggle",
+          "#mobile-workflow-trigger",
+        ]) {
+          const box = await page.locator(selector).boundingBox();
+          expect(box, selector).not.toBeNull();
+          expect(box.x, selector).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width, selector).toBeLessThanOrEqual(viewport.width + 0.5);
+        }
+      };
+
+      await assertMainFits();
+      await page.evaluate(() => applyAppProfilePresentation({ app_profile: "code_assistant" }));
+      await expect(sidebar).toBeHidden();
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+      // Code Assistant intentionally replaces Faculty Twin's lucky/token tools;
+      // only the shared shell geometry is invariant across profiles.
+      await assertMainFits({ controls: false });
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await expect(sidebar).toBeHidden();
+      await assertMainFits();
+
+      const closedShell = await appShell.boundingBox();
+      await menu.click();
+      await expect(page.getByRole("button", { name: "关闭菜单" })).toHaveAttribute("aria-expanded", "true");
+      await expect(sidebar).toBeVisible();
+      await expect(sidebar).toHaveAttribute("aria-hidden", "false");
+      await expect(sidebar).not.toHaveAttribute("inert", "");
+      expect(await appShell.boundingBox()).toEqual(closedShell);
+
+      await page.keyboard.press("Escape");
+      await expect(sidebar).toBeHidden();
+      await expect(menu).toBeFocused();
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+      await assertMainFits();
+    });
+  }
+}
+
+test("desktop sidebar retains its collapsed rail and expanded layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  const sidebar = page.locator("#primary-sidebar");
+  const shell = page.locator(".app-shell");
+  await expect(sidebar).toBeVisible();
+  await expect(page.locator("#mobile-sidebar-toggle")).toBeHidden();
+  expect(Math.round((await sidebar.boundingBox()).width)).toBe(56);
+  expect(Math.round((await shell.boundingBox()).x)).toBe(56);
+  await page.getByRole("button", { name: "切换侧边栏" }).click();
+  await expect(sidebar).toHaveCSS("width", "280px");
+  // Preserve the existing desktop layout: the 280px rail overlaps the content
+  // edge by 20px while the application shell settles at its established 260px.
+  await expect.poll(async () => Math.round((await shell.boundingBox()).x)).toBe(260);
+  expect(Math.round((await sidebar.boundingBox()).width)).toBe(280);
+});
+
 async function openRailView(page, buttonName, viewport) {
   if (viewport.width <= 720) {
     const menu = page.getByRole("button", { name: "打开菜单" });

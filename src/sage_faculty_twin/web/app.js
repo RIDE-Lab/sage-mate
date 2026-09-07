@@ -127,6 +127,10 @@ const topbarSubtitle = document.getElementById("topbar-subtitle");
 const topbarKicker = document.querySelector(".topbar-kicker");
 const themeToggleButton = document.getElementById("theme-toggle");
 const themeMediaQuery = globalThis.matchMedia?.("(prefers-color-scheme: dark)") || null;
+const sidebar = document.getElementById("primary-sidebar");
+const mobileSidebarToggle = document.getElementById("mobile-sidebar-toggle");
+const sidebarBackdrop = document.getElementById("sidebar-backdrop");
+const mobileSidebarMediaQuery = globalThis.matchMedia?.("(max-width: 720px)") || null;
 const openOnboardingHelpButton = document.getElementById("open-onboarding-help");
 const openProfileSwitcherButton = document.getElementById("open-profile-switcher");
 const profileSwitcherCurrent = document.getElementById("profile-switcher-current");
@@ -228,6 +232,52 @@ function applyTheme(theme, { persist = false } = {}) {
         themeToggleButton.setAttribute("title", nextLabel);
         themeToggleButton.setAttribute("aria-pressed", String(nextTheme === "dark"));
     }
+}
+
+function isMobileSidebarViewport() {
+    return mobileSidebarMediaQuery?.matches ?? globalThis.innerWidth <= 720;
+}
+
+function setSidebarExpanded(expanded, { restoreFocus = false } = {}) {
+    const nextExpanded = Boolean(expanded);
+    const mobile = isMobileSidebarViewport();
+    document.body.classList.toggle("sidebar-expanded", nextExpanded);
+    document.body.classList.toggle("mobile-sidebar-open", mobile && nextExpanded);
+    mobileSidebarToggle?.setAttribute("aria-expanded", String(mobile && nextExpanded));
+    mobileSidebarToggle?.setAttribute("aria-label", mobile && nextExpanded ? "关闭菜单" : "打开菜单");
+    mobileSidebarToggle?.setAttribute("title", mobile && nextExpanded ? "关闭菜单" : "打开菜单");
+    sidebarBackdrop?.setAttribute("aria-hidden", String(!(mobile && nextExpanded)));
+    if (sidebar) {
+        sidebar.toggleAttribute("inert", mobile && !nextExpanded);
+        sidebar.setAttribute("aria-hidden", String(mobile && !nextExpanded));
+    }
+    if (restoreFocus && mobile) {
+        mobileSidebarToggle?.focus({ preventScroll: true });
+    }
+}
+
+function toggleSidebar() {
+    setSidebarExpanded(!document.body.classList.contains("sidebar-expanded"));
+}
+
+function closeMobileSidebar({ restoreFocus = false } = {}) {
+    if (isMobileSidebarViewport()) {
+        setSidebarExpanded(false, { restoreFocus });
+    }
+}
+
+function handleSidebarViewportChange(event) {
+    if (event.matches) {
+        setSidebarExpanded(false);
+        return;
+    }
+    document.body.classList.remove("mobile-sidebar-open");
+    sidebar?.removeAttribute("inert");
+    sidebar?.setAttribute("aria-hidden", "false");
+    mobileSidebarToggle?.setAttribute("aria-expanded", "false");
+    mobileSidebarToggle?.setAttribute("aria-label", "打开菜单");
+    mobileSidebarToggle?.setAttribute("title", "打开菜单");
+    sidebarBackdrop?.setAttribute("aria-hidden", "true");
 }
 
 applyTheme(currentTheme());
@@ -1148,7 +1198,9 @@ function syncProfileSwitcherState() {
 function syncCodeAssistantChrome() {
     document.body.classList.add("profile-code-assistant");
     document.body.classList.remove("profile-faculty-twin");
-    document.body.classList.add("sidebar-expanded");
+    // Desktop keeps the useful expanded project rail. A mobile refresh must
+    // always start closed so the off-canvas drawer never consumes chat width.
+    setSidebarExpanded(!isMobileSidebarViewport());
     syncGuidanceLabelsForProfile();
     syncProfileSwitcherState();
     if (topbarKicker) {
@@ -2313,29 +2365,35 @@ historyNewChatButton?.addEventListener("click", () => {
 
 // Sidebar toggle - uses existing history-rail-collapsed system
 document.getElementById("sidebar-toggle")?.addEventListener("click", () => {
-    document.body.classList.toggle("sidebar-expanded");
+    if (isMobileSidebarViewport()) {
+        closeMobileSidebar({ restoreFocus: true });
+        return;
+    }
+    toggleSidebar();
 });
 
 // Mobile sidebar toggle + backdrop dismiss
-const mobileSidebarToggle = document.getElementById("mobile-sidebar-toggle");
-const sidebarBackdrop = document.getElementById("sidebar-backdrop");
-
 mobileSidebarToggle?.addEventListener("click", () => {
-    document.body.classList.toggle("sidebar-expanded");
+    toggleSidebar();
 });
 
 sidebarBackdrop?.addEventListener("click", () => {
-    document.body.classList.remove("sidebar-expanded");
+    closeMobileSidebar({ restoreFocus: true });
 });
 
 // Auto-close mobile sidebar when any rail button is tapped
 document.querySelectorAll(".sidebar .rail-btn, .sidebar .rail-user").forEach((btn) => {
     btn.addEventListener("click", () => {
         if (window.innerWidth <= 720) {
-            document.body.classList.remove("sidebar-expanded");
+            closeMobileSidebar();
         }
     });
 });
+
+mobileSidebarMediaQuery?.addEventListener?.("change", handleSidebarViewportChange);
+setSidebarExpanded(
+    !isMobileSidebarViewport() && document.body.classList.contains("sidebar-expanded"),
+);
 
 // Seed question chips: render random chips based on current profile
 renderSeedChips(visitorProfileInput?.value || "general_visitor");
@@ -3262,6 +3320,9 @@ document.addEventListener("click", (event) => {
 document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
         closeCodeApprovalMenu();
+        if (isMobileSidebarViewport() && document.body.classList.contains("sidebar-expanded")) {
+            closeMobileSidebar({ restoreFocus: true });
+        }
     }
 });
 
@@ -3402,7 +3463,7 @@ function handleOutsideDrawerClick(event) {
         && !target.closest("#mobile-sidebar-toggle")
         && !target.closest("#sidebar-toggle")
     ) {
-        document.body.classList.remove("sidebar-expanded");
+        closeMobileSidebar();
     }
 
     if (isMobileTopbarActionsOpen() && topbarShell && !topbarShell.contains(target)) {

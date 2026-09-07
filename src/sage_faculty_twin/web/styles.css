@@ -4700,19 +4700,33 @@ body.sidebar-expanded .rail-user {
     }
 
     .sidebar {
-        width: 280px;
-        transform: translateX(-100%);
-        transition: transform 250ms ease;
+        inset: 0 auto 0 0;
+        width: min(280px, calc(100vw - 40px));
+        max-width: calc(100vw - 40px);
+        margin: 0;
+        transform: translate3d(-100%, 0, 0);
+        visibility: hidden;
+        pointer-events: none;
+        transition: transform 250ms ease, visibility 0s linear 250ms;
         box-shadow: 4px 0 24px rgba(0, 0, 0, 0.1);
     }
 
     body.sidebar-expanded .sidebar {
-        transform: translateX(0);
+        transform: translate3d(0, 0, 0);
+        visibility: visible;
+        pointer-events: auto;
+        transition-delay: 0s;
     }
 
-    .app-shell {
+    .app-shell,
+    body.sidebar-expanded .app-shell {
         margin-left: 0 !important;
         width: 100% !important;
+        max-width: 100% !important;
+    }
+
+    body.mobile-sidebar-open {
+        overflow: hidden;
     }
 
     body.sidebar-expanded .chat-layout {
