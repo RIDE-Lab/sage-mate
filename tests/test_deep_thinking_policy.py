@@ -149,6 +149,24 @@ def test_degenerate_answer_detection_keeps_normal_short_and_structured_answers()
     )
 
 
+def test_degenerate_answer_detection_keeps_substantive_answer_with_uncertainty() -> None:
+    answer = (
+        "当前公开资料能够确认三层协作关系。SAGE 位于应用层，负责组织知识检索、"
+        "对话记忆和可观察的工作流；它不替代底层推理引擎。vLLM-HUST 位于核心"
+        "运行时层，承载模型加载、批处理、调度、KV Cache 与并行执行，并保持与"
+        "官方 vLLM 主线同步。vLLM-Ascend-HUST 位于硬件适配层，为昇腾设备补齐"
+        "算子、图编译、通信和设备管理能力。部署时应先固定 core 与 plugin 的兼容"
+        "提交，再由应用消费同一份运行时回执；评测时则分别观察工作流延迟、引擎"
+        "吞吐和硬件利用率，避免把三层指标混为一谈。选择建议是：做应用研究时从"
+        "SAGE 入手，研究通用 serving 时进入 vLLM-HUST，处理昇腾专项性能或兼容性"
+        "时进入 vLLM-Ascend-HUST。其中一个组件的精确版本仍需要额外确认，建议"
+        "开启联网检索获取实时参考。"
+    )
+
+    assert len("".join(answer.split())) > 320
+    assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
+
+
 def test_chinese_question_rejects_long_english_identity_boilerplate() -> None:
     answer = (
         "My apologies for the roundabout question. My name is Zhang, and I am a "
@@ -216,6 +234,18 @@ def test_relevance_guard_rejects_domain_free_answers() -> None:
     assert not _answer_is_irrelevant_to_question(
         "为什么首 token 延迟和吞吐量往往互相冲突？",
         "首 token 延迟偏向小批次快速调度，吞吐则偏向大批次提高设备利用率。",
+    )
+
+
+def test_relevance_guard_does_not_apply_optimization_rubric_to_positioning_question() -> None:
+    answer = (
+        "SAGE 负责组织应用工作流，vLLM-HUST 提供推理运行时，"
+        "vLLM-Ascend-HUST 则提供昇腾平台适配；三者按应用、核心引擎和硬件插件协作。"
+    )
+
+    assert not _answer_is_irrelevant_to_question(
+        "比较 SAGE、vLLM-HUST 和 vLLM-Ascend-HUST 的定位与协作关系。",
+        answer,
     )
 
 

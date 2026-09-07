@@ -361,9 +361,8 @@ vllm itself behaves correctly. Either:
 The streaming flag and the latency knobs (`DIGITAL_TWIN_STREAM_CHAT_ANSWER`,
 `DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`,
 `DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS`,
-`DIGITAL_TWIN_CHAT_PROMPT_SOFT_CAP_CHARS`) are read at module import time
-via `os.environ.get(...)`. They are *not* loaded by pydantic-settings.
-`tools/run_app_server.sh` therefore exports `.env` into the process
-environment immediately before launching uvicorn so these values reach the
-app. If you write your own launcher, do the same — a value that lives only
-inside `.env` will be invisible to those code paths.
+`DIGITAL_TWIN_PROMPT_SOFT_CAP`) are read when application settings are created.
+`tools/run_app_server.sh` exports `.env` into the process environment before
+launching uvicorn, so both settings-backed and module-level latency controls
+see one consistent deployment contract. If you write your own launcher, load
+the same environment before importing the application.

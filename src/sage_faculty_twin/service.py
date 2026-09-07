@@ -687,7 +687,29 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
     if ("延迟" in question or "latency" in lowered_question) and "吞吐" in question:
         if "延迟" not in answer or "吞吐" not in answer:
             return True
-    if any(marker in lowered_question for marker in ("ascend", "npu", "昇腾")):
+    accelerator_question = any(
+        marker in lowered_question for marker in ("ascend", "npu", "昇腾")
+    )
+    accelerator_optimization_question = accelerator_question and any(
+        marker in lowered_question
+        for marker in (
+            "优化",
+            "性能",
+            "效率",
+            "延迟",
+            "吞吐",
+            "显存",
+            "内存",
+            "算子",
+            "量化",
+            "kv cache",
+            "瓶颈",
+            "调优",
+            "排成",
+            "排程",
+        )
+    )
+    if accelerator_optimization_question:
         markers = ("ascend", "npu", "昇腾", "算子", "量化", "并行", "显存", "内存", "推理")
         coverage_groups = (
             ("量化", "fp16", "bf16", "int8"),
@@ -2532,27 +2554,47 @@ class FacultyTwinWorkflowSupport:
             repaired = True
         context.answer = _strip_internal_thinking_content(context.answer)
         context.answer = _strip_repeated_role_prefixes(context.answer)
-        if not repaired and (
-            self._is_degenerate_answer(context.answer)
-            or _contains_internal_prompt_leak(context.answer)
-            or has_unsupported_source_quote(context.answer or "", [
-                hit.excerpt for hit in context.knowledge_hits
-            ] + [hit.snippet or "" for hit in context.web_search_hits])
-            or _answer_language_mismatches_question(
-                context.request.question,
-                context.answer,
+        validation_failures: list[str] = []
+        if not repaired:
+            source_excerpts = [hit.excerpt for hit in context.knowledge_hits] + [
+                hit.snippet or "" for hit in context.web_search_hits
+            ]
+            validation_checks = (
+                ("degenerate", self._is_degenerate_answer(context.answer)),
+                ("prompt_leak", _contains_internal_prompt_leak(context.answer)),
+                (
+                    "unsupported_quote",
+                    has_unsupported_source_quote(context.answer or "", source_excerpts),
+                ),
+                (
+                    "language_mismatch",
+                    _answer_language_mismatches_question(
+                        context.request.question,
+                        context.answer,
+                    ),
+                ),
+                (
+                    "incomplete_task",
+                    _answer_does_not_complete_requested_task(
+                        context.request.question,
+                        context.answer,
+                    ),
+                ),
+                (
+                    "irrelevant",
+                    _answer_is_irrelevant_to_question(
+                        relevance_question,
+                        context.answer,
+                    ),
+                ),
             )
-            or _answer_does_not_complete_requested_task(
-                context.request.question,
-                context.answer,
-            )
-            or _answer_is_irrelevant_to_question(
-                relevance_question,
-                context.answer,
-            )
-        ):
+            validation_failures = [name for name, failed in validation_checks if failed]
+        if validation_failures:
             _raise_if_request_cancelled()
-            _logger.warning("LLM returned a degenerate answer; retrying with compact prompt")
+            _logger.warning(
+                "LLM answer failed validation (%s); retrying with compact prompt",
+                ",".join(validation_failures),
+            )
             context.answer = self._retry_answer_with_compact_prompt(context)
         context.workflow_action = (
             "advise_only" if context.decision_mode == "advise_only" else "answer"
@@ -3456,7 +3498,11 @@ class FacultyTwinWorkflowSupport:
             "超出模型能力范围",
             "建议开启联网检索获取实时参考",
         )
-        if any(marker in compact for marker in refusal_markers):
+        # An uncertainty disclosure inside an otherwise substantive answer is
+        # not a refusal. Treat these phrases as degenerate only when they
+        # dominate a short response; long grounded answers may legitimately
+        # identify one missing source and suggest how to verify it.
+        if len(compact) <= 320 and any(marker in compact for marker in refusal_markers):
             return True
         if re.search(r"[\[【](?:具体|待定|待填写|请填写)[^\]】]{0,20}[\]】]", compact):
             return True
