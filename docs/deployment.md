@@ -78,6 +78,15 @@ package version 由运行时合同补足。dev-hub 中的
 恢复记录的旧 image ID 与 gitlinks，并仍通过 `tools/lock_sage_mate_engine.sh` 受管
 重启，禁止留下临时后台进程。
 
+当前 production lock 选择的 latest-HUST-main 原子组合为 core
+`88e606d0f0cde63c412db456f3e92da2609e0438`、plugin merged-main
+`c0d6294bc30f775151dba256d49a37a29ba939d7` 和 dev-hub
+`337757b23c3a78580d5c65f41150c3e082cdbe50`。对应不可变镜像标签为
+`sage-mate/vllm-ascend-hust:core-88e606d0-plugin-c0d6294b-cann9.1`；实际部署仍必须
+同时锁定并核对 image ID。plugin 的 verified-core 声明、dev-hub production lock
+和本仓三个 gitlink 必须一起推进，禁止只更新其中一层。官方 `v0.23.0` 仅标识
+openEuler/CANN filesystem 基座，不代表当前 core 或 plugin 的源码版本。
+
 ## Deployment Targets
 
 `quickstart.sh` is the single installer entry point, but it has separate targets for the two
