@@ -22,7 +22,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
         rel="stylesheet" media="print" onload="this.media='all'" />
-    <link rel="stylesheet" href="./styles.4222.css" />
+    <link rel="stylesheet" href="./styles.4222.css?rev=mobile-sidebar-20260907" />
     <link rel="stylesheet" href="./companion.css" />
     <style>
         html {
@@ -77,7 +77,8 @@
     </svg>
     <div class="app-shell">
         <header class="topbar">
-            <button type="button" id="mobile-sidebar-toggle" class="mobile-sidebar-btn" title="菜单" aria-label="打开菜单">
+            <button type="button" id="mobile-sidebar-toggle" class="mobile-sidebar-btn" title="打开菜单"
+                aria-label="打开菜单" aria-controls="primary-sidebar" aria-expanded="false">
                 <svg class="ui-icon ui-icon-lg" aria-hidden="true"><use href="#icon-menu"></use></svg>
             </button>
             <div class="topbar-brand" aria-label="学术分身介绍">
@@ -107,7 +108,7 @@
         </header>
 
         <main class="chat-layout">
-            <aside class="sidebar" aria-label="侧边栏">
+            <aside id="primary-sidebar" class="sidebar" aria-label="侧边栏">
                 <nav class="sidebar-rail">
                     <div class="rail-top">
                         <button type="button" id="sidebar-toggle" class="rail-brand-btn" title="展开/收起菜单" aria-label="切换侧边栏">
@@ -1461,7 +1462,7 @@
     </section>
 
     <script src="./companion.js" defer></script>
-    <script src="./app.4222.js?rev=native-thinking-20260903" defer></script>
+    <script src="./app.4222.js?rev=mobile-sidebar-20260907" defer></script>
 </body>
 
 </html>
