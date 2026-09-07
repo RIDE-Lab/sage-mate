@@ -87,6 +87,37 @@ def has_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
     return any(anchor in searchable for anchor in anchors)
 
 
+def has_named_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
+    """Return true when a query names an ASCII entity present in the evidence.
+
+    Intent classification is advisory: a classifier can mistake an unfamiliar
+    paper or system name for a generic advising query.  Preserve an exact named
+    entity match in that case, while refusing to promote documents merely
+    because they share common natural-language words.
+    """
+
+    ignored = {
+        "about", "could", "explain", "please", "should", "their", "what",
+        "when", "where", "which", "would",
+    }
+    entities = {
+        token.casefold()
+        for token in re.findall(r"[A-Za-z][A-Za-z0-9_.+-]{3,}", question)
+        if token.casefold() not in ignored
+    }
+    if not entities:
+        return False
+    searchable = f"{hit.title}\n{hit.excerpt}"
+    return any(
+        re.search(
+            rf"(?<![A-Za-z0-9_.+-]){re.escape(entity)}(?![A-Za-z0-9_.+-])",
+            searchable,
+            re.IGNORECASE,
+        )
+        for entity in entities
+    )
+
+
 def matches_document_purpose(question: str, hit: KnowledgeSearchHit) -> bool:
     """A shared author/technical term does not turn a job ad into research evidence.
 
