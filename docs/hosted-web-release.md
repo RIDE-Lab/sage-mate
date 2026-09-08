@@ -129,6 +129,31 @@ Configure `APP_HOST`/`APP_PORT`, `SITE_HOST`/`SITE_PORT`, `VLLM_PROXY_HOST`/`VLL
 and the accelerator engine address in the destination machine's ignored `.env`. The tracked
 systemd units do not embed these values.
 
+## Codex and Responses API compatibility
+
+The managed OpenAI-compatible proxy remains a thin authentication, rate-limit,
+audit and routing boundary. Stateful `previous_response_id`, bounded response
+retention, standard function tools, custom/freeform tools and their SSE event
+schema are implemented by the pinned vLLM-HUST engine rather than duplicated in
+the product proxy. This keeps the behavior reusable by Sage Mate, Workstation
+and direct OpenAI-compatible clients.
+
+Enable bounded process-local continuation state in the managed engine with
+`VLLM_ENABLE_RESPONSES_API_STORE=1`, then set
+`VLLM_RESPONSES_API_STORE_MAX_ENTRIES` and
+`VLLM_RESPONSES_API_STORE_TTL_SECONDS`. The store is lost on engine restart and
+is not durable conversation storage. `VLLM_OPENAI_MODELS_CATALOG_JSON` may point
+only to a reviewed catalog already present in a mounted runtime directory; the
+engine validates and clamps advertised limits to the served model.
+
+Codex CLI 0.153.4 does not synchronously load a custom provider's remote
+`/models` response when starting a turn. To avoid fallback metadata in that
+client version, fetch the authenticated response once, retain only its `models`
+field in a local JSON file, and configure Codex `model_catalog_json` to that
+absolute file path. Refresh the file after a model or context-window change.
+This is a Codex client startup limitation; standard OpenAI clients continue to
+consume the unchanged `data` list directly.
+
 ## Verification
 
 After install:
