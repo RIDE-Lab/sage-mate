@@ -46,6 +46,20 @@ def test_numbered_markdown_is_not_an_extra_sentence():
     assert ChatDeliveryGate().deliver(response=response, original_question="用两句话说明").answer == response.answer
 
 
+@pytest.mark.parametrize(
+    ("question", "expected"),
+    [
+        ("请用两三句话介绍研究方向", 3),
+        ("请用一两句话回答", 2),
+        ("请用2-3句话回答", 3),
+        ("请用两到三句话回答", 3),
+        ("请用三至五句回答", 5),
+    ],
+)
+def test_sentence_limit_accepts_colloquial_and_explicit_ranges(question, expected):
+    assert AnswerConstraints.from_question(question).max_sentences == expected
+
+
 def test_explicit_three_actions_rejects_incomplete_paragraph():
     question = "请给出可检验的三项行动。"
     assert _answer_does_not_complete_requested_task(question, "核心判断：需要公平对比。")

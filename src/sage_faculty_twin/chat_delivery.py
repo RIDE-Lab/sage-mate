@@ -180,7 +180,9 @@ class AnswerConstraints:
         )
         char_match = re.search(r"(\d{1,5})\s*(?:个)?字(?:符)?(?:以?内|以下)", question)
         sentence_match = re.search(
-            r"([零一二两三四五六七八九十\d]{1,3})\s*(?:句|句话)(?:以?内|以下)?",
+            r"([零一二两三四五六七八九十\d]{1,3}"
+            r"(?:\s*(?:到|至|[-—~～])\s*[零一二两三四五六七八九十\d]{1,3})?)"
+            r"\s*(?:句|句话)(?:以?内|以下)?",
             question,
         )
         return cls(
@@ -192,12 +194,31 @@ class AnswerConstraints:
 
 
 def _parse_small_number(value: str) -> int:
+    value = value.strip()
+    explicit_range = re.split(r"\s*(?:到|至|[-—~～])\s*", value)
+    if len(explicit_range) > 1:
+        # Delivery enforces the upper bound of an explicitly stated range.
+        return max(_parse_small_number(part) for part in explicit_range)
     if value.isdigit():
         return int(value)
-    digits = {"零": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4,
-              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+    digits = {
+        "零": 0,
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
     if "十" not in value:
-        return digits[value]
+        # Colloquial ranges omit a separator: “一两句” and “两三句话”.
+        # Such multi-character forms cannot be a normal cardinal number in
+        # this grammar, so enforce the largest stated endpoint.
+        return max(digits[part] for part in value)
     tens, _, ones = value.partition("十")
     return (digits.get(tens, 1) * 10) + digits.get(ones, 0)
 
