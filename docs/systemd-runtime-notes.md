@@ -32,6 +32,10 @@ changes that came out of it.
   engine container mounts this repository's `deps/` directory at `/workspace`,
   so `/workspace/vllm-hust`, `/workspace/vllm-ascend-hust`, and
   `/workspace/vllm-hust-dev-hub` are always the pinned Faculty Twin submodules.
+- Engine shutdown runs the pinned Dev Hub's bounded, port-scoped container
+  cleanup through `ExecStop` before systemd terminates the host launcher. The
+  unit uses `KillMode=process` because container workers are outside its user
+  cgroup; cleanup errors and verified surviving process groups fail visibly.
 - `tools/lock_sage_mate_deployment.sh` is the only supported operator entrypoint
   for applying the Ascend deployment contract. It reads `.env` as the source of
   truth, clears stale systemd-user overrides, keeps physical NPU IDs separate
