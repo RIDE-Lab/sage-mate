@@ -17,6 +17,51 @@ ENGINE_SCRIPT = REPO_ROOT / "tools" / "run_vllm_engine.sh"
 ENGINE_LOCK_SCRIPT = REPO_ROOT / "tools" / "lock_sage_mate_engine.sh"
 APP_SCRIPT = REPO_ROOT / "tools" / "run_app_server.sh"
 DEPLOY_HELPERS = REPO_ROOT / "tools" / "lib" / "deploy_common.sh"
+ASCEND_ENGINE_UNIT = (
+    REPO_ROOT / "deploy" / "systemd" / "user" / "sage-mate-vllm-engine.service"
+)
+ENGINE_CLEANUP_SCRIPT = REPO_ROOT / "tools" / "cleanup_vllm_engine.sh"
+
+
+def test_ascend_engine_unit_uses_verified_pre_stop_cleanup() -> None:
+    unit = ASCEND_ENGINE_UNIT.read_text(encoding="utf-8")
+    cleanup = ENGINE_CLEANUP_SCRIPT.read_text(encoding="utf-8")
+
+    assert "ExecStop=__REPO_ROOT__/tools/cleanup_vllm_engine.sh" in unit
+    assert "ExecStopPost=" not in unit
+    assert "KillMode=process" in unit
+    assert "KillMode=control-group" not in unit
+    assert '"$container_cleanup" || true' not in cleanup
+    assert "wait_for_process_groups" in cleanup
+    assert "survived cleanup" in cleanup
+
+
+def test_ascend_engine_cleanup_propagates_pinned_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    producer = tmp_path / "producer"
+    cleanup = producer / "scripts" / "cleanup_vllm_hust_engine.sh"
+    cleanup.parent.mkdir(parents=True)
+    _write_executable(cleanup, "#!/usr/bin/env bash\nexit 41\n")
+    env = os.environ.copy()
+    env.update(
+        {
+            "VLLM_HUST_DEV_HUB_ROOT": str(producer),
+            "VLLM_ENGINE_HOST_CLEANUP": "0",
+            "SAGE_MATE_INSTANCE_CONTROL_ENABLED": "0",
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(ENGINE_CLEANUP_SCRIPT)],
+        cwd=REPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 41
 
 
 def test_runtime_dependency_contract_separates_portable_core_from_full_neuromem() -> (

@@ -7,13 +7,15 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=__REPO_ROOT__
 ExecStart=__REPO_ROOT__/tools/run_vllm_engine.sh
-ExecStopPost=__REPO_ROOT__/tools/cleanup_vllm_engine.sh
+ExecStop=__REPO_ROOT__/tools/cleanup_vllm_engine.sh
 Restart=on-failure
 RestartSec=10
 # Model loading can need generous startup time.
 TimeoutStartSec=600
 TimeoutStopSec=90
-KillMode=control-group
+# Container workers live outside this user unit's cgroup. ExecStop owns their
+# bounded cleanup before systemd terminates only the host launcher.
+KillMode=process
 
 [Install]
 WantedBy=default.target
