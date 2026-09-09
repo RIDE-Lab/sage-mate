@@ -459,6 +459,23 @@ def test_engine_example_disables_foreign_pythonpath_inheritance() -> None:
     assert "VLLM_ENGINE_INHERIT_PYTHONPATH=0" in example
 
 
+def test_production_prefix_cache_is_fail_closed_and_verified() -> None:
+    example = (REPO_ROOT / ".env.example").read_text(encoding="utf-8")
+    verifier = (REPO_ROOT / "tools" / "verify_sage_mate_engine.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "VLLM_ENGINE_ENABLE_PREFIX_CACHING=1" in example
+    assert "VLLM_ENGINE_REQUIRE_PREFIX_CACHING=1" in example
+    assert "--enable-prefix-caching" in verifier
+    assert "--no-enable-prefix-caching" in verifier
+    assert "vllm:prefix_cache_queries_total" in verifier
+    assert "vllm:prefix_cache_hits_total" in verifier
+    assert "vllm:prompt_tokens_cached_total" in verifier
+    assert "mamba_cache_mode" in verifier
+    assert "VLLM_ENGINE_VERIFIED_PREFIX_CACHE_MODE" in verifier
+
+
 def test_engine_launcher_preserves_explicit_immutable_wheel_profile() -> None:
     """Empty conda/source-path values must not be replaced by dev defaults."""
 

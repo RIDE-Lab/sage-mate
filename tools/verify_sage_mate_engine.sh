@@ -10,6 +10,8 @@ port="${VLLM_ENGINE_CONNECT_PORT:-${VLLM_ENGINE_PORT:-8000}}"
 container="${VLLM_ENGINE_CONTAINER:-}"
 import_origins=""
 api_key="${VLLM_HUST_API_KEY:-${VLLM_ENGINE_API_KEY:-${DIGITAL_TWIN_API_KEY:-}}}"
+prefix_caching_enabled="${VLLM_ENGINE_ENABLE_PREFIX_CACHING:-1}"
+prefix_caching_required="${VLLM_ENGINE_REQUIRE_PREFIX_CACHING:-0}"
 if [[ -f "$env_file" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -z "$line" || "$line" =~ ^[[:space:]]*# || "$line" != *=* ]] && continue
@@ -21,6 +23,20 @@ if [[ -f "$env_file" ]]; then
   port="${VLLM_ENGINE_CONNECT_PORT:-${VLLM_ENGINE_PORT:-8000}}"
   container="${VLLM_ENGINE_CONTAINER:-$container}"
   api_key="${VLLM_HUST_API_KEY:-${VLLM_ENGINE_API_KEY:-${DIGITAL_TWIN_API_KEY:-$api_key}}}"
+  prefix_caching_enabled="${VLLM_ENGINE_ENABLE_PREFIX_CACHING:-$prefix_caching_enabled}"
+  prefix_caching_required="${VLLM_ENGINE_REQUIRE_PREFIX_CACHING:-$prefix_caching_required}"
+fi
+
+for setting in prefix_caching_enabled prefix_caching_required; do
+  value="${!setting}"
+  [[ "$value" == "0" || "$value" == "1" ]] || {
+    echo "ERROR: $setting must resolve to 0 or 1 (got: $value)" >&2
+    exit 1
+  }
+done
+if [[ "$prefix_caching_required" == "1" && "$prefix_caching_enabled" != "1" ]]; then
+  echo "ERROR: production requires prefix caching, but VLLM_ENGINE_ENABLE_PREFIX_CACHING=$prefix_caching_enabled" >&2
+  exit 1
 fi
 
 # An empty machine-local override means "use the portable deployment-role name";
@@ -84,6 +100,33 @@ if [[ -n "$container" ]] && command -v docker >/dev/null 2>&1; then
   if [[ "$cmd" == *"--enforce-eager"* ]]; then
     echo "ERROR: serving command contains --enforce-eager: $cmd" >&2
     exit 1
+  fi
+  if [[ "$prefix_caching_required" == "1" ]]; then
+    [[ "$cmd" == *"--enable-prefix-caching"* && "$cmd" != *"--no-enable-prefix-caching"* ]] || {
+      echo "ERROR: production requires prefix caching but the live serving command does not enable it" >&2
+      exit 1
+    }
+    metrics="$(curl_engine --fail --silent --show-error --max-time "${SAGE_MATE_VERIFY_TIMEOUT_SECONDS:-20}" "http://$host:$port/metrics")"
+    cache_totals="$(python3 -c '
+import re, sys
+text = sys.stdin.read()
+def total(name):
+    pattern = rf"^{re.escape(name)}(?:\{{[^\n]*\}})?\s+([-+0-9.eE]+)$"
+    return sum(float(match) for match in re.findall(pattern, text, re.MULTILINE))
+queries = total("vllm:prefix_cache_queries_total")
+hits = total("vllm:prefix_cache_hits_total")
+cached = total("vllm:prompt_tokens_cached_total")
+if queries <= 0:
+    raise SystemExit("ERROR: prefix-cache query metric did not increase after the real chat probe")
+if not re.search(r"^vllm:cache_config_info\{[^\n]*enable_prefix_caching=\"True\"[^\n]*mamba_cache_mode=\"align\"[^\n]*\}\s+1(?:\.0)?$", text, re.MULTILINE):
+    raise SystemExit("ERROR: live cache config is not enabled in Mamba align mode")
+print(f"queries={queries:g} hits={hits:g} cached_tokens={cached:g}")
+' <<< "$metrics")" || {
+      echo "ERROR: live prefix-cache metrics did not pass verification" >&2
+      exit 1
+    }
+    echo "[sage-mate-verify] prefix_cache=ON required=YES command_verified $cache_totals"
+    export VLLM_ENGINE_VERIFIED_PREFIX_CACHE_MODE="mamba-align"
   fi
   runtime_env="$("${docker_cmd[@]}" exec "$container" sh -c 'pid=$(ps -eo pid=,args= | awk "/vllm serve/ {print \$1; exit}"); if [ -n "$pid" ]; then tr "\\0" "\\n" </proc/$pid/environ; fi' 2>/dev/null || true)"
   [[ "$runtime_env" == *$'COMPILE_CUSTOM_KERNELS=1\n'* || "$runtime_env" == *'COMPILE_CUSTOM_KERNELS=1'* ]] || {

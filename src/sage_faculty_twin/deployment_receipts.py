@@ -212,6 +212,15 @@ class DeploymentReceiptStore:
             if active["expert_parallel_enabled"]
             else "0",
             "VLLM_ENGINE_QUANTIZATION": active["quantization"],
+            "VLLM_ENGINE_ENABLE_PREFIX_CACHING": "1"
+            if active.get("prefix_caching_enabled")
+            else "0",
+            "VLLM_ENGINE_REQUIRE_PREFIX_CACHING": "1"
+            if active.get("prefix_caching_required")
+            else "0",
+            "VLLM_ENGINE_ENABLE_CHUNKED_PREFILL": "1"
+            if active.get("chunked_prefill_enabled")
+            else "0",
             "VLLM_ENGINE_COMPILATION_CONFIG": (
                 '{"mode":"graph"}' if active["graph_mode"] == "graph" else ""
             ),
@@ -232,6 +241,8 @@ class DeploymentReceiptStore:
             f"{active['architecture']}；{active['accelerator_count']}×{active['accelerator_model']}；"
             f"TP={active['tensor_parallel_size']}、DP={active['data_parallel_size']}、"
             f"量化={active['quantization']}、执行={active['graph_mode']}；"
+            f"prefix-cache={active.get('prefix_cache_mode', 'unrecorded')} "
+            f"({'required' if active.get('prefix_caching_required') else 'optional'})；"
             f"speculative={active['speculative_resolved_method']} "
             f"({'active' if active['speculative_active'] else 'inactive'})；"
             f"采集={active['generated_at']}；receipt={active['receipt_id']}。"
@@ -300,6 +311,10 @@ class DeploymentReceiptStore:
             "expert_parallel_enabled": parallelism["expert_parallel_enabled"],
             "quantization": execution["quantization"],
             "graph_mode": execution["graph_mode"],
+            "prefix_caching_enabled": execution.get("prefix_caching_enabled", False),
+            "prefix_caching_required": execution.get("prefix_caching_required", False),
+            "prefix_cache_mode": execution.get("prefix_cache_mode", "unrecorded"),
+            "chunked_prefill_enabled": execution.get("chunked_prefill_enabled", False),
             "speculative_requested_method": speculative["requested_method"],
             "speculative_resolved_method": speculative["resolved_method"],
             "speculative_active": speculative["active"],

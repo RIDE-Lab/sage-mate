@@ -131,6 +131,19 @@ def main() -> int:
         if os.environ.get("VLLM_ENGINE_COMPILATION_CONFIG")
         else "unknown"
     )
+    prefix_caching_enabled = _bool(
+        os.environ.get("VLLM_ENGINE_ENABLE_PREFIX_CACHING"), default=True
+    )
+    prefix_caching_required = _bool(
+        os.environ.get("VLLM_ENGINE_REQUIRE_PREFIX_CACHING")
+    )
+    prefix_cache_mode = os.environ.get("VLLM_ENGINE_VERIFIED_PREFIX_CACHE_MODE") or (
+        "disabled" if not prefix_caching_enabled else "unknown"
+    )
+    if prefix_caching_required and not prefix_caching_enabled:
+        raise SystemExit("ERROR: required prefix caching cannot be recorded as disabled")
+    if prefix_caching_required and prefix_cache_mode == "unknown":
+        raise SystemExit("ERROR: required prefix caching needs a verified runtime mode")
     payload = {
         "status": "active",
         "model": {
@@ -164,6 +177,12 @@ def main() -> int:
         "execution": {
             "quantization": os.environ.get("VLLM_ENGINE_QUANTIZATION") or "unknown",
             "graph_mode": graph_mode,
+            "prefix_caching_enabled": prefix_caching_enabled,
+            "prefix_caching_required": prefix_caching_required,
+            "prefix_cache_mode": prefix_cache_mode,
+            "chunked_prefill_enabled": _bool(
+                os.environ.get("VLLM_ENGINE_ENABLE_CHUNKED_PREFILL"), default=True
+            ),
         },
         "speculative": {
             "requested_method": requested,

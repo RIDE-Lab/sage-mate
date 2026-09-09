@@ -52,7 +52,14 @@ def _receipt(
             "data_parallel_size": 1,
             "expert_parallel_enabled": False,
         },
-        "execution": {"quantization": "w8a8", "graph_mode": "graph"},
+        "execution": {
+            "quantization": "w8a8",
+            "graph_mode": "graph",
+            "prefix_caching_enabled": True,
+            "prefix_caching_required": True,
+            "prefix_cache_mode": "mamba-align",
+            "chunked_prefill_enabled": True,
+        },
         "speculative": {
             "requested_method": "dspark",
             "resolved_method": "none",
@@ -258,7 +265,7 @@ def test_runtime_question_cites_receipt_and_maintenance_reports_sync(
     assert response.answer_basis
     summary = service.list_knowledge_review_summary()
     assert summary.active_deployment_receipt_id == receipt["receipt_id"]
-    assert summary.active_deployment_receipt_schema == "vllm-hust.deployment-receipt/v1"
+    assert summary.active_deployment_receipt_schema == "vllm-hust.deployment-receipt/v2"
     assert summary.deployment_receipt_sync_status == "ok"
 
 
@@ -291,6 +298,10 @@ def test_verified_writer_creates_contract_receipt_without_public_secrets(
         "VLLM_ENGINE_NPU_DEVICES": "4,5,6,7",
         "VLLM_ENGINE_TP_SIZE": "4",
         "VLLM_ENGINE_COMPILATION_CONFIG": '{"mode":"graph"}',
+        "VLLM_ENGINE_ENABLE_PREFIX_CACHING": "1",
+        "VLLM_ENGINE_REQUIRE_PREFIX_CACHING": "1",
+        "VLLM_ENGINE_VERIFIED_PREFIX_CACHE_MODE": "mamba-align",
+        "VLLM_ENGINE_ENABLE_CHUNKED_PREFILL": "1",
         "VLLM_ENGINE_IMAGE": "private.registry.invalid/image:test",
     }
     result = subprocess.run(
@@ -316,6 +327,9 @@ def test_verified_writer_creates_contract_receipt_without_public_secrets(
     assert receipt["model"]["served_name"] == "deepseek/verified"
     assert receipt["parallelism"]["tensor_parallel_size"] == 4
     assert receipt["execution"]["graph_mode"] == "graph"
+    assert receipt["execution"]["prefix_caching_enabled"] is True
+    assert receipt["execution"]["prefix_caching_required"] is True
+    assert receipt["execution"]["prefix_cache_mode"] == "mamba-align"
     assert receipt_path.stat().st_mode & 0o777 == 0o600
 
 
