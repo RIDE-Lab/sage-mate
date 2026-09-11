@@ -223,6 +223,10 @@ from .persona import (
     COMPACT_CITATION_GROUNDING_RULES,
     build_system_prompt,
 )
+from .research_review import (
+    build_research_review_guidance,
+    research_review_answer_issues,
+)
 from .planner_comparison_store import PlannerComparisonEntry, PlannerComparisonStore
 from .planner_metrics_store import PlannerMetricsStore
 from .service_runtime import ServiceRuntimeManager
@@ -658,6 +662,9 @@ def _answer_does_not_complete_requested_task(question: str, answer: str | None) 
         )
         if max(numbered_items, chinese_ordinals) < 3:
             return True
+
+    if research_review_answer_issues(question, normalized_answer):
+        return True
 
     generic_guidance_markers = (
         "如何",
@@ -1867,6 +1874,10 @@ class FacultyTwinWorkflowSupport:
         context.system_prompt = build_system_prompt(self._settings)
         if context.interaction_intent and context.interaction_intent.domain == "research":
             context.system_prompt += "\n" + self._experiment_validity_guidance()
+            context.system_prompt += build_research_review_guidance(
+                context.request.question,
+                domain=context.interaction_intent.domain,
+            )
 
         # Chat Latency Optimizations Task 3 + V4.1 context compression:
         # assemble the prompt with the full inputs first, then progressively
@@ -2984,18 +2995,14 @@ class FacultyTwinWorkflowSupport:
 
     @staticmethod
     def _should_use_curated_direction_evaluation(question: str) -> bool:
-        """Use a fast structured answer for research-direction evaluation prompts."""
-        lowered = question.lower()
-        direction = (
-            any(marker in question for marker in ("候选研究方向", "研究方向", "研究选题", "选题"))
-            and any(marker in question for marker in ("值得继续", "是否值得", "继续做", "继续投入"))
-        )
-        experiment_axes = (
-            any(marker in lowered for marker in ("baseline", "基线"))
-            and any(marker in question for marker in ("公平对比", "公平比较", "对比"))
-            and any(marker in question for marker in ("消融", "ablation"))
-        )
-        return direction and experiment_axes
+        """Retired compatibility hook for the old canned review shortcut.
+
+        Research-direction reviews need the evidence and domain boundaries in
+        the common review contract.  A fixed baseline/fairness/ablation answer
+        erased the very distinctions the review is meant to discover.
+        """
+
+        return False
 
     @staticmethod
     def _should_use_curated_deep_guidance(question: str) -> bool:
@@ -3065,6 +3072,10 @@ class FacultyTwinWorkflowSupport:
         )
         if context.interaction_intent and context.interaction_intent.domain == "research":
             compact_system_prompt += "\n" + self._experiment_validity_guidance()
+            compact_system_prompt += build_research_review_guidance(
+                context.request.question,
+                domain=context.interaction_intent.domain,
+            )
         compact_user_prompt = context.request.question.strip()
         compact_user_prompt = re.sub(r"^请?深入分析[：:，,、\\s]*", "", compact_user_prompt)
         # Repair wording, not grounding: the retry must see the same selected
