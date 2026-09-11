@@ -2661,6 +2661,11 @@ class FacultyTwinWorkflowSupport:
         question = request.question.strip()
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
+        if is_research_review_request(question, domain="research"):
+            # A review can contain fact-marker substrings (for example,
+            # ``当前工作负载`` contains ``当前工作``).  It needs synthesis,
+            # not the evidence-only biography shortcut.
+            return None
         contact_fact_markers = (
             "如何联系", "怎么联系", "联系张老师", "联系老师", "联系方式", "邮箱", "邮件", "招生", "申请", "合作"
         )

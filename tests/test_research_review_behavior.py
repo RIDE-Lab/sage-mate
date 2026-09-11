@@ -122,6 +122,36 @@ def test_lab_member_review_uses_research_fast_intent_on_the_first_turn(tmp_path)
     assert intent.decision_mode == "advise_only"
 
 
+def test_review_with_workload_wording_does_not_use_faculty_fact_shortcut(
+    tmp_path,
+) -> None:
+    settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    request = ChatRequest(
+        student_name="member",
+        visitor_profile="lab_member",
+        question="请评价是否继续研究：旧机制在当前工作负载得到负结果。",
+    )
+    intent = InteractionIntent(
+        action="answer",
+        domain="research",
+        decision_mode="advise_only",
+        confidence=1.0,
+    )
+    context = ChatWorkflowContext(
+        request=request,
+        conversation_id="review-not-fact",
+        owner_name=settings.owner_name,
+        used_model=settings.model_name,
+        intake=ChatIntake.from_request(request, conversation_id="review-not-fact"),
+        interaction_decision=InteractionDecision(intent=intent, source="test"),
+        interaction_intent=intent,
+    )
+
+    assert support._build_grounded_fact_answer(context) is None
+
+
 @pytest.mark.parametrize(
     ("question", "bad_answer", "expected_issue"),
     (
