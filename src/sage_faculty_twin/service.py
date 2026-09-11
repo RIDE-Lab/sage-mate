@@ -225,6 +225,7 @@ from .persona import (
 )
 from .research_review import (
     build_research_review_guidance,
+    is_research_review_request,
     research_review_answer_issues,
 )
 from .planner_comparison_store import PlannerComparisonEntry, PlannerComparisonStore
@@ -6039,6 +6040,19 @@ class FacultyTwinWorkflowSupport:
             )
         if self._looks_like_collaboration_preparation_question(question):
             return None
+
+        # Scientific review is a first-class research intent.  Do this before
+        # the member-only classifier fallback so the initial answer receives
+        # the review contract instead of being flattened into ``general``.
+        if is_research_review_request(question, domain="research"):
+            return InteractionIntent(
+                action="answer",
+                domain="research",
+                retrieval_scopes=["publications", "profile"],
+                exclude_scopes=["courseware"],
+                decision_mode="advise_only",
+                confidence=0.98,
+            )
 
         # High-frequency factual questions should not spend a second model
         # call guessing the intent. Their answer path is evidence-first and

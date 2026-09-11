@@ -98,12 +98,41 @@ def test_canned_direction_checklist_is_retired() -> None:
     )
 
 
+def test_lab_member_review_uses_research_fast_intent_on_the_first_turn(tmp_path) -> None:
+    settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    request = ChatRequest(
+        student_name="member",
+        visitor_profile="lab_member",
+        question=FIRST_TURN_SCENARIOS[0],
+    )
+    context = ChatWorkflowContext(
+        request=request,
+        conversation_id="review-intent",
+        owner_name=settings.owner_name,
+        used_model=settings.model_name,
+        intake=ChatIntake.from_request(request, conversation_id="review-intent"),
+    )
+
+    intent = support._build_fast_path_interaction_intent(context)
+
+    assert intent is not None
+    assert intent.domain == "research"
+    assert intent.decision_mode == "advise_only"
+
+
 @pytest.mark.parametrize(
     ("question", "bad_answer", "expected_issue"),
     (
         (
             FIRST_TURN_SCENARIOS[0],
             "没有证据卡就说明尚未做过实验，这只是纯蓝图。",
+            "contradicts_reported_evidence",
+        ),
+        (
+            FIRST_TURN_SCENARIOS[0],
+            "缺少证据卡，所以无法给出可靠评价，只能算有想法、无验证。",
             "contradicts_reported_evidence",
         ),
         (
@@ -119,6 +148,11 @@ def test_canned_direction_checklist_is_retired() -> None:
         (
             "请评价这个调度研究方向是否值得继续。",
             "若加速超过 30% 就继续，否则立即停止。",
+            "invents_numeric_stop_gate",
+        ),
+        (
+            "请评价这个调度研究方向是否值得继续。",
+            "至少三次重复都成功才继续，否则停止。",
             "invents_numeric_stop_gate",
         ),
     ),

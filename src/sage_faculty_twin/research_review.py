@@ -84,12 +84,21 @@ _FALSE_ABSENCE_CLAIMS = (
     "还没做过实验",
     "只是纯蓝图",
     "纯蓝图",
+    "有想法、无验证",
+    "有想法无验证",
 )
 
 _UNQUALIFIED_NUMERIC_GATE = re.compile(
     r"(?:[<>≥≤]\s*)?\d+(?:\.\d+)?"
     r"(?:\s*(?:到|至|[-—~～])\s*\d+(?:\.\d+)?)?"
     r"\s*(?:%|倍|个|次|天|周|个月)",
+    re.IGNORECASE,
+)
+
+_UNQUALIFIED_CHINESE_NUMERIC_GATE = re.compile(
+    r"(?:(?:至少|不少于|不低于|超过|大于|低于|小于|连续)\s*"
+    r"[一二两三四五六七八九十百]+\s*(?:个|次|天|周|个月)"
+    r"|[一二两三四五六七八九十百]+\s*(?:次重复|个样本|次实验|个\s*shape))",
     re.IGNORECASE,
 )
 
@@ -211,7 +220,13 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
         issues.append("contradicts_reported_evidence")
     if any(marker in compact_question for marker in _REPORTED_EVIDENCE_MARKERS) and any(
         marker in compact_answer
-        for marker in ("研究机会暂不可识别", "无法识别研究机会", "没有研究潜力")
+        for marker in (
+            "研究机会暂不可识别",
+            "无法识别研究机会",
+            "没有研究潜力",
+            "无法给出可靠评价",
+            "无法评价研究价值",
+        )
     ):
         issues.append("collapses_potential_into_evidence")
 
@@ -247,7 +262,9 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
     )
     unqualified_numeric_gate = False
     if not question_has_number:
-        for match in _UNQUALIFIED_NUMERIC_GATE.finditer(answer):
+        numeric_matches = list(_UNQUALIFIED_NUMERIC_GATE.finditer(answer))
+        numeric_matches.extend(_UNQUALIFIED_CHINESE_NUMERIC_GATE.finditer(answer))
+        for match in sorted(numeric_matches, key=lambda item: item.start()):
             clause_start = max(
                 answer.rfind(separator, 0, match.start())
                 for separator in ("。", "；", ";", "\n")
