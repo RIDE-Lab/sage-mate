@@ -2889,6 +2889,15 @@ chatForm.addEventListener("submit", async (event) => {
         }
     }
 
+    // A submitted question starts the real conversation. Retire the guide
+    // before inserting messages so its onboarding-active layout cannot hide
+    // the pending state or the final answer behind the guide card. Users can
+    // still reopen the guide explicitly from Help when they need it again.
+    if (wasOnboarding) {
+        markOnboardingCompleted();
+        hideOnboardingCard();
+    }
+
     lastFailedQuestion = null;
     noteOutgoingConversationQuestion(question);
 
@@ -3049,10 +3058,6 @@ chatForm.addEventListener("submit", async (event) => {
     }
     activeChatUserCancelled = false;
 
-    // Auto-advance onboarding after chat response completes
-    if (wasOnboarding && onboardingActive) {
-        setTimeout(() => advanceOnboarding(), 800);
-    }
 });
 
 function getChatAttachmentKey(file) {

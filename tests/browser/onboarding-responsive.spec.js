@@ -227,6 +227,31 @@ for (const viewport of VIEWPORTS) {
   });
 }
 
+for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
+  test(`submitting from onboarding reveals the conversation at ${viewport.name}`, async ({ page }) => {
+    await openOnboarding(page, viewport);
+
+    const question = "如果我对 LLM 推理优化感兴趣，建议先了解哪些关键词或系统？";
+    await page.locator("#chat-question").fill(question);
+    await page.getByRole("button", { name: "发送问题" }).click();
+
+    await expect(page.locator("body")).not.toHaveClass(/onboarding-active/);
+    await expect(page.locator("#onboarding-card")).toBeHidden();
+    await expect(page.locator(".chat-stream")).toBeVisible();
+    await expect(page.locator(".message-user")).toContainText(question);
+    await expect(page.locator(".message-ready")).toBeVisible();
+    await expect(page.locator(".message-ready .message-reply-block > .message-body")).toContainText("这是测试回答");
+
+    const overlap = await page.evaluate(() => {
+      const stream = document.querySelector(".message-ready")?.getBoundingClientRect();
+      const composer = document.querySelector("#chat-form")?.getBoundingClientRect();
+      if (!stream || !composer) return null;
+      return Math.max(0, Math.min(stream.bottom, composer.bottom) - Math.max(stream.top, composer.top));
+    });
+    expect(overlap).toBe(0);
+  });
+}
+
 for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
   test(`Sage companion is interactive at ${viewport.name}`, async ({ page }) => {
     await openOnboarding(page, viewport);

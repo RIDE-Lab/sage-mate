@@ -3042,6 +3042,40 @@ class FacultyTwinWorkflowSupport:
         )
 
     @staticmethod
+    def _is_orientation_learning_path_question(question: str) -> bool:
+        """Identify bounded requests for a practical technical starting path."""
+
+        lowered = question.lower()
+        has_learning_request = any(
+            marker in lowered
+            for marker in (
+                "从哪些关键词",
+                "哪些关键词",
+                "哪些系统",
+                "从哪里开始",
+                "如何入门",
+                "怎么入门",
+                "学习路径",
+                "了解路线",
+                "where should i start",
+                "getting started",
+                "learning path",
+            )
+        )
+        has_technical_topic = any(
+            marker in lowered
+            for marker in (
+                "llm",
+                "大模型",
+                "推理",
+                "serving",
+                "系统",
+                "优化",
+            )
+        )
+        return has_learning_request and has_technical_topic
+
+    @staticmethod
     def _build_compact_answer_system_prompt(question: str) -> str:
         prompt = (
             "你是一位严谨的科研导师。请直接、准确地回答用户问题，严格遵循用户指定的"
@@ -3059,6 +3093,13 @@ class FacultyTwinWorkflowSupport:
             prompt += (
                 " 张量并行的例子必须描述推理阶段如何把同一层的矩阵计算切到多个设备并合并结果；"
                 "不要改写成训练或数据并行示例。"
+            )
+        if FacultyTwinWorkflowSupport._is_orientation_learning_path_question(question):
+            prompt += (
+                " 这是入门路径建议，不是穷举式文献综述。请只给三个高信息量的起点；"
+                "每项包含一个关键词或系统、为什么值得先学，以及一个可立即执行的学习动作。"
+                "最后给一个明确的第一步，全文不超过450个中文字符。"
+                "通用学习建议可以明确标为建议，不要仅因缺少文献引用而拒绝回答。"
             )
         return prompt
 
@@ -3147,7 +3188,13 @@ class FacultyTwinWorkflowSupport:
                             deep_recovery and self._model_supports_native_thinking()
                         )
                         if deep_recovery or structured_recovery
-                        else (384 if attempt == 0 else 320)
+                        else (
+                            512
+                            if self._is_orientation_learning_path_question(
+                                context.request.question
+                            )
+                            else (384 if attempt == 0 else 320)
+                        )
                     ),
                     cache_namespace=(
                         f"{context.conversation_id or 'compact'}:compact-retry:"
@@ -5621,6 +5668,14 @@ class FacultyTwinWorkflowSupport:
                 "first pin down one core problem, then choose one setting or artifact, then keep one evaluation signal; "
                 "cut side branches that do not support that core. "
                 "Use explicit wording such as '先收窄到一个核心问题' or '先把边界收窄到一个可执行切口'."
+            )
+
+        if self._is_orientation_learning_path_question(question):
+            guidance.append(
+                "Orientation guidance: Treat this as a practical learning-path question, not an exhaustive literature review. "
+                "Give exactly three high-signal starting points. For each, name one keyword or system, explain why it comes first, "
+                "and give one immediately actionable learning step. End with one concrete first action, stay within 450 Chinese characters, "
+                "and do not refuse merely because general advice has no citation; clearly distinguish advice from retrieved facts."
             )
 
         if any(

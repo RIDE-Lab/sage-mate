@@ -490,6 +490,39 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
     assert service._llm_client.max_tokens == [384]
 
 
+def test_orientation_retry_is_concise_but_has_complete_output_budget(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.max_tokens: list[int | None] = []
+            self.system_prompts: list[str] = []
+
+        def answer_question_sync(
+            self, system_prompt: str, _user_prompt: str, **kwargs: object
+        ) -> str:
+            self.system_prompts.append(system_prompt)
+            self.max_tokens.append(kwargs.get("max_tokens"))  # type: ignore[arg-type]
+            return (
+                "1. PagedAttention：理解 KV Cache 分页管理；先读 vLLM 设计文档。\n"
+                "2. Continuous batching：理解请求调度；对照一次调度时间线。\n"
+                "3. Prefix caching：理解跨请求复用；跑一个命中与未命中对照。\n"
+                "第一步先用 vLLM 跑通基线并记录 TTFT、TPOT 和吞吐。"
+            )
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context()
+    context.request.question = (
+        "如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？"
+    )
+
+    answer = service._retry_answer_with_compact_prompt(context)
+
+    assert "PagedAttention" in answer
+    assert service._llm_client.max_tokens == [512]
+    assert "只给三个高信息量的起点" in service._llm_client.system_prompts[0]
+
+
 def test_owner_grounded_retry_keeps_retrieved_profile_facts(tmp_path: Path) -> None:
     class FakeLlmClient:
         def __init__(self) -> None:
