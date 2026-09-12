@@ -669,7 +669,13 @@ def _answer_does_not_complete_requested_task(question: str, answer: str | None) 
         if max(numbered_items, chinese_ordinals) < 3:
             return True
 
-    if research_review_answer_issues(question, normalized_answer):
+    review_issues = set(research_review_answer_issues(question, normalized_answer))
+    advisory_review_issues = {
+        "incomplete_virtual_reuse_evaluation",
+        "incomplete_virtual_reuse_net_benefit",
+        "underspecified_output_equivalence",
+    }
+    if review_issues - advisory_review_issues:
         return True
 
     generic_guidance_markers = (

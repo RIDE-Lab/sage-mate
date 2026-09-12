@@ -327,6 +327,17 @@ def test_polished_virtual_reuse_answer_still_needs_full_evaluation_contract() ->
     assert "incomplete_virtual_reuse_evaluation" in issues
     assert "incomplete_virtual_reuse_net_benefit" in issues
     assert "underspecified_output_equivalence" in issues
+    assert not _answer_does_not_complete_requested_task(question, incomplete)
+
+
+def test_dropping_requested_output_path_remains_a_blocking_error() -> None:
+    question = "请评价主动预执行虚拟请求并复用 KV/output 的研究价值。"
+    answer = "output 不可行，不予分析；只研究 KV。"
+
+    assert "drops_requested_output_reuse" in research_review_answer_issues(
+        question, answer
+    )
+    assert _answer_does_not_complete_requested_task(question, answer)
 
 
 def test_active_output_reuse_requires_each_strong_baseline_family() -> None:
