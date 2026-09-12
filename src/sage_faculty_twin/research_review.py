@@ -98,6 +98,25 @@ _UNQUALIFIED_CHINESE_NUMERIC_GATE = re.compile(
 )
 
 
+def _asks_active_request_reuse(compact_text: str) -> bool:
+    return (
+        "复用" in compact_text
+        and ("kv" in compact_text or "output" in compact_text)
+        and any(
+            marker in compact_text
+            for marker in (
+                "虚拟请求",
+                "主动构造",
+                "主动合成",
+                "主动生成",
+                "主动执行",
+                "提前执行",
+                "预执行",
+            )
+        )
+    )
+
+
 def is_research_review_request(question: str, *, domain: str | None = None) -> bool:
     """Return whether the turn asks for scientific judgment, not a fact lookup."""
 
@@ -139,11 +158,7 @@ def build_research_review_guidance(
         fidelity_constraints.append(
             "负结果的有效范围仅限输入给出的旧机制、工作负载和条件；新视角的效果仍未知"
         )
-    if (
-        "kv" in compact_question
-        and "output" in compact_question
-        and "复用" in compact_question
-    ):
+    if _asks_active_request_reuse(compact_question):
         fidelity_constraints.append(
             "保留用户提出的主动构造并执行虚拟请求这一创新核心，并分别分析 KV 状态复用与最终 output 复用，"
             "不能把两者混成同一机制或未经评估就排除 output 路径。先比较主动执行相对被动缓存、按需前缀缓存和"
@@ -310,9 +325,7 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
     if has_inverse_transfer_observation and asserts_transfer_is_not_bottleneck:
         issues.append("asserts_unverified_cause")
 
-    asks_active_virtual_output = all(
-        marker in compact_question for marker in ("虚拟请求", "output", "复用")
-    )
+    asks_active_virtual_output = _asks_active_request_reuse(compact_question)
     if asks_active_virtual_output:
         output_path_markers = (
             "outputmemoization",

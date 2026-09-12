@@ -328,6 +328,19 @@ def test_polished_virtual_reuse_answer_still_needs_full_evaluation_contract() ->
     assert "incomplete_virtual_reuse_net_benefit" in issues
 
 
+def test_active_reuse_contract_does_not_depend_on_virtual_request_wording() -> None:
+    question = (
+        "请评价在空闲时主动生成未来高概率请求并提前执行，再复用 KV 或完整 output。"
+    )
+    guidance = build_research_review_guidance(question, domain="research")
+    incomplete = "训练预测器并做 KV 复用；若命中率高就值得继续。"
+
+    assert "主动构造并执行虚拟请求" in guidance
+    assert "drops_requested_output_reuse" in research_review_answer_issues(
+        question, incomplete
+    )
+
+
 def test_each_numeric_example_requires_its_own_nearby_qualification() -> None:
     question = "请评价这个研究方向是否值得继续。"
     answer = (
