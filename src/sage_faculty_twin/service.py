@@ -5670,14 +5670,6 @@ class FacultyTwinWorkflowSupport:
                 "Use explicit wording such as '先收窄到一个核心问题' or '先把边界收窄到一个可执行切口'."
             )
 
-        if self._is_orientation_learning_path_question(question):
-            guidance.append(
-                "Orientation guidance: Treat this as a practical learning-path question, not an exhaustive literature review. "
-                "Give exactly three high-signal starting points. For each, name one keyword or system, explain why it comes first, "
-                "and give one immediately actionable learning step. End with one concrete first action, stay within 450 Chinese characters, "
-                "and do not refuse merely because general advice has no citation; clearly distinguish advice from retrieved facts."
-            )
-
         if any(
             marker in question or marker in lowered
             for marker in (
@@ -5838,6 +5830,14 @@ class FacultyTwinWorkflowSupport:
 
         lowered = question.lower()
         guidance: list[str] = []
+
+        if self._is_orientation_learning_path_question(question):
+            guidance.append(
+                "Orientation guidance: Treat this as a practical learning-path question, not an exhaustive literature review. "
+                "Give exactly three high-signal starting points. For each, name one keyword or system, explain why it comes first, "
+                "and give one immediately actionable learning step. End with one concrete first action, stay within 450 Chinese characters, "
+                "and do not refuse merely because general advice has no citation; clearly distinguish advice from retrieved facts."
+            )
 
         if any(
             marker in question or marker in lowered

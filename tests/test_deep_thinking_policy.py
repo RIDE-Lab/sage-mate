@@ -523,6 +523,20 @@ def test_orientation_retry_is_concise_but_has_complete_output_budget(tmp_path: P
     assert "只给三个高信息量的起点" in service._llm_client.system_prompts[0]
 
 
+def test_orientation_guidance_is_applied_to_initial_research_answer(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    question = "如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？"
+
+    guidance = service._build_research_response_guidance(
+        question,
+        InteractionIntent(action="answer", domain="research"),
+    )
+
+    assert "exactly three high-signal starting points" in guidance
+    assert "450 Chinese characters" in guidance
+
+
 def test_owner_grounded_retry_keeps_retrieved_profile_facts(tmp_path: Path) -> None:
     class FakeLlmClient:
         def __init__(self) -> None:

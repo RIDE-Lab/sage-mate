@@ -244,7 +244,9 @@ for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
 
     const overlap = await page.evaluate(() => {
       const stream = document.querySelector(".message-ready")?.getBoundingClientRect();
-      const composer = document.querySelector("#chat-form")?.getBoundingClientRect();
+      // The composer shell intentionally has a transparent fade above its
+      // solid control. Content must not intersect the actual control surface.
+      const composer = document.querySelector(".composer-row")?.getBoundingClientRect();
       if (!stream || !composer) return null;
       return Math.max(0, Math.min(stream.bottom, composer.bottom) - Math.max(stream.top, composer.top));
     });
