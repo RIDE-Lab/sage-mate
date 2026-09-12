@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -228,6 +228,7 @@ class ChatResponse(BaseModel):
     answer: str
     owner_name: str
     used_model: str
+    finish_reason: Literal["stop", "length", "content_filter", "tool_calls"] = "stop"
     exchange_id: str | None = None
     knowledge_hits: list[KnowledgeSearchHit] = Field(default_factory=list)
     web_search_hits: list[WebSearchHit] = Field(default_factory=list)

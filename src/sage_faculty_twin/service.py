@@ -64,6 +64,9 @@ from .chat_delivery import (
     split_answer_sentences,
     requested_list_size,
     answer_list_size,
+    multipart_answer_guidance,
+    multipart_answer_issues,
+    requested_part_labels,
     answer_contains_prompt_leak as _contains_internal_prompt_leak,
     answer_language_mismatches_question as _answer_language_mismatches_question,
 )
@@ -632,6 +635,8 @@ def _answer_does_not_complete_requested_task(question: str, answer: str | None) 
     compact_answer = re.sub(r"\s+", "", normalized_answer)
     required_items = requested_list_size(question)
     if required_items and answer_list_size(normalized_answer) < required_items:
+        return True
+    if multipart_answer_issues(question, normalized_answer):
         return True
     if (
         normalized_question
@@ -1873,6 +1878,9 @@ class FacultyTwinWorkflowSupport:
             memory_hits=context.memory_hits,
         )
         context.system_prompt = build_system_prompt(self._settings)
+        multipart_guidance = multipart_answer_guidance(context.request.question)
+        if multipart_guidance:
+            context.system_prompt += "\n" + multipart_guidance
         if context.interaction_intent and context.interaction_intent.domain == "research":
             context.system_prompt += "\n" + self._experiment_validity_guidance()
             context.system_prompt += build_research_review_guidance(
@@ -3101,11 +3109,17 @@ class FacultyTwinWorkflowSupport:
                 "最后给一个明确的第一步，全文不超过450个中文字符。"
                 "通用学习建议可以明确标为建议，不要仅因缺少文献引用而拒绝回答。"
             )
+        multipart_guidance = multipart_answer_guidance(question)
+        if multipart_guidance:
+            prompt += " " + multipart_guidance
         return prompt
 
     def _retry_answer_with_compact_prompt(self, context: ChatWorkflowContext) -> str:
         deep_recovery = self._is_explicit_deep_request(context.request)
-        structured_recovery = bool(requested_list_size(context.request.question))
+        structured_recovery = bool(
+            requested_list_size(context.request.question)
+            or requested_part_labels(context.request.question)
+        )
         compact_system_prompt = self._build_compact_answer_system_prompt(
             context.request.question
         )
@@ -3703,7 +3717,9 @@ class FacultyTwinWorkflowSupport:
         interaction_intent = context.interaction_intent
         domain = interaction_intent.domain if interaction_intent is not None else "general"
         decision_mode = context.decision_mode
-        if requested_list_size(context.request.question):
+        if requested_list_size(context.request.question) or requested_part_labels(
+            context.request.question
+        ):
             # Explicit output structure needs a complete-answer budget even
             # when deep mode is off. A ceiling is not a target output length.
             return {

@@ -10,6 +10,11 @@ from sage_faculty_twin.service import (
     _answer_language_mismatches_question,
     _strip_internal_thinking_content,
 )
+from sage_faculty_twin.chat_delivery import (
+    multipart_answer_guidance,
+    multipart_answer_issues,
+    requested_part_labels,
+)
 
 
 def _build_context(*, deep_thinking: bool = True, deep_thinking_explicit: bool = False) -> ChatWorkflowContext:
@@ -272,6 +277,37 @@ def test_task_completion_guard_keeps_three_numbered_questions() -> None:
         "最值得先问哪三个问题？",
         answer,
     )
+
+
+def test_explicit_lettered_parts_are_complete_or_rejected() -> None:
+    question = (
+        "请分别回答 E/F 两题。\n"
+        "E. 这个机制的正确性条件是什么？\n"
+        "F. 哪个实验能区分它和强基线？"
+    )
+    partial = "E. 必须保持状态等价，并核对模型与请求配置……"
+    complete = (
+        "E. 正确性要求模型、状态、请求配置和权限语义一致。\n"
+        "F. 固定工作负载，与不启用机制的强基线做配对实验并执行机制消融。"
+    )
+
+    assert requested_part_labels(question) == ("E", "F")
+    assert multipart_answer_issues(question, partial) == (
+        "missing_part_f",
+        "terminal_ellipsis",
+    )
+    assert _answer_does_not_complete_requested_task(question, partial)
+    assert multipart_answer_issues(question, complete) == ()
+    assert not _answer_does_not_complete_requested_task(question, complete)
+    assert "以 E、F 为独立标题逐题作答" in multipart_answer_guidance(question)
+
+
+def test_unseen_ab_parts_are_not_confused_with_technical_slashes() -> None:
+    question = "A：解释观察；B：给区分测量。不要把 KV/output 当成两个题号。"
+
+    assert requested_part_labels(question) == ("A", "B")
+    assert requested_part_labels("请比较 KV/output 复用成本") == ()
+    assert _answer_does_not_complete_requested_task(question, "A：可能存在排队开销。")
 
 
 def test_task_completion_guard_rejects_generic_guidance_refusal() -> None:

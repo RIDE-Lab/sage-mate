@@ -16,6 +16,19 @@ from sage_faculty_twin.models import ChatRequest, ChatResponse
 from sage_faculty_twin.service import DigitalTwinService
 
 
+def test_chat_response_exposes_a_typed_completion_status() -> None:
+    complete = ChatResponse(answer="完整回答。", owner_name="Owner", used_model="model")
+    truncated = ChatResponse(
+        answer="未完成……",
+        owner_name="Owner",
+        used_model="model",
+        finish_reason="length",
+    )
+
+    assert complete.model_dump()["finish_reason"] == "stop"
+    assert truncated.model_dump()["finish_reason"] == "length"
+
+
 def test_delivery_gate_normalizes_and_preserves_response_contract() -> None:
     gate = ChatDeliveryGate()
     delivered = gate.deliver(

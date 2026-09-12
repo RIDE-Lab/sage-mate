@@ -251,6 +251,53 @@ def answer_list_size(answer: str) -> int:
     ))
 
 
+def requested_part_labels(question: str) -> tuple[str, ...]:
+    """Extract explicit multipart labels without treating technical acronyms as parts."""
+
+    labels: list[str] = []
+    slash_group = re.search(
+        r"(?i)(?<![A-Za-z])([A-Z])\s*[/／]\s*([A-Z])\s*(?:两|2)?\s*(?:题|问|部分|小题)",
+        question,
+    )
+    if slash_group:
+        labels.extend(part.upper() for part in slash_group.groups())
+    for match in re.finditer(
+        r"(?im)(?:^|[\n。；;])\s*(?:问题\s*)?[（(]?([A-Z])[)）]?\s*(?:题)?\s*[.、:：]",
+        question,
+    ):
+        labels.append(match.group(1).upper())
+    return tuple(dict.fromkeys(labels)) if len(set(labels)) >= 2 else ()
+
+
+def multipart_answer_issues(question: str, answer: str) -> tuple[str, ...]:
+    """Return high-confidence completeness failures for explicitly labelled parts."""
+
+    requested = requested_part_labels(question)
+    if not requested:
+        return ()
+    issues: list[str] = []
+    for label in requested:
+        if not re.search(
+            rf"(?im)(?:^|\n)\s*(?:#{{1,6}}\s*)?(?:\*\*)?(?:问题\s*)?[（(]?{re.escape(label)}[)）]?\s*(?:题)?\s*(?:[.、:：]|(?:\*\*)?\s*$)",
+            answer,
+        ):
+            issues.append(f"missing_part_{label.lower()}")
+    if re.search(r"(?:\.\.\.|…+)\s*$", answer.strip()):
+        issues.append("terminal_ellipsis")
+    return tuple(issues)
+
+
+def multipart_answer_guidance(question: str) -> str:
+    labels = requested_part_labels(question)
+    if not labels:
+        return ""
+    joined = "、".join(labels)
+    return (
+        f"这是显式多题请求。必须按原顺序以 {joined} 为独立标题逐题作答，"
+        "每题给出完整结论；不得合并、遗漏或用省略号截断。"
+    )
+
+
 class ChatDeliveryGate:
     """Validate and mint the only response type accepted by public transports."""
 

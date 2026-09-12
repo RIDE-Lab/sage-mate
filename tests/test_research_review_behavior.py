@@ -222,8 +222,8 @@ def test_bad_first_answers_are_rejected_before_delivery(
         (
             FIRST_TURN_SCENARIOS[3],
             "当前判断：KV 复用要求可证明的 token 前缀与状态兼容，output 复用还要求请求、采样和权限语义等价；潜力存在但证据未知。\n"
-            "最有价值的研究机会：把虚拟请求的等价性证明与缓存生命周期绑定，而不是把相似请求直接视为可复用。\n"
-            "下一步决定性实验：测量校验、索引、驻留和失效成本是否小于省下的计算，并加入跨租户隔离与错误复用检查；结果决定应复用 KV、output，还是不复用。",
+            "最有价值的研究机会：空闲时主动执行带请求等价证书的规范化请求并保存完整 output，比较它相对被动 output 缓存和 prefix warmup 的增量。\n"
+            "下一步决定性实验：固定请求分布，比较不复用、被动 memoization、prefix/KV cache 与主动虚拟执行；净收益扣除预测、执行、校验、驻留、失效和机会成本，并用机制消融判断收益来源。",
         ),
     ),
 )
@@ -257,6 +257,9 @@ def test_turn_fidelity_constraints_are_derived_from_the_current_input() -> None:
     assert "token 前缀、位置、模型/适配器" in guidance
     assert "禁止把激活相似描述为数学安全或无损共享" in guidance
     assert "请求等价证书和成本感知复用路由" in guidance
+    assert "被动 output memoization" in guidance
+    assert "已有 prefix warmup" in guidance
+    assert "误预测与机会成本" in guidance
     assert "若等价性探针需要先完成原本要省掉的计算" in guidance
     assert "不得新增百分比、加速比、样本数或期限" in guidance
 
@@ -268,6 +271,46 @@ def test_missing_evidence_cannot_erase_a_concrete_research_opportunity() -> None
     assert "collapses_potential_into_evidence" in research_review_answer_issues(
         question, answer
     )
+
+
+def test_inverse_metrics_require_competing_explanations_not_a_causal_verdict() -> None:
+    question = (
+        "请判断这个通信优化是否值得研究：记录显示传输字节减少，但端到端耗时增加。"
+    )
+    guidance = build_research_review_guidance(question, domain="research")
+    bad_answer = "字节减少而耗时增加，因此搬运不是瓶颈，应停止该方向。"
+
+    assert "竞争解释" in guidance
+    assert "有效带宽下降" in guidance
+    assert "timeline 重叠/等待" in guidance
+    assert "asserts_unverified_cause" in research_review_answer_issues(
+        question, bad_answer
+    )
+
+
+def test_unseen_virtual_request_wording_keeps_an_executable_output_path() -> None:
+    question = (
+        "是否值得主动合成未来可能到来的虚拟请求并提前跑完，随后复用 KV 或 output？"
+        "请评价研究贡献。"
+    )
+    guidance = build_research_review_guidance(question, domain="research")
+    bad_answer = "output 不可行，只研究 KV；只要净收益为正就证明创新。"
+    good_answer = (
+        "当前判断：主动执行可能有净收益，但尚不能证明创新来自该机制。\n"
+        "最有价值的研究机会：按规范化请求和生成配置建立请求等价证书，空闲时提前执行并保存完整 output；"
+        "与不复用、被动 output memoization、prefix warmup 和按需 KV cache 比较。\n"
+        "下一步决定性实验：用主动选择消融验证收益来源，并从节省的计算中扣除预测、执行、校验、存储、"
+        "失效、误预测和机会成本；若只与被动缓存持平，则探索价值仍在，但主动机制的创新主张不成立。"
+    )
+
+    assert "主动构造并执行虚拟请求" in guidance
+    assert "drops_requested_output_reuse" in research_review_answer_issues(
+        question, bad_answer
+    )
+    assert "conflates_net_benefit_with_innovation" in research_review_answer_issues(
+        question, bad_answer
+    )
+    assert research_review_answer_issues(question, good_answer) == ()
 
 
 def test_each_numeric_example_requires_its_own_nearby_qualification() -> None:

@@ -145,12 +145,26 @@ def build_research_review_guidance(
         and "复用" in compact_question
     ):
         fidelity_constraints.append(
-            "分别分析 KV 状态复用与最终 output 复用，不能把两者混成同一机制：正确性保持的 KV 复用至少要求"
+            "保留用户提出的主动构造并执行虚拟请求这一创新核心，并分别分析 KV 状态复用与最终 output 复用，"
+            "不能把两者混成同一机制或未经评估就排除 output 路径。先比较主动执行相对被动缓存、按需前缀缓存和"
+            "已有前缀预热的新增价值。至少认真评估一条 output 路径：在可证明等价且资源空闲时主动执行规范化请求，"
+            "保存完整 output，命中时直接返回；正确性保持的 KV 复用至少要求"
             "token 前缀、位置、模型/适配器及相关执行状态兼容；最终 output 复用要求规范化请求、生成配置、"
-            "随机性和权限语义满足相应等价条件。语义/激活近似只能作为允许质量变化的新假设，不能冒充精确复用；"
+            "模型/分词器/模板/系统策略、工具状态、随机性、权限和新鲜度语义满足相应等价条件。语义/激活近似"
+            "只能作为允许质量变化的新假设，不能冒充精确复用；"
             "token 不同通常意味着 KV 状态不同，禁止把激活相似描述为数学安全或无损共享。优先研究可审计的"
-            "请求等价证书和成本感知复用路由；若等价性探针需要先完成原本要省掉的计算，必须计入成本并解释"
-            "净收益如何仍为正"
+            "请求等价证书和成本感知复用路由，并把主动请求选择作为待验证机制；强基线至少包括不复用、被动 output memoization、"
+            "按需 prefix/KV cache 和已有 prefix warmup。完整净收益须扣除预测、虚拟执行、验证、存储、失效、"
+            "误预测与机会成本；若等价性探针需要先完成原本要省掉的计算，也必须计入成本"
+        )
+    if any(marker in compact_question for marker in ("字节减少", "流量减少", "搬运量减少")) and any(
+        marker in compact_question for marker in ("耗时增加", "延迟增加", "时间增加", "反而更慢")
+    ):
+        fidelity_constraints.append(
+            "‘传输字节减少但耗时增加’只是联合观察，不是已证实原因。至少列出竞争解释：搬运不在关键路径、"
+            "有效带宽下降、计算通信重叠被破坏、同步/启动/排队开销上升、工作负载差异或测量噪声；并给出能"
+            "区分它们的测量，如分阶段关键路径、字节数与有效带宽、timeline 重叠/等待、队列与同步事件、"
+            "同负载配对重复。禁止直接断言搬运不是瓶颈"
         )
     if not re.search(r"\d", question):
         fidelity_constraints.append(
@@ -185,7 +199,9 @@ def build_research_review_guidance(
         "哪些已核实的架构特性会让旧假设失效；平台特异性不自动等于工程贡献，适配成功也不自动等于研究贡献。\n"
         "七、论文与实验可以并行：允许先写清问题、设计和待验证主张，但不得把实验计划当作已完成结果。"
         "技术建议必须交代机制、成立条件、实现/运行成本、主要失败模式，以及验证净收益的实验；不能用术语"
-        "堆砌代替推理。\n"
+        "堆砌代替推理。观察到相关指标共同变化时先列竞争解释和区分测量，不能把合理解释写成已证实因果。"
+        "净收益为正只说明方案在相应条件下可能可行；创新成立还需用机制消融证明收益来自所提机制，并优于"
+        "相关强替代方案，但在证据未齐时应保留其探索价值而不是提前否定。\n"
         "默认只输出三个紧凑部分：‘当前判断’（分别概括三维度）、‘最有价值的研究机会’（只选一个）、"
         "‘下一步决定性实验’（说明不同结果会如何改变结论）。每部分只写一个紧凑正文段落，"
         "避免前言、嵌套清单和多组泛化实验。\n"
@@ -276,5 +292,48 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
                 break
     if unqualified_numeric_gate:
         issues.append("invents_numeric_stop_gate")
+
+    has_inverse_transfer_observation = (
+        any(marker in compact_question for marker in ("字节减少", "流量减少", "搬运量减少"))
+        and any(marker in compact_question for marker in ("耗时增加", "延迟增加", "时间增加", "反而更慢"))
+    )
+    asserts_transfer_is_not_bottleneck = any(
+        marker in compact_answer
+        for marker in (
+            "说明搬运不是瓶颈",
+            "证明搬运不是瓶颈",
+            "因此搬运不是瓶颈",
+            "可见搬运不是瓶颈",
+        )
+    )
+    if has_inverse_transfer_observation and asserts_transfer_is_not_bottleneck:
+        issues.append("asserts_unverified_cause")
+
+    asks_active_virtual_output = all(
+        marker in compact_question for marker in ("虚拟请求", "output", "复用")
+    )
+    if asks_active_virtual_output:
+        output_path_markers = (
+            "outputmemoization",
+            "output缓存",
+            "完整output",
+            "最终output",
+            "请求等价",
+            "规范化请求",
+        )
+        rejects_without_evaluation = any(
+            marker in compact_answer
+            for marker in ("不考虑output", "排除output", "output不可行", "只研究kv")
+        )
+        if rejects_without_evaluation or not any(
+            marker in compact_answer for marker in output_path_markers
+        ):
+            issues.append("drops_requested_output_reuse")
+
+    if "净收益" in compact_answer and any(
+        marker in compact_answer
+        for marker in ("净收益为正就证明创新", "净收益为正说明创新成立", "正净收益证明创新")
+    ):
+        issues.append("conflates_net_benefit_with_innovation")
 
     return tuple(issues)
