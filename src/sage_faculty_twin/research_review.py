@@ -155,7 +155,8 @@ def build_research_review_guidance(
             "token 不同通常意味着 KV 状态不同，禁止把激活相似描述为数学安全或无损共享。优先研究可审计的"
             "请求等价证书和成本感知复用路由，并把主动请求选择作为待验证机制；强基线至少包括不复用、被动 output memoization、"
             "按需 prefix/KV cache 和已有 prefix warmup。完整净收益须扣除预测、虚拟执行、验证、存储、失效、"
-            "误预测与机会成本；若等价性探针需要先完成原本要省掉的计算，也必须计入成本"
+            "误预测与机会成本；若等价性探针需要先完成原本要省掉的计算，也必须计入成本。研究建议必须明确"
+            "适用场景、机制输入、产出的可复用 KV 或完整 output、正确性条件、强基线、归因消融和净收益边界"
         )
     if any(marker in compact_question for marker in ("字节减少", "流量减少", "搬运量减少")) and any(
         marker in compact_question for marker in ("耗时增加", "延迟增加", "时间增加", "反而更慢")
@@ -329,6 +330,30 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
             marker in compact_answer for marker in output_path_markers
         ):
             issues.append("drops_requested_output_reuse")
+        required_evaluation_groups = (
+            ("场景", "工作负载", "请求分布", "空闲"),
+            ("输入",),
+            ("正确性", "等价证书", "请求等价"),
+            ("基线", "不复用", "被动outputmemoization"),
+            ("机制消融", "归因消融", "收益来源"),
+        )
+        if any(
+            not any(marker in compact_answer for marker in group)
+            for group in required_evaluation_groups
+        ):
+            issues.append("incomplete_virtual_reuse_evaluation")
+        net_cost_markers = (
+            "预测",
+            "虚拟执行",
+            "验证",
+            "校验",
+            "存储",
+            "失效",
+            "误预测",
+            "机会成本",
+        )
+        if sum(marker in compact_answer for marker in net_cost_markers) < 5:
+            issues.append("incomplete_virtual_reuse_net_benefit")
 
     if "净收益" in compact_answer and any(
         marker in compact_answer

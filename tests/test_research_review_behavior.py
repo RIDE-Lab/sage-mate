@@ -222,7 +222,7 @@ def test_bad_first_answers_are_rejected_before_delivery(
         (
             FIRST_TURN_SCENARIOS[3],
             "当前判断：KV 复用要求可证明的 token 前缀与状态兼容，output 复用还要求请求、采样和权限语义等价；潜力存在但证据未知。\n"
-            "最有价值的研究机会：空闲时主动执行带请求等价证书的规范化请求并保存完整 output，比较它相对被动 output 缓存和 prefix warmup 的增量。\n"
+            "最有价值的研究机会：场景是重复请求与空闲容量并存；输入是规范化请求和生成配置，主动执行带请求等价证书的请求并保存完整 output，比较它相对被动 output 缓存和 prefix warmup 的增量。\n"
             "下一步决定性实验：固定请求分布，比较不复用、被动 memoization、prefix/KV cache 与主动虚拟执行；净收益扣除预测、执行、校验、驻留、失效和机会成本，并用机制消融判断收益来源。",
         ),
     ),
@@ -260,6 +260,8 @@ def test_turn_fidelity_constraints_are_derived_from_the_current_input() -> None:
     assert "被动 output memoization" in guidance
     assert "已有 prefix warmup" in guidance
     assert "误预测与机会成本" in guidance
+    assert "适用场景、机制输入" in guidance
+    assert "归因消融和净收益边界" in guidance
     assert "若等价性探针需要先完成原本要省掉的计算" in guidance
     assert "不得新增百分比、加速比、样本数或期限" in guidance
 
@@ -297,9 +299,10 @@ def test_unseen_virtual_request_wording_keeps_an_executable_output_path() -> Non
     bad_answer = "output 不可行，只研究 KV；只要净收益为正就证明创新。"
     good_answer = (
         "当前判断：主动执行可能有净收益，但尚不能证明创新来自该机制。\n"
-        "最有价值的研究机会：按规范化请求和生成配置建立请求等价证书，空闲时提前执行并保存完整 output；"
+        "最有价值的研究机会：场景是重复请求与空闲容量并存的工作负载；输入是规范化请求和生成配置，"
+        "按请求等价证书提前执行，产出并保存完整 output；"
         "与不复用、被动 output memoization、prefix warmup 和按需 KV cache 比较。\n"
-        "下一步决定性实验：用主动选择消融验证收益来源，并从节省的计算中扣除预测、执行、校验、存储、"
+        "下一步决定性实验：用机制消融验证收益来源，并从节省的计算中扣除预测、虚拟执行、校验、存储、"
         "失效、误预测和机会成本；若只与被动缓存持平，则探索价值仍在，但主动机制的创新主张不成立。"
     )
 
@@ -311,6 +314,18 @@ def test_unseen_virtual_request_wording_keeps_an_executable_output_path() -> Non
         question, bad_answer
     )
     assert research_review_answer_issues(question, good_answer) == ()
+
+
+def test_polished_virtual_reuse_answer_still_needs_full_evaluation_contract() -> None:
+    question = "请评价主动执行虚拟请求并复用 KV/output 是否有研究价值。"
+    incomplete = (
+        "可建立请求等价证书并保存完整 output；与被动 output memoization 和 prefix warmup 比较，"
+        "若净收益为正就继续。"
+    )
+
+    issues = research_review_answer_issues(question, incomplete)
+    assert "incomplete_virtual_reuse_evaluation" in issues
+    assert "incomplete_virtual_reuse_net_benefit" in issues
 
 
 def test_each_numeric_example_requires_its_own_nearby_qualification() -> None:
