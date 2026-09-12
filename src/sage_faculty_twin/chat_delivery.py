@@ -294,7 +294,8 @@ def multipart_answer_guidance(question: str) -> str:
     joined = "、".join(labels)
     return (
         f"这是显式多题请求。必须按原顺序以 {joined} 为独立标题逐题作答，"
-        "每题给出完整结论；不得合并、遗漏或用省略号截断。"
+        "每题标题后直接给一个紧凑但完整的正文段落；不要复述题目、嵌套重复标题、表格或附加总报告。"
+        "不得合并、遗漏或用省略号截断。"
     )
 
 

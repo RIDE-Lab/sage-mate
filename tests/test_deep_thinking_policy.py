@@ -300,6 +300,7 @@ def test_explicit_lettered_parts_are_complete_or_rejected() -> None:
     assert multipart_answer_issues(question, complete) == ()
     assert not _answer_does_not_complete_requested_task(question, complete)
     assert "以 E、F 为独立标题逐题作答" in multipart_answer_guidance(question)
+    assert "不要复述题目、嵌套重复标题、表格" in multipart_answer_guidance(question)
 
 
 def test_unseen_ab_parts_are_not_confused_with_technical_slashes() -> None:

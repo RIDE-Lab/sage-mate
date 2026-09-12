@@ -366,6 +366,15 @@ def test_active_reuse_contract_does_not_depend_on_virtual_request_wording() -> N
     )
 
 
+def test_multipart_review_uses_one_non_repeating_structure() -> None:
+    question = "请评审 A/B 两题。A. 判断瓶颈。B. 设计实验。"
+    guidance = build_research_review_guidance(question, domain="research")
+
+    assert "以这些标签作为唯一一级结构" in guidance
+    assert "不要在每题内重复三套标题" in guidance
+    assert "默认只输出三个紧凑部分" not in guidance
+
+
 def test_each_numeric_example_requires_its_own_nearby_qualification() -> None:
     question = "请评价这个研究方向是否值得继续。"
     answer = (

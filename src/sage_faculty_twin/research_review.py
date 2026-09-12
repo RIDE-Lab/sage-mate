@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import re
 
+from .chat_delivery import requested_part_labels
+
 
 _REVIEW_ACTION_MARKERS = (
     "评价",
@@ -189,6 +191,18 @@ def build_research_review_guidance(
         )
     fidelity_note = "；".join(fidelity_constraints)
 
+    if requested_part_labels(question):
+        output_structure = (
+            "本轮有显式子题标签，以这些标签作为唯一一级结构；每题用一个紧凑正文段落综合给出当前判断、"
+            "最有价值的机会和决定性实验，不复述问题，也不要在每题内重复三套标题。"
+        )
+    else:
+        output_structure = (
+            "默认只输出三个紧凑部分：‘当前判断’（分别概括三维度）、‘最有价值的研究机会’（只选一个）、"
+            "‘下一步决定性实验’（说明不同结果会如何改变结论）。每部分只写一个紧凑正文段落，"
+            "避免前言、嵌套清单和多组泛化实验。"
+        )
+
     return (
         "\n科研评审契约（行为要求，不是可引用资料）：目标是在保持科学标准的同时寻找可验证的研究机会，"
         "形成研究问题，并用实验推进论文。\n"
@@ -218,9 +232,7 @@ def build_research_review_guidance(
         "堆砌代替推理。观察到相关指标共同变化时先列竞争解释和区分测量，不能把合理解释写成已证实因果。"
         "净收益为正只说明方案在相应条件下可能可行；创新成立还需用机制消融证明收益来自所提机制，并优于"
         "相关强替代方案，但在证据未齐时应保留其探索价值而不是提前否定。\n"
-        "默认只输出三个紧凑部分：‘当前判断’（分别概括三维度）、‘最有价值的研究机会’（只选一个）、"
-        "‘下一步决定性实验’（说明不同结果会如何改变结论）。每部分只写一个紧凑正文段落，"
-        "避免前言、嵌套清单和多组泛化实验。\n"
+        f"{output_structure}\n"
         f"本轮输入保真约束：{fidelity_note}。回答前重新对照当前用户输入逐项检查，不得沿用模型自行补出的事实。\n"
     )
 
