@@ -221,7 +221,7 @@ def test_bad_first_answers_are_rejected_before_delivery(
         ),
         (
             FIRST_TURN_SCENARIOS[3],
-            "当前判断：KV 复用要求可证明的 token 前缀与状态兼容，output 复用还要求请求、采样和权限语义等价；潜力存在但证据未知。\n"
+            "当前判断：KV 复用要求可证明的 token 前缀与状态兼容，output 复用还要求模型、请求、采样和权限语义等价；潜力存在但证据未知。\n"
             "最有价值的研究机会：场景是重复请求与空闲容量并存；输入是规范化请求和生成配置，主动执行带请求等价证书的请求并保存完整 output，比较它相对被动 output 缓存和 prefix warmup 的增量。\n"
             "下一步决定性实验：固定请求分布，比较不复用、被动 memoization、prefix/KV cache 与主动虚拟执行；净收益扣除预测、执行、校验、驻留、失效和机会成本，并用机制消融判断收益来源。",
         ),
@@ -300,7 +300,7 @@ def test_unseen_virtual_request_wording_keeps_an_executable_output_path() -> Non
     good_answer = (
         "当前判断：主动执行可能有净收益，但尚不能证明创新来自该机制。\n"
         "最有价值的研究机会：场景是重复请求与空闲容量并存的工作负载；输入是规范化请求和生成配置，"
-        "按请求等价证书提前执行，产出并保存完整 output；"
+        "按模型、分词器、采样参数和权限一致的请求等价证书提前执行，产出并保存完整 output；"
         "与不复用、被动 output memoization、prefix warmup 和按需 KV cache 比较。\n"
         "下一步决定性实验：用机制消融验证收益来源，并从节省的计算中扣除预测、虚拟执行、校验、存储、"
         "失效、误预测和机会成本；若只与被动缓存持平，则探索价值仍在，但主动机制的创新主张不成立。"
@@ -326,6 +326,20 @@ def test_polished_virtual_reuse_answer_still_needs_full_evaluation_contract() ->
     issues = research_review_answer_issues(question, incomplete)
     assert "incomplete_virtual_reuse_evaluation" in issues
     assert "incomplete_virtual_reuse_net_benefit" in issues
+    assert "underspecified_output_equivalence" in issues
+
+
+def test_active_output_reuse_requires_each_strong_baseline_family() -> None:
+    question = "请评价主动预执行虚拟请求并复用 KV/output 的研究价值。"
+    answer_without_passive_output = (
+        "场景是空闲容量下的重复工作负载；输入是请求流，产出完整 output。"
+        "用模型、采样和权限一致的请求等价证书保证正确性；比较无缓存和 prefix warmup，"
+        "通过机制消融判断收益来源。净收益扣除预测、虚拟执行、校验、存储、失效和机会成本。"
+    )
+
+    assert "incomplete_virtual_reuse_evaluation" in research_review_answer_issues(
+        question, answer_without_passive_output
+    )
 
 
 def test_active_reuse_contract_does_not_depend_on_virtual_request_wording() -> None:

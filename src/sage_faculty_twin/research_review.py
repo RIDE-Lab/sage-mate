@@ -347,7 +347,9 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
             ("场景", "工作负载", "请求分布", "空闲"),
             ("输入",),
             ("正确性", "等价证书", "请求等价"),
-            ("基线", "不复用", "被动outputmemoization"),
+            ("不复用", "无缓存"),
+            ("被动output", "outputmemoization"),
+            ("prefixwarmup", "前缀预热", "静态预热"),
             ("机制消融", "归因消融", "收益来源"),
         )
         if any(
@@ -367,6 +369,21 @@ def research_review_answer_issues(question: str, answer: str | None) -> tuple[st
         )
         if sum(marker in compact_answer for marker in net_cost_markers) < 5:
             issues.append("incomplete_virtual_reuse_net_benefit")
+        if "output" in compact_question:
+            output_equivalence_markers = (
+                "模型",
+                "分词器",
+                "模板",
+                "系统策略",
+                "工具状态",
+                "生成配置",
+                "采样",
+                "随机性",
+                "权限",
+                "新鲜度",
+            )
+            if sum(marker in compact_answer for marker in output_equivalence_markers) < 3:
+                issues.append("underspecified_output_equivalence")
 
     if "净收益" in compact_answer and any(
         marker in compact_answer
