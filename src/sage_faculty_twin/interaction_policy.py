@@ -67,21 +67,48 @@ def requires_faculty_review(question: str) -> bool:
     return asks_to_join and asks_for_decision
 
 
-_HUMAN_HANDOFF_MARKERS = (
+_HANDOFF_ACTION_MARKERS = (
+    "我要投诉",
+    "我想投诉",
+    "正式投诉",
+    "提出投诉",
+    "我要申诉",
+    "我想申诉",
+    "正式申诉",
+    "提出申诉",
+    "我要举报",
+    "我想举报",
+    "正式举报",
+    "提出举报",
+    "转人工",
+    "人工处理",
+    "老师本人处理",
+)
+
+_HANDOFF_CONTACT_MARKERS = (
+    "联系老师",
+    "联系张老师",
+    "老师本人",
+    "马上联系",
+    "尽快联系",
+)
+
+_HANDOFF_SENSITIVE_MARKERS = (
     "投诉",
     "申诉",
+    "举报",
     "成绩",
     "保密",
     "隐私",
-    "紧急",
-    "马上联系",
-    "尽快联系",
-    "心理",
-    "危机",
-    "安全",
-    "举报",
-    "冲突",
-    "误会",
+    "心理危机",
+    "人身安全",
+)
+
+_DIRECT_CRISIS_MARKERS = (
+    "我有心理危机",
+    "我正处于心理危机",
+    "我的人身安全",
+    "我现在不安全",
 )
 
 _EXPLICIT_BOOKING_MARKERS = (
@@ -97,6 +124,11 @@ _EXPLICIT_BOOKING_MARKERS = (
     "book me",
     "schedule a meeting",
 )
+
+
+def requests_booking_action(question: str) -> bool:
+    normalized = question.strip().lower()
+    return any(marker in normalized for marker in _EXPLICIT_BOOKING_MARKERS)
 
 _BOOKING_INFORMATION_MARKERS = (
     "office hour",
@@ -164,16 +196,46 @@ _ADVISE_ONLY_MARKERS = (
 
 
 def requires_human_handoff(question: str) -> bool:
+    """Require an explicit personal escalation request before creating a ticket.
+
+    Research cards and quoted source material routinely contain words such as
+    ``紧急``, ``安全``, ``隐私`` and ``冲突``. Their presence alone is not an
+    instruction to mutate the faculty queue.
+    """
+
     normalized = question.strip().lower()
-    return any(marker in normalized for marker in _HUMAN_HANDOFF_MARKERS)
+    if any(marker in normalized for marker in _DIRECT_CRISIS_MARKERS):
+        return True
+    if any(marker in normalized for marker in _HANDOFF_ACTION_MARKERS):
+        return True
+    return any(marker in normalized for marker in _HANDOFF_CONTACT_MARKERS) and any(
+        marker in normalized for marker in _HANDOFF_SENSITIVE_MARKERS
+    )
 
 
 def asks_for_booking_information(question: str) -> bool:
     normalized = question.strip().lower()
-    if any(marker in normalized for marker in _EXPLICIT_BOOKING_MARKERS):
+    if requests_booking_action(question):
         return False
     return any(marker in normalized for marker in _BOOKING_INFORMATION_MARKERS) and any(
         marker in normalized for marker in _BOOKING_CONTEXT_MARKERS
+    )
+
+
+def forbids_booking_action(question: str) -> bool:
+    """Recognize an explicit instruction that booking is outside this request."""
+
+    normalized = " ".join(question.strip().lower().split())
+    booking_positions = [
+        normalized.find(marker)
+        for marker in ("预约", "book", "schedule", "meeting")
+        if marker in normalized
+    ]
+    return any(
+        any(negation in normalized[max(0, position - 32) : position] for negation in (
+            "不执行", "不要", "不得", "无需", "不用", "禁止", "不创建", "do not", "don't",
+        ))
+        for position in booking_positions
     )
 
 
@@ -267,6 +329,46 @@ class InteractionPolicyEngine:
                 ),
                 changed=True,
                 reasons=("booking_information_is_not_booking_action",),
+            )
+
+        if proposed.action == "book_meeting" and forbids_booking_action(request.question):
+            research_review = any(
+                marker in request.question
+                for marker in ("研究", "论文", "仓库", "证据", "审计", "评审")
+            )
+            return InteractionPolicyResult(
+                intent=InteractionIntent(
+                    action="answer",
+                    domain="research" if research_review else "general",
+                    retrieval_scopes=["publications", "profile"] if research_review else [],
+                    exclude_scopes=["courseware"] if research_review else [],
+                    decision_mode="direct_answer",
+                    confidence=max(proposed.confidence, 0.95),
+                ),
+                changed=True,
+                reasons=("booking_explicitly_forbidden",),
+            )
+
+        if proposed.action == "book_meeting" and not requests_booking_action(
+            request.question
+        ):
+            research_request = any(
+                marker in request.question.lower()
+                for marker in ("研究", "课题", "论文", "实验", "research", "paper")
+            )
+            return InteractionPolicyResult(
+                intent=InteractionIntent(
+                    action="answer",
+                    domain="research" if research_request else "general",
+                    retrieval_scopes=(
+                        ["publications", "profile"] if research_request else []
+                    ),
+                    exclude_scopes=["courseware"] if research_request else [],
+                    decision_mode="direct_answer",
+                    confidence=max(proposed.confidence, 0.9),
+                ),
+                changed=True,
+                reasons=("booking_requires_explicit_user_action",),
             )
 
         if proposed.action == "book_meeting" and proposed.decision_mode != "review_queue":

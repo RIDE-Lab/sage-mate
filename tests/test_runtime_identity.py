@@ -61,6 +61,35 @@ def test_general_model_advice_does_not_route_to_runtime_identity(question: str) 
     assert not is_runtime_identity_query(question)
 
 
+def test_structured_research_card_does_not_route_to_runtime_identity() -> None:
+    question = (
+        "请评价匿名系统研究课题。格式={\"engine\":\"eager\",\"accelerator\":\"selected\","
+        "\"evidence\":\"inspected here; what is supported or unsupported\","
+        f"\"payload\":\"{'x' * 900}\"}}"
+    )
+
+    assert not is_runtime_identity_query(question)
+
+
+def test_runtime_abbreviations_do_not_match_inside_evidence_words() -> None:
+    question = (
+        '事实卡={"claim":"execution against a vllm-compatible endpoint",'
+        '"verdict":"the project inspected here is unsupported"}'
+    )
+
+    assert not is_runtime_identity_query(question)
+
+
+def test_reveal_review_with_runtime_terms_does_not_use_identity_fast_path() -> None:
+    question = (
+        "请对照事实卡与 blind judgment，只解释证据判断与登记位置的异同。"
+        "事实包括真实加速器成对运行、当前证据限制、serving runtime 和 replay 推导；"
+        "不要从登记位置反推质量。"
+    )
+
+    assert not is_runtime_identity_query(question)
+
+
 def _provider(
     tmp_path: Path,
     *,

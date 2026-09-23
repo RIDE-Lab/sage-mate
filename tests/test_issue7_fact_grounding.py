@@ -208,7 +208,7 @@ def test_stack_comparison_bypasses_model_intent_for_lab_member(tmp_path: Path) -
 
     assert intent is not None
     assert intent.domain == "research"
-    assert intent.retrieval_scopes == ["profile", "publications"]
+    assert intent.retrieval_scopes == ["profile", "publications", "research_methodology"]
     assert intent.confidence == 0.99
 
 

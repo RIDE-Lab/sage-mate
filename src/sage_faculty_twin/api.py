@@ -39,6 +39,7 @@ from .auth import (
     set_admin_session_cookie,
     set_user_session_cookie,
 )
+from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .chat_delivery import DeliveredChatResponse
 from .request_context import (
@@ -204,6 +205,7 @@ class LazyDigitalTwinService:
 
 service = LazyDigitalTwinService()
 slack_link_store = SlackUserLinkStore(settings.slack_user_link_dir)
+lab_member_api_token_store = LabMemberApiTokenStore(settings)
 web_dir = Path(__file__).with_name("web")
 NO_STORE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
 MAX_CHAT_ATTACHMENTS = 4
@@ -677,6 +679,17 @@ def _resolve_effective_chat_visitor_profile(
     raw_request: Request,
     requested_visitor_profile: str | None,
 ) -> str | None:
+    authorization = raw_request.headers.get("authorization", "").strip()
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        identity = (
+            lab_member_api_token_store.authenticate(token.strip())
+            if scheme.lower() == "bearer" and token.strip()
+            else None
+        )
+        if identity is None:
+            raise HTTPException(status_code=401, detail="无效或过期的 API token。")
+        return identity.visitor_profile
     session_token = raw_request.cookies.get(USER_COOKIE_NAME)
     if not session_token:
         # Public profile hints may tailor course answers, but a client-owned
@@ -1837,6 +1850,14 @@ async def shutdown_event() -> None:
         await service.aclose()
 
 
+def _untraced_answer_chunk_callback() -> Callable[[str], None] | None:
+    """Enable upstream streaming only when the deployment explicitly requests it."""
+
+    if not STREAM_CHAT_ANSWER:
+        return None
+    return lambda _delta: None
+
+
 @llm_app.post("/chat", response_model=ChatResponse)
 async def chat(
     raw_request: Request,
@@ -1848,12 +1869,18 @@ async def chat(
     )
     stage_started = time.perf_counter()
     payload = await _parse_chat_request(raw_request)
+    effective_visitor_profile = _resolve_effective_chat_visitor_profile(
+        raw_request,
+        payload.visitor_profile,
+    )
     payload = payload.model_copy(
         update={
-            "visitor_profile": _resolve_effective_chat_visitor_profile(
-                raw_request,
-                payload.visitor_profile,
-            )
+            "visitor_profile": effective_visitor_profile,
+            "answer_max_tokens": (
+                payload.answer_max_tokens
+                if effective_visitor_profile == "lab_member"
+                else None
+            ),
         }
     )
     timing.record("request_parse", stage_started)
@@ -1956,7 +1983,7 @@ async def chat(
                 payload=payload,
                 admin_session_token=admin_session_token,
                 trace_callback=lambda _step: None,
-                answer_chunk_callback=lambda _delta: None,
+                answer_chunk_callback=_untraced_answer_chunk_callback(),
             )
             timing.record("sage_workflow", stage_started)
             return timing.attach(response, route="sage_workflow")

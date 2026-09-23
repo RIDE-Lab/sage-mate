@@ -117,6 +117,18 @@ def test_public_chat_route_does_not_publish_unvalidated_answer_chunks() -> None:
     assert "workflow_event_broker.publish_answer_chunk(request_id, delta)" not in source
 
 
+def test_untraced_chat_respects_non_streaming_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", False)
+    assert api_module._untraced_answer_chunk_callback() is None
+
+    monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", True)
+    callback = api_module._untraced_answer_chunk_callback()
+    assert callback is not None
+    assert callback("ignored") is None
+
+
 def test_answer_done_complete_gate_defers_close_until_answer_done() -> None:
     published: list[str] = []
     gate = api_module._AnswerDoneCompleteGate(lambda: published.append("complete"))

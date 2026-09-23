@@ -230,6 +230,9 @@ def test_prompt_caps_oversized_knowledge_excerpts(tmp_path: Path) -> None:
 
     # No single original 6k Z-run survives; the cap is well below 6000.
     assert "Z" * (_KNOWLEDGE_HIT_BODY_CAP + 100) not in context.user_prompt
+    assert len(context.knowledge_hits) == len(knowledge_hits)
+    assert all(len(hit.excerpt) <= _KNOWLEDGE_HIT_BODY_CAP + 1 for hit in context.knowledge_hits)
+    assert all("truncated" in hit.excerpt or hit.excerpt.endswith("…") for hit in context.knowledge_hits)
 
     prompt_step = next(step for step in context.workflow_trace if step.key == "prompt_build")
     assert "knowledge" in prompt_step.detail

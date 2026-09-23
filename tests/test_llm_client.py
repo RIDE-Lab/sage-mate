@@ -12,8 +12,27 @@ from sage_faculty_twin.benchmark_adapter import (
     load_local_lamp_scenarios,
 )
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.llm_client import IncompleteCompletionError, VllmChatClient
+from sage_faculty_twin.llm_client import (
+    IncompleteCompletionError,
+    VllmChatClient,
+    _InteractionIntentPayload,
+)
 from sage_faculty_twin.models import InteractionIntent
+
+
+def test_coerce_interaction_intent_removes_conflicting_excluded_scopes() -> None:
+    client = object.__new__(VllmChatClient)
+    payload = _InteractionIntentPayload(
+        action="answer",
+        domain="research",
+        retrieval_scopes=["profile", "publications", "profile"],
+        exclude_scopes=["courseware", "profile", "courseware"],
+    )
+
+    intent = client._coerce_interaction_intent(payload)
+
+    assert intent.retrieval_scopes == ["profile", "publications"]
+    assert intent.exclude_scopes == ["courseware"]
 
 
 def test_normalize_interaction_intent_for_explicit_teaching_question() -> None:
