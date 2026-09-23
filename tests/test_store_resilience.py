@@ -227,6 +227,35 @@ def test_escalation_store_create_request_survives_runtime_dir_wipe(
     assert store.count_records() == 1
 
 
+def test_escalation_store_deduplicates_pending_retry_in_same_conversation(
+    tmp_path: Path,
+) -> None:
+    settings = _make_settings(tmp_path)
+    store = EscalationQueueStore(settings)
+    request = ChatRequest(
+        student_name="Bob",
+        student_email="bob@example.com",
+        question="我要申诉成绩，请联系老师。",
+        conversation_id="conv-esc-retry",
+    )
+
+    first = store.create_request(
+        request,
+        conversation_id="conv-esc-retry",
+        route="human_handoff",
+        reason="需要老师确认",
+    )
+    retried = store.create_request(
+        request,
+        conversation_id="conv-esc-retry",
+        route="human_handoff",
+        reason="需要老师确认",
+    )
+
+    assert retried.escalation_id == first.escalation_id
+    assert store.count_records() == 1
+
+
 # ---------------------------------------------------------------------------
 # user_store.py
 # ---------------------------------------------------------------------------

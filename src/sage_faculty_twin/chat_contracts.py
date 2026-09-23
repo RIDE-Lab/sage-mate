@@ -47,9 +47,22 @@ class InteractionDecision:
     def __post_init__(self) -> None:
         overlap = set(self.intent.retrieval_scopes) & set(self.intent.exclude_scopes)
         if overlap:
-            raise ValueError(
-                "interaction decision includes and excludes the same scopes: "
-                + ", ".join(sorted(overlap))
+            # Model-produced scopes are routing hints rather than access-control
+            # rules. Honor the explicit exclusion and normalize the decision at
+            # the stage boundary so contradictory model output cannot become an
+            # internal HTTP 500.
+            object.__setattr__(
+                self,
+                "intent",
+                self.intent.model_copy(
+                    update={
+                        "retrieval_scopes": [
+                            scope
+                            for scope in self.intent.retrieval_scopes
+                            if scope not in overlap
+                        ]
+                    }
+                ),
             )
 
 

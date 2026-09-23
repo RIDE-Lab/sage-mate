@@ -94,6 +94,16 @@ class EscalationQueueStore:
         route: str,
         reason: str | None = None,
     ) -> EscalationRecord:
+        normalized_question = " ".join(request.question.split())
+        for existing in self._records.values():
+            if (
+                existing.conversation_id == conversation_id
+                and existing.route == route
+                and existing.status == "待处理"
+                and " ".join(existing.question.split()) == normalized_question
+            ):
+                return existing.to_response()
+
         record = EscalationQueueRecord(
             escalation_id=str(uuid4()),
             conversation_id=conversation_id,

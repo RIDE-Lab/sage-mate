@@ -9,7 +9,7 @@ import os
 import re
 import threading
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from importlib import metadata
 from pathlib import Path
@@ -27,6 +27,8 @@ from .deployment_receipts import DeploymentReceiptStore
 from .request_context import (
     RequestCancelledError,
     raise_if_request_cancelled as _raise_if_request_cancelled,
+    request_remaining_seconds,
+    request_runtime_diagnostics,
 )
 from .runtime_identity import (
     is_runtime_identity_query,
@@ -703,8 +705,33 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
         return False
     lowered_question = question.lower()
     lowered_answer = answer.lower()
-    if ("延迟" in question or "latency" in lowered_question) and "吞吐" in question:
-        if "延迟" not in answer or "吞吐" not in answer:
+    # Structured reviews assess supplied evidence and often answer with claim,
+    # support and limitation vocabulary instead of repeating every hardware or
+    # metric token from the evidence card. The task-completion and structured
+    # output checks are the appropriate validators for this intent.
+    if any(
+        marker in question
+        for marker in ("事实卡", "证据卡", "独立评价", "学术评审", "只输出合法JSON")
+    ):
+        return False
+    asks_latency = any(
+        marker in lowered_question
+        for marker in ("延迟", "latency", "ttft", "tpot", "响应时间")
+    )
+    asks_throughput = any(
+        marker in lowered_question
+        for marker in ("吞吐", "throughput", "qps", "request rate")
+    )
+    if asks_latency and asks_throughput:
+        answers_latency = any(
+            marker in lowered_answer
+            for marker in ("延迟", "latency", "ttft", "tpot", "响应时间", "首 token")
+        )
+        answers_throughput = any(
+            marker in lowered_answer
+            for marker in ("吞吐", "throughput", "qps", "并发", "批次", "batch")
+        )
+        if not answers_latency or not answers_throughput:
             return True
     accelerator_question = any(
         marker in lowered_question for marker in ("ascend", "npu", "昇腾")
@@ -729,18 +756,12 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
         )
     )
     if accelerator_optimization_question:
-        markers = ("ascend", "npu", "昇腾", "算子", "量化", "并行", "显存", "内存", "推理")
-        coverage_groups = (
-            ("量化", "fp16", "bf16", "int8"),
-            ("算子", "图优化", "图编译", "融合"),
-            ("kv cache", "内存", "缓存", "碎片"),
-            ("并行", "通信", "多卡"),
-            ("批处理", "batch", "调度", "并发"),
-            ("ttft", "tpot", "吞吐", "尾延迟", "p95", "p99"),
-        )
-        covered_dimensions = sum(
-            any(marker in lowered_answer for marker in group)
-            for group in coverage_groups
+        accelerator_markers = ("ascend", "npu", "昇腾", "910b", "910c")
+        optimization_markers = (
+            "量化", "fp16", "bf16", "int8", "算子", "图优化", "图编译",
+            "融合", "kv cache", "内存", "缓存", "碎片", "并行", "通信",
+            "多卡", "批处理", "batch", "调度", "并发", "ttft", "tpot",
+            "吞吐", "延迟", "p95", "p99", "推理",
         )
         accelerator_mismatches = (
             "cuda",
@@ -758,10 +779,17 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
             "zero冗余",
             "zero 冗余",
         )
-        return (
-            sum(marker in lowered_answer for marker in markers) < 2
-            or covered_dimensions < 3
-            or any(marker in lowered_answer for marker in accelerator_mismatches)
+        clearly_cross_platform = any(
+            marker in lowered_answer for marker in accelerator_mismatches
+        )
+        has_accelerator_context = any(
+            marker in lowered_answer for marker in accelerator_markers
+        )
+        has_optimization_content = any(
+            marker in lowered_answer for marker in optimization_markers
+        )
+        return clearly_cross_platform or not (
+            has_accelerator_context and has_optimization_content
         )
     if any(marker in question for marker in ("医学影像", "图像分割")):
         markers = ("医学", "影像", "分割", "标注", "临床", "泛化", "病灶", "器官")
@@ -855,6 +883,7 @@ _PROMPT_SOFT_CAP = 24000
 _PROMPT_MEMORY_HIT_KEEP: int = 3
 _KNOWLEDGE_HIT_BODY_CAP: int = 1200
 _ATTACHMENT_BODY_CAP: int = 4000
+_MIN_COMPACT_REPAIR_BUDGET_SECONDS: float = 12.0
 
 _logger = logging.getLogger(__name__)
 
@@ -934,6 +963,7 @@ class ChatWorkflowContext:
     answer: str | None = None
     system_prompt: str | None = None
     user_prompt: str | None = None
+    prompt_attachments: list[ChatAttachment] = field(default_factory=list)
     # Chat Latency Optimizations Task 3: set when the prompt builder applied
     # the soft-cap truncation chain (memory hits / knowledge excerpts /
     # attachment bodies). Surfaced via the ``prompt_build`` trace step so the
@@ -1163,8 +1193,9 @@ class FacultyTwinWorkflowSupport:
             return context
 
         intent, source = self._resolve_interaction_intent(context)
-        context.interaction_intent = intent
         context.interaction_decision = InteractionDecision(intent=intent, source=source)
+        intent = context.interaction_decision.intent
+        context.interaction_intent = intent
         context.decision_mode = intent.decision_mode
 
         if intent.action == "ask_followup" and intent.needs_clarification:
@@ -1502,6 +1533,20 @@ class FacultyTwinWorkflowSupport:
                 visitor_profile=context.request.visitor_profile,
                 admin_role=self._resolve_admin_role(),
             )
+            method_hits = []
+            for method_query in self._owner_method_retrieval_queries(context.request):
+                method_hits.extend(
+                    self._knowledge_store.search(
+                        method_query,
+                        top_k=2,
+                        visitor_profile=context.request.visitor_profile,
+                        admin_role=self._resolve_admin_role(),
+                    )
+                )
+            if method_hits:
+                raw_hits = list(
+                    {hit.document_id: hit for hit in method_hits + raw_hits}.values()
+                )
             # A top-k list dominated by one named subject cannot ground a
             # comparison. Retrieve a bounded per-subject supplement through
             # the same permission-aware store, then apply the same filters.
@@ -1521,6 +1566,12 @@ class FacultyTwinWorkflowSupport:
                 interaction_intent,
                 question=context.request.question,
             )
+            if method_hits:
+                method_ids = {hit.document_id for hit in method_hits}
+                context.knowledge_hits = (
+                    [hit for hit in context.knowledge_hits if hit.document_id in method_ids]
+                    + [hit for hit in context.knowledge_hits if hit.document_id not in method_ids]
+                )[:6]
             if subjects:
                 context.knowledge_hits = rank_comparison_evidence(context.knowledge_hits, subjects)[:6]
             # Identity/research questions get a small deterministic floor of
@@ -1893,6 +1944,10 @@ class FacultyTwinWorkflowSupport:
                 context.request.question,
                 domain=context.interaction_intent.domain,
             )
+            context.system_prompt += self._owner_review_style_guidance(
+                context.request,
+                context.interaction_intent,
+            )
 
         # Chat Latency Optimizations Task 3 + V4.1 context compression:
         # assemble the prompt with the full inputs first, then progressively
@@ -1901,7 +1956,11 @@ class FacultyTwinWorkflowSupport:
         # (cheapest signal loss), then knowledge excerpts, then attachment
         # bodies, and finally the rolling session digest.
         memory_hits = list(context.memory_hits)
-        knowledge_hits = list(context.knowledge_hits)
+        knowledge_hits = self._select_prompt_knowledge_hits(
+            context.request.question,
+            list(context.knowledge_hits),
+            context.interaction_intent,
+        )
         attachments = list(getattr(context.request, "attachments", None) or [])
         truncation_actions: list[str] = []
 
@@ -1997,6 +2056,124 @@ class FacultyTwinWorkflowSupport:
             truncation_actions.append("digest_dropped")
             user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
 
+        if _over_cap() and memory_hits:
+            maximum = max(len(item.summary) for item in memory_hits)
+            low, high = 1, maximum
+            best = [
+                replace(item, summary=self._truncate_prompt_text(item.summary, 1))
+                for item in memory_hits
+            ]
+            while low <= high:
+                body_limit = (low + high) // 2
+                candidate = [
+                    replace(
+                        item,
+                        summary=self._truncate_prompt_text(item.summary, body_limit),
+                    )
+                    for item in memory_hits
+                ]
+                candidate_prompt = _build(
+                    candidate, knowledge_hits, context.web_search_hits, attachments
+                )
+                if len(context.system_prompt or "") + len(candidate_prompt) <= cap:
+                    best = candidate
+                    low = body_limit + 1
+                else:
+                    high = body_limit - 1
+            memory_hits = best
+            truncation_actions.append(
+                f"memory_fitted({max(len(item.summary) for item in memory_hits)})"
+            )
+            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
+
+        if _over_cap() and knowledge_hits:
+            maximum = max(len(item.excerpt) for item in knowledge_hits)
+            low, high = 1, maximum
+            best = [
+                item.model_copy(update={"excerpt": self._truncate_prompt_text(item.excerpt, 1)})
+                for item in knowledge_hits
+            ]
+            while low <= high:
+                body_limit = (low + high) // 2
+                candidate = [
+                    item.model_copy(
+                        update={
+                            "excerpt": self._truncate_prompt_text(item.excerpt, body_limit)
+                        }
+                    )
+                    for item in knowledge_hits
+                ]
+                candidate_prompt = _build(
+                    memory_hits, candidate, context.web_search_hits, attachments
+                )
+                if len(context.system_prompt or "") + len(candidate_prompt) <= cap:
+                    best = candidate
+                    low = body_limit + 1
+                else:
+                    high = body_limit - 1
+            knowledge_hits = best
+            truncation_actions.append(
+                f"knowledge_fitted({max(len(item.excerpt) for item in knowledge_hits)})"
+            )
+            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
+
+        # Explicitly supplied attachments take precedence over opportunistic
+        # retrieval when the combined prompt is still too large.
+        dropped_knowledge = 0
+        while _over_cap() and knowledge_hits:
+            knowledge_hits.pop()
+            dropped_knowledge += 1
+            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
+        if dropped_knowledge:
+            truncation_actions.append(f"knowledge_dropped({dropped_knowledge})")
+
+        if _over_cap() and memory_hits:
+            dropped_memory = len(memory_hits)
+            memory_hits = []
+            truncation_actions.append(f"memory_dropped({dropped_memory})")
+            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
+
+        if _over_cap() and attachments:
+            maximum = max(len(item.text_content) for item in attachments)
+            low, high = 1, maximum
+            best = [self._truncate_prompt_attachment(item, 1) for item in attachments]
+            while low <= high:
+                body_limit = (low + high) // 2
+                candidate = [
+                    self._truncate_prompt_attachment(item, body_limit)
+                    for item in attachments
+                ]
+                candidate_prompt = _build(
+                    memory_hits, knowledge_hits, context.web_search_hits, candidate
+                )
+                if len(context.system_prompt or "") + len(candidate_prompt) <= cap:
+                    best = candidate
+                    low = body_limit + 1
+                else:
+                    high = body_limit - 1
+            attachments = best
+            truncation_actions.append(
+                f"attachments_fitted({max(len(item.text_content) for item in attachments)})"
+            )
+            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
+
+        if _over_cap():
+            raise RuntimeError(
+                f"prompt exceeds hard cap after bounded truncation: "
+                f"{len(context.system_prompt or '') + len(user_prompt)}>{cap}"
+            )
+
+        # Preserve exactly the evidence that reached the model. Returned IDs
+        # and excerpts can then be hashed to attest prompt participation even
+        # when the soft cap shortened them.
+        context.knowledge_hits = knowledge_hits
+        context.memory_hits = memory_hits
+        context.prompt_attachments = attachments
+        context.evidence_bundle = EvidenceBundle.build(
+            knowledge_hits=knowledge_hits,
+            web_hits=context.web_search_hits,
+            memory_hits=memory_hits,
+        )
         context.user_prompt = user_prompt
         context.prompt_envelope = PromptEnvelope(
             original_question=context.intake.original_question,
@@ -2039,6 +2216,30 @@ class FacultyTwinWorkflowSupport:
             duration_ms=self._elapsed_ms(started_at),
         )
         return context
+
+    @staticmethod
+    def _truncate_prompt_attachment(
+        attachment: ChatAttachment, body_limit: int
+    ) -> ChatAttachment:
+        shortened = FacultyTwinWorkflowSupport._truncate_prompt_text(
+            attachment.text_content, body_limit, label="attachment"
+        )
+        if shortened == attachment.text_content:
+            return attachment
+        return attachment.model_copy(update={"text_content": shortened})
+
+    @staticmethod
+    def _truncate_prompt_text(text: str, body_limit: int, *, label: str = "content") -> str:
+        if len(text) <= body_limit:
+            return text
+        marker = f"\n[… {label} truncated …]\n"
+        if body_limit <= len(marker) + 2:
+            return marker[: max(1, body_limit)]
+        else:
+            remaining = body_limit - len(marker)
+            head = max(1, (remaining * 2) // 3)
+            tail = max(1, remaining - head)
+            return text[:head] + marker + text[-tail:]
 
     def persist_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
@@ -3121,6 +3322,19 @@ class FacultyTwinWorkflowSupport:
         return prompt
 
     def _retry_answer_with_compact_prompt(self, context: ChatWorkflowContext) -> str:
+        remaining_seconds = request_remaining_seconds()
+        if (
+            remaining_seconds is not None
+            and remaining_seconds < _MIN_COMPACT_REPAIR_BUDGET_SECONDS
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=(
+                    "本轮回答未通过完整性校验，且剩余请求时间不足以安全重试。"
+                    "请缩小问题范围后重试。"
+                ),
+                headers={"Retry-After": "2"},
+            )
         deep_recovery = self._is_explicit_deep_request(context.request)
         structured_recovery = bool(
             requested_list_size(context.request.question)
@@ -3143,8 +3357,18 @@ class FacultyTwinWorkflowSupport:
                 context.request.question,
                 domain=context.interaction_intent.domain,
             )
+            compact_system_prompt += self._owner_review_style_guidance(
+                context.request,
+                context.interaction_intent,
+            )
         compact_user_prompt = context.request.question.strip()
         compact_user_prompt = re.sub(r"^请?深入分析[：:，,、\\s]*", "", compact_user_prompt)
+        repair_attachments = context.prompt_attachments or list(
+            getattr(context.request, "attachments", None) or []
+        )
+        attachment_context = self._format_attachment_context(repair_attachments)
+        if attachment_context:
+            compact_user_prompt = attachment_context + "\n当前问题：\n" + compact_user_prompt
         # Repair wording, not grounding: the retry must see the same selected
         # sources as the original call and the visible Support cards.
         evidence_lines = [
@@ -3723,6 +3947,16 @@ class FacultyTwinWorkflowSupport:
         interaction_intent = context.interaction_intent
         domain = interaction_intent.domain if interaction_intent is not None else "general"
         decision_mode = context.decision_mode
+        if context.request.answer_max_tokens is not None:
+            return {
+                "deadline_class": "batch-standard",
+                "request_priority": 45,
+                "target_e2e_ms": 30000.0,
+                "max_tokens": min(
+                    context.request.answer_max_tokens,
+                    int(self._settings.llm_policy_output_max_tokens_cap),
+                ),
+            }
         if requested_list_size(context.request.question) or requested_part_labels(
             context.request.question
         ):
@@ -4161,7 +4395,14 @@ class FacultyTwinWorkflowSupport:
     def _build_token_usage(self) -> TokenUsage | None:
         """Return per-request token usage from the LLM client, or None."""
         try:
-            usage = self._llm_client.last_request_usage
+            diagnostics = request_runtime_diagnostics()
+            if diagnostics is not None:
+                snapshot = diagnostics.snapshot()
+                if int(snapshot.get("llm_call_count") or 0) == 0:
+                    return None
+                usage = snapshot
+            else:
+                return None
             if not usage:
                 return None
             return TokenUsage(
@@ -5540,11 +5781,25 @@ class FacultyTwinWorkflowSupport:
         if interaction_intent is not None:
             scoped_hits = self._filter_knowledge_hits_by_intent(knowledge_hits, interaction_intent)
             if interaction_intent.domain == "research":
+                methodology_hits = []
+                if "research_methodology" in interaction_intent.retrieval_scopes:
+                    methodology_hits = [
+                        hit
+                        for hit in scoped_hits
+                        if self._matches_intent_scopes(hit, ["research_methodology"])
+                    ]
                 research_hits = [
                     hit
                     for hit in scoped_hits
                     if self._is_research_hit(hit) and not self._is_teaching_hit(hit)
                 ]
+                if methodology_hits:
+                    methodology_ids = {hit.document_id for hit in methodology_hits}
+                    return methodology_hits + [
+                        hit
+                        for hit in research_hits
+                        if hit.document_id not in methodology_ids
+                    ]
                 if research_hits:
                     return research_hits
             if scoped_hits:
@@ -5577,6 +5832,12 @@ class FacultyTwinWorkflowSupport:
             "系统方向",
             "课题组",
             "科研",
+            "研究课题",
+            "课题评价",
+            "七问",
+            "研究方法",
+            "科研方法",
+            "论文写作方法",
             "企业 r&d",
             "企业研发",
             "r&d",
@@ -5913,6 +6174,46 @@ class FacultyTwinWorkflowSupport:
             "实测指标及重复运行的不确定性，而非编造百分比。背景文献不证明你的新建议有效。\n"
         )
 
+    @staticmethod
+    def _owner_review_style_guidance(
+        request: ChatRequest,
+        interaction_intent: InteractionIntent | None,
+    ) -> str:
+        """Make member reviews resemble the owner's decision process.
+
+        Authentication gates access to the written method. This instruction
+        separately shapes judgment so an evidence audit does not collapse
+        every early idea into the same negative checklist.
+        """
+
+        if (
+            request.visitor_profile != "lab_member"
+            or interaction_intent is None
+            or interaction_intent.domain != "research"
+            or not any(
+                marker in request.question.lower()
+                for marker in (
+                    "课题",
+                    "选题",
+                    "研究方向",
+                    "评价",
+                    "评审",
+                    "审查",
+                    "research idea",
+                    "review",
+                )
+            )
+        ):
+            return ""
+        return (
+            "\n课题组内部审查风格（行为要求，不是可引用资料）：先给明确判断，再指出决定该判断的"
+            "一到三个主要矛盾，避免把通用检查表逐项重复。把‘想法潜力’与‘当前证据成熟度’分开；"
+            "证据不足不自动等于方向错误，需说明补哪条最小证据会改变判断。区分致命缺陷、可修复缺口"
+            "和暂未验证事项，并按对结论的影响排序。早期课题允许给出有条件推进结论，但条件必须可检验；"
+            "已有真实失败案例、机制差异或实现证据时，要明确承认其价值。最后只给最优先的下一步，"
+            "不要用同一套‘补 baseline、补消融’措辞覆盖所有课题。\n"
+        )
+
     def _build_general_technical_response_guidance(
         self,
         question: str,
@@ -6155,7 +6456,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["profile", "publications"],
+                retrieval_scopes=["profile", "publications", "research_methodology"],
                 exclude_scopes=["courseware"],
                 decision_mode="direct_answer",
                 confidence=0.99,
@@ -6164,7 +6465,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["profile", "publications"],
+                retrieval_scopes=["profile", "publications", "research_methodology"],
                 exclude_scopes=["courseware"],
                 decision_mode="direct_answer",
                 confidence=0.99,
@@ -6176,7 +6477,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["publications", "profile"],
+                retrieval_scopes=["publications", "profile", "research_methodology"],
                 exclude_scopes=["courseware"],
                 decision_mode="direct_answer",
                 confidence=0.98,
@@ -6188,7 +6489,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["publications", "profile"],
+                retrieval_scopes=["publications", "profile", "research_methodology"],
                 exclude_scopes=["courseware"],
                 decision_mode="direct_answer",
                 confidence=0.94,
@@ -6283,7 +6584,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["publications", "profile"],
+                retrieval_scopes=["publications", "profile", "research_methodology"],
                 exclude_scopes=["courseware"],
                 confidence=0.82,
             )
@@ -6372,7 +6673,7 @@ class FacultyTwinWorkflowSupport:
             return InteractionIntent(
                 action="answer",
                 domain="research",
-                retrieval_scopes=["publications", "profile"],
+                retrieval_scopes=["publications", "profile", "research_methodology"],
                 exclude_scopes=["courseware"],
                 confidence=0.6,
             )
@@ -6434,6 +6735,29 @@ class FacultyTwinWorkflowSupport:
         }:
             return f"{expanded_question}\n{request.course_context}".strip()
         return expanded_question
+
+    @staticmethod
+    def _owner_method_retrieval_queries(request: ChatRequest) -> tuple[str, ...]:
+        """Add precise, permission-aware queries for explicit owner-method requests."""
+        if request.visitor_profile != "lab_member":
+            return ()
+        if not any(
+            marker in request.question
+            for marker in (
+                "七问",
+                "研究课题",
+                "课题评价",
+                "科研方法",
+                "研究方法",
+                "论文写作方法",
+                "所有者方法",
+            )
+        ):
+            return ()
+        return (
+            "科研指导方法 如何确定一个好的研究课题",
+            "论文写作方法 系统论文修改与打磨经验",
+        )
 
     _SHORT_FOLLOWUP_PATTERN = re.compile(
         r"^(具体|那个|这个|那|这|这篇|那篇|继续|然后|展开|详细|细节|还有|接着|其他|另外|呢|么|哦|能否|可以|按前面|按刚才)"
@@ -6548,6 +6872,15 @@ class FacultyTwinWorkflowSupport:
         scope_map = {
             "publications": {"research", "publication", "paper-digest", "overview"},
             "profile": {"profile"},
+            "research_methodology": {
+                "research-advising",
+                "topic-selection",
+                "literature-review",
+                "experiment-design",
+                "paper-writing",
+                "revision",
+                "systems-paper",
+            },
             "courseware": {
                 "teaching",
                 "courseware",
@@ -8299,7 +8632,8 @@ class DigitalTwinService:
         matched_skill = (
             None
             if (
-                skip_skill_for_light_request
+                not request.skill_routing
+                or skip_skill_for_light_request
                 or (
                 FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(request.question)
                 or (
