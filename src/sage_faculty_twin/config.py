@@ -254,6 +254,12 @@ class AppSettings(BaseSettings):
     neuromem_embedding_model: str = Field(default="BAAI/bge-small-zh-v1.5")
     neuromem_embedding_dim: int = Field(default=512, ge=32, le=4096)
     retrieval_top_k: int = Field(default=3, ge=1, le=10)
+    knowledge_link_expansion_enabled: bool = Field(
+        default=False,
+        description="Enable experimental one-hop authored-link expansion after retrieval.",
+    )
+    knowledge_link_expansion_decay: float = Field(default=0.6, ge=0.0, le=1.0)
+    knowledge_link_expansion_max_documents: int = Field(default=8, ge=0, le=100)
     knowledge_search_cache_ttl_seconds: int = Field(default=300, ge=0, le=3600)
     knowledge_search_cache_max_entries: int = Field(default=256, ge=0, le=4096)
     web_search_enabled: bool = Field(default=True)

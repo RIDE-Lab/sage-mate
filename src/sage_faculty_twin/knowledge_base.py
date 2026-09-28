@@ -153,7 +153,7 @@ class LocalKnowledgeStore:
         # linked document_ids.  Built from ``metadata["linked_source_names"]``
         # at load time.  See wiki-link-retrieval repo for research context.
         self._link_graph: dict[str, list[str]] = {}
-        self._link_expansion_enabled = True
+        self._link_expansion_enabled = settings.knowledge_link_expansion_enabled
         self._load_documents_from_disk()
         self._rebuild_link_graph()
         if self._backend == "sagevdb":
@@ -391,6 +391,9 @@ class LocalKnowledgeStore:
                 str(top_k or self._settings.retrieval_top_k),
                 visitor_profile or "",
                 admin_role or "",
+                str(self._link_expansion_enabled),
+                str(self._settings.knowledge_link_expansion_decay),
+                str(self._settings.knowledge_link_expansion_max_documents),
                 normalized_query,
             )
         )
@@ -1487,7 +1490,8 @@ class LocalKnowledgeStore:
         query_tokens: set[str],
         query_profile: "QueryProfile",
         *,
-        max_expansion: int = 8,
+        max_expansion: int | None = None,
+        decay: float | None = None,
     ) -> list[KnowledgeSearchHit]:
         """Post-retrieval 1-hop link expansion.
 
@@ -1497,20 +1501,30 @@ class LocalKnowledgeStore:
         hit's score so they rank below the primary result but above
         unrelated documents.
         """
-        if not self._link_graph or not hits:
+        expansion_limit = (
+            self._settings.knowledge_link_expansion_max_documents
+            if max_expansion is None
+            else max_expansion
+        )
+        score_decay = (
+            self._settings.knowledge_link_expansion_decay
+            if decay is None
+            else decay
+        )
+        if not self._link_graph or not hits or expansion_limit <= 0 or score_decay <= 0:
             return hits
 
         seen_ids = {h.document_id for h in hits}
         expanded: list[KnowledgeSearchHit] = list(hits)
 
         for hit in hits:
-            if len(expanded) - len(hits) >= max_expansion:
+            if len(expanded) - len(hits) >= expansion_limit:
                 break
             neighbors = self._link_graph.get(hit.document_id, [])
             for neighbor_id in neighbors:
                 if neighbor_id in seen_ids:
                     continue
-                if len(expanded) - len(hits) >= max_expansion:
+                if len(expanded) - len(hits) >= expansion_limit:
                     break
                 doc = self._documents.get(neighbor_id)
                 if doc is None:
@@ -1520,7 +1534,7 @@ class LocalKnowledgeStore:
                 ):
                     continue
                 # Linked docs get a fraction of the parent hit's score
-                link_score = max(hit.score * 0.6, 1.5)
+                link_score = hit.score * score_decay
                 expanded.append(
                     KnowledgeSearchHit(
                         document_id=doc.document_id,
