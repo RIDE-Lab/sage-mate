@@ -289,6 +289,160 @@ class VllmChatClient:
         except Exception:
             pass
 
+    def _uses_responses_api(self) -> bool:
+        settings = getattr(self, "_settings", None)
+        return getattr(settings, "llm_api_mode", "chat_completions") == "responses"
+
+    def _completion_path(self) -> str:
+        return "/responses" if self._uses_responses_api() else "/chat/completions"
+
+    @staticmethod
+    def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+        for tool in tools:
+            if tool.get("type") != "function" or not isinstance(tool.get("function"), dict):
+                converted.append(dict(tool))
+                continue
+            function = tool["function"]
+            item: dict[str, Any] = {
+                "type": "function",
+                "name": function.get("name", ""),
+                "parameters": function.get("parameters", {}),
+            }
+            if function.get("description") is not None:
+                item["description"] = function["description"]
+            if function.get("strict") is not None:
+                item["strict"] = function["strict"]
+            converted.append(item)
+        return converted
+
+    @staticmethod
+    def _responses_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+        for message in messages:
+            role = str(message.get("role") or "user")
+            if role == "tool":
+                converted.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": message.get("tool_call_id", ""),
+                        "output": str(message.get("content") or ""),
+                    }
+                )
+                continue
+
+            content = message.get("content")
+            if content not in (None, ""):
+                converted.append({"role": role, "content": content})
+
+            if role != "assistant":
+                continue
+            for tool_call in message.get("tool_calls") or []:
+                function = tool_call.get("function") or {}
+                arguments = function.get("arguments", "{}")
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+                converted.append(
+                    {
+                        "type": "function_call",
+                        "call_id": tool_call.get("id", ""),
+                        "name": function.get("name", ""),
+                        "arguments": arguments,
+                    }
+                )
+        return converted
+
+    def _wire_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not self._uses_responses_api():
+            return dict(payload)
+
+        converted = dict(payload)
+        messages = converted.pop("messages", None)
+        if messages is not None:
+            converted["input"] = self._responses_input(list(messages))
+        if "max_tokens" in converted:
+            converted["max_output_tokens"] = converted.pop("max_tokens")
+        converted.pop("stream_options", None)
+        tools = converted.get("tools")
+        if isinstance(tools, list):
+            converted["tools"] = self._responses_tools(tools)
+        return converted
+
+    def _post_completion(
+        self,
+        client: Any,
+        payload: dict[str, Any],
+    ) -> Any:
+        return client.post(self._completion_path(), json=self._wire_payload(payload))
+
+    @staticmethod
+    def _response_text(data: dict[str, Any]) -> str:
+        choices = data.get("choices") or []
+        if choices:
+            message = choices[0].get("message") or {}
+            return str(
+                message.get("content")
+                or message.get("reasoning_content")
+                or choices[0].get("text")
+                or ""
+            )
+
+        parts: list[str] = []
+        for item in data.get("output") or []:
+            if item.get("type") != "message":
+                continue
+            for content in item.get("content") or []:
+                if content.get("type") == "output_text" and content.get("text"):
+                    parts.append(str(content["text"]))
+        return "".join(parts)
+
+    @staticmethod
+    def _response_usage(data: dict[str, Any]) -> tuple[int, int, int]:
+        usage = data.get("usage") or {}
+        if not isinstance(usage, dict):
+            return 0, 0, 0
+        prompt_tokens = int(usage.get("prompt_tokens") or usage.get("input_tokens") or 0)
+        completion_tokens = int(
+            usage.get("completion_tokens") or usage.get("output_tokens") or 0
+        )
+        total_tokens = int(
+            usage.get("total_tokens") or prompt_tokens + completion_tokens
+        )
+        return prompt_tokens, completion_tokens, total_tokens
+
+    @staticmethod
+    def _response_finish_reason(data: dict[str, Any]) -> str:
+        choices = data.get("choices") or []
+        if choices:
+            return str(choices[0].get("finish_reason") or "").strip().lower()
+        if any(item.get("type") == "function_call" for item in data.get("output") or []):
+            return "tool_calls"
+        incomplete = data.get("incomplete_details") or {}
+        reason = str(incomplete.get("reason") or "").strip().lower()
+        if reason in {"max_output_tokens", "max_tokens"}:
+            return "length"
+        return "stop" if data.get("status") == "completed" else str(data.get("status") or "")
+
+    @staticmethod
+    def _response_tool_calls(data: dict[str, Any]) -> list[dict[str, Any]]:
+        choices = data.get("choices") or []
+        if choices:
+            return list((choices[0].get("message") or {}).get("tool_calls") or [])
+        calls: list[dict[str, Any]] = []
+        for item in data.get("output") or []:
+            if item.get("type") != "function_call":
+                continue
+            calls.append(
+                {
+                    "id": item.get("call_id") or item.get("id"),
+                    "function": {
+                        "name": item.get("name", ""),
+                        "arguments": item.get("arguments", "{}"),
+                    },
+                }
+            )
+        return calls
+
     def _ensure_runtime_state(self) -> None:
         if not hasattr(self, "_cache_lock"):
             self._cache_lock = threading.Lock()
@@ -863,13 +1017,12 @@ class VllmChatClient:
             }
             self._record_request_start()
             started_at = perf_counter()
-            response = self._intent_client.post("/chat/completions", json=payload)
+            response = self._post_completion(self._intent_client, payload)
             response.raise_for_status()
             data = response.json()
-            choices = data.get("choices", [])
-            if not choices:
-                raise RuntimeError("Model returned no choices")
-            content = str(choices[0].get("message", {}).get("content") or "")
+            content = self._response_text(data)
+            if not content:
+                raise RuntimeError("Model returned no response text")
             elapsed_ms = (perf_counter() - started_at) * 1000.0
             self._record_request_success(latency_ms=elapsed_ms)
             result = self._extract_json_object(content)
@@ -945,13 +1098,10 @@ class VllmChatClient:
         started_at = perf_counter()
         self._record_request_start()
         try:
-            response = self._intent_client.post("/chat/completions", json=payload)
+            response = self._post_completion(self._intent_client, payload)
             response.raise_for_status()
             data = response.json()
-            choices = data.get("choices", [])
-            if not choices:
-                raise RuntimeError("Intent model returned no choices")
-            content = choices[0].get("message", {}).get("content", "")
+            content = self._response_text(data)
             if not content:
                 raise RuntimeError("Intent model returned empty content")
             elapsed_ms = (perf_counter() - started_at) * 1000.0
@@ -1183,7 +1333,10 @@ class VllmChatClient:
         for attempt in range(max_retries + 1):
             collected: list[str] = []
             try:
-                with self._client.stream("POST", "/chat/completions", json=payload) as response:
+                wire_payload = self._wire_payload(payload)
+                with self._client.stream(
+                    "POST", self._completion_path(), json=wire_payload
+                ) as response:
                     response.raise_for_status()
                     for raw_line in response.iter_lines():
                         if not raw_line:
@@ -1223,30 +1376,36 @@ class VllmChatClient:
                             err_code = 0
                         if err_msg:
                             raise StreamingServerError(err_msg, err_code)
-                        choices = chunk.get("choices") or []
-                        usage = chunk.get("usage") or {}
-                        if isinstance(usage, dict):
-                            prompt_tokens = max(
-                                prompt_tokens,
-                                int(usage.get("prompt_tokens") or 0),
+                        if chunk.get("type") == "response.failed":
+                            failure = chunk.get("response") or chunk
+                            error = failure.get("error") or {}
+                            raise StreamingServerError(
+                                str(error.get("message") or "Responses stream failed"),
+                                int(error.get("code") or 500),
                             )
-                            completion_tokens = max(
-                                completion_tokens,
-                                int(usage.get("completion_tokens") or 0),
-                            )
-                            total_tokens = max(
-                                total_tokens,
-                                int(usage.get("total_tokens") or 0),
-                            )
-                        if not choices:
-                            continue
-                        delta = choices[0].get("delta") or {}
-                        message = choices[0].get("message") or {}
-                        delta_content = (
-                            delta.get("content")
-                            or delta.get("reasoning_content")
-                            or message.get("content")
+                        chunk_prompt, chunk_completion, chunk_total = self._response_usage(
+                            chunk.get("response") or chunk
                         )
+                        prompt_tokens = max(prompt_tokens, chunk_prompt)
+                        completion_tokens = max(completion_tokens, chunk_completion)
+                        total_tokens = max(total_tokens, chunk_total)
+                        if chunk.get("type") == "response.output_text.delta":
+                            delta_content = chunk.get("delta")
+                            choices = []
+                        else:
+                            choices = chunk.get("choices") or []
+                            delta_content = None
+                        if not choices:
+                            if not delta_content:
+                                continue
+                        else:
+                            delta = choices[0].get("delta") or {}
+                            message = choices[0].get("message") or {}
+                            delta_content = (
+                                delta.get("content")
+                                or delta.get("reasoning_content")
+                                or message.get("content")
+                            )
                         if not delta_content:
                             continue
                         text = str(delta_content)
@@ -1307,7 +1466,7 @@ class VllmChatClient:
             logical_request_id="fixed-prefix-warmup",
         )
         try:
-            response = self._client.post("/chat/completions", json=payload)
+            response = self._post_completion(self._client, payload)
             response.raise_for_status()
             return True
         except Exception as exc:
@@ -1337,28 +1496,16 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             try:
-                response = self._client.post("/chat/completions", json=payload)
+                response = self._post_completion(self._client, payload)
                 response.raise_for_status()
 
                 data = response.json()
-                usage = data.get("usage") or {}
-                if isinstance(usage, dict):
-                    prompt_tokens = int(usage.get("prompt_tokens") or 0)
-                    completion_tokens = int(usage.get("completion_tokens") or 0)
-                    total_tokens = int(usage.get("total_tokens") or 0)
-                choices = data.get("choices", [])
-                if not choices:
-                    raise RuntimeError("vllm-hust returned no chat choices")
-                message = choices[0].get("message", {})
-                content = (
-                    message.get("content")
-                    or message.get("reasoning_content")
-                    or choices[0].get("text")
-                )
+                prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
+                content = self._response_text(data)
                 if not content:
-                    raise RuntimeError("vllm-hust returned an empty chat message")
+                    raise RuntimeError("vllm-hust returned an empty model response")
                 answer = str(content)
-                finish_reason = str(choices[0].get("finish_reason") or "").strip().lower()
+                finish_reason = self._response_finish_reason(data)
                 if finish_reason == "length" and continue_on_length:
                     answer = self._continue_truncated_answer(payload, answer)
                 break
@@ -1402,17 +1549,10 @@ class VllmChatClient:
 
             continuation_payload = dict(payload)
             continuation_payload["messages"] = continuation_messages
-            continuation_response = self._client.post(
-                "/chat/completions",
-                json=continuation_payload,
-            )
+            continuation_response = self._post_completion(self._client, continuation_payload)
             continuation_response.raise_for_status()
             data = continuation_response.json()
-            choices = data.get("choices", [])
-            if not choices:
-                return partial_answer + "\n\n[回答因长度限制被截断]"
-            message = choices[0].get("message", {})
-            continuation_text = str(message.get("content") or "").strip()
+            continuation_text = self._response_text(data).strip()
             if not continuation_text:
                 return partial_answer + "\n\n[回答因长度限制被截断]"
             return partial_answer.rstrip() + "\n" + continuation_text
@@ -1456,7 +1596,7 @@ class VllmChatClient:
 
         started_at = perf_counter()
         try:
-            response = self._client.post("/chat/completions", json=payload)
+            response = self._post_completion(self._client, payload)
             response.raise_for_status()
             data = response.json()
         except httpx.TimeoutException:
@@ -1466,10 +1606,7 @@ class VllmChatClient:
             raise
 
         elapsed_ms = (perf_counter() - started_at) * 1000.0
-        usage = data.get("usage") or {}
-        prompt_tokens = int(usage.get("prompt_tokens") or 0)
-        completion_tokens = int(usage.get("completion_tokens") or 0)
-        total_tokens = int(usage.get("total_tokens") or 0)
+        prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1482,14 +1619,11 @@ class VllmChatClient:
             "total_tokens": total_tokens,
         }
 
-        choices = data.get("choices", [])
-        if not choices:
+        content = self._response_text(data) or None
+        tool_calls = self._response_tool_calls(data)
+        finish_reason = self._response_finish_reason(data)
+        if not content and not tool_calls:
             return {"content": None, "tool_calls": [], "finish_reason": "no_choices"}
-
-        message = choices[0].get("message", {})
-        finish_reason = str(choices[0].get("finish_reason") or "").strip().lower()
-        content = message.get("content")
-        tool_calls = message.get("tool_calls") or []
 
         # Normalize tool_calls format
         normalized_calls = []

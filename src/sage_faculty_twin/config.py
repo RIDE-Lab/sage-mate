@@ -1,5 +1,7 @@
 from pathlib import Path
 
+from typing import Literal
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -20,6 +22,10 @@ class AppSettings(BaseSettings):
     owner_role: str = Field(default="华中科技大学计算机学院教师")
     model_name: str = Field(default="")
     llm_base_url: str = Field(default="http://127.0.0.1:8000/v1")
+    llm_api_mode: Literal["chat_completions", "responses"] = Field(
+        default="chat_completions",
+        description="OpenAI-compatible wire API used by the configured LLM endpoint.",
+    )
     local_model_backend: str = Field(
         default="none",
         pattern="^(none|vllm_metal)$",

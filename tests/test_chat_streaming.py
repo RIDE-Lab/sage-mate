@@ -136,10 +136,12 @@ class _FakeStreamingHttpxClient:
         self._deltas = deltas
         self.stream_calls = 0
         self.last_payload: dict | None = None
+        self.last_path: str | None = None
 
     def stream(self, method: str, path: str, json: dict) -> _FakeStreamingResponse:
         self.stream_calls += 1
         self.last_payload = json
+        self.last_path = path
         # Build OpenAI-compatible SSE lines: "data: {json}" plus the
         # terminator "data: [DONE]". Mix in a stray empty line and a
         # control comment to make sure the parser is tolerant.
@@ -215,6 +217,72 @@ def test_answer_question_sync_streams_tokens_in_order() -> None:
     # The streaming path must request ``stream=true`` so vLLM sends SSE
     # chunks rather than a single buffered JSON response.
     assert transport.last_payload.get("stream") is True
+
+
+def test_answer_question_sync_streams_responses_events_in_order() -> None:
+    class _ResponsesStreamingClient(_FakeStreamingHttpxClient):
+        def stream(self, method: str, path: str, json: dict) -> _FakeStreamingResponse:
+            self.stream_calls += 1
+            self.last_payload = json
+            self.last_path = path
+            lines = [
+                "event: response.created",
+                'data: {"type":"response.created","response":{"status":"in_progress"}}',
+            ]
+            for delta in self._deltas:
+                lines.extend(
+                    [
+                        "event: response.output_text.delta",
+                        "data: "
+                        + json_dumps(
+                            {"type": "response.output_text.delta", "delta": delta}
+                        ),
+                    ]
+                )
+            lines.extend(
+                [
+                    "event: response.completed",
+                    "data: "
+                    + json_dumps(
+                        {
+                            "type": "response.completed",
+                            "response": {
+                                "status": "completed",
+                                "usage": {
+                                    "input_tokens": 9,
+                                    "output_tokens": 4,
+                                    "total_tokens": 13,
+                                },
+                            },
+                        }
+                    ),
+                ]
+            )
+            return _FakeStreamingResponse(lines)
+
+    settings = AppSettings(
+        llm_api_mode="responses",
+        llm_cache_ttl_seconds=0,
+        llm_cache_max_entries=0,
+        llm_retry_attempts=0,
+    )
+    transport = _ResponsesStreamingClient(["你好", "，", "Responses", "！"])
+    client = _build_streaming_test_client(settings, transport)
+
+    seen: list[str] = []
+    answer = client.answer_question_sync("system", "user", token_callback=seen.append)
+
+    assert answer == "你好，Responses！"
+    assert seen == ["你好", "，", "Responses", "！"]
+    assert transport.last_path == "/responses"
+    assert transport.last_payload is not None
+    assert "input" in transport.last_payload
+    assert "messages" not in transport.last_payload
+    assert client.last_request_usage == {
+        "prompt_tokens": 9,
+        "completion_tokens": 4,
+        "total_tokens": 13,
+    }
 
 
 def test_answer_question_sync_falls_back_when_stream_is_empty() -> None:
