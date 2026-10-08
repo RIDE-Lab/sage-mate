@@ -219,6 +219,32 @@ def test_attachment_grounded_question_promotes_artifact_aware_plan() -> None:
     assert "artifact_memory" in decision.plan.evidence_contract.allowed_sources
 
 
+def test_plain_attachment_summary_does_not_mix_unrelated_hybrid_knowledge() -> None:
+    planner = DeterministicWorkflowPlanner()
+    context = WorkflowRequestContext.from_chat_request(
+        ChatRequest(
+            student_name="Alice",
+            conversation_id="conv-attachment-summary",
+            question="请只总结附件中的第一项计划和主要风险。",
+            attachments=[
+                {
+                    "file_name": "plan.txt",
+                    "media_type": "text/plain",
+                    "text_content": "第一项计划：缩小实验范围。主要风险：样本不足。",
+                }
+            ],
+        )
+    )
+
+    decision = planner.plan(context)
+    planned_steps = [step.step_id for step in decision.plan.steps]
+
+    assert decision.accepted is True
+    assert decision.plan.goal == "answer_artifact_grounded_question"
+    assert "retrieve_artifact_memory" in planned_steps
+    assert "retrieve_hybrid_knowledge" not in planned_steps
+
+
 def test_collaboration_follow_up_infers_collaboration_mode_and_recurring_journey() -> (
     None
 ):

@@ -2645,6 +2645,8 @@ class FacultyTwinWorkflowSupport:
             kwargs["request_priority"] = policy_context["request_priority"]
         if "target_e2e_ms" in signature.parameters:
             kwargs["target_e2e_ms"] = policy_context["target_e2e_ms"]
+        if "reasoning_effort" in signature.parameters:
+            kwargs["reasoning_effort"] = policy_context.get("reasoning_effort")
         if "max_tokens" in signature.parameters:
             if enable_thinking:
                 kwargs["max_tokens"] = min(
@@ -2668,12 +2670,19 @@ class FacultyTwinWorkflowSupport:
         interaction_intent = context.interaction_intent
         domain = interaction_intent.domain if interaction_intent is not None else "general"
         decision_mode = context.decision_mode
+        reasoning_effort = (
+            "xhigh"
+            if getattr(context.request, "deep_thinking_explicit", False)
+            and getattr(context.request, "deep_thinking", True)
+            else None
+        )
         if self._should_use_compact_general_answer(context):
             return {
                 "deadline_class": "interactive-high",
                 "request_priority": 90,
                 "target_e2e_ms": 5000.0,
                 "max_tokens": min(512, int(self._settings.llm_policy_output_max_tokens_cap)),
+                "reasoning_effort": reasoning_effort,
             }
 
         if decision_mode == "advise_only" or domain in {"research", "advising", "teaching"}:
@@ -2682,6 +2691,7 @@ class FacultyTwinWorkflowSupport:
                 "request_priority": 90,
                 "target_e2e_ms": 2200.0,
                 "max_tokens": int(self._settings.llm_fast_answer_max_tokens),
+                "reasoning_effort": reasoning_effort,
             }
 
         return {
@@ -2689,6 +2699,7 @@ class FacultyTwinWorkflowSupport:
             "request_priority": 45,
             "target_e2e_ms": 10000.0,
             "max_tokens": int(self._settings.llm_fast_answer_max_tokens),
+            "reasoning_effort": reasoning_effort,
         }
 
     def _should_use_compact_general_answer(self, context: ChatWorkflowContext) -> bool:

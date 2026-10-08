@@ -366,7 +366,7 @@ class DeterministicWorkflowPlanner:
             ]
             if include_profile_memory and include_recent_memory:
                 step_ids.append("retrieve_recent_memory")
-            else:
+            elif not include_artifact_memory:
                 step_ids.append("retrieve_hybrid_knowledge")
                 if include_recent_memory:
                     step_ids.append("retrieve_recent_memory")

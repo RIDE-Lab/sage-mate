@@ -1247,6 +1247,29 @@ def test_answer_question_can_disable_reuse_hints_for_recovery_retry() -> None:
     assert "kv_transfer_params" not in payload
 
 
+def test_answer_question_sends_quality_routing_effort_in_responses_payload() -> None:
+    transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("OK")])
+    client = _build_retry_test_client(
+        AppSettings(llm_api_mode="responses"),
+        transport,
+    )
+    client.model_name = "sage-auto"
+
+    answer = client.answer_question_sync(
+        "system",
+        "user",
+        enable_thinking=False,
+        reasoning_effort="xhigh",
+        max_tokens=8,
+        use_reuse_hints=False,
+    )
+
+    assert answer == "OK"
+    _, payload = transport.calls[0]
+    assert payload["reasoning"] == {"effort": "xhigh"}
+    assert "input" in payload
+
+
 def test_glm4_answer_uses_neutral_sampling_penalties() -> None:
     transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("OK")])
     client = _build_retry_test_client(

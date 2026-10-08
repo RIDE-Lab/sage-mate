@@ -1134,6 +1134,7 @@ class VllmChatClient:
         cache_namespace: str | None = None,
         segment_reuse_body_text: str | None = None,
         segment_reuse_scope: str | None = None,
+        reasoning_effort: str | None = None,
         use_reuse_hints: bool = True,
         continue_on_length: bool = True,
     ) -> str:
@@ -1163,6 +1164,8 @@ class VllmChatClient:
             "presence_penalty": presence_penalty,
             "repetition_penalty": repetition_penalty,
         }
+        if reasoning_effort:
+            payload["reasoning"] = {"effort": reasoning_effort}
         if not enable_thinking:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
             # Without thinking, we don't need as many tokens
