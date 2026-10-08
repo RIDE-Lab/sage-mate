@@ -267,6 +267,10 @@ class AppSettings(BaseSettings):
         default=DEFAULT_RUNTIME_SEED_DATA_DIR / "capability_plugins"
     )
     skill_dir: Path = Field(default=Path("data/skills"))
+    legacy_skill_shortcut_enabled: bool = Field(
+        default=False,
+        description="Allow legacy matched skills to bypass the grounded chat pipeline.",
+    )
     changelog_path: Path = Field(default=Path("data/changelog.json"))
     # --- Context Digest (rolling conversation compression) ---
     context_digest_enabled: bool = Field(default=True)

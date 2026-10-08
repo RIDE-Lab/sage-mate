@@ -679,6 +679,12 @@ _PREVIOUS_ANSWER_QUERY_PATTERNS = (
     re.compile(r"^(你)?(刚刚|刚才|上一条|上一个|前一个|前面)(回答|回复)(的内容|的)?是什么$"),
     re.compile(r"^(我)?上一条(收到)?的回答是什么$"),
 )
+_REMEMBERED_VALUE_CAPTURE_PATTERN = re.compile(
+    r"记住(?:这个|以下)?(?:临时)?(?:代号|编号|关键词|字符串)\s*[：:]\s*"
+    r"[“\"'‘]?([^\s，。！？；;”\"'’]+)"
+)
+_REMEMBERED_VALUE_LABELS = ("代号", "编号", "关键词", "字符串")
+_SECRET_VALUE_LABELS = ("密码", "密钥", "token", "api key", "secret", "credential")
 _WEB_SEARCH_QUERY_MARKERS = (
     "最新",
     "今天",
@@ -3782,7 +3788,11 @@ class FacultyTwinWorkflowSupport:
             materializable_hits,
         )
         knowledge_context = self._format_knowledge_context(residual_prompt_hits)
-        web_search_context = self._format_web_search_context(web_search_hits or [])
+        web_search_requested = bool(getattr(request, "web_search", False))
+        web_search_context = self._format_web_search_context(
+            web_search_hits or [],
+            requested=web_search_requested,
+        )
         intent_guidance = self._build_intent_guidance(interaction_intent)
         profile_grounding_guidance = self._build_profile_grounding_guidance(
             request, interaction_intent
@@ -3806,6 +3816,14 @@ class FacultyTwinWorkflowSupport:
         )
         availability_context = self._meeting_service.describe_current_availability()
         live_calendar_context = self._calendar_bridge.describe_for_prompt(request.question)
+        web_search_guidance = (
+            "Web search was requested for this turn. If no reliable result is shown below, "
+            "state that the attempted search could not confirm the answer; do not tell the user "
+            "to enable web search again.\n"
+            if web_search_requested
+            else "If external references would help but none are available below, remind the "
+            "user they can enable the 联网检索 toggle for real-time sources.\n"
+        )
         return (
             "Task context for answering the current user question:\n"
             "Treat this block as context, not as a request to discuss your instructions or identity. "
@@ -3813,8 +3831,7 @@ class FacultyTwinWorkflowSupport:
             "If the current question is a follow-up that refers to 刚才, 前面, 上一个, this, that, it, or an omitted subject, resolve it against the immediate session context first. "
             "Use retrieved knowledge only when it directly answers this question; ignore adjacent topics and do not add unasked facts just because they appear in context. "
             "Never invent paper titles, author names, conference names, URLs, or any bibliographic reference. "
-            "If the answer would benefit from external references but none are available in the context below, "
-            "remind the user they can enable the 联网检索 toggle for real-time sources.\n"
+            f"{web_search_guidance}"
             f"{materializable_knowledge_context}"
             "Request context:\n"
             f"Student name: {request.student_name}\n"
@@ -3956,6 +3973,16 @@ class FacultyTwinWorkflowSupport:
             return "在当前这个会话里，你这条之前还没有上一轮可回忆的内容。"
 
         previous_record = recent_records[0]
+        if recall_kind == "remembered_value":
+            previous_question = previous_record.question.strip()
+            remembered_value = self._extract_remembered_value(previous_question)
+            if remembered_value is None:
+                return "我找到了上一轮记录，但没有识别出可安全复述的代号或编号。"
+            if "只回复" in request.question or "仅回复" in request.question:
+                return remembered_value
+            return f"你刚才让我记住的是：{remembered_value}"
+
+
         if recall_kind == "previous_question":
             previous_question = previous_record.question.strip()
             if not previous_question:
@@ -3969,11 +3996,34 @@ class FacultyTwinWorkflowSupport:
 
     def _detect_recent_session_meta_query(self, question: str) -> str | None:
         normalized_question = _RECENT_SESSION_QUERY_NORMALIZER.sub("", question).lower()
+        lowered_question = question.lower()
+        asks_for_remembered_value = (
+            any(marker in question for marker in ("刚才", "刚刚", "之前", "上一条"))
+            and "记住" in question
+            and any(label in lowered_question for label in _REMEMBERED_VALUE_LABELS)
+            and "什么" in question
+        )
+        if asks_for_remembered_value and not any(
+            label in lowered_question for label in _SECRET_VALUE_LABELS
+        ):
+            return "remembered_value"
         if any(pattern.match(normalized_question) for pattern in _PREVIOUS_QUESTION_QUERY_PATTERNS):
             return "previous_question"
         if any(pattern.match(normalized_question) for pattern in _PREVIOUS_ANSWER_QUERY_PATTERNS):
             return "previous_answer"
         return None
+
+    @staticmethod
+    def _extract_remembered_value(question: str) -> str | None:
+        lowered_question = question.lower()
+        if any(label in lowered_question for label in _SECRET_VALUE_LABELS):
+            return None
+        match = _REMEMBERED_VALUE_CAPTURE_PATTERN.search(question)
+        if match is None:
+            return None
+        value = match.group(1).strip()
+        return value[:128] if value else None
+
 
     def _build_profile_grounding_guidance(
         self,
@@ -4195,8 +4245,18 @@ class FacultyTwinWorkflowSupport:
         ).strip() or "general_visitor"
         return visitor_profile
 
-    def _format_web_search_context(self, web_search_hits: list[WebSearchHit]) -> str:
+    def _format_web_search_context(
+        self,
+        web_search_hits: list[WebSearchHit],
+        *,
+        requested: bool = False,
+    ) -> str:
         if not web_search_hits:
+            if requested:
+                return (
+                    "联网检索已经执行，但没有返回足以支撑答案的可靠结果。"
+                    "请明确说明暂时无法确认；不要再提示用户开启联网检索。\n"
+                )
             return ""
 
         sections = [
@@ -4793,6 +4853,29 @@ class FacultyTwinWorkflowSupport:
         if self._is_benchmark_request(request):
             return None
         if request.attachments:
+            if self._should_force_human_handoff(question) or self._should_queue_for_review(
+                question
+            ):
+                return None
+            decision = context.planner_decision
+            planned_steps = (
+                {step.step_id for step in decision.plan.steps}
+                if decision is not None and decision.accepted
+                else set()
+            )
+            if (
+                decision is not None
+                and decision.accepted
+                and decision.plan.fallback_template == "answer_question"
+                and "retrieve_artifact_memory" in planned_steps
+            ):
+                return InteractionIntent(
+                    action="answer",
+                    domain="research",
+                    retrieval_scopes=[],
+                    decision_mode="direct_answer",
+                    confidence=0.99,
+                )
             return None
         if self._looks_like_contextual_follow_up(question, context.recent_session_context):
             relevance_question = self._build_answer_relevance_question(context)
@@ -6997,7 +7080,11 @@ class DigitalTwinService:
         recent_session_context = self._build_recent_session_context(request)
 
         # Skill routing: check if a skill matches before running the standard pipeline
-        matched_skill = self._skill_router.match(request.question)
+        matched_skill = (
+            self._skill_router.match(request.question)
+            if self._settings.legacy_skill_shortcut_enabled
+            else None
+        )
         if matched_skill is not None:
             _logger.info(
                 "Skill router matched '%s' for question (len=%d)",

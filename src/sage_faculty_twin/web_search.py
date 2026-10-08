@@ -19,6 +19,11 @@ _WEATHER_QUERY_MARKERS = (
 _NEWS_QUERY_MARKERS = (
     "新闻", "资讯", "动态", "最新", "最近", "近况", "发布", "announcement", "news", "update",
 )
+_KNOWN_OFFICIAL_RELEASE_REPOS = {
+    "vllm": ("vllm-project", "vllm"),
+    "sglang": ("sgl-project", "sglang"),
+}
+_RELEASE_QUERY_MARKERS = ("latest", "newest", "release", "version", "最新", "版本", "发布")
 _SEARCH_FILLER_RE = re_compile(
     r"请问|帮我|帮忙|查一下|查下|查询一下|查询|告诉我|想知道|看下|看一下|了解一下|搜一下|搜索一下|"
     r"实时|最新|当前|现在|此刻|最近|刚刚|今天|今日|目前|"
@@ -117,6 +122,16 @@ class WebSearchClient:
             return []
 
         limit = self._max_results if max_results is None else max(1, min(int(max_results), 8))
+        official_repo = self._known_official_release_repo(normalized_query)
+        if official_repo is not None:
+            try:
+                official_result = self._search_github_latest_release(*official_repo)
+                if official_result is not None:
+                    return [official_result]
+            except Exception:
+                pass  # Preserve Tavily/Bing fallback when GitHub is unavailable.
+
+
 
         # --- Tavily (primary) ---
         if self._tavily_api_key:
@@ -139,6 +154,48 @@ class WebSearchClient:
                 if reranked:
                     return reranked
         return []
+
+    @staticmethod
+    def _known_official_release_repo(query: str) -> tuple[str, str] | None:
+        lowered = str(query or "").lower()
+        if not any(marker in lowered for marker in _RELEASE_QUERY_MARKERS):
+            return None
+        for alias, repository in _KNOWN_OFFICIAL_RELEASE_REPOS.items():
+            if alias in lowered:
+                return repository
+        return None
+
+    def _search_github_latest_release(
+        self,
+        owner: str,
+        repository: str,
+    ) -> WebSearchResult | None:
+        api_url = f"https://api.github.com/repos/{owner}/{repository}/releases/latest"
+        with self._client() as client:
+            response = client.get(
+                api_url,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        tag_name = str(payload.get("tag_name") or "").strip()
+        html_url = str(payload.get("html_url") or "").strip()
+        if not tag_name or not html_url:
+            return None
+        release_name = str(payload.get("name") or "").strip()
+        published_at = str(payload.get("published_at") or "").strip()
+        title = release_name or f"{repository} {tag_name}"
+        snippet = f"Official GitHub release tag: {tag_name}."
+        if published_at:
+            snippet += f" Published at {published_at}."
+        return WebSearchResult(
+            title=title[:300],
+            url=html_url[:1000],
+            snippet=snippet[:500],
+            score=100.0,
+        )
+
 
     # ---- Tavily backend ----
 

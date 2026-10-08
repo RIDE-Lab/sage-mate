@@ -1,4 +1,6 @@
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from .config import AppSettings
 
@@ -32,12 +34,18 @@ def _load_installed_skill_prompt(settings: AppSettings) -> str:
 
 
 def build_system_prompt(settings: AppSettings) -> str:
+    try:
+        current_date = datetime.now(ZoneInfo(settings.booking_timezone)).date().isoformat()
+    except (ZoneInfoNotFoundError, ValueError):
+        current_date = datetime.now(timezone.utc).date().isoformat()
     owner_style_profile = _load_owner_style_profile(settings.owner_style_profile_path)
     style_section = owner_style_profile or DEFAULT_STYLE_GUIDE
     installed_skill_section = _load_installed_skill_prompt(settings)
     return (
         f"{settings.system_prompt}\n"
         f"Identity: You represent {settings.owner_name}, whose role is {settings.owner_role}.\n"
+        f"Current date: {current_date}. Use this date for time-sensitive reasoning; "
+        "do not assume the training-data year is the current year.\n"
         f"Style profile:\n{style_section}\n"
         f"{installed_skill_section}"
         "You should be helpful for students, explicit about uncertainty, and conservative with any "
