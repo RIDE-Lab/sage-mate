@@ -28,6 +28,16 @@ _AWARD_QUERY_ALIASES = {
     "图灵奖": ("图灵奖", "turing award"),
     "诺贝尔奖": ("诺贝尔奖", "nobel prize"),
 }
+_OFFICIAL_AWARD_PAGES = {
+    "图灵奖": (
+        "ACM A.M. Turing Award official winners",
+        "https://amturing.acm.org/?pg=awards.html",
+    ),
+    "诺贝尔奖": (
+        "The Nobel Prize official prize list",
+        "https://www.nobelprize.org/prizes/lists/all-nobel-prizes/",
+    ),
+}
 _TEACHER_NAME_RE = re_compile(r"([\u4e00-\u9fff]{2,4})老师")
 _YEAR_RE = re_compile(r"(?<!\d)(20\d{2})(?!\d)")
 _SEARCH_FILLER_RE = re_compile(
@@ -137,6 +147,15 @@ class WebSearchClient:
             except Exception:
                 pass  # Preserve Tavily/Bing fallback when GitHub is unavailable.
 
+        official_award_page = self._known_official_award_page(normalized_query)
+        if official_award_page is not None:
+            try:
+                official_result = self._search_official_award_page(*official_award_page)
+                if official_result is not None:
+                    return [official_result]
+            except Exception:
+                pass
+
 
 
         # --- Tavily (primary) ---
@@ -199,6 +218,30 @@ class WebSearchClient:
             title=title[:300],
             url=html_url[:1000],
             snippet=snippet[:500],
+            score=100.0,
+        )
+
+    @staticmethod
+    def _known_official_award_page(query: str) -> tuple[str, str] | None:
+        lowered = str(query or "").lower()
+        for marker, page in _OFFICIAL_AWARD_PAGES.items():
+            aliases = _AWARD_QUERY_ALIASES[marker]
+            if marker in query or any(alias.lower() in lowered for alias in aliases):
+                return page
+        return None
+
+    def _search_official_award_page(
+        self,
+        title: str,
+        url: str,
+    ) -> WebSearchResult | None:
+        with self._client() as client:
+            response = client.get(url)
+            response.raise_for_status()
+        return WebSearchResult(
+            title=title,
+            url=url,
+            snippet="Official award recipient directory maintained by the awarding institution.",
             score=100.0,
         )
 

@@ -319,6 +319,24 @@ def test_award_search_rewrites_entities_and_drops_irrelevant_results() -> None:
     assert [result.url for result in results] == ["https://awards.acm.org/turing"]
 
 
+def test_award_search_prefers_official_award_directory() -> None:
+    client = WebSearchClient(timeout_seconds=1, max_results=3)
+    client._search_official_award_page = lambda title, url: WebSearchResult(
+        title=title,
+        url=url,
+        snippet="Official award recipient directory.",
+        score=100.0,
+    )
+    client._search_bing_rss = lambda *args, **kwargs: (_ for _ in ()).throw(
+        AssertionError("Bing must not run when the official award directory succeeds")
+    )
+
+    results = client.search("张书豪老师是否获得了 2026 年图灵奖？")
+
+    assert len(results) == 1
+    assert results[0].url == "https://amturing.acm.org/?pg=awards.html"
+
+
 def test_award_question_filters_unrelated_local_knowledge_hits() -> None:
     relevant = KnowledgeSearchHit(
         document_id="profile-awards",
