@@ -16,6 +16,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException, status
 from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
@@ -3955,7 +3956,12 @@ class FacultyTwinWorkflowSupport:
                 sections.append(f"{index}. User: {record.question}\nAssistant: {record.answer}")
         return "\n".join(sections) + "\n"
 
+
     def _build_recent_session_meta_answer(self, request: ChatRequest) -> str | None:
+        temporal_answer = self._build_current_time_meta_answer(request.question)
+        if temporal_answer is not None:
+            return temporal_answer
+
         recall_kind = self._detect_recent_session_meta_query(request.question)
         if recall_kind is None:
             return None
@@ -3993,6 +3999,31 @@ class FacultyTwinWorkflowSupport:
         if not previous_answer:
             return "我找到了上一轮记录，但我上一轮的回答内容是空的。"
         return f"我刚刚回答的是：{previous_answer}"
+
+    def _build_current_time_meta_answer(self, question: str) -> str | None:
+        normalized_question = _RECENT_SESSION_QUERY_NORMALIZER.sub("", question).lower()
+        if len(normalized_question) > 48:
+            return None
+        asks_for_year = any(
+            marker in normalized_question
+            for marker in ("当前是哪一年", "现在是哪一年", "今年是哪一年", "当前年份", "现在年份")
+        )
+        asks_for_date = any(
+            marker in normalized_question
+            for marker in ("今天日期", "当前日期", "今天是几号", "今天几号")
+        )
+        if not asks_for_year and not asks_for_date:
+            return None
+        try:
+            current_date = datetime.now(ZoneInfo(self._settings.booking_timezone)).date()
+        except (ZoneInfoNotFoundError, ValueError):
+            current_date = datetime.now(UTC).date()
+        if asks_for_year:
+            return str(current_date.year)
+        if "只回复" in question or "仅回复" in question:
+            return current_date.isoformat()
+        return f"今天是 {current_date.isoformat()}。"
+
 
     def _detect_recent_session_meta_query(self, question: str) -> str | None:
         normalized_question = _RECENT_SESSION_QUERY_NORMALIZER.sub("", question).lower()

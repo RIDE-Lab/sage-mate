@@ -190,6 +190,28 @@ def test_system_prompt_contains_current_local_date(tmp_path: Path) -> None:
     assert expected in prompt
     assert "Current date:" in prompt
 
+def test_current_year_question_uses_authoritative_local_date_without_llm(
+    tmp_path: Path,
+) -> None:
+    service = DigitalTwinService(_settings(tmp_path, booking_timezone="Asia/Shanghai"))
+    llm = _RecordingLLM(answer="2024")
+    service._llm_client = llm
+
+    response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id="conv-current-year",
+                question="当前是哪一年？只回复四位年份。",
+            )
+        )
+    )
+
+    assert response.answer == str(datetime.now().astimezone().year)
+    assert llm.prompts == []
+
+
+
 
 def test_latest_vllm_release_uses_official_repository_detection() -> None:
     assert WebSearchClient._known_official_release_repo(
