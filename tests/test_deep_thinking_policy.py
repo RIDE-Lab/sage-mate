@@ -228,7 +228,7 @@ def test_relevance_guard_rejects_domain_free_answers() -> None:
         "前文讨论 Ascend NPU 大模型推理。当前问题：请排成三步。",
         "第三步优化并行通信，提高模型训练速度。",
     )
-    assert _answer_is_irrelevant_to_question(
+    assert not _answer_is_irrelevant_to_question(
         "如何优化大模型在 Ascend NPU 上的推理效率？",
         "重点优化 NPU 推理的 KV Cache、内存生命周期和缓存碎片。",
     )
@@ -239,6 +239,10 @@ def test_relevance_guard_rejects_domain_free_answers() -> None:
     assert not _answer_is_irrelevant_to_question(
         "为什么首 token 延迟和吞吐量往往互相冲突？",
         "首 token 延迟偏向小批次快速调度，吞吐则偏向大批次提高设备利用率。",
+    )
+    assert not _answer_is_irrelevant_to_question(
+        "为什么 latency 和 throughput 往往互相冲突？",
+        "TTFT 偏向及时调度，而 QPS 依赖更大的批次来提高设备利用率。",
     )
 
 
@@ -252,6 +256,19 @@ def test_relevance_guard_does_not_apply_optimization_rubric_to_positioning_quest
         "比较 SAGE、vLLM-HUST 和 vLLM-Ascend-HUST 的定位与协作关系。",
         answer,
     )
+
+
+def test_relevance_guard_does_not_require_card_keywords_in_evidence_review() -> None:
+    question = (
+        "请依据匿名事实卡独立评价系统研究贡献，只输出合法JSON。"
+        "事实卡涉及 Ascend NPU 优化、延迟和吞吐。"
+    )
+    answer = (
+        '{"judgment":"机制已有实现线索，但当前材料缺少可复核的对照实验，'
+        '因此证据成熟度不足。"}'
+    )
+
+    assert not _answer_is_irrelevant_to_question(question, answer)
 
 
 def test_task_completion_guard_rejects_three_question_refusal() -> None:

@@ -49,11 +49,28 @@ def is_runtime_identity_query(question: str) -> bool:
     )
     return any(
         segment
-        and any(marker in segment for marker in _RUNTIME_SUBJECT_MARKERS)
-        and any(marker in segment for marker in _RUNTIME_CONTEXT_MARKERS)
-        and any(marker in segment for marker in _RUNTIME_QUERY_MARKERS)
+        # Natural identity questions are short. Large serialized cards can
+        # contain unrelated subject/context/query tokens whose accidental
+        # co-occurrence must not activate the zero-LLM runtime fast path.
+        and len(segment) <= 512
+        and _contains_runtime_marker(segment, _RUNTIME_SUBJECT_MARKERS)
+        and _contains_runtime_marker(segment, _RUNTIME_CONTEXT_MARKERS)
+        and _contains_runtime_marker(segment, _RUNTIME_QUERY_MARKERS)
         for segment in segments
     )
+
+
+def _contains_runtime_marker(segment: str, markers: tuple[str, ...]) -> bool:
+    """Match English tokens on word boundaries while retaining Chinese phrases."""
+    for marker in markers:
+        normalized = marker.strip()
+        if normalized.isascii() and any(char.isalnum() for char in normalized):
+            pattern = rf"(?<![a-z0-9_]){re.escape(normalized)}(?![a-z0-9_])"
+            if re.search(pattern, segment):
+                return True
+        elif normalized in segment:
+            return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)

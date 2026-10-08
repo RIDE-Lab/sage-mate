@@ -25,7 +25,7 @@ def test_intake_preserves_original_question_as_immutable_data() -> None:
         intake.original_question = "rewritten"  # type: ignore[misc]
 
 
-def test_interaction_decision_rejects_conflicting_retrieval_scopes() -> None:
+def test_interaction_decision_normalizes_conflicting_retrieval_scopes() -> None:
     intent = InteractionIntent(
         action="answer",
         domain="general",
@@ -35,8 +35,10 @@ def test_interaction_decision_rejects_conflicting_retrieval_scopes() -> None:
         confidence=0.9,
     )
 
-    with pytest.raises(ValueError, match="same scopes"):
-        InteractionDecision(intent=intent, source="test")
+    decision = InteractionDecision(intent=intent, source="test")
+
+    assert decision.intent.retrieval_scopes == []
+    assert decision.intent.exclude_scopes == ["profile"]
 
 
 def test_prompt_envelope_requires_all_cross_path_invariants() -> None:

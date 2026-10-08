@@ -5,6 +5,7 @@ from time import perf_counter
 
 import pytest
 
+from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatResponse, WorkflowTraceStep
 from sage_faculty_twin.request_context import (
     RequestCancellationController,
@@ -16,6 +17,7 @@ from sage_faculty_twin.request_context import (
     request_remaining_seconds,
 )
 from sage_faculty_twin.request_timing import RequestTimingLedger
+from sage_faculty_twin.service import DigitalTwinService
 
 
 def test_request_scope_caps_io_timeout_by_absolute_deadline() -> None:
@@ -91,3 +93,28 @@ def test_timing_ledger_attaches_reconcilable_public_diagnostics() -> None:
     assert attached.request_timing.unattributed_duration_ms < 2000
     assert "request_parse" in attached.request_timing.stage_durations_ms
     assert attached.request_timing.total_duration_ms <= attached.request_timing.budget_ms
+
+
+def test_token_usage_is_request_local_and_absent_for_zero_call_path(tmp_path) -> None:
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    support._llm_client._last_request_usage = {
+        "prompt_tokens": 999,
+        "completion_tokens": 999,
+        "total_tokens": 1998,
+    }
+    controller = RequestCancellationController()
+
+    with request_cancellation_scope(controller):
+        assert support._build_token_usage() is None
+        controller.diagnostics.record_llm_call()
+        controller.diagnostics.record_token_usage(
+            prompt_tokens=100,
+            completion_tokens=20,
+            total_tokens=120,
+        )
+        usage = support._build_token_usage()
+
+    assert usage is not None
+    assert usage.prompt_tokens == 100
+    assert usage.completion_tokens == 20
+    assert usage.total_tokens == 120

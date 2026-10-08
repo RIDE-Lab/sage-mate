@@ -1,13 +1,25 @@
 """User-observed completeness/evidence failures; no model or private data required."""
+from time import perf_counter
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import HTTPException
 
 from sage_faculty_twin.chat_delivery import AnswerConstraints, ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.evidence_policy import has_named_query_evidence, has_query_evidence
-from sage_faculty_twin.models import ChatRequest, ChatResponse, InteractionIntent, KnowledgeSearchHit
+from sage_faculty_twin.models import (
+    ChatAttachment,
+    ChatRequest,
+    ChatResponse,
+    InteractionIntent,
+    KnowledgeSearchHit,
+)
+from sage_faculty_twin.request_context import (
+    RequestCancellationController,
+    request_cancellation_scope,
+)
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.skill_runner import SkillRunner
 from sage_faculty_twin.skill_tools import SkillToolRegistry
@@ -174,6 +186,115 @@ def test_structured_fast_answer_has_complete_budget_and_failed_repair_has_no_fak
     assert "长上下文推理" in calls[0]  # repair preserved its original evidence
     assert context.knowledge_hits == []
     assert context.decision_mode == "answer_quality_unavailable"
+
+
+def test_compact_repair_preserves_the_exact_prompt_attachments(tmp_path):
+    support = object.__new__(FacultyTwinWorkflowSupport)
+    support._settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
+    captured_prompts = []
+
+    def answer(_system_prompt, user_prompt, **_kwargs):
+        captured_prompts.append(user_prompt)
+        return "两份附件分别给出了基线定义和尾延迟约束，应先统一工作负载再比较结果。"
+
+    support._llm_client = SimpleNamespace(answer_question_sync=answer)
+    prompt_attachments = [
+        ChatAttachment(
+            file_name="baseline.txt",
+            media_type="text/plain",
+            text_content="BASELINE-SENTINEL：固定模型、硬件和请求流。",
+            size_bytes=64,
+        ),
+        ChatAttachment(
+            file_name="latency.txt",
+            media_type="text/plain",
+            text_content="TAIL-LATENCY-SENTINEL：报告 P99 与超时率。",
+            size_bytes=64,
+        ),
+    ]
+    context = ChatWorkflowContext(
+        request=ChatRequest(student_name="test", question="请比较两份附件的实验要求。"),
+        conversation_id="test",
+        owner_name="Owner",
+        used_model="test",
+        interaction_intent=InteractionIntent(action="answer", domain="research"),
+        prompt_attachments=prompt_attachments,
+    )
+
+    support._retry_answer_with_compact_prompt(context)
+
+    assert len(captured_prompts) == 1
+    assert "baseline.txt" in captured_prompts[0]
+    assert "BASELINE-SENTINEL" in captured_prompts[0]
+    assert "latency.txt" in captured_prompts[0]
+    assert "TAIL-LATENCY-SENTINEL" in captured_prompts[0]
+
+
+def test_compact_repair_fails_fast_when_request_budget_is_exhausted(tmp_path):
+    support = object.__new__(FacultyTwinWorkflowSupport)
+    support._settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
+    support._llm_client = SimpleNamespace(
+        answer_question_sync=lambda *_args, **_kwargs: pytest.fail("repair must not start")
+    )
+    context = ChatWorkflowContext(
+        request=ChatRequest(student_name="test", question="请重新生成完整回答。"),
+        conversation_id="test",
+        owner_name="Owner",
+        used_model="test",
+        interaction_intent=InteractionIntent(action="answer", domain="research"),
+    )
+
+    with request_cancellation_scope(
+        RequestCancellationController(), deadline_at=perf_counter() + 0.5
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            support._retry_answer_with_compact_prompt(context)
+
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers == {"Retry-After": "2"}
+
+
+def test_member_research_review_separates_potential_from_evidence_maturity() -> None:
+    request = ChatRequest(
+        student_name="member",
+        visitor_profile="lab_member",
+        question="请评价这个研究课题是否值得继续。",
+    )
+    guidance = FacultyTwinWorkflowSupport._owner_review_style_guidance(
+        request,
+        InteractionIntent(action="answer", domain="research"),
+    )
+
+    assert "先给明确判断" in guidance
+    assert "想法潜力" in guidance
+    assert "证据不足不自动等于方向错误" in guidance
+    assert "最优先的下一步" in guidance
+
+
+def test_owner_review_style_is_not_applied_to_public_or_nonresearch_requests() -> None:
+    public_request = ChatRequest(
+        student_name="visitor",
+        visitor_profile="general_visitor",
+        question="请评价这个研究课题。",
+    )
+    member_teaching = public_request.model_copy(
+        update={"visitor_profile": "lab_member", "question": "请解释课程作业。"}
+    )
+
+    assert (
+        FacultyTwinWorkflowSupport._owner_review_style_guidance(
+            public_request,
+            InteractionIntent(action="answer", domain="research"),
+        )
+        == ""
+    )
+    assert (
+        FacultyTwinWorkflowSupport._owner_review_style_guidance(
+            member_teaching,
+            InteractionIntent(action="answer", domain="teaching"),
+        )
+        == ""
+    )
 
 
 @pytest.mark.parametrize("native", [False, True])

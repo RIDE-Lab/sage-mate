@@ -51,7 +51,7 @@ from .workflow_steps import get_default_step_registry
 
 _DEFAULT_RETRIEVAL_SCOPES: dict[str, list[str]] = {
     "general": [],
-    "research": ["publications", "profile"],
+    "research": ["publications", "profile", "research_methodology"],
     "teaching": ["courseware"],
     "advising": ["preparation", "meeting_policy", "profile"],
     "booking": ["meeting_policy"],
@@ -897,8 +897,8 @@ class VllmChatClient:
             'Allowed action values: "answer", "book_meeting", "ask_followup", "review_queue", "human_handoff". '
             'Allowed domain values: "general", "research", "teaching", "advising", "booking". '
             'Allowed decision_mode values: "direct_answer", "advise_only", "review_queue", "human_handoff". '
-            'Allowed retrieval scopes: "publications", "profile", "courseware", "preparation", "meeting_policy". '
-            'Allowed exclude scopes: "publications", "profile", "courseware", "preparation", "meeting_policy". '
+            'Allowed retrieval scopes: "publications", "profile", "research_methodology", "courseware", "preparation", "meeting_policy". '
+            'Allowed exclude scopes: "publications", "profile", "research_methodology", "courseware", "preparation", "meeting_policy". '
             "DEFAULT BEHAVIOR: choose action=answer. The downstream pipeline retrieves the owner's papers, course slides and biography and grounds the answer; you do NOT need to ask the student for more info before classifying. "
             "Use ask_followup ONLY as a last resort and ONLY when ALL of the following are true: "
             "(a) the question contains no concrete academic anchor (no paper title, system name, course term, KV/TTFT/batching/scheduling/inference keyword, no '论文/文献/汇报/写作/研究方向/招生/课题'), "
@@ -1128,7 +1128,10 @@ class VllmChatClient:
         }
         started_at = perf_counter()
         self._record_request_start()
+        diagnostics = request_runtime_diagnostics()
         try:
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
             response = self._intent_client.post("/chat/completions", json=payload)
             response.raise_for_status()
             data = response.json()
@@ -1139,7 +1142,24 @@ class VllmChatClient:
             if not content:
                 raise RuntimeError("Intent model returned empty content")
             elapsed_ms = (perf_counter() - started_at) * 1000.0
-            self._record_request_success(latency_ms=elapsed_ms)
+            usage = data.get("usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or 0)
+            if diagnostics is not None:
+                diagnostics.record_llm_ttft(elapsed_ms)
+                diagnostics.record_llm_complete(elapsed_ms)
+                diagnostics.record_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
+            self._record_request_success(
+                latency_ms=elapsed_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             return str(content)
         except Exception as exc:
             self._record_request_error(exc)
@@ -1494,6 +1514,11 @@ class VllmChatClient:
         elapsed_ms = (perf_counter() - started_at) * 1000.0
         if diagnostics is not None:
             diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1618,6 +1643,11 @@ class VllmChatClient:
         if diagnostics is not None:
             diagnostics.record_llm_ttft(elapsed_ms)
             diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1633,6 +1663,8 @@ class VllmChatClient:
         return answer
 
     def _continue_truncated_answer(self, payload: dict[str, Any], partial_answer: str) -> str:
+        started_at = perf_counter()
+        diagnostics = request_runtime_diagnostics()
         try:
             raise_if_request_cancelled(minimum_remaining_seconds=0.1)
             messages = list(payload.get("messages") or [])
@@ -1650,6 +1682,8 @@ class VllmChatClient:
 
             continuation_payload = dict(payload)
             continuation_payload["messages"] = continuation_messages
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
             with self._request_completion_client() as request_client:
                 continuation_response = request_client.post(
                     "/chat/completions",
@@ -1667,6 +1701,26 @@ class VllmChatClient:
             continuation_text = str(message.get("content") or "").strip()
             if not continuation_text:
                 raise IncompleteCompletionError("empty continuation")
+            elapsed_ms = (perf_counter() - started_at) * 1000.0
+            usage = data.get("usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or 0)
+            if diagnostics is not None:
+                # The parent completion records the end-to-end duration,
+                # including this continuation. Recording it here as well
+                # would double-count model wall time for a single request.
+                diagnostics.record_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
+            self._record_request_success(
+                latency_ms=elapsed_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             return partial_answer.rstrip() + "\n" + continuation_text
         except RequestCancelledError:
             raise
@@ -1709,8 +1763,11 @@ class VllmChatClient:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         started_at = perf_counter()
+        diagnostics = request_runtime_diagnostics()
         try:
             raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
             with self._request_completion_client() as request_client:
                 response = request_client.post(
                     "/chat/completions",
@@ -1730,6 +1787,14 @@ class VllmChatClient:
         prompt_tokens = int(usage.get("prompt_tokens") or 0)
         completion_tokens = int(usage.get("completion_tokens") or 0)
         total_tokens = int(usage.get("total_tokens") or 0)
+        if diagnostics is not None:
+            diagnostics.record_llm_ttft(elapsed_ms)
+            diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1861,6 +1926,17 @@ class VllmChatClient:
         decision_mode = payload.decision_mode
         retrieval_scopes = payload.retrieval_scopes or _DEFAULT_RETRIEVAL_SCOPES.get(domain, [])
         exclude_scopes = payload.exclude_scopes or _DEFAULT_EXCLUDE_SCOPES.get(domain, [])
+        retrieval_scopes = list(
+            dict.fromkeys(item for item in retrieval_scopes if item.strip())
+        )
+        included_scopes = set(retrieval_scopes)
+        exclude_scopes = list(
+            dict.fromkeys(
+                item
+                for item in exclude_scopes
+                if item.strip() and item not in included_scopes
+            )
+        )
         if decision_mode is None:
             decision_mode = (
                 action if action in {"review_queue", "human_handoff"} else "direct_answer"
@@ -1868,8 +1944,8 @@ class VllmChatClient:
         normalized_payload = {
             "action": action,
             "domain": domain,
-            "retrieval_scopes": [item for item in retrieval_scopes if item.strip()],
-            "exclude_scopes": [item for item in exclude_scopes if item.strip()],
+            "retrieval_scopes": retrieval_scopes,
+            "exclude_scopes": exclude_scopes,
             "decision_mode": str(decision_mode),
             "needs_clarification": payload.needs_clarification,
             "clarification_message": payload.clarification_message,
@@ -1931,7 +2007,7 @@ class VllmChatClient:
                     update={
                         "action": "answer",
                         "domain": "research",
-                        "retrieval_scopes": ["publications", "profile"],
+                        "retrieval_scopes": ["publications", "profile", "research_methodology"],
                         "exclude_scopes": ["courseware"],
                         "decision_mode": "direct_answer"
                         if intent.decision_mode == ""
@@ -1965,7 +2041,7 @@ class VllmChatClient:
                         "domain": "advising"
                         if intent.domain in {"", "general"}
                         else intent.domain,
-                        "retrieval_scopes": ["preparation", "profile", "publications"],
+                        "retrieval_scopes": ["preparation", "profile", "publications", "research_methodology"],
                         "exclude_scopes": ["courseware"],
                         "decision_mode": "advise_only",
                         "needs_clarification": False,
@@ -2107,7 +2183,7 @@ class VllmChatClient:
                 update={
                     "action": "answer",
                     "domain": "research",
-                    "retrieval_scopes": ["publications", "profile"],
+                    "retrieval_scopes": ["publications", "profile", "research_methodology"],
                     "exclude_scopes": ["courseware"],
                     "needs_clarification": False,
                     "clarification_message": None,
@@ -2603,6 +2679,11 @@ def _looks_like_booking_information_question(lowered: str, question: str) -> boo
 def _looks_like_teaching_question(lowered: str, question: str) -> bool:
     if _looks_like_mixed_course_research_boundary_question(lowered, question):
         return False
+    if any(
+        marker in question
+        for marker in ("七问", "研究课题", "课题评价", "科研方法", "研究方法", "论文写作方法")
+    ):
+        return False
     if bool(re.search(r"第\s*\d+\s*讲", question)):
         return True
     teaching_markers = ("tutorial", "lecture", "experiment", "assignment", "course")
@@ -2755,6 +2836,12 @@ def _looks_like_research_question(lowered: str, question: str) -> bool:
         "研究什么",
         "做什么研究",
         "科研",
+        "研究课题",
+        "课题评价",
+        "七问",
+        "研究方法",
+        "科研方法",
+        "论文写作方法",
         "flowrag",
         "libamm",
         "publication",

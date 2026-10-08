@@ -433,7 +433,7 @@ def test_chat_accepts_multipart_uploads(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["answer"] == "已读取附件。"
-    assert callable(captured["answer_chunk_callback"])
+    assert captured["answer_chunk_callback"] is None
     request = captured["request"]
     assert request.question == "请结合我上传的草稿给我提建议。"
     assert len(request.attachments) == 1
@@ -489,7 +489,7 @@ def test_chat_uses_authenticated_visitor_profile_over_client_payload(monkeypatch
 
     assert response.status_code == 200
     assert captured["request"].visitor_profile == "lab_member"
-    assert callable(captured["answer_chunk_callback"])
+    assert captured["answer_chunk_callback"] is None
 
 
 def test_chat_downgrades_unauthenticated_lab_member_claim(monkeypatch) -> None:
@@ -517,12 +517,14 @@ def test_chat_downgrades_unauthenticated_lab_member_claim(monkeypatch) -> None:
         json={
             "student_name": "Anonymous",
             "visitor_profile": "lab_member",
+            "answer_max_tokens": 1024,
             "question": "请查询组内制度。",
         },
     )
 
     assert response.status_code == 200
     assert captured["request"].visitor_profile == "general_visitor"
+    assert captured["request"].answer_max_tokens is None
 
 
 def test_chat_rejects_unsupported_upload_type() -> None:

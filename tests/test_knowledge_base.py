@@ -16,7 +16,7 @@ from sage_faculty_twin.models import (
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
-from sage_faculty_twin.service import DigitalTwinService
+from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSupport
 
 
 def test_index_completeness_reports_local_and_neuromem_counts(tmp_path: Path) -> None:
@@ -1453,6 +1453,109 @@ def test_service_filters_generic_profile_hits_for_preparation_guidance_queries(
     )
 
     assert [hit.document_id for hit in filtered] == ["meeting-hit"]
+
+
+def test_research_methodology_scope_accepts_owner_method_documents(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    methodology = KnowledgeSearchHit(
+        document_id="method-seven-questions",
+        title="科研指导方法｜如何确定一个好的研究课题",
+        excerpt="七问依次检查问题、重要性、现有解法边界、机制、可行性、实验和知识增量。",
+        score=1.0,
+        tags=["research-advising", "topic-selection", "experiment-design"],
+        source_name="private-materials:how-to-think-about-research-topic",
+    )
+
+    assert support._matches_intent_scopes(methodology, ["research_methodology"])
+    filtered = support._filter_knowledge_hits_by_intent(
+        [methodology],
+        InteractionIntent(
+            action="answer",
+            domain="research",
+            retrieval_scopes=["publications", "profile", "research_methodology"],
+            exclude_scopes=["courseware"],
+        ),
+        question="请按七问法评价研究课题，并使用科研指导方法。",
+    )
+    assert [hit.document_id for hit in filtered] == ["method-seven-questions"]
+
+
+def test_prompt_selection_keeps_research_and_paper_writing_methods(tmp_path: Path) -> None:
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    hits = [
+        KnowledgeSearchHit(
+            document_id="method-seven-questions",
+            title="科研指导方法｜如何确定一个好的研究课题",
+            excerpt="七问方法。",
+            score=2.0,
+            tags=["research-advising", "topic-selection", "experiment-design"],
+            source_name="private-materials:how-to-think-about-research-topic",
+        ),
+        KnowledgeSearchHit(
+            document_id="paper-revision-lessons",
+            title="论文写作方法｜系统论文修改与打磨经验",
+            excerpt="系统论文修改经验。",
+            score=1.5,
+            tags=["paper-writing", "research-advising", "revision"],
+            source_name="private-materials:paper-revision-lessons",
+        ),
+    ]
+    intent = InteractionIntent(
+        action="answer",
+        domain="research",
+        retrieval_scopes=["publications", "profile", "research_methodology"],
+        exclude_scopes=["courseware"],
+    )
+
+    selected = support._select_prompt_knowledge_hits(
+        "请按七问法评价研究课题，并结合论文写作方法。", hits, intent
+    )
+
+    assert [hit.document_id for hit in selected] == [
+        "method-seven-questions",
+        "paper-revision-lessons",
+    ]
+
+
+def test_seven_question_method_prompt_routes_as_research(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    support = DigitalTwinService(settings)._build_support()
+    request = ChatRequest(
+        student_name="Alice",
+        question="请按七问法评价这个研究课题，并检查实验设计。",
+        visitor_profile="lab_member",
+    )
+
+    intent = support._build_fallback_interaction_intent(request)
+
+    assert intent.domain == "research"
+    assert "research_methodology" in intent.retrieval_scopes
+
+
+def test_owner_method_retrieval_query_requires_authenticated_lab_profile(tmp_path: Path) -> None:
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    authenticated = ChatRequest(
+        student_name="Alice",
+        question="请按七问法评价这个研究课题，并结合论文写作方法。",
+        visitor_profile="lab_member",
+    )
+    public = authenticated.model_copy(update={"visitor_profile": "general_visitor"})
+    unrelated = authenticated.model_copy(update={"question": "请介绍最近的论文。"})
+
+    assert support._owner_method_retrieval_queries(authenticated) == (
+        "科研指导方法 如何确定一个好的研究课题",
+        "论文写作方法 系统论文修改与打磨经验",
+    )
+    assert support._owner_method_retrieval_queries(public) == ()
+    assert support._owner_method_retrieval_queries(unrelated) == ()
+
+
+def test_explicit_owner_method_bypasses_generic_curated_direction_answer() -> None:
+    question = "请按七问研究方法评价候选研究方向是否值得继续，并检查 baseline、公平对比和消融。"
+
+    assert not FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(question)
 
 
 def test_service_drops_scope_matched_hit_without_query_evidence(tmp_path: Path) -> None:

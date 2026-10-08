@@ -38,6 +38,9 @@ class RequestRuntimeDiagnostics:
     llm_total_duration_ms: float = 0.0
     llm_cache_hits: int = 0
     llm_cache_misses: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
 
     def record_llm_call(self) -> None:
         with self._lock:
@@ -63,6 +66,14 @@ class RequestRuntimeDiagnostics:
             else:
                 self.llm_cache_misses += 1
 
+    def record_token_usage(
+        self, *, prompt_tokens: int, completion_tokens: int, total_tokens: int
+    ) -> None:
+        with self._lock:
+            self.prompt_tokens += max(0, prompt_tokens)
+            self.completion_tokens += max(0, completion_tokens)
+            self.total_tokens += max(0, total_tokens)
+
     def snapshot(self) -> dict[str, int | float | None]:
         with self._lock:
             return {
@@ -74,6 +85,9 @@ class RequestRuntimeDiagnostics:
                 "llm_total_duration_ms": round(self.llm_total_duration_ms, 3),
                 "llm_cache_hits": self.llm_cache_hits,
                 "llm_cache_misses": self.llm_cache_misses,
+                "prompt_tokens": self.prompt_tokens,
+                "completion_tokens": self.completion_tokens,
+                "total_tokens": self.total_tokens,
             }
 
 
