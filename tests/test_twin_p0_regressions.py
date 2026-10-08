@@ -346,6 +346,28 @@ def test_award_question_filters_unrelated_local_knowledge_hits() -> None:
     ] == ["profile-awards"]
 
 
+def test_owner_award_fact_check_is_date_grounded_and_conservative(tmp_path: Path) -> None:
+    service = DigitalTwinService(_settings(tmp_path, booking_timezone="Asia/Shanghai"))
+    llm = _RecordingLLM(answer="截至当前（2024 年），候选人资格不符。")
+    service._llm_client = llm
+
+    response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Verifier",
+                conversation_id="conv-owner-award-check",
+                question="张书豪老师是否获得了 2026 年图灵奖？请核实并说明依据。",
+                web_search=True,
+            )
+        )
+    )
+
+    assert str(datetime.now().astimezone().year) in response.answer
+    assert "没有可靠证据支持该说法" in response.answer
+    assert "资格不符" not in response.answer
+    assert llm.prompts == []
+
+
 def test_requested_web_search_without_hits_is_explicit_in_prompt(
     tmp_path: Path,
 ) -> None:

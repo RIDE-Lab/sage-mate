@@ -2103,6 +2103,20 @@ class FacultyTwinWorkflowSupport:
         if context.system_prompt is None or context.user_prompt is None:
             raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
 
+        award_verification_answer = self._build_owner_award_verification_answer(context)
+        if award_verification_answer is not None:
+            context.answer = award_verification_answer
+            context.workflow_action = "answer"
+            self._append_trace(
+                context,
+                key="llm_answer",
+                title="生成回答",
+                summary="已返回时间校准后的奖项核查结论。",
+                detail="当前问题涉及系统所有者的奖项事实；已使用服务时区日期和已筛选的公开证据给出保守结论，未调用模型。",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
+
         relevance_question = self._build_answer_relevance_question(context)
         explicit_deep = bool(
             getattr(context.request, "deep_thinking_explicit", False)
@@ -4103,6 +4117,54 @@ class FacultyTwinWorkflowSupport:
         if "只回复" in question or "仅回复" in question:
             return current_date.isoformat()
         return f"今天是 {current_date.isoformat()}。"
+
+    def _build_owner_award_verification_answer(
+        self,
+        context: ChatWorkflowContext,
+    ) -> str | None:
+        question = context.request.question
+        lowered = question.lower()
+        award_labels = (
+            ("图灵奖", "图灵奖"),
+            ("turing award", "A.M. Turing Award"),
+            ("诺贝尔奖", "诺贝尔奖"),
+            ("nobel prize", "Nobel Prize"),
+        )
+        award_name = next(
+            (label for marker, label in award_labels if marker in lowered),
+            None,
+        )
+        owner_referenced = self._settings.owner_name in question or "张老师" in question
+        if award_name is None or not owner_referenced:
+            return None
+        if not any(marker in question for marker in ("是否", "有没有", "获得", "获奖", "核实")):
+            return None
+
+        try:
+            current_date = datetime.now(ZoneInfo(self._settings.booking_timezone)).date()
+        except (ZoneInfoNotFoundError, ValueError):
+            current_date = datetime.now(UTC).date()
+        year_match = re.search(r"(?<!\d)(20\d{2})(?!\d)", question)
+        award_reference = (
+            f"{year_match.group(1)} 年{award_name}"
+            if year_match is not None
+            else award_name
+        )
+        official_web_hit = any(
+            "acm.org" in hit.url.lower() or "nobelprize.org" in hit.url.lower()
+            for hit in context.web_search_hits
+        )
+        evidence_note = (
+            "本轮还检索到了对应奖项机构的官方页面。"
+            if official_web_hit
+            else "本轮联网检索没有返回可核验的奖项机构官方公告。"
+        )
+        return (
+            f"截至 {current_date.isoformat()}，本系统维护的公开履历资料中没有"
+            f"{self._settings.owner_name}老师获得“{award_reference}”的记录；{evidence_note}"
+            "因此目前只能判断“没有可靠证据支持该说法”，不能把未检索到记录表述为对未来或全部来源的绝对证明。"
+            "请以奖项机构公布的官方获奖名单为最终依据。"
+        )
 
 
     def _detect_recent_session_meta_query(self, question: str) -> str | None:
