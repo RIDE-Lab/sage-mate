@@ -24,6 +24,12 @@ _KNOWN_OFFICIAL_RELEASE_REPOS = {
     "sglang": ("sgl-project", "sglang"),
 }
 _RELEASE_QUERY_MARKERS = ("latest", "newest", "release", "version", "最新", "版本", "发布")
+_AWARD_QUERY_ALIASES = {
+    "图灵奖": ("图灵奖", "turing award"),
+    "诺贝尔奖": ("诺贝尔奖", "nobel prize"),
+}
+_TEACHER_NAME_RE = re_compile(r"([\u4e00-\u9fff]{2,4})老师")
+_YEAR_RE = re_compile(r"(?<!\d)(20\d{2})(?!\d)")
 _SEARCH_FILLER_RE = re_compile(
     r"请问|帮我|帮忙|查一下|查下|查询一下|查询|告诉我|想知道|看下|看一下|了解一下|搜一下|搜索一下|"
     r"实时|最新|当前|现在|此刻|最近|刚刚|今天|今日|目前|"
@@ -138,7 +144,7 @@ class WebSearchClient:
             try:
                 tavily_results = self._search_tavily(normalized_query, limit)
                 if tavily_results:
-                    return tavily_results
+                    return self._rerank_results(normalized_query, tavily_results, limit)
             except Exception:
                 pass  # fall through to Bing
 
@@ -268,6 +274,17 @@ class WebSearchClient:
     @staticmethod
     def _rewrite_query_for_bing(query: str) -> str:
         lowered = query.lower()
+        award_aliases = WebSearchClient._award_result_terms(query)
+        if award_aliases:
+            person_match = _TEACHER_NAME_RE.search(query)
+            year_match = _YEAR_RE.search(query)
+            parts = []
+            if person_match is not None:
+                parts.append(f'"{person_match.group(1)}"')
+            parts.append(f'"{award_aliases[0]}"')
+            if year_match is not None:
+                parts.append(year_match.group(1))
+            return " ".join(parts)
         if any(marker in query or marker in lowered for marker in _WEATHER_QUERY_MARKERS):
             location = WebSearchClient._extract_weather_location(query)
             if location:
@@ -325,6 +342,7 @@ class WebSearchClient:
         max_results: int,
     ) -> list[WebSearchResult]:
         news_intent = cls._is_news_query(original_query)
+        award_terms = cls._award_result_terms(original_query)
         query_tokens = cls._query_tokens(original_query)
         seen_urls: set[str] = set()
         rescored: list[WebSearchResult] = []
@@ -334,6 +352,9 @@ class WebSearchClient:
             if canonical_url in seen_urls:
                 continue
             seen_urls.add(canonical_url)
+            combined = f"{result.title} {result.snippet} {result.url}".lower()
+            if award_terms and not any(term.lower() in combined for term in award_terms):
+                continue
             score = cls._score_result(result, query_tokens=query_tokens, index=index, news_intent=news_intent)
             if news_intent and score < -5:
                 continue
@@ -348,6 +369,14 @@ class WebSearchClient:
 
         rescored.sort(key=lambda item: item.score, reverse=True)
         return rescored[:max_results]
+
+    @staticmethod
+    def _award_result_terms(query: str) -> tuple[str, ...]:
+        lowered = str(query or "").lower()
+        for marker, aliases in _AWARD_QUERY_ALIASES.items():
+            if marker in query or any(alias.lower() in lowered for alias in aliases):
+                return aliases
+        return ()
 
     @classmethod
     def _score_result(

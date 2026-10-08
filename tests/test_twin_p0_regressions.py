@@ -3,9 +3,9 @@ from datetime import datetime
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.models import ChatRequest, InteractionIntent
+from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.persona import build_system_prompt
-from sage_faculty_twin.service import DigitalTwinService
+from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSupport
 from sage_faculty_twin.skills import SkillResult
 from sage_faculty_twin.web_search import WebSearchClient, WebSearchResult
 
@@ -159,7 +159,7 @@ def test_same_conversation_recalls_explicit_non_secret_value_without_llm(
     llm = _RecordingLLM(answer="已记住。")
     service._llm_client = llm
 
-    asyncio.run(
+    write_response = asyncio.run(
         service.answer(
             ChatRequest(
                 student_name="Alice",
@@ -179,7 +179,48 @@ def test_same_conversation_recalls_explicit_non_secret_value_without_llm(
     )
 
     assert response.answer == "蓝鲸-714"
-    assert len(llm.prompts) == 1
+    assert write_response.answer == "已记住。"
+    assert llm.prompts == []
+    assert not write_response.answer_basis
+    profile_step = next(
+        step
+        for step in write_response.workflow_trace
+        if step.key == "memory_profile_consolidate"
+    )
+    assert profile_step.status == "skipped"
+
+
+def test_same_conversation_recalls_short_remembered_value_query_without_llm(
+    tmp_path: Path,
+) -> None:
+    service = DigitalTwinService(_settings(tmp_path))
+    llm = _RecordingLLM(answer="不应调用模型")
+    service._llm_client = llm
+
+    write_response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id="conv-short-value-recall",
+                question="请记住这个临时代号：海燕-908。",
+            )
+        )
+    )
+    read_response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id="conv-short-value-recall",
+                question="刚才的临时代号是什么？",
+            )
+        )
+    )
+
+    assert write_response.answer == "已记住。"
+    assert read_response.answer == "你刚才让我记住的是：海燕-908"
+    assert llm.prompts == []
+    assert not write_response.answer_basis
+    assert not read_response.answer_basis
 
 
 def test_system_prompt_contains_current_local_date(tmp_path: Path) -> None:
@@ -250,6 +291,59 @@ def test_latest_vllm_release_search_prefers_official_result() -> None:
 
     assert len(results) == 1
     assert results[0].url.endswith("/v1.2.3")
+
+
+def test_award_search_rewrites_entities_and_drops_irrelevant_results() -> None:
+    query = "张书豪老师是否获得了 2026 年图灵奖？请核实并说明依据。"
+    assert WebSearchClient._rewrite_query_for_bing(query) == '"张书豪" "图灵奖" 2026'
+
+    results = WebSearchClient._rerank_results(
+        query,
+        [
+            WebSearchResult(
+                title="张（汉语汉字）_百度百科",
+                url="https://baike.baidu.com/item/%E5%BC%A0/31793",
+                snippet="张是常见汉字。",
+                score=3.0,
+            ),
+            WebSearchResult(
+                title="ACM A.M. Turing Award",
+                url="https://awards.acm.org/turing",
+                snippet="Official Turing Award information and recipients.",
+                score=2.0,
+            ),
+        ],
+        3,
+    )
+
+    assert [result.url for result in results] == ["https://awards.acm.org/turing"]
+
+
+def test_award_question_filters_unrelated_local_knowledge_hits() -> None:
+    relevant = KnowledgeSearchHit(
+        document_id="profile-awards",
+        title="公开资料精选 · 张书豪公开个人简介、奖励与学术服务",
+        excerpt="公开奖励记录。",
+        score=96.0,
+        tags=["audience:public"],
+        source_name="public-profile:bio-awards-service",
+    )
+    unrelated = KnowledgeSearchHit(
+        document_id="inference-survey",
+        title="国产推理引擎综述",
+        excerpt="讨论调度、缓存与网络控制面。",
+        score=80.0,
+        tags=["audience:public"],
+        source_name="survey.pdf",
+    )
+
+    assert [
+        hit.document_id
+        for hit in FacultyTwinWorkflowSupport._filter_knowledge_hits_for_question(
+            "张书豪老师是否获得了 2026 年图灵奖？",
+            [unrelated, relevant],
+        )
+    ] == ["profile-awards"]
 
 
 def test_requested_web_search_without_hits_is_explicit_in_prompt(

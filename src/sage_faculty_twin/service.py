@@ -916,15 +916,26 @@ class FacultyTwinWorkflowSupport:
             is_current_time_answer = (
                 self._build_current_time_meta_answer(context.request.question) is not None
             )
+            is_remember_command = self._is_remembered_value_command(
+                context.request.question
+            )
             trace_summary = (
                 "已直接读取系统当前日期。"
                 if is_current_time_answer
-                else "已直接读取同会话最近一轮内容。"
+                else (
+                    "已确认记录非敏感临时标识。"
+                    if is_remember_command
+                    else "已直接读取同会话最近一轮内容。"
+                )
             )
             trace_detail = (
                 "当前问题是在查询日期，已使用服务配置时区的系统日期直接回答，未调用模型。"
                 if is_current_time_answer
-                else "当前问题是在回忆上一轮会话内容，已在意图分类前直接从当前 conversation 记录中返回结果。"
+                else (
+                    "当前请求明确要求记住一个非敏感临时标识；已确认并保留本轮短期会话记录，未调用模型。"
+                    if is_remember_command
+                    else "当前问题是在回忆上一轮会话内容，已在意图分类前直接从当前 conversation 记录中返回结果。"
+                )
             )
             self._append_trace(
                 context,
@@ -1251,6 +1262,10 @@ class FacultyTwinWorkflowSupport:
                 admin_role=self._resolve_admin_role(),
             )
             context.knowledge_hits = self._filter_knowledge_hits_by_intent(raw_hits, interaction_intent)
+            context.knowledge_hits = self._filter_knowledge_hits_for_question(
+                context.request.question,
+                context.knowledge_hits,
+            )
             hit_count = len(context.knowledge_hits)
             top_score = context.knowledge_hits[0].score if context.knowledge_hits else 0.0
 
@@ -2026,6 +2041,19 @@ class FacultyTwinWorkflowSupport:
 
     def consolidate_profile_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
+        if self._is_remembered_value_command(
+            context.request.question
+        ) or self._detect_recent_session_meta_query(context.request.question) == "remembered_value":
+            self._append_trace(
+                context,
+                key="memory_profile_consolidate",
+                title="沉淀长期画像记忆",
+                summary="临时标识不写入长期画像。",
+                detail="该值仅用于当前会话连续性，不代表稳定用户画像或偏好。",
+                status="skipped",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
         if context.persisted_memory_record is None:
             self._append_trace(
                 context,
@@ -4011,6 +4039,9 @@ class FacultyTwinWorkflowSupport:
         if temporal_answer is not None:
             return temporal_answer
 
+        if self._is_remembered_value_command(request.question):
+            return "已记住。"
+
         recall_kind = self._detect_recent_session_meta_query(request.question)
         if recall_kind is None:
             return None
@@ -4079,7 +4110,6 @@ class FacultyTwinWorkflowSupport:
         lowered_question = question.lower()
         asks_for_remembered_value = (
             any(marker in question for marker in ("刚才", "刚刚", "之前", "上一条"))
-            and "记住" in question
             and any(label in lowered_question for label in _REMEMBERED_VALUE_LABELS)
             and "什么" in question
         )
@@ -4103,6 +4133,10 @@ class FacultyTwinWorkflowSupport:
             return None
         value = match.group(1).strip()
         return value[:128] if value else None
+
+    @classmethod
+    def _is_remembered_value_command(cls, question: str) -> bool:
+        return "记住" in question and cls._extract_remembered_value(question) is not None
 
 
     def _build_profile_grounding_guidance(
@@ -4428,6 +4462,37 @@ class FacultyTwinWorkflowSupport:
             return research_hits
 
         return [hit for hit in knowledge_hits if not self._is_teaching_hit(hit)] or knowledge_hits
+
+    @staticmethod
+    def _filter_knowledge_hits_for_question(
+        question: str,
+        knowledge_hits: list[KnowledgeSearchHit],
+    ) -> list[KnowledgeSearchHit]:
+        award_markers = ("图灵奖", "turing award", "诺贝尔奖", "nobel prize")
+        lowered_question = question.lower()
+        if not any(marker in lowered_question for marker in award_markers):
+            return knowledge_hits
+
+        person_match = re.search(r"([\u4e00-\u9fff]{2,4})老师", question)
+        person_name = person_match.group(1) if person_match is not None else ""
+        relevant_hits = []
+        for hit in knowledge_hits:
+            searchable = " ".join(
+                (
+                    hit.title,
+                    hit.excerpt,
+                    hit.source_name or "",
+                    " ".join(hit.tags),
+                )
+            ).lower()
+            if (
+                any(marker in searchable for marker in award_markers)
+                or "奖励" in searchable
+                or "荣誉" in searchable
+                or (person_name and person_name in searchable)
+            ):
+                relevant_hits.append(hit)
+        return relevant_hits
 
     def _is_research_question(self, question: str) -> bool:
         lowered = question.lower()
