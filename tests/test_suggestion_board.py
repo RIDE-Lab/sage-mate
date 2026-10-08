@@ -44,7 +44,12 @@ def test_anonymous_suggestion_board_accepts_guest_messages(isolated_suggestion_s
     assert list_response.json()[0]["suggestion_id"] == payload["suggestion_id"]
     assert list_response.json()[0]["message"] == "***"
 
-    health_response = client.get("/health")
+    login_response = client.post(
+        "/auth/admin/login",
+        json={"username": settings.admin_username, "password": settings.admin_password},
+    )
+    assert login_response.status_code == 200
+    health_response = client.get("/admin/health")
     assert health_response.status_code == 200
     assert health_response.json()["suggestion_board_records"] == "1"
 

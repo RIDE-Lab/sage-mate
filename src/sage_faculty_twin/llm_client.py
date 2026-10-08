@@ -779,6 +779,11 @@ class VllmChatClient:
                 eff_prompt_tokens = int(self._vllm_prompt_tokens_prom_total)
                 eff_completion_tokens = int(self._vllm_generation_tokens_prom_total)
 
+            eff_request_count = max(
+                eff_request_count,
+                eff_success_count + eff_error_count,
+            )
+
             last_status = "not_checked"
             if eff_success_count > 0:
                 if self._last_success_at is not None and (
@@ -844,6 +849,8 @@ class VllmChatClient:
                 "llm_max_latency_ms": f"{max_latency_ms:.2f}",
                 "llm_request_throughput_rps": f"{recent_rps:.4f}",
                 "llm_completion_throughput_tps": f"{recent_tps:.4f}",
+                "llm_metrics_scope": "process_lifetime",
+                "llm_throughput_window_seconds": str(int(_THROUGHPUT_WINDOW_SECONDS)),
                 "llm_prompt_tokens_total": str(eff_prompt_tokens),
                 "llm_completion_tokens_total": str(eff_completion_tokens),
                 "llm_total_tokens_total": str(eff_prompt_tokens + eff_completion_tokens),
@@ -1672,6 +1679,7 @@ class VllmChatClient:
 
         started_at = perf_counter()
         emit_trace_event("model_request", {"mode": "tools", "payload": payload})
+        self._record_request_start()
         try:
             response = self._post_completion(self._client, payload)
             response.raise_for_status()

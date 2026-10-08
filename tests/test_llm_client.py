@@ -651,6 +651,12 @@ def test_responses_mode_normalizes_function_calls() -> None:
         "finish_reason": "tool_calls",
     }
     assert transport.calls[0][0] == "/responses"
+    snapshot = client.runtime_snapshot()
+    assert snapshot["llm_request_count"] == "1"
+    assert snapshot["llm_success_count"] == "1"
+    assert snapshot["llm_error_count"] == "0"
+    assert snapshot["llm_metrics_scope"] == "process_lifetime"
+    assert snapshot["llm_throughput_window_seconds"] == "60"
 
 
 def test_request_chat_completion_retries_timeout_then_succeeds(

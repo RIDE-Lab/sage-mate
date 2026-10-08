@@ -9141,6 +9141,8 @@ class DigitalTwinService:
                     "llm_max_latency_ms": "0.00",
                     "llm_request_throughput_rps": "0.0000",
                     "llm_completion_throughput_tps": "0.0000",
+                    "llm_metrics_scope": "process_lifetime",
+                    "llm_throughput_window_seconds": "60",
                     "llm_prompt_tokens_total": "0",
                     "llm_completion_tokens_total": "0",
                     "llm_total_tokens_total": "0",

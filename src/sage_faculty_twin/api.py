@@ -1446,19 +1446,29 @@ async def health() -> dict[str, object]:
     if not service.is_initialized():
         return {
             "status": "starting",
+            "readiness": "starting",
             "app_version": __version__,
             "message": "Service is initializing in background.",
-            "model": settings.model_name or "detecting...",
             "owner_name": settings.owner_name,
             "owner_role": settings.owner_role,
             "homepage_public_url": settings.homepage_public_url,
-            "stack_version_sage": "unknown",
-            "stack_version_neuromem": "unknown",
-            "stack_version_vllm_hust": "unknown",
-            "stack_version_sagevdb": "unknown",
-            "stack_version_sage_anns": "unknown",
-            "sage_runtime": "FlowNetEnvironment",
         }
+    snapshot = service.health()
+    return {
+        "status": snapshot.get("status", "ok"),
+        "readiness": "ready",
+        "app_version": snapshot.get("app_version", __version__),
+        "owner_name": snapshot.get("owner_name", settings.owner_name),
+        "owner_role": snapshot.get("owner_role", settings.owner_role),
+        "homepage_public_url": snapshot.get(
+            "homepage_public_url", settings.homepage_public_url
+        ),
+        "model_name": snapshot.get("model_name", settings.model_name or "sage-auto"),
+    }
+
+
+@llm_app.get("/admin/health")
+async def admin_health(_: dict = Depends(require_admin_session)) -> dict[str, object]:
     return service.health()
 
 
@@ -1468,7 +1478,9 @@ async def stack_versions() -> dict[str, str]:
 
 
 @llm_app.get("/stack/hardware")
-async def stack_hardware() -> dict[str, str]:
+async def stack_hardware(
+    _: dict = Depends(require_admin_session),
+) -> dict[str, str]:
     return build_hardware_payload()
 
 

@@ -281,6 +281,33 @@ def test_auth_session_reflects_admin_login_state() -> None:
     }
 
 
+def test_public_health_is_minimal_and_diagnostics_require_admin() -> None:
+    client.cookies.clear()
+
+    public_response = client.get("/health")
+    assert public_response.status_code == 200
+    payload = public_response.json()
+    assert payload["readiness"] in {"starting", "ready"}
+    assert "llm_request_count" not in payload
+    assert "registered_user_accounts" not in payload
+    assert "escalation_queue_records" not in payload
+
+    assert client.get("/admin/health").status_code == 403
+    assert client.get("/stack/hardware").status_code == 403
+
+    login_response = client.post(
+        "/auth/admin/login",
+        json={"username": settings.admin_username, "password": settings.admin_password},
+    )
+    assert login_response.status_code == 200
+    diagnostics_response = client.get("/admin/health")
+    assert diagnostics_response.status_code == 200
+    diagnostics = diagnostics_response.json()
+    assert "llm_request_count" in diagnostics
+    assert "registered_user_accounts" in diagnostics
+    assert client.get("/stack/hardware").status_code == 200
+
+
 def test_manager_login_can_access_admin_search_and_has_manager_role(
     isolated_availability_store,
 ) -> None:
@@ -548,7 +575,12 @@ def test_health_exposes_neuromem_runtime_summary(isolated_availability_store) ->
         conversation_id="conv-neuromem-health",
     )
 
-    health_response = client.get("/health")
+    login_response = client.post(
+        "/auth/admin/login",
+        json={"username": settings.admin_username, "password": settings.admin_password},
+    )
+    assert login_response.status_code == 200
+    health_response = client.get("/admin/health")
 
     assert health_response.status_code == 200
     payload = health_response.json()
@@ -597,9 +629,12 @@ def test_user_can_register_login_and_logout(isolated_availability_store) -> None
     health_response = client.get("/health")
     assert health_response.status_code == 200
     health_payload = health_response.json()
-    assert health_payload["registered_user_accounts"] == "1"
-    assert health_payload["llm_status"] in {"not_checked", "ok", "error"}
-    assert "llm_cache_entries" in health_payload
+    assert health_payload["readiness"] == "ready"
+    assert "registered_user_accounts" not in health_payload
+    assert "llm_cache_entries" not in health_payload
+
+    admin_health_response = client.get("/admin/health")
+    assert admin_health_response.status_code == 403
 
     session_response = client.get("/auth/user/session")
     assert session_response.status_code == 200

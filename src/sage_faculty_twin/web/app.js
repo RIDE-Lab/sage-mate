@@ -1956,6 +1956,7 @@ async function handleLuckyQuestionClick() {
 }
 
 const adminOnlyDrawerButtons = [
+    document.getElementById("open-status-drawer"),
     openKnowledgeButton,
     openAvailabilityEditorButton,
     openBookingListButton,
@@ -3221,7 +3222,7 @@ async function refreshStatus() {
         let lastError = null;
         for (let attempt = 0; attempt <= HEALTH_REQUEST_RETRY_COUNT; attempt += 1) {
             try {
-                return await apiRequest("/health", { timeoutMs: HEALTH_REQUEST_TIMEOUT_MS });
+                return await apiRequest(isAdminSession ? "/admin/health" : "/health", { timeoutMs: HEALTH_REQUEST_TIMEOUT_MS });
             } catch (error) {
                 lastError = error;
             }
@@ -3330,7 +3331,7 @@ async function refreshHardwareBar() {
 function renderLlmMetrics(data) {
     const container = document.getElementById("app-llm-metrics");
     if (!container) return;
-    if (!data) {
+    if (!data || !isAdminSession) {
         container.style.display = "none";
         return;
     }
@@ -3554,13 +3555,14 @@ function renderOnlineBenchmarkTable(data) {
     const cacheHitRate = requestCount > 0 ? `${Math.round((cacheHitCount / requestCount) * 100)}%` : "--";
     const fallbackRate = plannerTotal > 0 ? `${Math.round((plannerFallbacks / plannerTotal) * 100)}%` : "--";
 
+    const throughputWindow = Math.max(1, Number(data.llm_throughput_window_seconds || 60));
     const rows = [
         ["模型状态", formatLlmStatus(data.llm_status, errorCount)],
-        ["请求总数", formatCount(requestCount)],
+        ["请求总数（本进程）", formatCount(requestCount)],
         ["成功数 / 失败数", `${formatCount(successCount)} / ${formatCount(errorCount)}`],
         ["成功率", successRate],
-        ["吞吐（请求/s）", llmRps > 0 ? llmRps.toFixed(3) : "0.000"],
-        ["吞吐（Token/s）", llmTps > 0 ? llmTps.toFixed(2) : "0.00"],
+        [`最近 ${throughputWindow} 秒吞吐（请求/s）`, llmRps > 0 ? llmRps.toFixed(3) : "0.000"],
+        [`最近 ${throughputWindow} 秒吞吐（Token/s）`, llmTps > 0 ? llmTps.toFixed(2) : "0.00"],
         ["平均 LLM 延迟", Number.isFinite(avgLlmLatency) ? `${avgLlmLatency.toFixed(2)} ms` : "--"],
         ["峰值 LLM 延迟", Number.isFinite(p95LikeLlmLatency) ? `${p95LikeLlmLatency.toFixed(2)} ms` : "--"],
         ["缓存命中率（总）", cacheHitRate],
@@ -10484,10 +10486,12 @@ async function initializePage() {
     markPresentationReady();
     startOnlinePresenceHeartbeat();
     startStatusAutoRefresh();
-    await refreshPoweredByVersions();
-    refreshHardwareBar();
-    await refreshStatus();
     await refreshSession();
+    await refreshPoweredByVersions();
+    if (isAdminSession) {
+        refreshHardwareBar();
+    }
+    await refreshStatus();
     await refreshUserSession();
     applyVisitorProfilePresentation({ syncCourseContext: true });
     // Auto-mark identity as guest for unauthenticated users — no landing page needed
