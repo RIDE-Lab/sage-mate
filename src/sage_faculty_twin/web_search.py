@@ -237,11 +237,20 @@ class WebSearchClient:
     ) -> WebSearchResult | None:
         with self._client() as client:
             response = client.get(url)
-            response.raise_for_status()
+            if response.status_code not in {401, 403}:
+                response.raise_for_status()
+            access_note = (
+                " Content access is restricted from this service network."
+                if response.status_code in {401, 403}
+                else ""
+            )
         return WebSearchResult(
             title=title,
             url=url,
-            snippet="Official award recipient directory maintained by the awarding institution.",
+            snippet=(
+                "Official award recipient directory maintained by the awarding institution."
+                f"{access_note}"
+            ),
             score=100.0,
         )
 

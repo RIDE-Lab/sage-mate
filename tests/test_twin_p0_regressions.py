@@ -337,6 +337,37 @@ def test_award_search_prefers_official_award_directory() -> None:
     assert results[0].url == "https://amturing.acm.org/?pg=awards.html"
 
 
+def test_official_award_directory_keeps_restricted_official_endpoint() -> None:
+    client = WebSearchClient(timeout_seconds=1, max_results=3)
+
+    class _RestrictedResponse:
+        status_code = 403
+
+        def raise_for_status(self) -> None:
+            raise AssertionError("403 official endpoint should remain usable as a citation")
+
+    class _RestrictedClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def get(self, url):
+            assert url == "https://amturing.acm.org/?pg=awards.html"
+            return _RestrictedResponse()
+
+    client._client = lambda: _RestrictedClient()
+
+    result = client._search_official_award_page(
+        "ACM A.M. Turing Award official winners",
+        "https://amturing.acm.org/?pg=awards.html",
+    )
+
+    assert result is not None
+    assert "restricted" in result.snippet
+
+
 def test_award_question_filters_unrelated_local_knowledge_hits() -> None:
     relevant = KnowledgeSearchHit(
         document_id="profile-awards",
