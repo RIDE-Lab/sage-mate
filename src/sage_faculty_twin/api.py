@@ -39,6 +39,7 @@ from .auth import (
     set_user_session_cookie,
 )
 from .config import settings
+from .conversation_trace_store import ConversationTraceStore
 from .models import (
     AdminLoginRequest,
     AdminSessionResponse,
@@ -117,6 +118,7 @@ from .history_auth import resolve_authenticated_history_email
 from .service import DigitalTwinService, build_stack_versions_payload, build_hardware_payload
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
+from .trace_context import bind_trace_event_sink
 
 
 _logger = logging.getLogger(__name__)
@@ -130,6 +132,7 @@ def configure_local_cors(target_app: FastAPI) -> None:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Trace-Id"],
     )
 
 
@@ -212,6 +215,41 @@ CHAT_SSE_KEEPALIVE_SECONDS = float(os.environ.get("DIGITAL_TWIN_CHAT_SSE_KEEPALI
 STREAM_CHAT_ANSWER = os.environ.get(
     "DIGITAL_TWIN_STREAM_CHAT_ANSWER", "true"
 ).strip().lower() not in {"0", "false", "no", "off"}
+CONVERSATION_TRACE_RETENTION_DAYS = int(
+    os.environ.get("DIGITAL_TWIN_CONVERSATION_TRACE_RETENTION_DAYS", "365")
+)
+_conversation_trace_stores: dict[tuple[Path, Path | None], ConversationTraceStore] = {}
+_conversation_trace_stores_lock = threading.Lock()
+
+
+def get_conversation_trace_store() -> ConversationTraceStore:
+    explicit_db = os.environ.get("DIGITAL_TWIN_CONVERSATION_TRACE_DB", "").strip()
+    if explicit_db:
+        db_path = Path(explicit_db)
+    else:
+        # The dynamic environment lookup keeps pytest's per-test runtime
+        # isolation effective even though this module is imported at collection time.
+        isolated_memory_dir = os.environ.get("DIGITAL_TWIN_CONVERSATION_MEMORY_DIR", "").strip()
+        if isolated_memory_dir:
+            db_path = Path(isolated_memory_dir).parent / "conversation_traces" / "traces.sqlite3"
+        else:
+            db_path = settings.runtime_dir / "data/conversation_traces/traces.sqlite3"
+    db_path = db_path.expanduser().resolve()
+    archive_value = os.environ.get(
+        "DIGITAL_TWIN_CONVERSATION_TRACE_ARCHIVE_DB", ""
+    ).strip()
+    archive_db_path = Path(archive_value).expanduser().resolve() if archive_value else None
+    store_key = (db_path, archive_db_path)
+    with _conversation_trace_stores_lock:
+        store = _conversation_trace_stores.get(store_key)
+        if store is None:
+            store = ConversationTraceStore(
+                db_path,
+                retention_days=CONVERSATION_TRACE_RETENTION_DAYS,
+                archive_db_path=archive_db_path,
+            )
+            _conversation_trace_stores[store_key] = store
+    return store
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
 SLACK_TWIN_ALLOWED_USER_IDS = {
     user_id.strip()
@@ -1645,6 +1683,7 @@ async def shutdown_event() -> None:
 @llm_app.post("/chat", response_model=ChatResponse)
 async def chat(
     raw_request: Request,
+    http_response: Response,
     request_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> ChatResponse:
     payload = await _parse_chat_request(raw_request)
@@ -1658,18 +1697,56 @@ async def chat(
     )
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     timeout_seconds = CHAT_REQUEST_TIMEOUT_SECONDS
+    trace_id = secrets.token_hex(16)
+    http_response.headers["X-Trace-Id"] = trace_id
+    trace_store = get_conversation_trace_store()
+    trace_store.begin(
+        trace_id=trace_id,
+        request_id=request_id,
+        conversation_id=payload.conversation_id,
+        student_name=payload.student_name,
+        student_email=payload.student_email,
+        source="http_sse" if request_id is not None else "http",
+        request_payload=payload.model_dump(mode="json"),
+    )
 
     if request_id is None:
         try:
-            return await asyncio.wait_for(
-                service.answer(payload, admin_session_token=admin_session_token),
-                timeout=timeout_seconds,
-            )
+            with bind_trace_event_sink(
+                lambda event_type, event_payload: trace_store.append_event(
+                    trace_id, event_type, event_payload
+                )
+            ):
+                chat_response = await asyncio.wait_for(
+                    service.answer(payload, admin_session_token=admin_session_token),
+                    timeout=timeout_seconds,
+                )
         except asyncio.TimeoutError as exc:
+            error_payload = {
+                "type": "timeout",
+                "message": f"Chat exceeded the {int(timeout_seconds)} second budget.",
+            }
+            trace_store.append_event(trace_id, "error", error_payload)
+            trace_store.finish(trace_id, status="timeout", error=error_payload)
             raise HTTPException(
                 status_code=504,
                 detail=(f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"),
+                headers={"X-Trace-Id": trace_id},
             ) from exc
+        except Exception as exc:
+            error_payload = {"type": type(exc).__name__, "message": str(exc)}
+            trace_store.append_event(trace_id, "error", error_payload)
+            trace_store.finish(trace_id, status="error", error=error_payload)
+            raise
+
+        response_payload = chat_response.model_dump(mode="json")
+        for step in chat_response.workflow_trace:
+            trace_store.append_event(trace_id, "trace-step", step.model_dump(mode="json"))
+        trace_store.set_response(trace_id, response_payload)
+        trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
+        trace_store.append_event(trace_id, "complete", {})
+        trace_store.finish(trace_id, status="completed")
+        return chat_response
 
     # When ``request_id`` is supplied the chat workflow streams trace events
     # over the workflow-events SSE channel. With
@@ -1680,17 +1757,26 @@ async def chat(
     # ``publish_complete`` until that background task finishes so the SSE
     # consumer still sees the post-answer trace steps before the stream
     # closes.
-    answer_complete_gate = _AnswerDoneCompleteGate(
-        lambda: workflow_event_broker.publish_complete(request_id)
-    )
+    def _publish_complete_and_finish_trace() -> None:
+        trace_store.append_event(trace_id, "complete", {})
+        trace_store.finish(trace_id, status="completed")
+        workflow_event_broker.publish_complete(request_id)
+
+    answer_complete_gate = _AnswerDoneCompleteGate(_publish_complete_and_finish_trace)
+
+    def _publish_trace_step(step: object) -> None:
+        step_payload = getattr(step, "model_dump")(mode="json")
+        trace_store.append_event(trace_id, "trace-step", step_payload)
+        workflow_event_broker.publish_step(request_id, step)
 
     def _on_post_answer_complete() -> None:
         if STREAM_CHAT_ANSWER:
             answer_complete_gate.mark_post_answer_complete()
         else:
-            workflow_event_broker.publish_complete(request_id)
+            _publish_complete_and_finish_trace()
 
     answer_chunk_callback = None
+    answer_chunks: list[str] = []
     if STREAM_CHAT_ANSWER:
         # Chat Latency Optimizations Task 5: only attach the streaming
         # callback when the feature flag is on. The service then asks
@@ -1698,47 +1784,103 @@ async def chat(
         # chunk to the SSE broker so the browser can paint tokens as
         # they arrive.
         def _on_answer_chunk(delta: str) -> None:
+            if delta:
+                answer_chunks.append(delta)
             workflow_event_broker.publish_answer_chunk(request_id, delta)
 
         answer_chunk_callback = _on_answer_chunk
 
     try:
-        response = await asyncio.wait_for(
-            service.answer(
-                payload,
-                admin_session_token=admin_session_token,
-                trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),
-                on_post_answer_complete=_on_post_answer_complete,
-                answer_chunk_callback=answer_chunk_callback,
-            ),
-            timeout=timeout_seconds,
-        )
+        with bind_trace_event_sink(
+            lambda event_type, event_payload: trace_store.append_event(
+                trace_id, event_type, event_payload
+            )
+        ):
+            chat_response = await asyncio.wait_for(
+                service.answer(
+                    payload,
+                    admin_session_token=admin_session_token,
+                    trace_callback=_publish_trace_step,
+                    on_post_answer_complete=_on_post_answer_complete,
+                    answer_chunk_callback=answer_chunk_callback,
+                ),
+                timeout=timeout_seconds,
+            )
     except asyncio.TimeoutError as exc:
         message = f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"
+        error_payload = {"type": "timeout", "message": message}
+        trace_store.append_event(trace_id, "error", error_payload)
+        trace_store.finish(trace_id, status="timeout", error=error_payload)
         workflow_event_broker.publish_error(request_id, message)
-        raise HTTPException(status_code=504, detail=message) from exc
+        raise HTTPException(
+            status_code=504,
+            detail=message,
+            headers={"X-Trace-Id": trace_id},
+        ) from exc
     except Exception as exc:
+        error_payload = {"type": type(exc).__name__, "message": str(exc)}
+        trace_store.append_event(trace_id, "error", error_payload)
+        trace_store.finish(trace_id, status="error", error=error_payload)
         workflow_event_broker.publish_error(request_id, str(exc))
         raise
 
+    response_payload = chat_response.model_dump(mode="json")
+    trace_store.set_response(trace_id, response_payload)
     if STREAM_CHAT_ANSWER:
         # Surface the final structured ChatResponse to the SSE channel so
         # the streaming UI can swap the progressively-painted text for the
         # rendered fields (answer_basis, follow_up_actions, etc.) without
         # re-fetching anything.
         try:
-            workflow_event_broker.publish_answer_done(request_id, response.model_dump(mode="json"))
+            trace_store.append_event(
+                trace_id,
+                "answer_stream",
+                {"chunks": answer_chunks, "chunk_count": len(answer_chunks)},
+            )
+            trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
+            workflow_event_broker.publish_answer_done(request_id, response_payload)
         except Exception:  # pragma: no cover - defensive
             pass
         finally:
             answer_complete_gate.mark_answer_done()
 
-    return response
+    return chat_response
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
 async def submit_chat_feedback(request: ChatFeedbackRequest) -> ChatFeedbackResponse:
     return service.submit_chat_feedback(request)
+
+
+@llm_app.get("/admin/conversation-traces")
+async def list_conversation_traces(
+    limit: int = Query(default=50, ge=1, le=500),
+    conversation_id: str | None = Query(default=None, max_length=128),
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    store = get_conversation_trace_store()
+    return {
+        "traces": store.list_traces(limit=limit, conversation_id=conversation_id),
+        "stats": store.stats(),
+    }
+
+
+@llm_app.get("/admin/conversation-traces/stats")
+async def get_conversation_trace_stats(
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    return get_conversation_trace_store().stats()
+
+
+@llm_app.get("/admin/conversation-traces/{trace_id}")
+async def get_conversation_trace(
+    trace_id: str,
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    trace = get_conversation_trace_store().get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    return trace
 
 
 @llm_app.post("/context/compress")

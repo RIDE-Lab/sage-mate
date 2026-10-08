@@ -26,6 +26,7 @@ from sage.serving.integrations import policy as serving_policy
 
 from .config import AppSettings
 from .models import InteractionIntent
+from .trace_context import emit_trace_event
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
 from .workflow_steps import get_default_step_registry
@@ -1096,11 +1097,13 @@ class VllmChatClient:
             "chat_template_kwargs": {"enable_thinking": False},
         }
         started_at = perf_counter()
+        emit_trace_event("model_request", {"mode": "intent", "payload": payload})
         self._record_request_start()
         try:
             response = self._post_completion(self._intent_client, payload)
             response.raise_for_status()
             data = response.json()
+            emit_trace_event("model_response", {"mode": "intent", "response": data})
             content = self._response_text(data)
             if not content:
                 raise RuntimeError("Intent model returned empty content")
@@ -1108,6 +1111,10 @@ class VllmChatClient:
             self._record_request_success(latency_ms=elapsed_ms)
             return str(content)
         except Exception as exc:
+            emit_trace_event(
+                "model_error",
+                {"mode": "intent", "type": type(exc).__name__, "message": str(exc)},
+            )
             self._record_request_error(exc)
             raise
 
@@ -1314,6 +1321,15 @@ class VllmChatClient:
         semantic_key = self._semantic_cache_key(cache_payload, namespace=payload.get("_cache_ns"))
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
         if cached is not None:
+            emit_trace_event(
+                "model_cache_hit",
+                {
+                    "mode": "stream",
+                    "hit_type": hit_type or "exact",
+                    "request": cache_payload,
+                    "response": cached,
+                },
+            )
             self._record_cache_hit(hit_type or "exact")
             try:
                 token_callback(cached)
@@ -1323,6 +1339,7 @@ class VllmChatClient:
 
         # Strip internal cache-namespace key before sending to the server.
         payload.pop("_cache_ns", None)
+        emit_trace_event("model_request", {"mode": "stream", "payload": payload})
 
         started_at = perf_counter()
         self._record_request_start()
@@ -1332,6 +1349,7 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             collected: list[str] = []
+            raw_chunks: list[dict[str, Any]] = []
             try:
                 wire_payload = self._wire_payload(payload)
                 with self._client.stream(
@@ -1357,6 +1375,8 @@ class VllmChatClient:
                             chunk = json.loads(data_text)
                         except json.JSONDecodeError:
                             continue
+                        if isinstance(chunk, dict):
+                            raw_chunks.append(chunk)
                         # vLLM may return HTTP 200 with an error payload
                         # embedded in the SSE stream (e.g. when
                         # thinking_token_budget is rejected because
@@ -1428,9 +1448,32 @@ class VllmChatClient:
             except EmptyStreamingResponseError:
                 raise
             except Exception as exc:
+                emit_trace_event(
+                    "model_error",
+                    {
+                        "mode": "stream",
+                        "attempt": attempt + 1,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
                 self._record_request_error(exc)
                 raise
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        emit_trace_event(
+            "model_response",
+            {
+                "mode": "stream",
+                "chunks": raw_chunks,
+                "answer": answer,
+                "usage": {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                },
+                "latency_ms": elapsed_ms,
+            },
+        )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1485,10 +1528,20 @@ class VllmChatClient:
         semantic_key = self._semantic_cache_key(payload, namespace=cache_ns)
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
         if cached is not None:
+            emit_trace_event(
+                "model_cache_hit",
+                {
+                    "mode": "buffered",
+                    "hit_type": hit_type or "exact",
+                    "request": payload,
+                    "response": cached,
+                },
+            )
             self._record_cache_hit(hit_type or "exact")
             return cached
 
         started_at = perf_counter()
+        emit_trace_event("model_request", {"mode": "buffered", "payload": payload})
         self._record_request_start()
         max_retries = self._settings.llm_retry_attempts
         prompt_tokens = 0
@@ -1500,6 +1553,10 @@ class VllmChatClient:
                 response.raise_for_status()
 
                 data = response.json()
+                emit_trace_event(
+                    "model_response",
+                    {"mode": "buffered", "attempt": attempt + 1, "response": data},
+                )
                 prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
                 content = self._response_text(data)
                 if not content:
@@ -1515,6 +1572,15 @@ class VllmChatClient:
                     raise
                 self._sleep_before_retry(attempt + 1)
             except Exception as exc:
+                emit_trace_event(
+                    "model_error",
+                    {
+                        "mode": "buffered",
+                        "attempt": attempt + 1,
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                )
                 self._record_request_error(exc)
                 raise
         elapsed_ms = (perf_counter() - started_at) * 1000.0
@@ -1549,9 +1615,16 @@ class VllmChatClient:
 
             continuation_payload = dict(payload)
             continuation_payload["messages"] = continuation_messages
+            emit_trace_event(
+                "model_request",
+                {"mode": "continuation", "payload": continuation_payload},
+            )
             continuation_response = self._post_completion(self._client, continuation_payload)
             continuation_response.raise_for_status()
             data = continuation_response.json()
+            emit_trace_event(
+                "model_response", {"mode": "continuation", "response": data}
+            )
             continuation_text = self._response_text(data).strip()
             if not continuation_text:
                 return partial_answer + "\n\n[回答因长度限制被截断]"
@@ -1595,13 +1668,19 @@ class VllmChatClient:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
 
         started_at = perf_counter()
+        emit_trace_event("model_request", {"mode": "tools", "payload": payload})
         try:
             response = self._post_completion(self._client, payload)
             response.raise_for_status()
             data = response.json()
+            emit_trace_event("model_response", {"mode": "tools", "response": data})
         except httpx.TimeoutException:
             raise
         except Exception as exc:
+            emit_trace_event(
+                "model_error",
+                {"mode": "tools", "type": type(exc).__name__, "message": str(exc)},
+            )
             self._record_request_error(exc)
             raise
 
