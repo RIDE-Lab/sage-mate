@@ -209,6 +209,15 @@ def test_current_year_question_uses_authoritative_local_date_without_llm(
 
     assert response.answer == str(datetime.now().astimezone().year)
     assert llm.prompts == []
+    interaction_step = next(
+        step for step in response.workflow_trace if step.key == "interaction_understand"
+    )
+    assert interaction_step.summary == "已直接读取系统当前日期。"
+    usefulness_step = next(
+        step for step in response.workflow_trace if step.key == "memory_usefulness_score"
+    )
+    assert usefulness_step.status == "skipped"
+    assert "无需评估记忆证据" in usefulness_step.summary
 
 
 

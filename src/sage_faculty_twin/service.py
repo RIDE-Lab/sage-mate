@@ -913,12 +913,25 @@ class FacultyTwinWorkflowSupport:
             context.workflow_action = "answer"
             context.answer = direct_session_answer
             context.route = "done"
+            is_current_time_answer = (
+                self._build_current_time_meta_answer(context.request.question) is not None
+            )
+            trace_summary = (
+                "已直接读取系统当前日期。"
+                if is_current_time_answer
+                else "已直接读取同会话最近一轮内容。"
+            )
+            trace_detail = (
+                "当前问题是在查询日期，已使用服务配置时区的系统日期直接回答，未调用模型。"
+                if is_current_time_answer
+                else "当前问题是在回忆上一轮会话内容，已在意图分类前直接从当前 conversation 记录中返回结果。"
+            )
             self._append_trace(
                 context,
                 key="interaction_understand",
                 title="理解用户意图",
-                summary="已直接读取同会话最近一轮内容。",
-                detail="当前问题是在回忆上一轮会话内容，已在意图分类前直接从当前 conversation 记录中返回结果。",
+                summary=trace_summary,
+                detail=trace_detail,
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
@@ -2829,6 +2842,19 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
+
+        if self._build_current_time_meta_answer(context.request.question) is not None:
+            self._append_trace(
+                context,
+                key="memory_usefulness_score",
+                title="评估记忆证据有效性",
+                summary="系统日期回答无需评估记忆证据。",
+                detail="本轮答案来自服务配置时区的系统日期，不依赖对话记忆或检索材料。",
+                status="skipped",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
+
 
         if not self._planner_requests_any_step(context, "score_memory_usefulness"):
             self._append_trace(
