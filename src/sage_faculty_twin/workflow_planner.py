@@ -366,7 +366,9 @@ class DeterministicWorkflowPlanner:
             ]
             if include_profile_memory and include_recent_memory:
                 step_ids.append("retrieve_recent_memory")
-            elif not include_artifact_memory:
+            elif not include_artifact_memory and (
+                context.course_context or not _looks_like_standalone_definition(question)
+            ):
                 step_ids.append("retrieve_hybrid_knowledge")
                 if include_recent_memory:
                     step_ids.append("retrieve_recent_memory")
@@ -775,6 +777,33 @@ def _should_include_artifact_memory(context: WorkflowRequestContext) -> bool:
 def _looks_like_simple_greeting(question: str) -> bool:
     normalized = re.sub(r"\s+", "", question)
     return normalized in {"你好", "您好", "hello", "hi", "早上好"}
+
+
+def _looks_like_standalone_definition(question: str) -> bool:
+    """Detect general definition requests that do not need owner/course RAG."""
+    lowered = question.lower()
+    definition_markers = (
+        "什么是",
+        "是什么意思",
+        "如何定义",
+        "简单解释",
+        "一句话说明",
+        "what is",
+        "define ",
+    )
+    owner_or_course_markers = (
+        "张老师",
+        "老师的",
+        "课题组",
+        "课程",
+        "课上",
+        "讲义",
+        "作业",
+        "sage",
+    )
+    return any(marker in lowered or marker in question for marker in definition_markers) and not any(
+        marker in lowered or marker in question for marker in owner_or_course_markers
+    )
 
 
 # ── Plugin routing helpers ──────────────────────────────────────────────────
