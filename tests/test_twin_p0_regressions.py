@@ -218,6 +218,11 @@ def test_current_year_question_uses_authoritative_local_date_without_llm(
     )
     assert usefulness_step.status == "skipped"
     assert "无需评估记忆证据" in usefulness_step.summary
+    persist_step = next(
+        step for step in response.workflow_trace if step.key == "memory_persist"
+    )
+    assert persist_step.status == "skipped"
+    assert response.memory_write_back is False
 
 
 

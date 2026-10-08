@@ -1748,6 +1748,18 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
+        if self._build_current_time_meta_answer(context.request.question) is not None:
+            self._append_trace(
+                context,
+                key="memory_persist",
+                title="写入对话记忆",
+                summary="系统日期回答不写入对话记忆。",
+                detail="当前答案由服务配置时区确定，不属于用户偏好或对话事实，避免污染短期和长期记忆。",
+                status="skipped",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
+
         if context.answer is None:
             self._append_trace(
                 context,
