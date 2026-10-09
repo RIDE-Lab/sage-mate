@@ -186,7 +186,7 @@ def test_active_onboarding_keeps_chat_stream_visible() -> None:
     assert "display: flex;" in block_match.group(1)
 
 
-def test_active_onboarding_uses_left_column_even_after_chat_starts() -> None:
+def test_active_onboarding_uses_one_centered_column_even_after_chat_starts() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     shell_selector = "body.onboarding-active .chat-shell"
     selector = "body.onboarding-active .chat-shell .onboarding-card"
@@ -194,8 +194,72 @@ def test_active_onboarding_uses_left_column_even_after_chat_starts() -> None:
     block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
 
     assert shell_block, f"Missing CSS block for {shell_selector}"
-    assert "display: grid;" in shell_block.group(1)
-    assert "grid-template-columns:" in shell_block.group(1)
+    assert "display: flex;" in shell_block.group(1)
+    assert "flex-direction: column;" in shell_block.group(1)
+    assert "grid-template-columns:" not in shell_block.group(1)
     assert block_match, f"Missing CSS block for {selector}"
-    assert "grid-column: 1;" in block_match.group(1)
-    assert "grid-row: 1 / 3;" in block_match.group(1)
+    assert "width: min(100%, 720px);" in block_match.group(1)
+    assert "margin: clamp(16px, 4vh, 36px) auto 12px;" in block_match.group(1)
+    assert "grid-column:" not in block_match.group(1)
+
+
+def test_restoring_a_conversation_hides_the_empty_state_onboarding() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    restore_fn = js[
+        js.index("async function restoreConversationFromHistory"):
+        js.index("async function fetchConversationTranscript")
+    ]
+    transcript_fn = js[
+        js.index("function renderConversationTranscript"):
+        js.index("function ", js.index("function renderConversationTranscript") + 1)
+    ]
+
+    assert 'chatStream.querySelector(".message-user")' in restore_fn
+    assert "hideOnboardingCard();" in restore_fn
+    assert "hideOnboardingCard();" in transcript_fn
+
+    hide_fn = js[js.index("function hideOnboardingCard"):js.index("let onboardingHintTimer")]
+    assert 'document.getElementById("seed-chips")?.classList.add("hidden");' in hide_fn
+
+
+def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "const INLINE_WORKFLOW_TRACE_ENABLED = true;" in js
+    summary_fn = js[
+        js.index("function buildWorkflowStatusSummaryHtml"):
+        js.index("function buildWorkflowPhaseRailHtml")
+    ]
+    assert 'class="message-workflow-summary message-section"' in summary_fn
+    assert 'aria-expanded="false"' in summary_fn
+    assert '<strong class="message-section-title">处理过程</strong>' in summary_fn
+    assert '<div class="message-section-content" hidden>' in summary_fn
+    assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
+        "buildWorkflowPhaseRailHtml"
+    )
+
+
+def test_live_progress_uses_one_compact_surface_inside_the_message() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    pending_fn = js[
+        js.index("function renderPendingAssistantMessage"):
+        js.index("function updatePendingAssistantMessage")
+    ]
+    compact_fn = js[
+        js.index("function buildPendingWorkflowTraceCompactHtml"):
+        js.index("function buildWorkflowChipRowHtml")
+    ]
+    assert 'aria-label="实时处理进度"' in pending_fn
+    assert "thinking-phase-rail" not in pending_fn
+    assert "thinking-trace-chip-row" not in compact_fn
+    assert "已完成 ${completedSteps.length} 步" in compact_fn
+
+
+def test_compact_process_summary_hides_details_until_requested() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert ".message-workflow-summary .message-section-content[hidden]" in css
+    assert ".message-workflow-summary .message-inline-process-preview" in css
+    assert "text-overflow: ellipsis;" in css
+    assert ".message-process-icon" in css

@@ -328,8 +328,9 @@ const MAX_CHAT_UPLOAD_FILES = 4;
 const MAX_CHAT_UPLOAD_BYTES = 5 * 1024 * 1024;
 const DEFAULT_COMPOSER_UPLOAD_HINT = "支持 PDF、TXT、MD、CSV、JSON、PY、YAML、LOG，最多 4 个文件。";
 const SUPPORTED_CHAT_UPLOAD_SUFFIXES = new Set([".pdf", ".txt", ".md", ".csv", ".json", ".py", ".yaml", ".yml", ".log"]);
-// Keep workflow trace in the dedicated bottom panel to avoid duplicated UI in chat bubbles.
-const INLINE_WORKFLOW_TRACE_ENABLED = false;
+// Keep a compact, durable workflow summary with each completed answer. The
+// dedicated DAG remains available as an optional advanced view.
+const INLINE_WORKFLOW_TRACE_ENABLED = true;
 const WORKFLOW_PHASE_DEFINITIONS = [
     { key: "intake", label: "接入", icon: "inbox" },
     { key: "decide", label: "判断", icon: "branch" },
@@ -1594,8 +1595,11 @@ function hideOnboardingCard() {
     const hasMessages = chatStream && chatStream.querySelectorAll(".message-user").length > 0;
     if (!hasMessages) {
         document.getElementById("welcome-greeting")?.classList.remove("hidden");
+        document.getElementById("seed-chips")?.classList.remove("hidden");
+    } else {
+        document.getElementById("welcome-greeting")?.classList.add("hidden");
+        document.getElementById("seed-chips")?.classList.add("hidden");
     }
-    document.getElementById("seed-chips")?.classList.remove("hidden");
 }
 
 let onboardingHintTimer = null;
@@ -6822,6 +6826,9 @@ async function restoreConversationFromHistory(conversationId) {
         currentConversationTitle = conversationHistoryMeta.titleOverrides[conversationId] || entry.title || DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = entry.preview || "";
         chatStream.innerHTML = entry.html || initialChatStreamMarkup;
+        if (chatStream.querySelector(".message-user")) {
+            hideOnboardingCard();
+        }
         hydrateConversationInteractiveState();
         renderConversationHistoryList();
         renderWorkflowTrace([], {
@@ -6880,6 +6887,7 @@ function renderConversationTranscript(transcript) {
         appendMessage("user", speakerName, exchange.question, {});
         appendMessage("assistant", assistantLabel, exchange.answer, {});
     });
+    hideOnboardingCard();
     syncConversationMode();
 }
 
@@ -7026,12 +7034,7 @@ function renderPendingAssistantMessage(container, currentStage = "理解问题",
                             </div>
                         </div>
                         ${INLINE_WORKFLOW_TRACE_ENABLED
-            ? `<div class="thinking-phase-rail" aria-live="polite">
-                            ${buildWorkflowPhaseRailHtml({ currentStage, workflowSteps, complete: false })}
-                        </div>`
-            : ""}
-                        ${INLINE_WORKFLOW_TRACE_ENABLED
-            ? `<div class="thinking-trace" aria-label="实时处理过程">
+            ? `<div class="thinking-trace" aria-label="实时处理进度" aria-live="polite">
                             <div class="thinking-trace-list"></div>
                         </div>`
             : ""}
@@ -7054,15 +7057,6 @@ function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
     if (pendingLabel) {
         pendingLabel.textContent = currentStage;
     }
-    const pendingRail = chatStream?.querySelector(".message-pending .thinking-phase-rail");
-    if (pendingRail) {
-        pendingRail.innerHTML = buildWorkflowPhaseRailHtml({
-            currentStage,
-            workflowSteps,
-            complete: false,
-        });
-    }
-
     if (INLINE_WORKFLOW_TRACE_ENABLED) {
         syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
     }
@@ -7158,7 +7152,6 @@ function renderAssistantMessage(
                 <div class="message-frame">
                     <div class="message-main-copy">
                         <div class="message-reply-block">
-                            <span class="message-section-kicker">Reply</span>
                             <div class="${bodyClass}">${formatMessageContent(cleanedText)}</div>
                             <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
                                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -7204,26 +7197,18 @@ function buildWorkflowStatusSummaryHtml(workflowTrace) {
 
     return `
         <section class="message-workflow-summary message-section" data-expanded="false" aria-label="本次处理过程">
-            <div class="message-workflow-summary-head">
-                <div class="message-workflow-summary-copy">
-                    <span class="message-section-kicker">Workflow</span>
-                    <strong class="message-section-title">处理进展</strong>
-                </div>
-                <div class="message-workflow-summary-meta">
+            <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
+                <div class="message-section-toggle-copy">
+                    <span class="message-process-icon" aria-hidden="true"></span>
+                    <strong class="message-section-title">处理过程</strong>
                     <span class="message-inline-process-preview">${escapeHtml(preview)}</span>
                 </div>
-            </div>
-            ${buildWorkflowPhaseRailHtml({ workflowSteps: workflowTrace, complete: true })}
-            <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开完整步骤" data-open-label="收起详情">
-                <div class="message-section-toggle-copy">
-                    <span class="message-workflow-summary-note">默认只显示简化阶段，完整步骤按需展开。</span>
-                </div>
                 <div class="message-section-toggle-meta">
-                    <span class="message-section-count">${escapeHtml(`${workflowTrace.length} 步`)}</span>
-                    <span class="message-section-chevron">展开完整步骤</span>
+                    <span class="message-section-chevron">展开</span>
                 </div>
             </button>
             <div class="message-section-content" hidden>
+                ${buildWorkflowPhaseRailHtml({ workflowSteps: workflowTrace, complete: true })}
                 <div class="message-workflow-chip-row">
                     ${buildWorkflowChipRowHtml(workflowTrace)}
                 </div>
@@ -7439,15 +7424,9 @@ function buildPendingWorkflowTraceCompactHtml(steps, options = {}) {
                 <strong>${escapeHtml(latestStep?.title || "处理中")}</strong>
                 ${typeof latestStep?.duration_ms === "number" ? `<span class="thinking-trace-duration">${escapeHtml(formatWorkflowDuration(latestStep.duration_ms))}</span>` : ""}
             </div>
-            <div class="thinking-trace-progress-meta">
-                <span>阶段 ${completedPhaseCount + 1}/${WORKFLOW_PHASE_DEFINITIONS.length}</span>
-                <span>步骤 ${currentStepIndex + 1}/${steps.length}</span>
-            </div>
+            <div class="thinking-trace-progress-meta">阶段 ${Math.min(completedPhaseCount + 1, WORKFLOW_PHASE_DEFINITIONS.length)}/${WORKFLOW_PHASE_DEFINITIONS.length} · 步骤 ${currentStepIndex + 1}/${steps.length}</div>
             <p class="thinking-trace-compact-copy">${escapeHtml(latestStep?.summary || latestStep?.detail || "正在继续推进这次请求。")}</p>
-            <div class="thinking-trace-chip-row">
-                ${buildWorkflowChipRowHtml(steps, { compact: true, currentIndex: currentStepIndex })}
-            </div>
-            ${completedSteps.length ? `<p class="thinking-trace-compact-history">已完成 ${completedSteps.length} 个实际步骤，后续会继续补齐剩余环节。</p>` : ""}
+            ${completedSteps.length ? `<p class="thinking-trace-compact-history">已完成 ${completedSteps.length} 步</p>` : ""}
         </div>
     `;
 }
