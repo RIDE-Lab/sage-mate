@@ -47,13 +47,13 @@ neuromem = [
 ]
 vdb = [
   "isage>=0.3.2.4",
-  "isage-vdb>=0.2.0.10",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",
 ]
 vdb-anns = [
   "isage>=0.3.2.4",
-  "isage-vdb>=0.2.0.10",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
   "isage-anns>=0.2.0",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",

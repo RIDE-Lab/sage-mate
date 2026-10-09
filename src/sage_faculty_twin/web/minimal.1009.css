@@ -228,23 +228,28 @@ select {
     letter-spacing: -0.045em;
 }
 
-.seed-chips {
+.seed-chips,
+.chat-shell.chat-empty .seed-chips {
     gap: 8px;
     max-width: 520px;
     margin-top: 0;
     padding: 4px 0 18px;
     border: 0;
     border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
 }
 
-.seed-chips-label {
-    color: #8a8a84;
+.seed-chips-label,
+.chat-shell.chat-empty .seed-chips-label {
+    color: #62625e;
     font-size: 0.76rem;
 }
 
 .seed-chip {
     padding: 7px 11px;
-    border-color: var(--line);
+    border-color: #85857e;
     border-radius: 8px;
     background: #ffffff;
     color: #5f5f5a;
@@ -301,6 +306,13 @@ select {
     color: var(--ink);
 }
 
+#lucky-question-button,
+.token-usage-toggle {
+    border: 1px solid #85857e;
+    color: #62625e;
+    background: #ffffff;
+}
+
 .send-button,
 .primary-button {
     border: 1px solid var(--ink);
@@ -341,7 +353,7 @@ select {
 }
 
 .composer-pill-toggle {
-    border-color: var(--line);
+    border-color: #85857e;
     border-radius: 8px;
     background: #ffffff;
     color: #666661;
@@ -440,6 +452,37 @@ select {
     animation: none;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
+}
+
+.rail-user-avatar {
+    border-color: #85857e;
+}
+
+.status-item,
+.app-stack-chip,
+.app-version-badge,
+.drawer-card,
+.inline-status-success,
+.inline-status-warning,
+.inline-status-error {
+    border-color: #85857e;
+}
+
+#settings-view .inline-status-success,
+#settings-view .inline-status-warning,
+#settings-view .inline-status-error {
+    border-color: #85857e;
+}
+
+.account-tab.active {
+    color: #191918;
+    background: #efefec;
+    border-color: #85857e;
+}
+
+body.onboarding-active .chat-shell .onboarding-card {
+    width: min(100%, 640px);
+    max-width: 640px;
 }
 
 .onboarding-question-card {
@@ -551,7 +594,7 @@ select,
 .field input,
 .field textarea,
 .field select {
-    border-color: var(--line-strong);
+    border-color: #85857e;
     border-radius: 8px;
     background: #ffffff;
     color: var(--ink);
@@ -597,7 +640,117 @@ a {
     color: var(--muted);
 }
 
+html[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #171717;
+    --surface: #202020;
+    --surface-solid: #202020;
+    --surface-soft: #292929;
+    --surface-muted: #303030;
+    --surface-raised: #252525;
+    --ink: #f4f4f1;
+    --text-primary: #f4f4f1;
+    --text-secondary: #d0d0ca;
+    --muted: #bcbcb5;
+    --line: #494943;
+    --line-strong: #85857e;
+    --control-border: #85857e;
+    --accent: #f4f4f1;
+    --accent-deep: #f4f4f1;
+    --accent-soft: #303030;
+    --assistant: #202020;
+    --user: #303030;
+    --shadow: none;
+}
+
+html[data-theme="dark"] body,
+html[data-theme="dark"] .chat-layout,
+html[data-theme="dark"] .chat-shell,
+html[data-theme="dark"] .chat-shell.chat-empty,
+html[data-theme="dark"] .chat-stream {
+    color: var(--ink);
+    background: var(--bg);
+}
+
+html[data-theme="dark"] .topbar,
+html[data-theme="dark"] .sidebar,
+html[data-theme="dark"] .sidebar-rail,
+html[data-theme="dark"] .history-rail,
+html[data-theme="dark"] .composer-shell,
+html[data-theme="dark"] .composer-row,
+html[data-theme="dark"] .modal-panel,
+html[data-theme="dark"] .side-drawer,
+html[data-theme="dark"] .workflow-shell,
+html[data-theme="dark"] .onboarding-card,
+html[data-theme="dark"] .drawer-card,
+html[data-theme="dark"] .status-item,
+html[data-theme="dark"] .operations-section {
+    color: var(--ink);
+    background: var(--surface);
+    border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .seed-chips-label,
+html[data-theme="dark"] .chat-shell.chat-empty .seed-chips-label {
+    color: #c8c8c2;
+}
+
+html[data-theme="dark"] .seed-chip,
+html[data-theme="dark"] .composer-pill-toggle,
+html[data-theme="dark"] .composer-icon-button,
+html[data-theme="dark"] .token-usage-toggle,
+html[data-theme="dark"] .ghost-button,
+html[data-theme="dark"] .drawer-button,
+html[data-theme="dark"] .icon-button,
+html[data-theme="dark"] .history-item,
+html[data-theme="dark"] .rail-user-avatar,
+html[data-theme="dark"] input,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] select {
+    color: var(--ink);
+    background: var(--surface);
+    border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .composer-tools-row,
+html[data-theme="dark"] .message-section,
+html[data-theme="dark"] .message-workflow-summary,
+html[data-theme="dark"] .message-citations,
+html[data-theme="dark"] .inline-status,
+html[data-theme="dark"] .list-card {
+    color: var(--ink);
+    background: var(--surface-soft);
+    border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .message-main-copy,
+html[data-theme="dark"] .message-section-title,
+html[data-theme="dark"] .message-basis-copy,
+html[data-theme="dark"] .message-basis-title,
+html[data-theme="dark"] .message-basis-detail,
+html[data-theme="dark"] .greeting-text,
+html[data-theme="dark"] .topbar-title,
+html[data-theme="dark"] .chat-view-title {
+    color: var(--ink);
+}
+
+html[data-theme="dark"] .account-tab.active {
+    color: var(--ink);
+    background: var(--surface-muted);
+}
+
+html[data-theme="dark"] #lucky-question-button,
+html[data-theme="dark"] .token-usage-toggle {
+    color: var(--ink);
+    background: var(--surface);
+    border-color: var(--line-strong);
+}
+
 @media (max-width: 760px) {
+    .chat-shell.chat-empty .sage-companion {
+        transform: none;
+    }
+
     .history-item-actions {
         opacity: 1;
     }
@@ -610,6 +763,10 @@ a {
     .chat-stream {
         padding-inline: 16px;
         padding-bottom: calc(116px + var(--safe-bottom));
+    }
+
+    .chat-shell:has(.composer-tools-disclosure[open]) .chat-stream {
+        padding-bottom: calc(220px + var(--safe-bottom));
     }
 
     .composer-shell {
