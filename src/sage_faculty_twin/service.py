@@ -7458,8 +7458,21 @@ class DigitalTwinService:
         should_background = _POST_ANSWER_BACKGROUND_DEFAULT and trace_callback is not None
 
         if should_background:
+            # The current exchange must be durable before the HTTP response is
+            # returned. Otherwise an immediate follow-up can race the
+            # background task and miss the turn that the user just saw. Keep
+            # the slower profile consolidation, follow-up planning, and
+            # usefulness scoring off the critical path.
+            try:
+                MemoryPersistStage(support).execute(context)
+            except Exception:  # pragma: no cover - defensive log
+                _logger.exception(
+                    "critical conversation memory persist failed (conversation_id=%s)",
+                    getattr(context, "conversation_id", None),
+                )
+
             # Production fast path: ship the rendered response immediately,
-            # run post-answer side-effects on a background task. The trace
+            # run non-critical post-answer side-effects on a background task. The trace
             # callback inside ``_run_post_answer_inline_blocking`` keeps the
             # workflow-events SSE stream populated; ``on_post_answer_complete``
             # lets the caller (api.py) defer ``publish_complete`` until the
@@ -7471,6 +7484,7 @@ class DigitalTwinService:
                         self._run_post_answer_inline_blocking,
                         context,
                         support,
+                        include_memory_persist=False,
                     )
                 except Exception:  # pragma: no cover - defensive log
                     _logger.exception(
@@ -9585,6 +9599,8 @@ class DigitalTwinService:
         self,
         context: ChatWorkflowContext,
         support: FacultyTwinWorkflowSupport,
+        *,
+        include_memory_persist: bool = True,
     ) -> ChatWorkflowContext:
         """Run the four post-answer side-effect stages on ``context``.
 
@@ -9597,11 +9613,12 @@ class DigitalTwinService:
         layer is best-effort.
         """
         post_answer_stages: list[tuple[str, type[MapFunction]]] = [
-            ("memory_persist", MemoryPersistStage),
             ("memory_profile_consolidate", MemoryProfileConsolidationStage),
             ("follow_up_plan", FollowUpPlanningStage),
             ("memory_usefulness_score", MemoryUsefulnessScoringStage),
         ]
+        if include_memory_persist:
+            post_answer_stages.insert(0, ("memory_persist", MemoryPersistStage))
         for stage_key, stage_cls in post_answer_stages:
             try:
                 stage_cls(support).execute(context)
