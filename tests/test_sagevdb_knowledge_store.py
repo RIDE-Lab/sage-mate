@@ -210,6 +210,7 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[tuple[str, dict[str, object]]] = []
+    workload_headers: list[dict[str, str]] = []
 
     class FakeResponse:
         def raise_for_status(self) -> None:
@@ -230,7 +231,8 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
             assert kwargs["base_url"] == "https://gateway.example/v1/"
             assert kwargs["headers"]["Authorization"] == "Bearer test-key"
 
-        def post(self, path: str, *, json: dict[str, object]):
+        def post(self, path: str, *, json: dict[str, object], headers=None):
+            workload_headers.append(dict(headers or {}))
             calls.append((path, json))
             return FakeResponse()
 
@@ -247,6 +249,7 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
 
     vectors = embedder.encode_many(["alpha", "beta"])
     query_vector = embedder.encode("question", is_query=True)
+    embedder.encode_many(["document"], workload="reindex")
 
     assert calls[0] == (
         "embeddings",
@@ -258,6 +261,11 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
         },
     )
     assert str(calls[1][1]["input"][0]).startswith("Instruct: ")
+    assert workload_headers == [
+        {"X-Sage-Workload": "interactive"},
+        {"X-Sage-Workload": "interactive"},
+        {"X-Sage-Workload": "reindex"},
+    ]
     assert np.isclose(np.linalg.norm(vectors[0]), 1.0)
     assert np.isclose(np.linalg.norm(query_vector), 1.0)
 
@@ -281,8 +289,9 @@ def test_openai_reranker_restores_scores_by_document_index(
         def __init__(self, **kwargs) -> None:
             assert kwargs["base_url"] == "https://gateway.example/v1/"
 
-        def post(self, path: str, *, json: dict[str, object]):
+        def post(self, path: str, *, json: dict[str, object], headers=None):
             assert path == "rerank"
+            assert headers == {"X-Sage-Workload": "interactive"}
             assert json["model"] == "reranker-model"
             assert json["top_n"] == 2
             return FakeResponse()

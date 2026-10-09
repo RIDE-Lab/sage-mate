@@ -106,7 +106,13 @@ class OpenAITextEmbedder:
     def encode(self, text: str, *, is_query: bool = False):
         return self.encode_many([text], is_query=is_query)[0]
 
-    def encode_many(self, texts: list[str], *, is_query: bool = False):
+    def encode_many(
+        self,
+        texts: list[str],
+        *,
+        is_query: bool = False,
+        workload: str = "interactive",
+    ):
         if not texts:
             return []
         inputs = list(texts)
@@ -114,6 +120,7 @@ class OpenAITextEmbedder:
             inputs = [f"Instruct: {self._query_instruction}\nQuery: {text}" for text in inputs]
         response = self._client.post(
             "embeddings",
+            headers={"X-Sage-Workload": workload},
             json={
                 "model": self._model_name,
                 "input": inputs,
@@ -166,6 +173,7 @@ class OpenAIReranker:
             return []
         response = self._client.post(
             "rerank",
+            headers={"X-Sage-Workload": "interactive"},
             json={
                 "model": self._model_name,
                 "query": query,
@@ -1801,7 +1809,10 @@ class LocalKnowledgeStore:
         vectors = []
         for start in range(0, len(texts), batch_size):
             vectors.extend(
-                self._text_embedder.encode_many(texts[start : start + batch_size])
+                self._text_embedder.encode_many(
+                    texts[start : start + batch_size],
+                    workload="reindex",
+                )
             )
         return vectors
 
