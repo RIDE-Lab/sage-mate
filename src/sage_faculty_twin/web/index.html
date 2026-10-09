@@ -341,8 +341,15 @@
                                 <span class="send-button-spinner" aria-hidden="true"></span>
                             </button>
                         </div>
-                        <div class="composer-tools-row" aria-label="发送附加操作">
-                            <div class="composer-tools-left">
+                        <details class="composer-tools-disclosure">
+                            <summary class="composer-tools-summary" aria-label="展开工具与高级选项">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
+                                <span>工具</span>
+                                <span class="composer-tools-active-label">已启用</span>
+                                <svg class="composer-tools-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                            </summary>
+                            <div class="composer-tools-row" aria-label="发送附加操作">
+                                <div class="composer-tools-left">
                                 <label class="composer-pill-toggle" title="开启后模型会先推理再回答，质量更高但更慢">
                                     <input type="checkbox" id="deep-thinking-checkbox" />
                                     <span class="pill-toggle-label">🧠 深度思考</span>
@@ -351,8 +358,8 @@
                                     <input type="checkbox" id="web-search-checkbox" />
                                     <span class="pill-toggle-label">🌐 联网检索</span>
                                 </label>
-                            </div>
-                            <div class="composer-tools-right">
+                                </div>
+                                <div class="composer-tools-right">
                                 <button type="button" id="lucky-question-button"
                                     class="composer-icon-button" aria-label="随机生成一个可直接提问的问题"
                                     title="随便问一个随机问题">
@@ -383,8 +390,9 @@
                                     aria-label="打开推理路径" title="查看推理路径">
                                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="13" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/></svg>
                                 </button>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                         <div id="code-composer-context-row" class="code-composer-context-row" hidden></div>
                     </div>
                     <div id="composer-attachment-list" class="composer-attachment-list" hidden></div>

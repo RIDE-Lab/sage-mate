@@ -4032,7 +4032,64 @@ body.sidebar-expanded .rail-user {
     justify-content: space-between;
     gap: 8px;
     width: 100%;
-    padding: 12px 8px 0;
+    padding: 10px;
+    border: 1px solid rgba(22, 35, 56, 0.08);
+    border-radius: 14px;
+    background: rgba(248, 250, 252, 0.88);
+}
+
+.composer-tools-disclosure {
+    width: 100%;
+    margin-top: 4px;
+}
+
+.composer-tools-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 4px 9px;
+    border-radius: 9px;
+    color: rgba(32, 33, 35, 0.52);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: color 150ms ease, background 150ms ease;
+}
+
+.composer-tools-summary::-webkit-details-marker {
+    display: none;
+}
+
+.composer-tools-summary:hover,
+.composer-tools-disclosure[open] .composer-tools-summary {
+    color: var(--ink);
+    background: rgba(32, 33, 35, 0.05);
+}
+
+.composer-tools-chevron {
+    transition: transform 150ms ease;
+}
+
+.composer-tools-disclosure[open] .composer-tools-chevron {
+    transform: rotate(180deg);
+}
+
+.composer-tools-active-label {
+    display: none;
+    color: var(--accent-deep);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.composer-tools-disclosure:has(input:checked) .composer-tools-active-label {
+    display: inline;
+}
+
+.composer-tools-disclosure:not([open]) .composer-tools-row {
+    display: none;
 }
 
 .composer-tools-left {
@@ -7313,7 +7370,7 @@ body.profile-code-assistant .composer-tools-row {
         width: 100%;
     }
 
-    .app-version-badge {
+.app-version-badge {
         right: 8px;
         bottom: calc(6px + var(--safe-bottom));
         font-size: 0.72rem;
@@ -7422,6 +7479,12 @@ body.profile-code-assistant .composer-tools-row {
         border-radius: 8px;
         font-size: 0.66rem;
     }
+}
+
+/* Product diagnostics stay in the status/admin surfaces, not the core chat. */
+.app-stack-banner,
+.app-version-badge {
+    display: none;
 }
 
 /* ── Token usage badge (inline in composer tools row) ── */

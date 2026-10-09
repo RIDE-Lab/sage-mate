@@ -222,6 +222,38 @@ def test_restoring_a_conversation_hides_the_empty_state_onboarding() -> None:
     assert 'document.getElementById("seed-chips")?.classList.add("hidden");' in hide_fn
 
 
+def test_default_chat_is_quiet_and_guidance_is_opt_in() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    initialize_fn = js[js.index("async function initializePage"):js.index("initializePage().catch")]
+    session_fn = js[js.index("function applyUserSession"):js.index("async function loadManagedServices")]
+    restart_fn = js[js.index("function restartOnboarding"):js.index("// --- iOS Safari")]
+
+    assert "startOnboarding(" not in initialize_fn
+    assert "startOnboarding(" not in session_fn
+    assert "showDefaultLandingContent();" in initialize_fn
+    assert "startOnboarding(profile, { force: true });" in restart_fn
+
+
+def test_advanced_composer_controls_are_collapsed_into_one_tools_disclosure() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert '<details class="composer-tools-disclosure">' in html
+    assert 'class="composer-tools-summary"' in html
+    assert html.index('class="composer-tools-summary"') < html.index('class="composer-tools-row"')
+    assert ".composer-tools-disclosure:not([open]) .composer-tools-row" in css
+    assert ".composer-tools-disclosure:has(input:checked) .composer-tools-active-label" in css
+
+
+def test_diagnostics_do_not_compete_with_the_core_chat_surface() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"\.app-stack-banner,\s*\n\.app-version-badge \{\s*\n\s*display: none;",
+        css,
+    )
+
+
 def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 

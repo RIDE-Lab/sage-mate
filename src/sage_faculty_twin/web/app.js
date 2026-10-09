@@ -3882,11 +3882,6 @@ function applyUserSession(session) {
         applyVisitorProfilePresentation();
         switchConversationHistoryScope(resolveConversationHistoryStorageScope());
         updateWelcomeGreeting();
-        // Trigger progressive onboarding for newly authenticated users
-        if (!isCodeAssistantProfile() && !wasAuthenticated && !hasCompletedOnboarding()) {
-            const profile = account.visitor_profile || "general_visitor";
-            startOnboarding(profile);
-        }
         refreshSlackTwinLinkStatus();
         return;
     }
@@ -10477,12 +10472,9 @@ async function initializePage() {
     if (!isAdminSession && !isUserAuthenticated) {
         markVisitorIdentitySelected(visitorProfileInput?.value || "general_visitor");
     }
-    // Start Faculty Twin onboarding for new users, or show profile-specific landing content.
-    const profile = visitorProfileInput?.value || "general_visitor";
+    // Keep the default conversation surface quiet. The full guided tour is
+    // available from the sidebar help button instead of opening automatically.
     if (!isCodeAssistantProfile()) {
-        startOnboarding(profile);
-    }
-    if (!onboardingActive && !isCodeAssistantProfile()) {
         showDefaultLandingContent();
     }
     if (isCodeAssistantProfile() && !chatStream?.querySelector(".message-user")) {
