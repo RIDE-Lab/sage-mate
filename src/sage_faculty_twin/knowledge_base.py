@@ -24,6 +24,56 @@ from .models import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class _RerankPlan:
+    candidate_count: int
+    bypass_remote: bool
+    reason: str
+
+
+def _select_rerank_plan(
+    settings: AppSettings,
+    *,
+    available_candidates: int,
+    retrieval_scores: list[float],
+    deterministic_scores: list[float],
+    allow_deterministic_bypass: bool = True,
+) -> _RerankPlan:
+    """Choose a bounded remote-rerank budget without inspecting query text."""
+    available = max(0, int(available_candidates))
+    small = min(settings.sagevdb_reranker_small_candidates, available)
+    medium = min(settings.sagevdb_reranker_medium_candidates, available)
+    large = min(settings.sagevdb_reranker_large_candidates, available)
+
+    if not settings.sagevdb_reranker_adaptive_enabled:
+        return _RerankPlan(candidate_count=large, bypass_remote=False, reason="fixed")
+
+    strongest_deterministic = max(deterministic_scores, default=0.0)
+    if (
+        allow_deterministic_bypass
+        and strongest_deterministic
+        >= settings.sagevdb_reranker_bypass_deterministic_score
+    ):
+        return _RerankPlan(
+            candidate_count=small,
+            bypass_remote=True,
+            reason="strong_deterministic",
+        )
+
+    ordered_scores = sorted(retrieval_scores, reverse=True)
+    best = ordered_scores[0] if ordered_scores else float("-inf")
+    runner_up = ordered_scores[1] if len(ordered_scores) > 1 else float("-inf")
+    margin = best - runner_up if len(ordered_scores) > 1 else float("inf")
+    if (
+        best >= settings.sagevdb_reranker_high_confidence_similarity
+        and margin >= settings.sagevdb_reranker_high_confidence_margin
+    ):
+        return _RerankPlan(candidate_count=small, bypass_remote=False, reason="high_confidence")
+    if best >= settings.sagevdb_reranker_medium_confidence_similarity:
+        return _RerankPlan(candidate_count=medium, bypass_remote=False, reason="medium_confidence")
+    return _RerankPlan(candidate_count=large, bypass_remote=False, reason="low_confidence")
+
+
 class HashingTextEmbedder:
     def __init__(self, settings: AppSettings, np_module) -> None:
         self._settings = settings
@@ -263,6 +313,9 @@ class LocalKnowledgeStore:
         self._np = None
         self._text_embedder = None
         self._reranker = OpenAIReranker(settings) if settings.sagevdb_reranker_enabled else None
+        self._last_rerank_plan: _RerankPlan | None = None
+        self._last_rerank_fallback = False
+        self._last_rerank_candidate_sources: tuple[str, ...] = ()
         self._document_id_to_vector_id: dict[str, int] = {}
         self._search_cache: OrderedDict[
             str, tuple[float, list[KnowledgeSearchHit]]
@@ -655,6 +708,12 @@ class LocalKnowledgeStore:
 
     def _uses_sagevdb_anns_backend(self) -> bool:
         return self._normalize_sagevdb_backend() in {"sage-anns", "sageanns", "anns"}
+
+    def _sagevdb_similarity_score(self, raw_score: float) -> float:
+        """Normalize backend-specific search scores so larger always means better."""
+        if self._uses_sagevdb_anns_backend():
+            return float(raw_score)
+        return 1.0 - float(raw_score)
 
     def _document_metadata(self, document: KnowledgeDocumentRecord) -> dict[str, str]:
         return {
@@ -1088,6 +1147,9 @@ class LocalKnowledgeStore:
         visitor_profile: str | None = None,
         admin_role: str | None = None,
     ) -> list[KnowledgeSearchHit]:
+        self._last_rerank_plan = None
+        self._last_rerank_fallback = False
+        self._last_rerank_candidate_sources = ()
         if self._sagevdb is None or self._np is None or not self._documents:
             return []
 
@@ -1095,14 +1157,21 @@ class LocalKnowledgeStore:
         query_vector = self._embed_text(query, is_query=True)
         candidate_count = max(self.count_documents(), 1)
         if self._reranker is not None:
-            candidate_count = min(
-                candidate_count,
-                max(
-                    limit * self._settings.sagevdb_reranker_candidate_multiplier,
-                    limit + 5,
-                ),
-                self._settings.sagevdb_reranker_max_candidates,
-            )
+            if self._settings.sagevdb_reranker_adaptive_enabled:
+                candidate_count = min(
+                    candidate_count,
+                    self._settings.sagevdb_reranker_large_candidates,
+                    self._settings.sagevdb_reranker_max_candidates,
+                )
+            else:
+                candidate_count = min(
+                    candidate_count,
+                    max(
+                        limit * self._settings.sagevdb_reranker_candidate_multiplier,
+                        limit + 5,
+                    ),
+                    self._settings.sagevdb_reranker_max_candidates,
+                )
         if self._uses_sagevdb_anns_backend():
             results = self._sagevdb.search(
                 query_vector,
@@ -1130,10 +1199,9 @@ class LocalKnowledgeStore:
         for result in results:
             if self._uses_sagevdb_anns_backend():
                 metadata = dict(getattr(result, "metadata", {}) or {})
-                retrieval_score = float(result.score)
             else:
                 metadata = dict(self._sagevdb.get_metadata(int(result.id)))
-                retrieval_score = 1.0 - float(result.score)
+            retrieval_score = self._sagevdb_similarity_score(float(result.score))
             document_id = metadata.get("document_id")
             if not document_id:
                 continue
@@ -1166,63 +1234,182 @@ class LocalKnowledgeStore:
             retrieval_scores.append(retrieval_score)
 
         if self._reranker is not None:
-            seen_document_ids = {hit.document_id for hit in hits}
-            lexical_candidates: list[tuple[float, KnowledgeDocumentRecord]] = []
+            # Build one deduplicated hybrid pool.  Previously the semantic budget
+            # and lexical budget were each allowed to reach candidate_count,
+            # silently doubling the payload sent to the remote reranker.
+            candidates: dict[
+                str,
+                tuple[
+                    KnowledgeSearchHit,
+                    KnowledgeDocumentRecord,
+                    float,
+                    float,
+                ],
+            ] = {}
+            semantic_document_ids: list[str] = []
+            for hit, document, retrieval_score in zip(
+                hits, hit_documents, retrieval_scores, strict=True
+            ):
+                deterministic_score = float(hit.score)
+                semantic_document_ids.append(hit.document_id)
+                candidates[hit.document_id] = (
+                    hit,
+                    document,
+                    retrieval_score,
+                    deterministic_score,
+                )
+
             for document in self.list_documents():
-                if document.document_id in seen_document_ids:
+                if document.document_id in candidates:
                     continue
                 if not _document_is_visible_to_requester(
                     document, query_profile.visitor_profile, query_profile.admin_role
                 ):
                     continue
-                lexical_score = self._score_document(document, query_tokens, query_profile)
-                if lexical_score > 0:
-                    lexical_candidates.append((lexical_score, document))
-            lexical_candidates.sort(key=lambda item: item[0], reverse=True)
-            remaining_candidates = min(
-                candidate_count,
-                max(
-                    self._settings.sagevdb_reranker_max_candidates - len(hits),
-                    0,
-                ),
-            )
-            for lexical_score, document in lexical_candidates[:remaining_candidates]:
-                hits.append(
+                deterministic_score = self._score_document(
+                    document, query_tokens, query_profile
+                )
+                if deterministic_score <= 0:
+                    continue
+                candidates[document.document_id] = (
                     KnowledgeSearchHit(
                         document_id=document.document_id,
                         title=document.title,
                         excerpt=self._build_excerpt(document.content, query_tokens),
-                        score=lexical_score,
+                        score=deterministic_score,
                         tags=document.tags,
                         source_name=document.source_name,
                         metadata=document.metadata,
-                    )
+                    ),
+                    document,
+                    0.0,
+                    deterministic_score,
                 )
-                hit_documents.append(document)
-                retrieval_scores.append(min(lexical_score, 100.0) / 100.0)
 
-        if self._reranker is not None and hits:
-            max_chars = self._settings.sagevdb_reranker_document_max_chars
-            rerank_documents = [
-                self._compose_retrieval_text(document)[:max_chars]
-                for document in hit_documents
-            ]
-            try:
-                semantic_scores = self._reranker.rerank(query, rerank_documents)
-                for hit, semantic_score, retrieval_score in zip(
-                    hits, semantic_scores, retrieval_scores, strict=True
-                ):
-                    deterministic_score = max(min(hit.score, 100.0), 0.0) / 100.0
-                    hit.score = (
-                        0.40 * retrieval_score
-                        + 0.35 * semantic_score
-                        + 0.25 * deterministic_score
-                    )
-            except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
-                logger.warning(
-                    "Remote SageVDB reranker failed; retaining deterministic candidate scores.",
-                    exc_info=True,
+            def preliminary_score(
+                candidate: tuple[
+                    KnowledgeSearchHit,
+                    KnowledgeDocumentRecord,
+                    float,
+                    float,
+                ],
+            ) -> float:
+                retrieval_score = max(min(candidate[2], 1.0), 0.0)
+                deterministic_score = max(min(candidate[3], 100.0), 0.0) / 100.0
+                return (0.60 * retrieval_score) + (0.40 * deterministic_score)
+
+            if not self._settings.sagevdb_reranker_adaptive_enabled:
+                # Preserve the pre-adaptive candidate set exactly so the fixed
+                # mode remains a trustworthy A/B control: all semantic hits,
+                # followed by at most the same number of strongest lexical hits.
+                semantic_candidates = [
+                    candidates[document_id] for document_id in semantic_document_ids
+                ]
+                semantic_document_id_set = set(semantic_document_ids)
+                lexical_candidates = sorted(
+                    (
+                        candidate
+                        for document_id, candidate in candidates.items()
+                        if document_id not in semantic_document_id_set
+                    ),
+                    key=lambda item: item[3],
+                    reverse=True,
                 )
+                remaining_candidates = min(
+                    candidate_count,
+                    max(
+                        self._settings.sagevdb_reranker_max_candidates
+                        - len(semantic_candidates),
+                        0,
+                    ),
+                )
+                selected = semantic_candidates + lexical_candidates[:remaining_candidates]
+                plan = _RerankPlan(
+                    candidate_count=len(selected),
+                    bypass_remote=False,
+                    reason="fixed",
+                )
+            else:
+                ordered_deterministic_scores = sorted(
+                    (item[3] for item in candidates.values()),
+                    reverse=True,
+                )
+                deterministic_margin = (
+                    ordered_deterministic_scores[0] - ordered_deterministic_scores[1]
+                    if len(ordered_deterministic_scores) > 1
+                    else (ordered_deterministic_scores[0] if ordered_deterministic_scores else 0.0)
+                )
+                has_structured_query_signal = bool(
+                    query_profile.named_entities
+                    or query_profile.ordinal_numbers
+                    or query_profile.topic_domains
+                )
+                plan = _select_rerank_plan(
+                    self._settings,
+                    available_candidates=len(candidates),
+                    retrieval_scores=[item[2] for item in candidates.values()],
+                    deterministic_scores=[item[3] for item in candidates.values()],
+                    allow_deterministic_bypass=(
+                        has_structured_query_signal
+                        or deterministic_margin
+                        >= self._settings.sagevdb_reranker_bypass_deterministic_margin
+                    ),
+                )
+                if plan.bypass_remote:
+                    ordered_candidates = sorted(
+                        candidates.values(),
+                        key=lambda item: (item[3], item[2]),
+                        reverse=True,
+                    )
+                else:
+                    ordered_candidates = sorted(
+                        candidates.values(),
+                        key=preliminary_score,
+                        reverse=True,
+                    )
+                selected = ordered_candidates[: plan.candidate_count]
+            self._last_rerank_plan = plan
+            hits = [item[0] for item in selected]
+            hit_documents = [item[1] for item in selected]
+            retrieval_scores = [item[2] for item in selected]
+            deterministic_scores = [item[3] for item in selected]
+            self._last_rerank_candidate_sources = tuple(
+                (item[1].source_name or "") for item in selected
+            )
+
+            if not plan.bypass_remote and hits:
+                max_chars = self._settings.sagevdb_reranker_document_max_chars
+                rerank_documents = [
+                    self._compose_retrieval_text(document)[:max_chars]
+                    for document in hit_documents
+                ]
+                try:
+                    semantic_scores = self._reranker.rerank(query, rerank_documents)
+                    for hit, semantic_score, retrieval_score, deterministic_score in zip(
+                        hits,
+                        semantic_scores,
+                        retrieval_scores,
+                        deterministic_scores,
+                        strict=True,
+                    ):
+                        normalized_retrieval = max(min(retrieval_score, 1.0), 0.0)
+                        normalized_semantic = max(min(float(semantic_score), 1.0), 0.0)
+                        normalized_deterministic = (
+                            max(min(deterministic_score, 100.0), 0.0) / 100.0
+                        )
+                        hit.score = (
+                            0.40 * normalized_retrieval
+                            + 0.35 * normalized_semantic
+                            + 0.25 * normalized_deterministic
+                        )
+                except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
+                    self._last_rerank_fallback = True
+                    logger.warning(
+                        "Remote SageVDB reranker failed; retaining hybrid candidate scores.",
+                        exc_info=True,
+                    )
+                    for hit, candidate in zip(hits, selected, strict=True):
+                        hit.score = preliminary_score(candidate)
         hits.sort(key=lambda h: h.score, reverse=True)
         # Wiki-link retrieval: 1-hop expansion after reranking.
         if self._link_expansion_enabled:
@@ -2145,13 +2332,18 @@ def _build_query_profile(
     ):
         document_types.add("lecture")
         topic_domains.add("teaching")
-    if (
-        "experiment" in lowered
-        or "lab" in lowered
-        or "实验" in query
-        or "project" in lowered
-        or "项目" in query
-    ):
+    has_explicit_experiment = bool(
+        re.search(r"\bexperiments?\b", lowered)
+        or re.search(r"\blab(?:oratory)?\b", lowered)
+        or re.search(r"实验(?!室)", query)
+    )
+    has_project = bool(re.search(r"\bprojects?\b", lowered) or "项目" in query)
+    has_teaching_project_context = bool(
+        course_ids
+        or any(marker in query for marker in ("课程", "作业", "实验课", "教学", "课件"))
+        or any(marker in lowered for marker in ("course", "assignment", "class project"))
+    )
+    if has_explicit_experiment or (has_project and has_teaching_project_context):
         document_types.add("experiment")
         topic_domains.add("teaching")
 
@@ -2177,7 +2369,11 @@ def _build_query_profile(
         marker in query for marker in research_markers
     ):
         topic_domains.add("research")
-        if any(
+        if has_project and any(
+            marker in lowered for marker in ("roadmap", "proposal", "project")
+        ) or any(marker in query for marker in ("路线图", "项目", "研究目标")):
+            research_focus = "overview"
+        elif any(
             marker in query
             for marker in ("研究主线", "研究方向", "主要研究", "研究什么", "研究板块")
         ):

@@ -352,7 +352,7 @@ def test_sagevdb_remote_reranker_reorders_semantic_candidates(
             del settings
 
         def rerank(self, query: str, documents: list[str]) -> list[float]:
-            assert query == "semantic query"
+            assert query == "opaque request"
             assert len(documents) == 2
             return [0.1, 0.9]
 
@@ -374,10 +374,100 @@ def test_sagevdb_remote_reranker_reorders_semantic_candidates(
         )
     )
 
-    hits = store.search("semantic query", top_k=1)
+    hits = store.search("opaque request", top_k=1)
 
     assert hits
     assert hits[0].source_name == "second"
+
+
+def test_sagevdb_strong_deterministic_match_bypasses_remote_reranker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_store = LocalKnowledgeStore(
+        AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local")
+    )
+    seed_store.add_document(
+        KnowledgeDocumentCreate(
+            title="LeapQuant recurrent-state quantization",
+            content="LeapQuant is the exact topic requested by this test.",
+            tags=["leapquant"],
+            source_name="exact-match",
+        )
+    )
+    seed_store.add_document(
+        KnowledgeDocumentCreate(
+            title="Unrelated candidate",
+            content="A generic systems note.",
+            tags=["systems"],
+            source_name="unrelated",
+        )
+    )
+
+    class FakeANNSDatabase:
+        def __init__(self) -> None:
+            self._metadata: list[dict[str, str]] = []
+
+        def build_index(self, vectors, metadata=None) -> None:
+            del vectors
+            self._metadata = list(metadata or [])
+
+        def search(self, query, k=10, include_metadata=True):
+            del query, include_metadata
+            return [
+                SimpleNamespace(id=index, score=0.8 - (index * 0.1), metadata=metadata)
+                for index, metadata in enumerate(self._metadata[:k])
+            ]
+
+    class FailIfCalledReranker:
+        def __init__(self, settings: AppSettings) -> None:
+            del settings
+
+        def rerank(self, query: str, documents: list[str]) -> list[float]:
+            raise AssertionError(
+                f"remote reranker must not run for exact match: {query!r}, {len(documents)} docs"
+            )
+
+    monkeypatch.setattr(
+        sagevdb_module,
+        "create_database",
+        lambda config, **kwargs: FakeANNSDatabase(),
+    )
+    monkeypatch.setattr(knowledge_base_module, "OpenAIReranker", FailIfCalledReranker)
+
+    store = LocalKnowledgeStore(
+        AppSettings(
+            knowledge_base_dir=tmp_path,
+            knowledge_backend="sagevdb",
+            sagevdb_embedding_backend="hash",
+            sagevdb_dimension=128,
+            sagevdb_backend="sage-anns",
+            sagevdb_reranker_enabled=True,
+        )
+    )
+
+    hits = store.search("LeapQuant recurrent-state quantization", top_k=1)
+
+    assert hits
+    assert hits[0].source_name == "exact-match"
+    assert store._last_rerank_plan is not None
+    assert store._last_rerank_plan.bypass_remote is True
+    assert store._last_rerank_plan.reason == "strong_deterministic"
+
+
+def test_sagevdb_similarity_scores_use_backend_semantics() -> None:
+    store = LocalKnowledgeStore.__new__(LocalKnowledgeStore)
+    store._settings = AppSettings(
+        _env_file=None,
+        knowledge_sagevdb_backend="cpp",
+    )
+    assert store._sagevdb_similarity_score(0.25) == pytest.approx(0.75)
+
+    store._settings = AppSettings(
+        _env_file=None,
+        knowledge_sagevdb_backend="sage-anns",
+    )
+    assert store._sagevdb_similarity_score(0.75) == pytest.approx(0.75)
 
 
 def test_sagevdb_sage_anns_backend_uses_adapter_database(

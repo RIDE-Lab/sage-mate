@@ -273,6 +273,15 @@ class AppSettings(BaseSettings):
     sagevdb_reranker_candidate_multiplier: int = Field(default=8, ge=2, le=32)
     sagevdb_reranker_max_candidates: int = Field(default=64, ge=4, le=256)
     sagevdb_reranker_document_max_chars: int = Field(default=1500, ge=256, le=32000)
+    sagevdb_reranker_adaptive_enabled: bool = Field(default=True)
+    sagevdb_reranker_small_candidates: int = Field(default=16, ge=4, le=256)
+    sagevdb_reranker_medium_candidates: int = Field(default=24, ge=4, le=256)
+    sagevdb_reranker_large_candidates: int = Field(default=48, ge=4, le=256)
+    sagevdb_reranker_high_confidence_similarity: float = Field(default=0.65, ge=-1.0, le=1.0)
+    sagevdb_reranker_medium_confidence_similarity: float = Field(default=0.45, ge=-1.0, le=1.0)
+    sagevdb_reranker_high_confidence_margin: float = Field(default=0.03, ge=0.0, le=2.0)
+    sagevdb_reranker_bypass_deterministic_score: float = Field(default=75.0, ge=0.0)
+    sagevdb_reranker_bypass_deterministic_margin: float = Field(default=20.0, ge=0.0)
     knowledge_sagevdb_persistence_dir: Path | None = Field(
         default=None,
         description="Durable SageVDB generation directory for the knowledge index. "
@@ -400,6 +409,24 @@ class AppSettings(BaseSettings):
 
     @model_validator(mode="after")
     def apply_runtime_dir_defaults(self) -> "AppSettings":
+        if not (
+            self.sagevdb_reranker_small_candidates
+            <= self.sagevdb_reranker_medium_candidates
+            <= self.sagevdb_reranker_large_candidates
+            <= self.sagevdb_reranker_max_candidates
+        ):
+            raise ValueError(
+                "SageVDB reranker candidate tiers must satisfy "
+                "small <= medium <= large <= max_candidates."
+            )
+        if (
+            self.sagevdb_reranker_medium_confidence_similarity
+            > self.sagevdb_reranker_high_confidence_similarity
+        ):
+            raise ValueError(
+                "SageVDB reranker medium-confidence similarity must not exceed "
+                "the high-confidence threshold."
+            )
         runtime_root = self.runtime_dir
         defaults: dict[str, Path] = {
             "homepage_dir": runtime_root / "data/homepage",
