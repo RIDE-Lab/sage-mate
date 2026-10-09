@@ -225,6 +225,39 @@ def test_same_conversation_recalls_short_remembered_value_query_without_llm(
     assert not read_response.answer_basis
 
 
+def test_same_conversation_recalls_natural_experiment_number_without_llm(
+    tmp_path: Path,
+) -> None:
+    service = DigitalTwinService(_settings(tmp_path))
+    llm = _RecordingLLM(answer="不应调用模型")
+    service._llm_client = llm
+
+    write_response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id="conv-natural-value-recall",
+                question="本轮实验编号是 ORIOLE-109。请记住它，只回复：已记住。",
+            )
+        )
+    )
+    read_response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id="conv-natural-value-recall",
+                question="本轮实验编号是什么？只回复编号。",
+            )
+        )
+    )
+
+    assert write_response.answer == "已记住。"
+    assert read_response.answer == "ORIOLE-109"
+    assert llm.prompts == []
+    assert not write_response.answer_basis
+    assert not read_response.answer_basis
+
+
 def test_system_prompt_contains_current_local_date(tmp_path: Path) -> None:
     settings = _settings(tmp_path, booking_timezone="Asia/Shanghai")
     prompt = build_system_prompt(settings)

@@ -681,8 +681,13 @@ _PREVIOUS_ANSWER_QUERY_PATTERNS = (
     re.compile(r"^(我)?上一条(收到)?的回答是什么$"),
 )
 _REMEMBERED_VALUE_CAPTURE_PATTERN = re.compile(
+    r"(?:"
     r"记住(?:这个|以下)?(?:临时)?(?:代号|编号|关键词|字符串)\s*[：:]\s*"
     r"[“\"'‘]?([^\s，。！？；;”\"'’]+)"
+    r"|"
+    r"(?:本轮|这轮|当前)(?:实验)?(?:代号|编号|关键词|字符串)\s*(?:是|为|[：:])\s*"
+    r"[“\"'‘]?([^\s，。！？；;”\"'’]+)"
+    r")"
 )
 _REMEMBERED_VALUE_LABELS = ("代号", "编号", "关键词", "字符串")
 _SECRET_VALUE_LABELS = ("密码", "密钥", "token", "api key", "secret", "credential")
@@ -4218,7 +4223,10 @@ class FacultyTwinWorkflowSupport:
         normalized_question = _RECENT_SESSION_QUERY_NORMALIZER.sub("", question).lower()
         lowered_question = question.lower()
         asks_for_remembered_value = (
-            any(marker in question for marker in ("刚才", "刚刚", "之前", "上一条"))
+            any(
+                marker in question
+                for marker in ("刚才", "刚刚", "之前", "上一条", "本轮", "这轮", "当前")
+            )
             and any(label in lowered_question for label in _REMEMBERED_VALUE_LABELS)
             and "什么" in question
         )
@@ -4240,7 +4248,7 @@ class FacultyTwinWorkflowSupport:
         match = _REMEMBERED_VALUE_CAPTURE_PATTERN.search(question)
         if match is None:
             return None
-        value = match.group(1).strip()
+        value = next(group for group in match.groups() if group is not None).strip()
         return value[:128] if value else None
 
     @classmethod
