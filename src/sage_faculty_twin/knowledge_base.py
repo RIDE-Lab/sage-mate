@@ -1050,11 +1050,14 @@ class LocalKnowledgeStore:
         )
         hits: list[KnowledgeSearchHit] = []
         hit_documents: list[KnowledgeDocumentRecord] = []
+        retrieval_scores: list[float] = []
         for result in results:
             if self._uses_sagevdb_anns_backend():
                 metadata = dict(getattr(result, "metadata", {}) or {})
+                retrieval_score = float(result.score)
             else:
                 metadata = dict(self._sagevdb.get_metadata(int(result.id)))
+                retrieval_score = 1.0 - float(result.score)
             document_id = metadata.get("document_id")
             if not document_id:
                 continue
@@ -1084,6 +1087,7 @@ class LocalKnowledgeStore:
                 )
             )
             hit_documents.append(document)
+            retrieval_scores.append(retrieval_score)
 
         if self._reranker is not None and hits:
             max_chars = self._settings.sagevdb_reranker_document_max_chars
@@ -1093,9 +1097,15 @@ class LocalKnowledgeStore:
             ]
             try:
                 semantic_scores = self._reranker.rerank(query, rerank_documents)
-                for hit, semantic_score in zip(hits, semantic_scores, strict=True):
+                for hit, semantic_score, retrieval_score in zip(
+                    hits, semantic_scores, retrieval_scores, strict=True
+                ):
                     deterministic_tiebreak = max(min(hit.score, 100.0), -100.0) * 0.001
-                    hit.score = semantic_score + deterministic_tiebreak
+                    hit.score = (
+                        0.65 * retrieval_score
+                        + 0.35 * semantic_score
+                        + deterministic_tiebreak
+                    )
             except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
                 logger.warning(
                     "Remote SageVDB reranker failed; retaining deterministic candidate scores.",
@@ -1649,7 +1659,7 @@ class LocalKnowledgeStore:
                 ):
                     continue
                 # Linked docs get a fraction of the parent hit's score
-                link_score = max(hit.score * 0.6, 1.5)
+                link_score = hit.score * 0.6
                 expanded.append(
                     KnowledgeSearchHit(
                         document_id=doc.document_id,
