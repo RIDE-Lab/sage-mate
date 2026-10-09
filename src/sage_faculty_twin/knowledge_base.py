@@ -448,6 +448,15 @@ class LocalKnowledgeStore:
     def backend_name(self) -> str:
         return self._backend
 
+    def runtime_backend_name(self) -> str:
+        if self._backend == "sagevdb":
+            if self._sagevdb is None:
+                return "sagevdb:uninitialized"
+            return f"sagevdb:{type(self._sagevdb).__name__}"
+        if self._backend == "neuromem":
+            return f"neuromem:{self._neuromem_index_type}"
+        return self._backend
+
     def _load_documents_from_disk(self) -> None:
         for path in sorted(self._base_dir.glob("*.json")):
             document = KnowledgeDocumentRecord.model_validate_json(path.read_text(encoding="utf-8"))

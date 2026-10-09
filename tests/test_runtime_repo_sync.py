@@ -161,3 +161,53 @@ def test_runtime_env_file_is_loaded_before_shared_defaults(tmp_path: Path) -> No
     )
 
     assert result.stdout == str(configured_runtime)
+
+
+def test_runtime_pythonpath_uses_installed_neuromem_unless_explicitly_opted_in(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "sage-mate"
+    (repo_root / "src").mkdir(parents=True)
+    (tmp_path / "SAGE" / "src").mkdir(parents=True)
+    (tmp_path / "neuromem").mkdir()
+    env = os.environ.copy()
+    env.pop("DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE", None)
+
+    default_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; build_repo_pythonpath "$2"',
+            "runtime-env-test",
+            str(RUNTIME_ENV_SCRIPT),
+            str(repo_root),
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    default_entries = {
+        Path(entry).resolve() for entry in default_result.stdout.strip().split(":") if entry
+    }
+    assert (tmp_path / "neuromem").resolve() not in default_entries
+
+    env["DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE"] = "true"
+    opted_in_result = subprocess.run(
+        [
+            "bash",
+            "-c",
+            'source "$1"; build_repo_pythonpath "$2"',
+            "runtime-env-test",
+            str(RUNTIME_ENV_SCRIPT),
+            str(repo_root),
+        ],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    opted_in_entries = {
+        Path(entry).resolve() for entry in opted_in_result.stdout.strip().split(":") if entry
+    }
+    assert (tmp_path / "neuromem").resolve() in opted_in_entries

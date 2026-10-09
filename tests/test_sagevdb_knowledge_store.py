@@ -205,3 +205,4 @@ def test_sagevdb_sage_anns_backend_local_integration(tmp_path: Path) -> None:
     assert hits
     assert hits[0].title == "Office hour preference"
     assert hits[0].score > 0.0
+    assert store.runtime_backend_name() == "sagevdb:SageANNSVectorStore"

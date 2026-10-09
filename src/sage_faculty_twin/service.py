@@ -4098,15 +4098,57 @@ class FacultyTwinWorkflowSupport:
         normalized_question = _RECENT_SESSION_QUERY_NORMALIZER.sub("", question).lower()
         if len(normalized_question) > 48:
             return None
-        asks_for_year = any(
-            marker in normalized_question
-            for marker in ("当前是哪一年", "现在是哪一年", "今年是哪一年", "当前年份", "现在年份")
+        temporal_question = re.sub(
+            r"^(请问|请告诉我|告诉我|麻烦问一下|帮我看看|请回答)",
+            "",
+            normalized_question,
+            count=1,
         )
-        asks_for_date = any(
-            marker in normalized_question
-            for marker in ("今天日期", "当前日期", "今天是几号", "今天几号")
-        )
-        if not asks_for_year and not asks_for_date:
+        for style_marker in ("请只回复", "只回复", "仅回复", "replyonly", "answeronly"):
+            marker_index = temporal_question.find(style_marker)
+            if marker_index > 0:
+                temporal_question = temporal_question[:marker_index]
+                break
+        asks_for_year = temporal_question in {
+                "当前是哪一年",
+                "现在是哪一年",
+                "今年是哪一年",
+                "当前年份",
+                "现在年份",
+                "whatisthecurrentyear",
+                "whatyearisit",
+                "whatyeararewein",
+        }
+        asks_for_date = temporal_question in {
+                "今天日期",
+                "当前日期",
+                "现在日期",
+                "今天是几号",
+                "今天几号",
+                "今天是几月几日",
+                "今天几月几日",
+                "现在是几月几日",
+                "当前是几月几日",
+                "今天是几月几号",
+                "今天几月几号",
+                "现在是几月几号",
+                "当前是几月几号",
+                "今天是什么日期",
+                "现在是什么日期",
+                "当前是什么日期",
+                "whatistodaysdate",
+                "whatdateisit",
+                "currentdate",
+        }
+        asks_for_weekday = temporal_question in {
+                "今天是星期几",
+                "今天星期几",
+                "今天是周几",
+                "今天周几",
+                "whatdayoftheweekisit",
+                "whatdayistoday",
+        }
+        if not asks_for_year and not asks_for_date and not asks_for_weekday:
             return None
         try:
             current_date = datetime.now(ZoneInfo(self._settings.booking_timezone)).date()
@@ -4114,6 +4156,11 @@ class FacultyTwinWorkflowSupport:
             current_date = datetime.now(UTC).date()
         if asks_for_year:
             return str(current_date.year)
+        if asks_for_weekday and not asks_for_date:
+            weekday = ("星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日")[
+                current_date.weekday()
+            ]
+            return weekday if "只回复" in question or "仅回复" in question else f"今天是{weekday}。"
         if "只回复" in question or "仅回复" in question:
             return current_date.isoformat()
         return f"今天是 {current_date.isoformat()}。"
@@ -9158,6 +9205,7 @@ class DigitalTwinService:
         )
         neuromem_snapshot = self._conversation_store.runtime_snapshot()
         conversation_stats = dict(neuromem_snapshot.get("conversation_stats") or {})
+        profile_stats = dict(neuromem_snapshot.get("profile_stats") or {})
         telemetry = dict(conversation_stats.get("telemetry") or {})
         recent_events = list(neuromem_snapshot.get("recent_events") or [])
         planner_metrics = self._planner_metrics_store.build_summary()
@@ -9174,11 +9222,17 @@ class DigitalTwinService:
             "model_name": self._llm_client.model_name,
             "sage_runtime": self._describe_sage_runtime(),
             "knowledge_backend": self._knowledge_store.backend_name(),
+            "knowledge_runtime_backend": self._knowledge_store.runtime_backend_name(),
             "knowledge_embedding_backend": self._knowledge_store.embedding_backend_name(),
             "knowledge_documents": str(self._knowledge_store.count_documents()),
             "conversation_memory_backend": self._conversation_store.backend_name(),
             "conversation_memory_records": str(self._conversation_store.count_records()),
             "conversation_memory_profiles": str(self._conversation_store.count_profiles()),
+            "conversation_memory_profile_index_backends": json.dumps(
+                profile_stats.get("index_backends") or {},
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
             "artifact_memory_drafts": str(self._artifact_memory_draft_store.count_drafts()),
             "conversation_feedback_records": str(self._analytics_store.count_feedback()),
             "planner_comparison_records": str(self._planner_comparison_store.count_records()),

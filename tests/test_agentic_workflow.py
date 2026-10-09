@@ -88,7 +88,13 @@ class IntentAwareLLMClient:
     ) -> bool:
         return self._booking_intent
 
-    def answer_question_sync(self, system_prompt: str, user_prompt: str) -> str:
+    def answer_question_sync(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        **kwargs,
+    ) -> str:
+        del kwargs
         return self._answer
 
     async def answer_question(self, system_prompt: str, user_prompt: str) -> str:
@@ -100,9 +106,14 @@ class RecordingLLMClient(IntentAwareLLMClient):
         super().__init__(booking_intent=booking_intent, answer=answer)
         self.prompts: list[str] = []
 
-    def answer_question_sync(self, system_prompt: str, user_prompt: str) -> str:
+    def answer_question_sync(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        **kwargs,
+    ) -> str:
         self.prompts.append(user_prompt)
-        return super().answer_question_sync(system_prompt, user_prompt)
+        return super().answer_question_sync(system_prompt, user_prompt, **kwargs)
 
 
 class IntentClassifierFailingLLMClient(RecordingLLMClient):
@@ -1368,6 +1379,7 @@ def test_chat_passes_recent_session_context_into_intent_classification(
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
         conversation_memory_dir=tmp_path / "conversation-memory",
+        fast_intent_classifier_enabled=False,
     )
     service = DigitalTwinService(settings)
 
@@ -1510,6 +1522,7 @@ def test_natural_follow_up_phrasings_reuse_recent_session_context(
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
         conversation_memory_dir=tmp_path / "conversation-memory",
+        fast_intent_classifier_enabled=False,
     )
 
     class NaturalFollowUpLLM(RecordingLLMClient):

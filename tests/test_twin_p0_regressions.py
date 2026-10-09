@@ -2,6 +2,8 @@ import asyncio
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.persona import build_system_prompt
@@ -264,6 +266,72 @@ def test_current_year_question_uses_authoritative_local_date_without_llm(
     )
     assert persist_step.status == "skipped"
     assert response.memory_write_back is False
+
+
+@pytest.mark.parametrize(
+    ("question", "answer_kind"),
+    [
+        ("今天是几月几日？", "sentence"),
+        ("今天是几月几号？只回复日期。", "iso"),
+        ("现在是什么日期？仅回复日期。", "iso"),
+        ("What is today's date?", "sentence"),
+        ("今天是星期几？只回复星期。", "weekday"),
+    ],
+)
+def test_natural_current_date_questions_use_authoritative_local_date_without_llm(
+    tmp_path: Path,
+    question: str,
+    answer_kind: str,
+) -> None:
+    service = DigitalTwinService(_settings(tmp_path, booking_timezone="Asia/Shanghai"))
+    llm = _RecordingLLM(answer="I cannot access the current date.")
+    service._llm_client = llm
+
+    response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                conversation_id=f"conv-current-date-{answer_kind}",
+                question=question,
+            )
+        )
+    )
+
+    current_date = datetime.now().astimezone().date()
+    if answer_kind == "iso":
+        assert response.answer == current_date.isoformat()
+    elif answer_kind == "weekday":
+        assert response.answer == (
+            "星期一",
+            "星期二",
+            "星期三",
+            "星期四",
+            "星期五",
+            "星期六",
+            "星期日",
+        )[current_date.weekday()]
+    else:
+        assert response.answer == f"今天是 {current_date.isoformat()}。"
+    assert llm.prompts == []
+    assert response.answer_basis == []
+    assert response.memory_write_back is False
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "这篇论文是哪一年发表的？",
+        "2024 年 5 月 1 日是星期几？",
+        "项目当前日期字段应该如何设计？",
+    ],
+)
+def test_non_current_temporal_questions_do_not_trigger_system_date_answer(
+    tmp_path: Path,
+    question: str,
+) -> None:
+    service = DigitalTwinService(_settings(tmp_path, booking_timezone="Asia/Shanghai"))
+
+    assert service._build_support()._build_current_time_meta_answer(question) is None
 
 
 

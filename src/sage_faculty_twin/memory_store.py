@@ -1452,6 +1452,12 @@ class NeuroMemConversationStore:
 
     def _build_service_stats(self, collection: Any, *, memory_scope: str) -> dict[str, Any]:
         storage_stats: dict[str, Any] = dict(collection.get_storage_stats())
+        index_backends = {
+            str(index_name): str(
+                getattr(index, "active_backend", "") or type(index).__name__
+            )
+            for index_name, index in dict(getattr(collection, "indexes", {}) or {}).items()
+        }
         collection_type = str(
             getattr(collection, "collection_type", "")
             or dict(getattr(collection, "config", {}) or {}).get("collection_type")
@@ -1474,6 +1480,7 @@ class NeuroMemConversationStore:
             extra={
                 "memory_scope": memory_scope,
                 "collection_type": collection_type,
+                "index_backends": index_backends,
                 "telemetry": self.get_telemetry_summary(),
             },
         )

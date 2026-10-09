@@ -29,8 +29,19 @@ _src = str(_repo_root / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-# Prepend sibling source checkouts so local edits are visible.
-for sibling in ("SAGE/src", "sageVDB", "neuromem"):
+# Prepend the SAGE policy and SageVDB source checkouts. NeuroMem defaults to
+# the declared package dependency so a stale sibling checkout cannot shadow a
+# newer, API-compatible installed build. Developers can explicitly opt into a
+# local NeuroMem checkout with DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE=true.
+siblings = ["SAGE/src", "sageVDB"]
+if os.environ.get("DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE", "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    siblings.append("neuromem")
+for sibling in siblings:
     entry = str(_repo_root.parent / sibling)
     if Path(entry).exists() and entry not in sys.path:
         sys.path.insert(0, entry)
