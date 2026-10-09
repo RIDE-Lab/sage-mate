@@ -62,6 +62,91 @@ def test_sagevdb_backend_adds_and_searches_documents(tmp_path: Path) -> None:
     assert hits[0].score > 0.0
 
 
+def test_sagevdb_restart_reuses_durable_index_without_reembedding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    knowledge_dir = tmp_path / "knowledge"
+    persistence_dir = tmp_path / "sagevdb-index"
+    settings = AppSettings(
+        knowledge_base_dir=knowledge_dir,
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        knowledge_sagevdb_persistence_dir=persistence_dir,
+    )
+    first = LocalKnowledgeStore(settings)
+    first.add_document(
+        KnowledgeDocumentCreate(
+            title="Persistent office hours",
+            content="Students should send an agenda before office hours.",
+            tags=["meeting"],
+            source_name="persistent-note",
+        )
+    )
+    first_generation = first._sagevdb_persistence.generation
+    assert first._sagevdb_last_sync.embedded == 1
+
+    def fail_if_embedded(self, texts):
+        raise AssertionError(f"restart unexpectedly embedded {len(texts)} documents")
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", fail_if_embedded)
+    restarted = LocalKnowledgeStore(settings)
+
+    assert restarted._sagevdb_open_result.loaded is True
+    assert restarted._sagevdb_persistence.generation == first_generation
+    assert restarted._sagevdb_last_sync.embedded == 0
+    assert restarted._sagevdb_last_sync.committed is False
+    hits = restarted.search("What should students send before office hours?", top_k=1)
+    assert hits
+    assert hits[0].source_name == "persistent-note"
+
+
+def test_sagevdb_persistence_sync_is_incremental(tmp_path: Path) -> None:
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        knowledge_sagevdb_persistence_dir=tmp_path / "sagevdb-index",
+    )
+    store = LocalKnowledgeStore(settings)
+    first = store.add_document(
+        KnowledgeDocumentCreate(
+            title="First",
+            content="alpha",
+            tags=["one"],
+            source_name="first",
+        )
+    )
+    second = store.add_document(
+        KnowledgeDocumentCreate(
+            title="Second",
+            content="beta",
+            tags=["two"],
+            source_name="second",
+        )
+    )
+    assert store._sagevdb_last_sync.added == 1
+    assert store._sagevdb_last_sync.embedded == 1
+
+    store.update_document(
+        first.document_id,
+        KnowledgeDocumentCreate(
+            title="First updated",
+            content="alpha changed",
+            tags=["one"],
+            source_name="first",
+        ),
+    )
+    assert store._sagevdb_last_sync.updated == 1
+    assert store._sagevdb_last_sync.embedded == 1
+
+    store.delete_documents([second.document_id])
+    assert store._sagevdb_last_sync.deleted == 1
+    assert store._sagevdb_last_sync.embedded == 0
+
+
 def test_sentence_transformer_backend_uses_real_embedding_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

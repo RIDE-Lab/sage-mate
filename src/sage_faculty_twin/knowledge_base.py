@@ -236,6 +236,9 @@ class LocalKnowledgeStore:
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
         self._backend = settings.knowledge_backend.lower()
         self._sagevdb = None
+        self._sagevdb_persistence = None
+        self._sagevdb_open_result = None
+        self._sagevdb_last_sync = None
         self._neuromem_collection = None
         raw_index_type = (settings.neuromem_index_type or "auto").strip().lower()
         if raw_index_type == "auto":
@@ -656,7 +659,15 @@ class LocalKnowledgeStore:
     def _initialize_sagevdb(self) -> None:
         try:
             import numpy as np
-            from sagevdb import DatabaseConfig, DistanceMetric, IndexType, create_database
+            from sagevdb import (
+                DatabaseConfig,
+                DistanceMetric,
+                IndexType,
+                PersistentRecord,
+                PersistentSageVDB,
+                create_database,
+                stable_content_hash,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "DIGITAL_TWIN_KNOWLEDGE_BACKEND is set to 'sagevdb' but sagevdb is not available. "
@@ -685,7 +696,58 @@ class LocalKnowledgeStore:
             database_kwargs["algorithm"] = algorithm
 
         try:
-            self._sagevdb = create_database(cfg, **database_kwargs)
+            if self._uses_sagevdb_anns_backend():
+                self._sagevdb = create_database(cfg, **database_kwargs)
+            else:
+                persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
+                if persistence_dir is None:
+                    persistence_dir = self._base_dir / ".sagevdb-index"
+
+                def database_factory():
+                    return create_database(cfg, **database_kwargs)
+
+                compatibility = {
+                    "backend": backend,
+                    "dimension": int(self._text_embedder.dimension),
+                    "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
+                    "embedding_model": self._settings.sagevdb_embedding_model,
+                    "index_type": "FLAT",
+                    "metric": "COSINE",
+                    "retrieval_text_format": 1,
+                }
+                self._sagevdb_persistence = PersistentSageVDB(
+                    persistence_dir,
+                    database_factory,
+                    compatibility=compatibility,
+                )
+                self._sagevdb_open_result = self._sagevdb_persistence.open()
+                documents_by_id = {
+                    document.document_id: document for document in self.list_documents()
+                }
+                persistent_records = [
+                    PersistentRecord(
+                        key=document.document_id,
+                        content_hash=stable_content_hash(
+                            self._compose_retrieval_text(document)
+                        ),
+                        metadata=self._document_metadata(document),
+                    )
+                    for document in documents_by_id.values()
+                ]
+
+                def vector_provider(records):
+                    texts = [
+                        self._compose_retrieval_text(documents_by_id[record.key])
+                        for record in records
+                    ]
+                    return self._embed_documents(texts)
+
+                self._sagevdb_last_sync = self._sagevdb_persistence.sync(
+                    persistent_records,
+                    vector_provider,
+                )
+                self._sagevdb = self._sagevdb_persistence.database
+                self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         except ImportError as exc:
             if self._uses_sagevdb_anns_backend():
                 raise RuntimeError(
@@ -696,19 +758,20 @@ class LocalKnowledgeStore:
         except ValueError as exc:
             raise RuntimeError(f"Failed to initialize sagevdb backend '{backend}': {exc}") from exc
 
+        if not self._uses_sagevdb_anns_backend():
+            logger.info(
+                "SageVDB persistence ready: open=%s sync=%s generation=%s",
+                self._sagevdb_open_result,
+                self._sagevdb_last_sync,
+                self._sagevdb_persistence.generation,
+            )
+            return
+
         self._document_id_to_vector_id.clear()
         if self._uses_sagevdb_anns_backend():
             self._rebuild_sagevdb_anns_index()
             return
 
-        documents = self.list_documents()
-        texts = [self._compose_retrieval_text(document) for document in documents]
-        vectors = self._embed_documents(texts)
-        for document, vector in zip(documents, vectors, strict=True):
-            vector_id = self._sagevdb.add(vector.tolist())
-            self._document_id_to_vector_id[document.document_id] = int(vector_id)
-            self._sagevdb.set_metadata(int(vector_id), self._document_metadata(document))
-        self._sagevdb.build_index()
 
     def embedding_backend_name(self) -> str:
         if self._backend != "sagevdb":
@@ -993,6 +1056,11 @@ class LocalKnowledgeStore:
             return
 
         if self._uses_sagevdb_anns_backend():
+            if rebuild_index:
+                self._initialize_sagevdb()
+            return
+
+        if self._sagevdb_persistence is not None:
             if rebuild_index:
                 self._initialize_sagevdb()
             return

@@ -9,6 +9,9 @@ def test_runtime_dir_supplies_mutable_store_defaults(tmp_path: Path, monkeypatch
     settings = AppSettings(_env_file=None, runtime_dir=tmp_path)
 
     assert settings.knowledge_base_dir == tmp_path / "data/knowledge_base"
+    assert settings.knowledge_sagevdb_persistence_dir == (
+        tmp_path / "data/knowledge_base/.sagevdb-index"
+    )
     assert settings.conversation_memory_dir == tmp_path / "data/conversation_memory"
     assert settings.user_account_store_dir == tmp_path / "data/user_accounts"
     assert settings.slack_user_link_dir == tmp_path / "data/slack_user_links"

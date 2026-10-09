@@ -273,6 +273,11 @@ class AppSettings(BaseSettings):
     sagevdb_reranker_candidate_multiplier: int = Field(default=8, ge=2, le=32)
     sagevdb_reranker_max_candidates: int = Field(default=64, ge=4, le=256)
     sagevdb_reranker_document_max_chars: int = Field(default=1500, ge=256, le=32000)
+    knowledge_sagevdb_persistence_dir: Path | None = Field(
+        default=None,
+        description="Durable SageVDB generation directory for the knowledge index. "
+        "When omitted it is placed inside knowledge_base_dir.",
+    )
     knowledge_sagevdb_backend: str = Field(
         default="",
         description="Optional SageVDB backend used only by the knowledge store. "
@@ -421,6 +426,10 @@ class AppSettings(BaseSettings):
         for field_name, runtime_default in defaults.items():
             if field_name not in self.model_fields_set:
                 setattr(self, field_name, runtime_default)
+        if "knowledge_sagevdb_persistence_dir" not in self.model_fields_set:
+            self.knowledge_sagevdb_persistence_dir = (
+                self.knowledge_base_dir / ".sagevdb-index"
+            )
         return self
 
 
