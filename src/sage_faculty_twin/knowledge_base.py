@@ -697,8 +697,13 @@ class LocalKnowledgeStore:
             self._rebuild_sagevdb_anns_index()
             return
 
-        for document in self.list_documents():
-            self._add_to_sagevdb(document, rebuild_index=False)
+        documents = self.list_documents()
+        texts = [self._compose_retrieval_text(document) for document in documents]
+        vectors = self._embed_documents(texts)
+        for document, vector in zip(documents, vectors, strict=True):
+            vector_id = self._sagevdb.add(vector.tolist())
+            self._document_id_to_vector_id[document.document_id] = int(vector_id)
+            self._sagevdb.set_metadata(int(vector_id), self._document_metadata(document))
         self._sagevdb.build_index()
 
     def embedding_backend_name(self) -> str:
