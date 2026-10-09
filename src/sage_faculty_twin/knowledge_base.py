@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 import threading
@@ -10,12 +11,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import httpx
+
 from .config import AppSettings
 from .models import (
     KnowledgeDocumentCreate,
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class HashingTextEmbedder:
@@ -76,6 +82,107 @@ class SentenceTransformerTextEmbedder:
                 f"Embedding dimension mismatch: model returned {array.shape[0]}, expected {self.dimension}."
             )
         return array
+
+
+class OpenAITextEmbedder:
+    """Authenticated OpenAI-compatible embedding client for SageVDB."""
+
+    def __init__(self, settings: AppSettings, np_module) -> None:
+        self._np = np_module
+        self._model_name = settings.sagevdb_embedding_model
+        self._query_instruction = settings.sagevdb_embedding_query_instruction.strip()
+        self.dimension = int(settings.sagevdb_dimension)
+        base_url = settings.sagevdb_embedding_base_url or settings.llm_base_url
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(settings.sagevdb_embedding_timeout_seconds),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    def encode(self, text: str, *, is_query: bool = False):
+        return self.encode_many([text], is_query=is_query)[0]
+
+    def encode_many(self, texts: list[str], *, is_query: bool = False):
+        if not texts:
+            return []
+        inputs = list(texts)
+        if is_query and self._query_instruction:
+            inputs = [f"Instruct: {self._query_instruction}\nQuery: {text}" for text in inputs]
+        response = self._client.post(
+            "embeddings",
+            json={
+                "model": self._model_name,
+                "input": inputs,
+                "encoding_format": "float",
+                "dimensions": self.dimension,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = sorted(payload.get("data", []), key=lambda item: int(item["index"]))
+        if len(rows) != len(inputs):
+            raise RuntimeError(
+                f"Embedding endpoint returned {len(rows)} vectors for {len(inputs)} inputs."
+            )
+        vectors = []
+        for row in rows:
+            array = self._np.asarray(row.get("embedding", []), dtype=self._np.float32)
+            if array.ndim != 1:
+                array = array.reshape(-1)
+            if int(array.shape[0]) != self.dimension:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch: endpoint returned {array.shape[0]}, "
+                    f"expected {self.dimension}."
+                )
+            norm = float(self._np.linalg.norm(array))
+            if norm > 0.0:
+                array /= norm
+            vectors.append(array)
+        return vectors
+
+
+class OpenAIReranker:
+    """Authenticated Jina-compatible reranker client exposed by vLLM."""
+
+    def __init__(self, settings: AppSettings) -> None:
+        self._model_name = settings.sagevdb_reranker_model
+        base_url = settings.sagevdb_reranker_base_url or settings.llm_base_url
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(settings.sagevdb_reranker_timeout_seconds),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        if not documents:
+            return []
+        response = self._client.post(
+            "rerank",
+            json={
+                "model": self._model_name,
+                "query": query,
+                "documents": documents,
+                "top_n": len(documents),
+            },
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        scores: list[float | None] = [None] * len(documents)
+        for result in results:
+            index = int(result["index"])
+            if 0 <= index < len(scores):
+                scores[index] = float(result["relevance_score"])
+        if any(score is None for score in scores):
+            raise RuntimeError("Reranker endpoint did not score every candidate document.")
+        return [float(score) for score in scores]
 
 
 class NeuromemBgeEmbedder:
@@ -144,6 +251,7 @@ class LocalKnowledgeStore:
         self._neuromem_embedder = None
         self._np = None
         self._text_embedder = None
+        self._reranker = OpenAIReranker(settings) if settings.sagevdb_reranker_enabled else None
         self._document_id_to_vector_id: dict[str, int] = {}
         self._search_cache: OrderedDict[
             str, tuple[float, list[KnowledgeSearchHit]]
@@ -844,8 +952,11 @@ class LocalKnowledgeStore:
             return HashingTextEmbedder(self._settings, np_module)
         if embedding_backend == "sentence-transformers":
             return SentenceTransformerTextEmbedder(self._settings, np_module)
+        if embedding_backend == "openai":
+            return OpenAITextEmbedder(self._settings, np_module)
         raise RuntimeError(
-            "Unsupported sagevdb embedding backend. Use 'sentence-transformers' or 'hash'."
+            "Unsupported sagevdb embedding backend. Use 'openai', "
+            "'sentence-transformers', or 'hash'."
         )
 
     def _rebuild_sagevdb_anns_index(self) -> None:
@@ -858,8 +969,9 @@ class LocalKnowledgeStore:
 
         vectors = []
         metadata_batch = []
+        texts = [self._compose_retrieval_text(document) for document in documents]
+        vectors.extend(self._embed_documents(texts))
         for vector_id, document in enumerate(documents):
-            vectors.append(self._embed_text(self._compose_retrieval_text(document)))
             metadata_batch.append(self._document_metadata(document))
             self._document_id_to_vector_id[document.document_id] = int(vector_id)
 
@@ -895,11 +1007,21 @@ class LocalKnowledgeStore:
             return []
 
         limit = top_k or self._settings.retrieval_top_k
-        query_vector = self._embed_text(query)
+        query_vector = self._embed_text(query, is_query=True)
+        candidate_count = max(self.count_documents(), 1)
+        if self._reranker is not None:
+            candidate_count = min(
+                candidate_count,
+                max(
+                    limit * self._settings.sagevdb_reranker_candidate_multiplier,
+                    limit + 5,
+                ),
+                self._settings.sagevdb_reranker_max_candidates,
+            )
         if self._uses_sagevdb_anns_backend():
             results = self._sagevdb.search(
                 query_vector,
-                k=max(self.count_documents(), 1),
+                k=candidate_count,
                 include_metadata=True,
             )
         else:
@@ -908,7 +1030,7 @@ class LocalKnowledgeStore:
             results = search_numpy(
                 self._sagevdb,
                 query_vector,
-                SearchParams(k=max(self._sagevdb.size(), 1)),
+                SearchParams(k=candidate_count),
             )
 
         query_tokens = self._tokenize(query)
@@ -918,6 +1040,7 @@ class LocalKnowledgeStore:
             admin_role=admin_role,
         )
         hits: list[KnowledgeSearchHit] = []
+        hit_documents: list[KnowledgeDocumentRecord] = []
         for result in results:
             if self._uses_sagevdb_anns_backend():
                 metadata = dict(getattr(result, "metadata", {}) or {})
@@ -938,7 +1061,7 @@ class LocalKnowledgeStore:
             # ordering is delegated to _score_document which handles Chinese
             # text and tag relevance far better than hash cosine similarity.
             rerank_score = self._score_document(document, query_tokens, query_profile)
-            if rerank_score <= 0:
+            if self._reranker is None and rerank_score <= 0:
                 continue
             hits.append(
                 KnowledgeSearchHit(
@@ -951,6 +1074,24 @@ class LocalKnowledgeStore:
                     metadata=document.metadata,
                 )
             )
+            hit_documents.append(document)
+
+        if self._reranker is not None and hits:
+            max_chars = self._settings.sagevdb_reranker_document_max_chars
+            rerank_documents = [
+                self._compose_retrieval_text(document)[:max_chars]
+                for document in hit_documents
+            ]
+            try:
+                semantic_scores = self._reranker.rerank(query, rerank_documents)
+                for hit, semantic_score in zip(hits, semantic_scores, strict=True):
+                    deterministic_tiebreak = max(min(hit.score, 100.0), -100.0) * 0.001
+                    hit.score = semantic_score + deterministic_tiebreak
+            except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
+                logger.warning(
+                    "Remote SageVDB reranker failed; retaining deterministic candidate scores.",
+                    exc_info=True,
+                )
         hits.sort(key=lambda h: h.score, reverse=True)
         # Wiki-link retrieval: 1-hop expansion after reranking.
         if self._link_expansion_enabled:
@@ -1521,10 +1662,25 @@ class LocalKnowledgeStore:
             return text
         return f"{text} {' '.join(tokens)}".strip()
 
-    def _embed_text(self, text: str):
+    def _embed_text(self, text: str, *, is_query: bool = False):
         if self._np is None or self._text_embedder is None:
             raise RuntimeError("sagevdb backend is not initialized")
+        if isinstance(self._text_embedder, OpenAITextEmbedder):
+            return self._text_embedder.encode(text, is_query=is_query)
         return self._text_embedder.encode(text)
+
+    def _embed_documents(self, texts: list[str]):
+        if self._np is None or self._text_embedder is None:
+            raise RuntimeError("sagevdb backend is not initialized")
+        if not isinstance(self._text_embedder, OpenAITextEmbedder):
+            return [self._text_embedder.encode(text) for text in texts]
+        batch_size = self._settings.sagevdb_embedding_batch_size
+        vectors = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(
+                self._text_embedder.encode_many(texts[start : start + batch_size])
+            )
+        return vectors
 
 
 def _tokenize_text(text: str) -> set[str]:
