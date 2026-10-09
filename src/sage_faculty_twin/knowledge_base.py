@@ -1089,6 +1089,39 @@ class LocalKnowledgeStore:
             hit_documents.append(document)
             retrieval_scores.append(retrieval_score)
 
+        if self._reranker is not None:
+            seen_document_ids = {hit.document_id for hit in hits}
+            lexical_candidates: list[tuple[float, KnowledgeDocumentRecord]] = []
+            for document in self.list_documents():
+                if document.document_id in seen_document_ids:
+                    continue
+                if not _document_is_visible_to_requester(
+                    document, query_profile.visitor_profile, query_profile.admin_role
+                ):
+                    continue
+                lexical_score = self._score_document(document, query_tokens, query_profile)
+                if lexical_score > 0:
+                    lexical_candidates.append((lexical_score, document))
+            lexical_candidates.sort(key=lambda item: item[0], reverse=True)
+            remaining_candidates = max(
+                self._settings.sagevdb_reranker_max_candidates - len(hits),
+                0,
+            )
+            for lexical_score, document in lexical_candidates[:remaining_candidates]:
+                hits.append(
+                    KnowledgeSearchHit(
+                        document_id=document.document_id,
+                        title=document.title,
+                        excerpt=self._build_excerpt(document.content, query_tokens),
+                        score=lexical_score,
+                        tags=document.tags,
+                        source_name=document.source_name,
+                        metadata=document.metadata,
+                    )
+                )
+                hit_documents.append(document)
+                retrieval_scores.append(0.0)
+
         if self._reranker is not None and hits:
             max_chars = self._settings.sagevdb_reranker_document_max_chars
             rerank_documents = [
@@ -1100,11 +1133,11 @@ class LocalKnowledgeStore:
                 for hit, semantic_score, retrieval_score in zip(
                     hits, semantic_scores, retrieval_scores, strict=True
                 ):
-                    deterministic_tiebreak = max(min(hit.score, 100.0), -100.0) * 0.001
+                    deterministic_score = max(min(hit.score, 100.0), 0.0) / 100.0
                     hit.score = (
-                        0.65 * retrieval_score
+                        0.40 * retrieval_score
                         + 0.35 * semantic_score
-                        + deterministic_tiebreak
+                        + 0.25 * deterministic_score
                     )
             except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
                 logger.warning(
