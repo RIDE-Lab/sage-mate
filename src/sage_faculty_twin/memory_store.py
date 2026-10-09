@@ -461,7 +461,7 @@ class NeuroMemConversationStore:
                 "metric": "cosine",
                 "ann_algorithm": algorithm,
                 "backend_name": self._settings.sagevdb_backend,
-                "allow_faiss_fallback": True,
+                "allow_faiss_fallback": False,
             }
         return {}
 
@@ -472,6 +472,8 @@ class NeuroMemConversationStore:
                 normalized["backend"] = "numpy"
             if not normalized.get("csc_backend"):
                 normalized["csc_backend"] = "numpy"
+        if index_type in {"sage_vdb_ann", "sagedb_ann"}:
+            normalized.update(self._default_collection_index_config(index_type))
         return normalized
 
     def add_exchange(
@@ -1155,16 +1157,22 @@ class NeuroMemConversationStore:
 
         collection.indexes = {}
         collection.index_metadata = {}
+        index_metadata_migrated = False
 
         for index_name, metadata in dict(index_metadata).items():
             index_type = str(dict(metadata).get("type") or "bm25")
+            stored_index_config = dict(dict(metadata).get("config") or {})
             index_config = self._normalize_index_config(
                 index_type,
-                dict(dict(metadata).get("config") or {}),
+                stored_index_config,
+            )
+            index_metadata_migrated = (
+                index_metadata_migrated or index_config != stored_index_config
             )
             try:
                 collection.add_index(str(index_name), index_type, index_config)
             except ValueError:
+                index_metadata_migrated = True
                 fallback_type = self._default_collection_index_type()
                 fallback_config = self._default_collection_index_config(fallback_type)
                 collection.add_index(str(index_name), fallback_type, fallback_config)
@@ -1180,6 +1188,9 @@ class NeuroMemConversationStore:
         for data_id in collection.storage.keys():
             for index_name in list(collection.indexes.keys()):
                 collection.insert_to_index(str(data_id), index_name)
+
+        if index_metadata_migrated:
+            self._persist_collection(collection, self._collections_dir / name)
 
         return collection
 
@@ -1227,6 +1238,7 @@ class NeuroMemConversationStore:
                 index_type,
                 dict(metadata.get("config") or {}),
             )
+            metadata["config"] = index_config
             index = IndexFactory.create(index_type, index_config)
             index_path = snapshot_dir / f"index_{index_name}"
             if index_path.exists():
