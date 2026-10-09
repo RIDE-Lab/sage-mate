@@ -359,6 +359,7 @@ select {
     color: #666661;
     box-shadow: none;
     transform: none;
+    transition: none;
 }
 
 .composer-pill-toggle:hover {
