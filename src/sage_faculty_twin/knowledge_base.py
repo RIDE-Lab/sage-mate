@@ -1103,9 +1103,12 @@ class LocalKnowledgeStore:
                 if lexical_score > 0:
                     lexical_candidates.append((lexical_score, document))
             lexical_candidates.sort(key=lambda item: item[0], reverse=True)
-            remaining_candidates = max(
-                self._settings.sagevdb_reranker_max_candidates - len(hits),
-                0,
+            remaining_candidates = min(
+                candidate_count,
+                max(
+                    self._settings.sagevdb_reranker_max_candidates - len(hits),
+                    0,
+                ),
             )
             for lexical_score, document in lexical_candidates[:remaining_candidates]:
                 hits.append(
@@ -1120,7 +1123,7 @@ class LocalKnowledgeStore:
                     )
                 )
                 hit_documents.append(document)
-                retrieval_scores.append(0.0)
+                retrieval_scores.append(min(lexical_score, 100.0) / 100.0)
 
         if self._reranker is not None and hits:
             max_chars = self._settings.sagevdb_reranker_document_max_chars
