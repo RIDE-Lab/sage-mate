@@ -1059,6 +1059,10 @@ test("composer modes retain native keyboard focus and visible boundaries", async
     expectThemeAuditPasses(await auditThemeSelectors(page, [
       ".composer-pill-toggle", ".rail-user-avatar",
     ]), { requireBorders: [".composer-pill-toggle", ".rail-user-avatar"] });
+    await deep.evaluate((element) => { element.disabled = true; });
+    expectThemeAuditPasses(await auditThemeSelectors(page, [
+      ".composer-pill-toggle",
+    ]), { requireBorders: [".composer-pill-toggle"] });
   }
 });
 

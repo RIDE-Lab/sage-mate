@@ -370,6 +370,7 @@ def test_sagevdb_remote_reranker_reorders_semantic_candidates(
             sagevdb_embedding_backend="hash",
             sagevdb_dimension=128,
             sagevdb_backend="sage-anns",
+            knowledge_sagevdb_backend="sage-anns",
             sagevdb_reranker_enabled=True,
         )
     )
@@ -442,6 +443,7 @@ def test_sagevdb_strong_deterministic_match_bypasses_remote_reranker(
             sagevdb_embedding_backend="hash",
             sagevdb_dimension=128,
             sagevdb_backend="sage-anns",
+            knowledge_sagevdb_backend="sage-anns",
             sagevdb_reranker_enabled=True,
         )
     )
@@ -511,6 +513,7 @@ def test_sagevdb_sage_anns_backend_uses_adapter_database(
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     store = LocalKnowledgeStore(settings)
@@ -549,6 +552,7 @@ def test_sagevdb_sage_anns_backend_local_integration(tmp_path: Path) -> None:
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     store = LocalKnowledgeStore(settings)

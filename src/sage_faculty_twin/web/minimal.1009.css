@@ -368,6 +368,14 @@ select {
     box-shadow: none;
 }
 
+.composer-pill-toggle:has(input:disabled),
+.composer-pill-toggle[aria-disabled="true"] {
+    color: #52524e;
+    background: #f4f4f1;
+    border-color: #85857e;
+    opacity: 1;
+}
+
 .composer-pill-toggle:has(input:checked),
 .composer-pill-toggle.web-search-pill:has(input:checked) {
     color: #ffffff;
@@ -743,6 +751,13 @@ html[data-theme="dark"] #lucky-question-button,
 html[data-theme="dark"] .token-usage-toggle {
     color: var(--ink);
     background: var(--surface);
+    border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .composer-pill-toggle:has(input:disabled),
+html[data-theme="dark"] .composer-pill-toggle[aria-disabled="true"] {
+    color: #d0d0ca;
+    background: var(--surface-muted);
     border-color: var(--line-strong);
 }
 
