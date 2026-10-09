@@ -25,6 +25,18 @@ if missing_symbols:
     )
 
 
+def test_knowledge_sagevdb_backend_can_differ_from_conversation_backend() -> None:
+    settings = AppSettings(
+        knowledge_sagevdb_backend="cpp",
+        sagevdb_backend="sage-anns",
+    )
+    store = LocalKnowledgeStore.__new__(LocalKnowledgeStore)
+    store._settings = settings
+
+    assert store._normalize_sagevdb_backend() == "cpp"
+    assert settings.sagevdb_backend == "sage-anns"
+
+
 def test_sagevdb_backend_adds_and_searches_documents(tmp_path: Path) -> None:
     settings = AppSettings(
         knowledge_base_dir=tmp_path,

@@ -636,7 +636,11 @@ class LocalKnowledgeStore:
             self._initialize_neuromem()
 
     def _normalize_sagevdb_backend(self) -> str:
-        return self._settings.sagevdb_backend.strip().lower().replace("_", "-")
+        backend = (
+            self._settings.knowledge_sagevdb_backend
+            or self._settings.sagevdb_backend
+        )
+        return backend.strip().lower().replace("_", "-")
 
     def _uses_sagevdb_anns_backend(self) -> bool:
         return self._normalize_sagevdb_backend() in {"sage-anns", "sageanns", "anns"}

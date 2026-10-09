@@ -273,6 +273,11 @@ class AppSettings(BaseSettings):
     sagevdb_reranker_candidate_multiplier: int = Field(default=8, ge=2, le=32)
     sagevdb_reranker_max_candidates: int = Field(default=64, ge=4, le=256)
     sagevdb_reranker_document_max_chars: int = Field(default=1500, ge=256, le=32000)
+    knowledge_sagevdb_backend: str = Field(
+        default="",
+        description="Optional SageVDB backend used only by the knowledge store. "
+        "An empty value inherits sagevdb_backend for backward compatibility.",
+    )
     sagevdb_backend: str = Field(default="cpp")
     sagevdb_anns_algorithm: str = Field(default="faiss_hnsw")
     service_manager_script: Path = Field(default=REPO_ROOT / "manage.sh")
