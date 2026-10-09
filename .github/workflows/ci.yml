@@ -85,7 +85,6 @@ jobs:
           DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE: segment
         run: |
           python -m pytest tests/ -q --tb=short \
-            --ignore=tests/test_sagevdb_knowledge_store.py \
             --ignore=tests/test_identity_eval.py
 
   install-linux-cpu:
