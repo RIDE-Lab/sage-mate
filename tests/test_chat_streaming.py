@@ -1,6 +1,6 @@
 """Regression tests for the Chat Latency Optimizations Task 5 streaming.
 
-When ``DIGITAL_TWIN_STREAM_CHAT_ANSWER`` is enabled the LLM client asks
+When the legacy ``DIGITAL_TWIN_STREAM_CHAT_ANSWER`` flag is enabled the LLM client asks
 for an OpenAI-compatible streaming completion (``stream=true``) and
 forwards each token chunk through the ``answer_chunk_callback`` plumbed
 all the way from ``/chat`` -> ``DigitalTwinService.answer`` ->
@@ -10,7 +10,9 @@ all the way from ``/chat`` -> ``DigitalTwinService.answer`` ->
 final ``{"type": "answer_done", "response": {...}}`` once the /chat POST
 finishes rendering.
 
-The tests below cover three guarantees:
+The public ``/chat`` route buffers these chunks and exposes only the validated
+final response. The lower-level tests below cover the internal streaming
+transport and broker primitives:
 
 1. ``WorkflowEventBroker.publish_answer_chunk`` / ``publish_answer_done``
    land on the SSE stream as typed JSON events with the expected shape.
@@ -25,6 +27,7 @@ The tests below cover three guarantees:
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import threading
 from collections import OrderedDict
@@ -33,8 +36,10 @@ from typing import Iterable, Iterator
 import pytest
 
 from sage_faculty_twin import api as api_module
+from sage_faculty_twin.chat_delivery import ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.llm_client import VllmChatClient
+from sage_faculty_twin.models import ChatResponse
 
 
 @pytest.fixture
@@ -45,7 +50,7 @@ def short_keepalive(monkeypatch: pytest.MonkeyPatch) -> float:
     return 5.0
 
 
-def test_publish_answer_delta_then_done_emits_in_order(
+def test_publish_delivered_answer_then_done_emits_in_order(
     short_keepalive: float,
 ) -> None:
     """``answer_delta`` events must arrive in publish order, followed by
@@ -70,11 +75,15 @@ def test_publish_answer_delta_then_done_emits_in_order(
                 if request_id in broker._streams:  # type: ignore[attr-defined]
                     break
 
-        for delta in ("Hello", ", ", "world", "!"):
-            broker.publish_answer_chunk(request_id, delta)
-        # Empty deltas are dropped to avoid spamming the SSE stream.
-        broker.publish_answer_chunk(request_id, "")
-        broker.publish_answer_done(request_id, {"answer": "Hello, world!", "owner_name": "Twin"})
+        delivered = ChatDeliveryGate().deliver(
+            response=ChatResponse(
+                answer="Hello, world!",
+                owner_name="Twin",
+                used_model="test-model",
+            ),
+            original_question="Say hello",
+        )
+        broker.publish_answer_done(request_id, delivered)
         broker.publish_complete(request_id)
 
         events: list[dict] = [await first]
@@ -86,16 +95,38 @@ def test_publish_answer_delta_then_done_emits_in_order(
         return events
 
     events = asyncio.run(driver())
-    deltas = [e for e in events if e.get("type") == "answer_delta"]
     done = [e for e in events if e.get("type") == "answer_done"]
 
-    assert [e["text"] for e in deltas] == ["Hello", ", ", "world", "!"]
     assert len(done) == 1
-    assert done[0]["response"] == {"answer": "Hello, world!", "owner_name": "Twin"}
-    # answer_done arrives after the last answer_delta.
-    last_delta_index = max(i for i, e in enumerate(events) if e.get("type") == "answer_delta")
-    done_index = next(i for i, e in enumerate(events) if e.get("type") == "answer_done")
-    assert done_index > last_delta_index
+    assert done[0]["response"]["answer"] == "Hello, world!"
+    assert not any(e.get("type") == "answer_delta" for e in events)
+
+
+def test_broker_rejects_unvalidated_chat_response() -> None:
+    broker = api_module.WorkflowEventBroker()
+    response = ChatResponse(answer="raw", owner_name="Twin", used_model="test-model")
+
+    with pytest.raises(TypeError, match="DeliveredChatResponse"):
+        broker.publish_answer_done("req-unvalidated", response)  # type: ignore[arg-type]
+
+
+def test_public_chat_route_does_not_publish_unvalidated_answer_chunks() -> None:
+    source = inspect.getsource(api_module.chat)
+
+    assert "answer_chunk_callback = _untraced_answer_chunk_callback()" in source
+    assert "workflow_event_broker.publish_answer_chunk(request_id, delta)" not in source
+
+
+def test_untraced_chat_respects_non_streaming_setting(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", False)
+    assert api_module._untraced_answer_chunk_callback() is None
+
+    monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", True)
+    callback = api_module._untraced_answer_chunk_callback()
+    assert callback is not None
+    assert callback("ignored") is None
 
 
 def test_answer_done_complete_gate_defers_close_until_answer_done() -> None:

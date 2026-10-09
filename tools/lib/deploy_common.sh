@@ -43,6 +43,51 @@ raise SystemExit(0 if sys.version_info >= (major, minor) else 1)
 PY
 }
 
+project_optional_requirement() {
+    local repo_root="$1" python_bin="$2" extra_name="$3" package_prefix="$4"
+    "$python_bin" - "$repo_root/pyproject.toml" "$extra_name" "$package_prefix" <<'PY'
+import sys
+import tomllib
+
+project_path, extra_name, package_prefix = sys.argv[1:]
+with open(project_path, "rb") as handle:
+    extras = tomllib.load(handle)["project"]["optional-dependencies"]
+for requirement in extras[extra_name]:
+    if requirement.lower().startswith(package_prefix.lower()):
+        print(requirement)
+        break
+else:
+    raise SystemExit(
+        f"project extra {extra_name!r} does not declare {package_prefix!r}"
+    )
+PY
+}
+
+ensure_neuromem_collection_runtime() {
+    local repo_root="$1" python_bin="$2"
+    if "$python_bin" -c "from importlib.metadata import version; version('isage-neuromem'); from sage.neuromem import UnifiedCollection" 2>/dev/null; then
+        return 0
+    fi
+
+    local requirement=""
+    requirement=$(project_optional_requirement \
+        "$repo_root" "$python_bin" "neuromem" "isage-neuromem")
+    deploy_log "Installing lightweight NeuroMem collection runtime"
+    # The published package currently declares the optional SAGE service
+    # kernel as mandatory. Sage Mate uses only the collection API, and the
+    # service-kernel native wheel is not available on Ascend ARM64.
+    if "$python_bin" -m pip --version >/dev/null 2>&1; then
+        "$python_bin" -m pip install --quiet --no-deps "$requirement"
+    else
+        local uv_bin=""
+        uv_bin=$(resolve_uv_bin)
+        [[ -n "$uv_bin" ]] || deploy_fail \
+            "Neither pip nor uv is available to repair the NeuroMem runtime"
+        "$uv_bin" pip install --python "$python_bin" --no-deps "$requirement"
+    fi
+    "$python_bin" -c "from importlib.metadata import version; version('isage-neuromem'); from sage.neuromem import UnifiedCollection"
+}
+
 resolve_uv_bin() {
     local uv_bin=""
     uv_bin=$(command -v uv 2>/dev/null || true)

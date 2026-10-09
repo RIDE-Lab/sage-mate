@@ -1,6 +1,318 @@
 # Changelog
 
+## v4.6.35 - 2026-09-01
+
+- Kept the Sage companion roaming on the landing page while docking it outside
+  the desktop transcript column once a conversation begins; narrow screens now
+  remove the floating layer during a conversation and retain the sidebar entry.
+- Replaced opacity-only deep-thinking disabled styling with explicit semantic
+  surfaces, text, dashed borders, and focus-safe state treatment.
+- Moved context-compression loading, success, error, disabled, and focus states
+  onto the shared light/dark action and feedback token system.
+- Added Chromium regression coverage for desktop gutter docking, mobile long
+  answers, zero horizontal overflow, theme contrast, and companion access.
+
+## v4.6.34 - 2026-09-01
+
+- Refocused the public first screen around the academic-twin identity, a compact
+  welcome block, curated starter questions, and the composer instead of leaving
+  returning visitors in a large empty split layout.
+- Reworked onboarding into a centered, bounded guidance card that keeps the
+  composer available without competing with an empty chat column.
+- Unified onboarding and global ghost controls with the semantic day/night
+  surface, text, border, focus, and active states; the selected theme control now
+  remains clearly visible in midnight mode.
+- Added desktop and 390x844 visual regression coverage for the new hierarchy,
+  theme persistence, action-control contrast, and deep-thinking feedback states.
+
+## v4.6.33 - 2026-08-16
+
+- Removed vLLM API credentials from engine process arguments across both shared
+  dev-hub launch paths; authentication now uses vLLM's native environment contract.
+- Made the canonical deployment lock's help path non-mutating and rejected all
+  unsupported arguments before reading host configuration or touching systemd.
+- Normalized explicit checkpoint provenance from `config.json`, added bounded
+  engine-log rotation and per-run boundaries, and replaced stale model-specific
+  container/log identities with stable deployment-role names.
+- Graduated the shared Ascend `/etc/hccn.conf` mount fix and secret-safe dev-hub
+  launcher to their canonical `main` branches before updating parent pins.
+
+## v4.6.32 - 2026-08-15
+
+- Separated live serving availability from deployment-lock identity so an
+  unavailable inference endpoint is reported as a configured target rather
+  than falsely described as currently serving.
+- Aligned deterministic runtime answers, `used_model`, Support labels, health
+  metadata, and operational acceptance gates around the same availability
+  snapshot, including timeout and missing-runtime cases.
+
+## v4.6.31 - 2026-08-15
+
+- Added a trusted-main-only Ascend host regression workflow backed by a
+  workflow-restricted, one-job ephemeral runner instead of exposing the NPU
+  host to public pull-request code.
+- Added non-destructive ARM64/NPU, Docker device-binding, graph-mode, app
+  health, runner cleanup, and public-safe report gates plus an operator wrapper
+  that registers, dispatches, watches, and removes one runner automatically.
+
+## v4.6.30 - 2026-08-15
+
+- Fixed returning-visitor first paint so the welcome identity and three
+  suggested questions appear immediately instead of waiting behind remote
+  health, version, and session initialization.
+- Added desktop and 390x844 browser gates that deliberately hold the versions
+  endpoint and require the useful landing content to remain visible.
+
+## v4.6.29 - 2026-08-15
+
+- Unified public chat, Support, status, settings, account, onboarding, and
+  operational state colors behind one light/dark semantic token contract.
+- Split info/success/warning/error foreground, surface, and opaque border roles
+  so components cannot accidentally reuse a background token as text.
+- Added a browser release gate for computed alpha-composited contrast across
+  desktop and 390x844, plus checked-in visual baselines and CI diff artifacts.
+- Fixed previously untested low-contrast borders on recommendation chips and
+  settings cards, and added an explicit accessible name to account settings.
+
 ## Unreleased
+
+## v4.6.28 - 2026-08-15
+
+### Added
+
+- 新增与具体模型无关的 operational self-knowledge 部署门禁，从 `/health` 或独立 fixture 生成预期事实，并检查正文、`used_model`、Support、route、trace、阶段耗时与 contradiction score。
+- 门禁覆盖 24 个中英文、同义词、错别字、追问、误导前提和组件协作问题；同一评估器已覆盖 DeepSeek/Ascend、DeepSeek/GPU 与 GLM/Ascend fixture。
+- hosted/web 验收默认运行语义门禁并生成 `operational-self-knowledge/v1` JSON artifact，失败会阻止部署验收通过。
+
+### Fixed
+
+- 运行状态回答补充 SAGE、vLLM-HUST 与 Ascend 插件的职责边界，并展示 speculative decoding 的结构化未启用原因，不再只给出布尔状态。
+- 扩展模型错别字、误导性 CUDA/GPU 前提、协作关系及简短追问的通用意图识别；规则不绑定具体模型名或人物名。
+
+## v4.6.27 - 2026-08-15
+
+### Added
+
+- 成功通过健康、真实对话、NPU 挂载、图模式和导入来源门禁后，标准部署验证脚本会自动生成带哈希的 `vllm-hust.deployment-receipt/v1` 回执。
+- 知识维护报告和 `/health` 展示 active 回执版本、年龄与同步状态；运行状态问答可将最新回执作为独立 Support 证据引用。
+
+### Fixed
+
+- 部署事实按实时端点、未过期版本化回执、旧部署锁的顺序解析；新 active 回执会 supersede 旧版本，failed 和 stale 回执不会覆盖当前状态。
+- 回执同步现在验证严格 schema、内容哈希、来源 URI 和公开字段白名单；密钥、私网地址、本机路径、镜像及容器导入路径不会进入公开状态或引用材料，拒收原因可审计且不会重复刷写。
+
+## v4.6.26 - 2026-08-15
+
+### Fixed
+
+- 系统状态页的标题、分区、指标标签/数值、长模型与镜像名称统一使用日/夜主题语义 token，修复深色背景上的黑字回归。
+- 系统状态卡片和页脚运行指标使用可辨识的不透明边界与前景色；窄屏改为单列并允许长值安全换行，不再产生横向溢出。
+- 状态页为 loading、ready、error 提供明确状态，并为完整模型、NPU 与镜像字符串补充可悬停查看的 `title`。
+
+## v4.6.25 - 2026-08-15
+
+### Added
+
+- 增加单一、结构化且可脱敏的运行时身份提供器，实时展示 served model、checkpoint 架构、vLLM-HUST/Ascend 插件版本、NPU 型号与数量、并行、量化、图模式及 speculative 状态。
+- 中英文运行状态问答会附带带采集时间和来源的 Support 证据，并与 `/health`、实际 `used_model` 共享同一事实源。
+
+### Fixed
+
+- 运行环境问答不再依赖模型参数中的过期自我认知，也不会在状态不可用时猜测 CUDA、GPU 或其他后端；实时探测失败时按部署回执降级，否则明确显示未知。
+- 将运行时问答与一般模型选择、部署建议分流，避免用模型名或人物名硬编码身份规则。
+
+## v4.6.24 - 2026-08-15
+
+### Changed
+
+- 同步已合并的 vLLM-HUST TP8 图尺寸 LCM 对齐修复和 dev-hub 运行时来源校验；部署继续保持 graph mode，禁止 `enforce-eager` 回退。
+- DSpark speculative 与 KV cache 连续内存预算仍作为独立研究问题跟踪；在 proposer 和分配策略通过验证前不会被发布配置错误启用。
+
+### Fixed
+
+- 运行时来源验收同时支持固定源码目录与精确 wheel 合约，并核对模块文件确由声明的 distribution/version 所有，不再误拒绝正确安装的原生 Ascend wheel。
+- 版本更新日志补齐 v4.6.23 与 v4.6.24 的公开展示记录，并区分“能力识别”“已启用”和“研究中”三种状态。
+
+## v4.6.23 - 2026-08-15
+
+### Changed
+
+- 将固定的 vLLM-HUST core 更新到可从远端 main 复现的提交，并纳入 checkpoint-aware speculative capability 合约。
+- DeepSeek-V4 DSpark 检查点现在会与 legacy MTP 明确区分；能力状态可由配置、启动日志、`/v1/models` 与运行指标统一读取。
+
+### Added
+
+- speculative decoding 指标补充 drafted/accepted/rejected token、接受率、proposer/verification 延迟与每次 target forward 的实际提交 token 数。
+
+## v4.6.22 - 2026-08-15
+
+### Fixed
+
+- 将运行时实际必需的 SAGE 与 SageANNS 纳入基础依赖，普通 `uv sync` 不再移除 ANNS 插件后留下依赖机器状态才能通过的伪完整环境。
+- NeuroMem collection 运行时会依据项目声明自动补齐，并隔离其当前仅 x86_64 可用的可选 SAGE Kernel 服务依赖，使 Ascend ARM64 与普通开发机使用同一安装入口。
+- 应用启动会依据仓库依赖契约自动修复基础 SAGE/NeuroMem 栈和按需 SageVDB 栈，不再在脚本中重复硬编码包版本。
+- 显式选择 SageANNS 对话索引但插件缺失时，稳定返回可操作的缺失依赖错误，而不是被 NeuroMem 注册表差异覆盖成“未知索引”。
+
+## v4.6.21 - 2026-08-15
+
+### Fixed
+
+- 客户端断开或请求预算耗尽时，除取消 asyncio 外壳外，还会通过 request-id 注册表、浏览器 workflow SSE、OpenAI 代理和请求独占 socket 逐层传播取消，避免旧模型请求继续后台运行、阻塞重启或占用队列。
+- 发送按钮在处理中变为可点击的停止控件；点击停止和页面离开会显式通知后端，不再受空输入框 `required` 校验阻挡。
+- 聊天请求账本增加模型调用/重试、TTFT、模型总耗时、缓存命中与未归因耗时，便于定位端到端尾延迟。
+- 伙伴装扮面板的响应式高度现在包含内边距与边框，避免 393px 窄屏下切换标签后越出视口。
+
+### Added
+
+- 新增可配置、无机器硬编码的 HTTP/2 线上延迟验收工具，覆盖三类 10 次 warm workload、引用覆盖、时间归因和混合负载 admission。
+
+## v4.6.20 - 2026-08-15
+
+### Changed
+
+- 将聊天超时改为从请求入口开始计算的统一总预算，覆盖解析、fast path、排队、SAGE 工作流与模型重试。
+- 为模型同步/流式请求和退避重试传播绝对 deadline，预算耗尽后不再启动无效的后台重试。
+- 在聊天响应中加入可核对的请求 trace ID、总耗时、剩余预算、API 阶段耗时与工作流 trace 汇总。
+
+## v4.6.19 - 2026-08-13
+
+### Fixed
+
+- 对“研究项目第一周如何规划”这类有界问题走本地结构化快路径，避免模型重复/串题并将响应压到秒级。
+
+## v4.6.18 - 2026-08-13
+
+### Fixed
+
+- 将非深度交互回答预算进一步收紧到 192 token；超长内容不再触发额外续写，优先保证可用响应时间。
+
+## v4.6.17 - 2026-08-13
+
+### Fixed
+
+- 将非深度交互回答预算从 1024 收紧到 256 token，避免低吞吐 NPU 上普通问题生成几十秒；深度思考仍使用独立预算。
+
+## v4.6.16 - 2026-08-13
+
+### Fixed
+
+- 允许浏览器生成的访客会话安全触发上下文压缩，避免未登录用户误收到 401。
+- 默认使用有界的确定性会话摘要，避免压缩额外占用 NPU 请求槽。
+- 将非深度模式的模型修复重试限制为单次，避免异常回答触发 60–80 秒的重复生成。
+
+## v4.6.15 - 2026-08-13
+
+### Fixed
+
+- Replaced translucent composer action borders with opaque contrast-safe tokens for reliable 3:1+ boundaries in both themes.
+
+## v4.6.14 - 2026-08-13
+
+### Fixed
+
+- Made disabled/unsupported composer actions opaque, contrast-safe, and explicitly marked; no longer rely on opacity to communicate unavailable input.
+- Kept Token expanded state at normal scale; only the instantaneous press uses scale feedback.
+
+## v4.6.13 - 2026-08-13
+
+### Fixed
+
+- Unified composer send, microphone, dice, token, workflow, and upload controls under readable theme-aware action tokens.
+- Added explicit hover, focus, active, selected, and disabled affordances without relying on low opacity alone.
+
+## v4.6.12 - 2026-08-12
+
+### Fixed
+
+- Kept the wandering mobile companion in the open greeting area on the empty landing screen.
+
+## v4.6.11 - 2026-08-12
+
+### Fixed
+
+- Corrected mobile companion coordinates when the chat shell establishes a fixed-position containing block.
+
+## v4.6.10 - 2026-08-12
+
+### Fixed
+
+- Darkened the cyan gradient stops used behind deep-thinking labels so every stop keeps white text at least 4.5:1 contrast.
+
+## v4.6.9 - 2026-08-12
+
+### Fixed
+
+- Re-clamped the mobile companion after composer reflow so it cannot cover the input or recommendation chips.
+
+## v4.6.8 - 2026-08-12
+
+### Fixed
+
+- Kept the selected theme button at its resting scale and moved it to the right edge on narrow screens.
+
+## v4.6.7 - 2026-08-12
+
+### Added
+
+- Added an explicit sun/moon theme switch with semantic midnight-glass and cool light palettes.
+- Persisted the visitor's theme choice while respecting system preference until explicitly changed.
+- Added light-theme contrast coverage for the composer, Support evidence, status states, and narrow screens.
+
+## v4.6.6 - 2026-08-12
+
+### Changed
+
+- Consolidated composer mode controls into one accessible state system with readable deep-thinking and web-search checked, processing, focus, hover, and disabled states.
+- Introduced a midnight glass design token system with deep navy surfaces, indigo/electric-cyan accents, and semantic success/warning/error foreground and surface tokens.
+- Restyled Support evidence cards, status badges, workflow states, and composer placeholder text for dark-surface contrast.
+
+## v4.6.5 - 2026-08-12
+
+### Changed
+
+- Redesigned deep-thinking progress as a full-width Codex-style reasoning state with persistent selected-mode visibility, progress rail, and completion summary.
+
+## v4.6.4 - 2026-08-12
+
+### Fixed
+
+- Shortcut responses now expose context reuse, local retrieval, workflow trace, memory write-back, and model context capacity instead of rendering all context fields as zero.
+- The token/context badge now remains visible for model-bypass responses and clearly reports zero generated tokens rather than hiding the metadata.
+
+## v4.6.3 - 2026-08-12
+
+### Fixed
+
+- Migrated application and vLLM proxy startup/shutdown to FastAPI lifespan handlers.
+- Synchronized the machine-local application model label with the served DeepSeek backend to remove misleading startup fallback warnings.
+
+## v4.6.2 - 2026-08-12
+
+### Changed
+
+- Fast-path answers now persist conversation exchanges before returning, so short follow-ups retain their subject.
+- Resolved contextual follow-ups can use the local evidence lane and return grounded answers without an unnecessary model round-trip.
+- Answer delivery validation now tolerates URLs and technical English terms inside substantive Chinese answers.
+
+### Fixed
+
+- Fixed follow-up requests losing context or timing out after a fast first answer.
+- Fixed Chinese web-search answers being rejected as language mismatches and surfacing as HTTP 500.
+
+## v4.6.1 - 2026-08-10
+
+### Changed
+
+- Sage Mate now runs the DeepSeek backend on NPU 4–7 with a portable deployment lock and runtime verification path.
+- Research/course factual answers use SAGE evidence first and expose an explicit basis instead of silently presenting unsupported text.
+- The lucky-question dice now combines multiple templates and rotates recent topic, analysis lens, outcome, and wording dimensions.
+
+### Fixed
+
+- Bounded interactive chat admission and retry behavior under NPU contention to avoid avoidable 504 responses.
+- Added deterministic policy boundaries for prompt/credential disclosure and explicit unknown answers when evidence is insufficient.
+- Added a fast path for baseline/fair-comparison/ablation research-direction questions, reducing them from model-timeout latency to a short structured response.
+- Corrected the personal homepage link to `https://me.sage.org.ai/` and synchronized the displayed runtime model name with the served `/v1/models` backend.
 
 ## v4.5.0 - 2026-07-10
 

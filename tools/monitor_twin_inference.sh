@@ -19,6 +19,9 @@ load_dotenv() {
 
 load_dotenv
 
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation monitor
+
 runtime_root="${DIGITAL_TWIN_RUNTIME_DIR:-$repo_root/../sage-mate-runtime-private}"
 mkdir -p "$runtime_root/logs" "$runtime_root/data/alerts"
 log_file="$runtime_root/logs/twin_inference_monitor.log"

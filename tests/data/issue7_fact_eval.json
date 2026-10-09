@@ -1,0 +1,53 @@
+[
+  {
+    "id": "research-current-focus",
+    "profile": "general_visitor",
+    "question": "张老师目前主要研究哪些方向？",
+    "domain": "research",
+    "must_have": ["大模型推理", "状态管理"],
+    "must_not_have": ["内存数据库算法", "Assistant:"]
+  },
+  {
+    "id": "research-lab-overview",
+    "profile": "general_visitor",
+    "question": "课题组研究主线是什么？",
+    "domain": "research",
+    "must_have": ["共享状态", "推理"],
+    "must_not_have": ["Assistant:"]
+  },
+  {
+    "id": "course-overview",
+    "profile": "student",
+    "course_context": "大模型推理基础设施课程",
+    "question": "大模型推理基础设施课程主要学习什么？",
+    "domain": "teaching",
+    "must_have": ["课程资料", "推理"],
+    "must_not_have": ["反向传播", "Assistant:"]
+  },
+  {
+    "id": "course-prefill-decode",
+    "profile": "student",
+    "course_context": "大模型推理基础设施课程",
+    "question": "这门课会讲 Prefill 和 Decode 吗？",
+    "domain": "teaching",
+    "must_have": ["课程"],
+    "must_not_have": ["Assistant:"]
+  },
+  {
+    "id": "joining-preparation",
+    "profile": "general_visitor",
+    "question": "加入课题组前需要准备什么？",
+    "domain": "advising",
+    "must_have": ["简历"],
+    "must_not_have": ["保证录取", "Assistant:"]
+  },
+  {
+    "id": "unknown-course-detail",
+    "profile": "student",
+    "course_context": "未收录课程",
+    "question": "这门课的实验分组规则是什么？",
+    "domain": "teaching",
+    "must_have": ["资料不足"],
+    "must_not_have": ["每周", "Assistant:"]
+  }
+]

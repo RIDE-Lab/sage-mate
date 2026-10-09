@@ -418,8 +418,14 @@ def test_non_admin_chat_cannot_inject_knowledge_even_if_intent_says_so(
 def test_chat_accepts_multipart_uploads(monkeypatch) -> None:
     captured = {}
 
-    async def fake_answer(request, admin_session_token=None, trace_callback=None):
+    async def fake_answer(
+        request,
+        admin_session_token=None,
+        trace_callback=None,
+        answer_chunk_callback=None,
+    ):
         captured["request"] = request
+        captured["answer_chunk_callback"] = answer_chunk_callback
         return ChatResponse(
             answer="已读取附件。",
             owner_name="张书豪",
@@ -454,6 +460,7 @@ def test_chat_accepts_multipart_uploads(monkeypatch) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["answer"] == "已读取附件。"
+    assert captured["answer_chunk_callback"] is None
     request = captured["request"]
     assert request.question == "请结合我上传的草稿给我提建议。"
     assert len(request.attachments) == 1
@@ -465,8 +472,14 @@ def test_chat_uses_authenticated_visitor_profile_over_client_payload(monkeypatch
     captured = {}
     email = f"lab-user-{uuid4().hex}@example.com"
 
-    async def fake_answer(request, admin_session_token=None, trace_callback=None):
+    async def fake_answer(
+        request,
+        admin_session_token=None,
+        trace_callback=None,
+        answer_chunk_callback=None,
+    ):
         captured["request"] = request
+        captured["answer_chunk_callback"] = answer_chunk_callback
         return ChatResponse(
             answer="ok",
             owner_name="张书豪",
@@ -503,6 +516,42 @@ def test_chat_uses_authenticated_visitor_profile_over_client_payload(monkeypatch
 
     assert response.status_code == 200
     assert captured["request"].visitor_profile == "lab_member"
+    assert captured["answer_chunk_callback"] is None
+
+
+def test_chat_downgrades_unauthenticated_lab_member_claim(monkeypatch) -> None:
+    captured = {}
+
+    async def fake_answer(
+        request,
+        admin_session_token=None,
+        trace_callback=None,
+        answer_chunk_callback=None,
+    ):
+        captured["request"] = request
+        return ChatResponse(
+            answer="ok",
+            owner_name="张书豪",
+            used_model="mock-model",
+            conversation_id=request.conversation_id,
+        )
+
+    monkeypatch.setattr(service, "answer", fake_answer)
+    client.cookies.clear()
+
+    response = client.post(
+        "/chat",
+        json={
+            "student_name": "Anonymous",
+            "visitor_profile": "lab_member",
+            "answer_max_tokens": 1024,
+            "question": "请查询组内制度。",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["request"].visitor_profile == "general_visitor"
+    assert captured["request"].answer_max_tokens is None
 
 
 def test_chat_rejects_unsupported_upload_type() -> None:

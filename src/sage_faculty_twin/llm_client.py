@@ -6,9 +6,12 @@ import hashlib
 import json
 import logging
 import re
+import socket
 import threading
 import time
 from collections import OrderedDict, deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from time import perf_counter
 from typing import Any, Callable, Literal
 from urllib.parse import urlsplit, urlunsplit
@@ -25,15 +28,31 @@ bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 from sage.serving.integrations import policy as serving_policy
 
 from .config import AppSettings
+from .thinking_policy import ThinkingCapability, VisibleAnswerFilter, capability_from_tokenization, configured_capability
+from .interaction_policy import (
+    asks_for_booking_information,
+    requires_faculty_review,
+    requires_human_handoff,
+)
 from .models import InteractionIntent
 from .trace_context import emit_trace_event
+from .request_context import (
+    bounded_request_timeout,
+    RequestCancelledError,
+    raise_if_request_cancelled,
+    register_request_cancel_callback,
+    request_has_cancellation_controller,
+    request_remaining_seconds,
+    request_runtime_diagnostics,
+    request_was_cancelled,
+)
 from .workflow_context import WorkflowRequestContext
 from .workflow_planner import PlanSpec, ShadowPlanCandidate
 from .workflow_steps import get_default_step_registry
 
 _DEFAULT_RETRIEVAL_SCOPES: dict[str, list[str]] = {
     "general": [],
-    "research": ["publications", "profile"],
+    "research": ["publications", "profile", "research_methodology"],
     "teaching": ["courseware"],
     "advising": ["preparation", "meeting_policy", "profile"],
     "booking": ["meeting_policy"],
@@ -154,6 +173,10 @@ class StreamingServerError(RuntimeError):
         self.status_code = status_code
 
 
+class IncompleteCompletionError(RuntimeError):
+    """A token-limited generation is not a completed/cacheable answer."""
+
+
 class EmptyStreamingResponseError(RuntimeError):
     """Raised when an SSE chat response completes without answer content."""
 
@@ -174,17 +197,11 @@ class _InteractionIntentPayload(BaseModel):
 
 
 class VllmChatClient:
+    supports_fast_intent_bypass = True
+
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
-        self._client = httpx.Client(
-            base_url=self._settings.llm_base_url,
-            headers={
-                "Authorization": f"Bearer {self._settings.api_key}",
-                "Content-Type": "application/json",
-            },
-            timeout=float(self._settings.llm_timeout_seconds),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
+        self._client = self._build_completion_client()
         # Intent classification client: use a smaller/faster model when configured.
         intent_base_url = self._settings.intent_llm_base_url or self._settings.llm_base_url
         self._intent_client = httpx.Client(
@@ -196,14 +213,28 @@ class VllmChatClient:
             timeout=30.0,
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
+
         # Auto-detect model name from the connected LLM if not explicitly configured.
         self.model_name: str = self._settings.model_name
         if not self.model_name:
             self.model_name = self._detect_model_name()
         else:
-            # Even with a configured name, try to discover max context length.
-            self._probe_model_max_len()
+            # The served model is runtime state, not a portable application
+            # constant.  A machine-local model preference can become stale
+            # after the deployment lock resolves a different compatible
+            # backend, so reconcile it with /models before sending requests.
+            detected_model = self._detect_model_name()
+            if detected_model and detected_model != self.model_name:
+                logger.warning(
+                    "Configured model %s is not served; using runtime model %s",
+                    self.model_name,
+                    detected_model,
+                )
+                self.model_name = detected_model
         self._intent_model_name = self._settings.intent_model_name or self.model_name
+        self._runtime_model_refresh_at = 0.0
+        self._thinking_capability_model = ""
+        self._refresh_thinking_capability()
         self._cache_lock = threading.Lock()
         self._response_cache: OrderedDict[str, tuple[float, str, str]] = OrderedDict()
         self._metrics_lock = threading.Lock()
@@ -218,10 +249,7 @@ class VllmChatClient:
         self._last_success_at: float | None = None
         self._last_error_at: float | None = None
         self._last_error_message: str | None = None
-        # Auto-detected: set to False when the connected vllm instance does
-        # not support --reasoning-config. Start conservatively for non-reasoning
-        # model families so the first hosted/web deep request does not discover
-        # support by failing in production.
+        # Optional server extension, separate from native model reasoning.
         self._supports_thinking_budget = self._model_supports_thinking_budget()
         self._recent_success_timestamps: deque[float] = deque()
         self._recent_completion_token_samples: deque[tuple[float, int]] = deque()
@@ -254,10 +282,77 @@ class VllmChatClient:
         self._session_kv_anchors: dict[str, dict[str, Any]] = {}
         self._last_vllm_start_time_s: float = 0.0
 
-    def _detect_model_name(self) -> str:
+    def _build_completion_client(self) -> httpx.Client:
+        return httpx.Client(
+            base_url=self._settings.llm_base_url,
+            headers={
+                "Authorization": f"Bearer {self._settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(self._settings.llm_timeout_seconds),
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+
+    @staticmethod
+    def _interrupt_completion_client(client: httpx.Client) -> None:
+        """Abort an active sync HTTP exchange, including pre-header reads.
+
+        ``httpx.Client.close()`` does not interrupt a synchronous request that
+        is blocked waiting for response headers.  httpx/httpcore expose no
+        public synchronous cancellation hook, so first shut down any active
+        request-owned sockets and then close the client.  Attribute access is
+        deliberately guarded so an httpcore layout change degrades to normal
+        close semantics instead of breaking requests.
+        """
+
+        try:
+            transport = getattr(client, "_transport", None)
+            pool = getattr(transport, "_pool", None)
+            connections = tuple(getattr(pool, "connections", ()) or ())
+            for connection in connections:
+                protocol = getattr(connection, "_connection", None)
+                stream = getattr(protocol, "_network_stream", None)
+                sock = getattr(stream, "_sock", None)
+                if sock is None:
+                    continue
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                try:
+                    sock.close()
+                except OSError:
+                    pass
+        finally:
+            client.close()
+
+    @contextmanager
+    def _request_completion_client(self) -> Iterator[httpx.Client]:
+        """Yield an interruptible, request-owned model connection when scoped."""
+
+        if not request_has_cancellation_controller():
+            yield self._client
+            return
+        client = self._build_completion_client()
+        unregister = register_request_cancel_callback(
+            lambda: self._interrupt_completion_client(client)
+        )
+        try:
+            raise_if_request_cancelled()
+            yield client
+        finally:
+            unregister()
+            client.close()
+
+    @property
+    def supports_native_tool_calling(self) -> bool:
+        """Whether tool schemas may be sent directly to the upstream server."""
+        return self._settings.llm_tool_calling_mode == "native"
+
+    def _detect_model_name(self, *, timeout_seconds: float = 10.0) -> str:
         """Query the connected LLM's /models endpoint to discover the served model name."""
         try:
-            response = self._client.get("/models", timeout=10.0)
+            response = self._client.get("/models", timeout=timeout_seconds)
             response.raise_for_status()
             data = response.json()
             models = data.get("data", [])
@@ -274,6 +369,94 @@ class VllmChatClient:
             logger.warning("Failed to auto-detect model name from %s: %s",
                            self._settings.llm_base_url, exc)
         return ""
+
+    def _refresh_thinking_capability(self) -> None:
+        # Initialization / model changes only: no per-question template parsing
+        # or capability-generation request on the NPU.
+        if (getattr(self, "_thinking_capability_model", None) == self.model_name
+                and hasattr(self, "_thinking_capability")):
+            return
+        capability = configured_capability(self._settings.llm_thinking_mode)
+        if capability.supported is None:
+            try:
+                url = self._settings.llm_tokenize_url or self._settings.llm_base_url.removesuffix("/v1").rstrip("/") + "/tokenize"
+                rendered = []
+                for enabled in (False, True):
+                    response = self._client.post(url, timeout=2.0, json={
+                        "model": self.model_name,
+                        "messages": [{"role": "user", "content": "Hello"}],
+                        "add_generation_prompt": True,
+                        "return_token_strs": True,
+                        "chat_template_kwargs": {"enable_thinking": enabled},
+                    })
+                    response.raise_for_status()
+                    rendered.append(response.json())
+                capability = capability_from_tokenization(*rendered)
+            except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+                capability = ThinkingCapability(None, "tokenizer_probe_unavailable")
+        self._thinking_capability = capability
+        self._thinking_capability_model = self.model_name
+
+    @property
+    def supports_native_thinking(self) -> bool:
+        self._refresh_thinking_capability()
+        if self._thinking_capability.supported is None:
+            raise RuntimeError(
+                "Native thinking capability is unknown; configure a trusted tokenizer endpoint "
+                "or declare the verified DIGITAL_TWIN_LLM_THINKING_MODE."
+            )
+        return self._thinking_capability.supported
+
+    def probe_runtime_model_name(self) -> str:
+        """Probe the serving endpoint without falling back to configured memory."""
+        detected = self._detect_model_name(timeout_seconds=2.0)
+        if detected:
+            self.model_name = detected
+            self._intent_model_name = self._settings.intent_model_name or detected
+        return detected
+
+    def probe_runtime_model_metadata(self) -> dict[str, Any]:
+        """Return the live public model card needed by runtime identity."""
+        try:
+            response = self._client.get("/models", timeout=2.0)
+            response.raise_for_status()
+            models = response.json().get("data", [])
+            if not models or not isinstance(models[0], dict):
+                return {}
+            record = models[0]
+            model_name = str(record.get("id") or "").strip()
+            if model_name:
+                self.model_name = model_name
+                self._intent_model_name = self._settings.intent_model_name or model_name
+            capability = record.get("speculative_capability")
+            return {
+                "id": model_name,
+                "speculative_capability": capability if isinstance(capability, dict) else {},
+            }
+        except Exception as exc:
+            logger.warning(
+                "Failed to probe runtime model metadata from %s: %s",
+                self._settings.llm_base_url,
+                exc,
+            )
+            return {}
+
+    def refresh_runtime_model_name(self) -> str:
+        """Refresh the displayed model from the serving endpoint.
+
+        The engine can be restarted or swapped independently of the app
+        process, so the configured preference is not authoritative for health
+        and status views.
+        """
+        now = time.monotonic()
+        if now - self._runtime_model_refresh_at < 15.0:
+            return self.model_name
+        self._runtime_model_refresh_at = now
+        detected = self._detect_model_name()
+        if detected:
+            self.model_name = detected
+            self._intent_model_name = self._settings.intent_model_name or detected
+        return self.model_name
 
     def _probe_model_max_len(self) -> None:
         """Query /models to discover max_model_len when model name is pre-configured."""
@@ -373,8 +556,9 @@ class VllmChatClient:
         self,
         client: Any,
         payload: dict[str, Any],
+        **kwargs: Any,
     ) -> Any:
-        return client.post(self._completion_path(), json=self._wire_payload(payload))
+        return client.post(self._completion_path(), json=self._wire_payload(payload), **kwargs)
 
     @staticmethod
     def _response_text(data: dict[str, Any]) -> str:
@@ -383,7 +567,6 @@ class VllmChatClient:
             message = choices[0].get("message") or {}
             return str(
                 message.get("content")
-                or message.get("reasoning_content")
                 or choices[0].get("text")
                 or ""
             )
@@ -829,6 +1012,7 @@ class VllmChatClient:
                 max_latency_ms = avg_latency_ms
 
             return {
+                "model_name": getattr(self, "model_name", ""),
                 "llm_status": last_status,
                 "llm_request_count": str(eff_request_count),
                 "llm_success_count": str(eff_success_count),
@@ -875,8 +1059,8 @@ class VllmChatClient:
             'Allowed action values: "answer", "book_meeting", "ask_followup", "review_queue", "human_handoff". '
             'Allowed domain values: "general", "research", "teaching", "advising", "booking". '
             'Allowed decision_mode values: "direct_answer", "advise_only", "review_queue", "human_handoff". '
-            'Allowed retrieval scopes: "publications", "profile", "courseware", "preparation", "meeting_policy". '
-            'Allowed exclude scopes: "publications", "profile", "courseware", "preparation", "meeting_policy". '
+            'Allowed retrieval scopes: "publications", "profile", "research_methodology", "courseware", "preparation", "meeting_policy". '
+            'Allowed exclude scopes: "publications", "profile", "research_methodology", "courseware", "preparation", "meeting_policy". '
             "DEFAULT BEHAVIOR: choose action=answer. The downstream pipeline retrieves the owner's papers, course slides and biography and grounds the answer; you do NOT need to ask the student for more info before classifying. "
             "Use ask_followup ONLY as a last resort and ONLY when ALL of the following are true: "
             "(a) the question contains no concrete academic anchor (no paper title, system name, course term, KV/TTFT/batching/scheduling/inference keyword, no '论文/文献/汇报/写作/研究方向/招生/课题'), "
@@ -1106,7 +1290,11 @@ class VllmChatClient:
         started_at = perf_counter()
         emit_trace_event("model_request", {"mode": "intent", "payload": payload})
         self._record_request_start()
+        diagnostics = request_runtime_diagnostics()
         try:
+            raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
             response = self._post_completion(self._intent_client, payload)
             response.raise_for_status()
             data = response.json()
@@ -1115,7 +1303,24 @@ class VllmChatClient:
             if not content:
                 raise RuntimeError("Intent model returned empty content")
             elapsed_ms = (perf_counter() - started_at) * 1000.0
-            self._record_request_success(latency_ms=elapsed_ms)
+            usage = data.get("usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or 0)
+            if diagnostics is not None:
+                diagnostics.record_llm_ttft(elapsed_ms)
+                diagnostics.record_llm_complete(elapsed_ms)
+                diagnostics.record_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
+            self._record_request_success(
+                latency_ms=elapsed_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             return str(content)
         except Exception as exc:
             emit_trace_event(
@@ -1173,12 +1378,20 @@ class VllmChatClient:
         }
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
-        if not enable_thinking:
-            payload["chat_template_kwargs"] = {"enable_thinking": False}
-            # Without thinking, we don't need as many tokens
-            if max_tokens is not None and max_tokens > 2048:
-                max_tokens = 2048
-        else:
+        # True must also be explicit: the server may default to non-thinking.
+        payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        if enable_thinking:
+            payload["chat_template_kwargs"]["reasoning_effort"] = self._settings.llm_reasoning_effort
+            # Answer anti-repetition penalties also affect private reasoning;
+            # applying them there can corrupt the model's analytical output.
+            payload.update(frequency_penalty=0.0, presence_penalty=0.0, repetition_penalty=1.0)
+            for key, value in {
+                "temperature": self._settings.llm_thinking_temperature,
+                "top_p": self._settings.llm_thinking_top_p,
+                "top_k": self._settings.llm_thinking_top_k,
+            }.items():
+                if value is not None:
+                    payload[key] = value
             # B2: Cap thinking tokens to reduce wasted CoT generation.
             # Uses vllm-hust's thinking_token_budget parameter.
             # Only send when the server supports --reasoning-config.
@@ -1287,10 +1500,7 @@ class VllmChatClient:
         return local_base and model_name.startswith("mlx-community/")
 
     def _model_supports_thinking_budget(self) -> bool:
-        if self._is_local_mlx_model():
-            return False
-        model_name = (self._settings.model_name or self.model_name or "").strip().lower()
-        return "qwen3" in model_name
+        return self._settings.llm_thinking_budget_supported
 
     def _is_thinking_budget_unsupported(self, exc: httpx.HTTPStatusError) -> bool:
         """Return True when the 400 error indicates the vllm instance
@@ -1330,6 +1540,9 @@ class VllmChatClient:
         cache_key = self._cache_key(cache_payload, namespace=payload.get("_cache_ns"))
         semantic_key = self._semantic_cache_key(cache_payload, namespace=payload.get("_cache_ns"))
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
+        diagnostics = request_runtime_diagnostics()
+        if diagnostics is not None:
+            diagnostics.record_cache_lookup(hit=cached is not None)
         if cached is not None:
             emit_trace_event(
                 "model_cache_hit",
@@ -1360,13 +1573,22 @@ class VllmChatClient:
         for attempt in range(max_retries + 1):
             collected: list[str] = []
             raw_chunks: list[dict[str, Any]] = []
+            visible_filter = VisibleAnswerFilter()
+            finish_reason = ""
+            first_token_recorded = False
             try:
-                wire_payload = self._wire_payload(payload)
-                with self._client.stream(
-                    "POST", self._completion_path(), json=wire_payload
+                raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+                if diagnostics is not None:
+                    diagnostics.record_llm_call()
+                with self._request_completion_client() as request_client, request_client.stream(
+                    "POST",
+                    self._completion_path(),
+                    json=self._wire_payload(payload),
+                    **self._request_timeout_kwargs(),
                 ) as response:
                     response.raise_for_status()
                     for raw_line in response.iter_lines():
+                        raise_if_request_cancelled()
                         if not raw_line:
                             continue
                         line = (
@@ -1425,26 +1647,39 @@ class VllmChatClient:
                         else:
                             choices = chunk.get("choices") or []
                             delta_content = None
+                            if chunk.get("type") in {"response.completed", "response.incomplete"}:
+                                finish_reason = self._response_finish_reason(
+                                    chunk.get("response") or chunk
+                                ) or finish_reason
                         if not choices:
                             if not delta_content:
                                 continue
                         else:
+                            finish_reason = choices[0].get("finish_reason") or finish_reason
                             delta = choices[0].get("delta") or {}
                             message = choices[0].get("message") or {}
                             delta_content = (
                                 delta.get("content")
-                                or delta.get("reasoning_content")
                                 or message.get("content")
                             )
                         if not delta_content:
                             continue
-                        text = str(delta_content)
+                        text = visible_filter.feed(str(delta_content))
+                        if not text:
+                            continue
                         collected.append(text)
+                        if diagnostics is not None and not first_token_recorded:
+                            diagnostics.record_llm_ttft(
+                                (perf_counter() - started_at) * 1000.0
+                            )
+                            first_token_recorded = True
                         try:
                             token_callback(text)
                         except Exception:  # pragma: no cover - defensive
                             pass
-                answer = "".join(collected)
+                answer = "".join(collected) + visible_filter.finish()
+                if finish_reason == "length":
+                    raise IncompleteCompletionError("streaming answer reached token limit")
                 if not answer:
                     raise EmptyStreamingResponseError(
                         "vllm-hust returned an empty streaming chat message"
@@ -1454,8 +1689,15 @@ class VllmChatClient:
                 if attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
+                if diagnostics is not None:
+                    diagnostics.record_llm_retry()
                 self._sleep_before_retry(attempt + 1)
             except EmptyStreamingResponseError:
+                raise
+            except (httpx.ReadError, httpx.WriteError) as exc:
+                if request_was_cancelled():
+                    raise RequestCancelledError("model request interrupted after cancellation") from exc
+                self._record_request_error(exc)
                 raise
             except Exception as exc:
                 emit_trace_event(
@@ -1484,6 +1726,13 @@ class VllmChatClient:
                 "latency_ms": elapsed_ms,
             },
         )
+        if diagnostics is not None:
+            diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1537,6 +1786,9 @@ class VllmChatClient:
         cache_key = self._cache_key(payload, namespace=cache_ns)
         semantic_key = self._semantic_cache_key(payload, namespace=cache_ns)
         cached, hit_type = self._get_cached_response(cache_key, semantic_key)
+        diagnostics = request_runtime_diagnostics()
+        if diagnostics is not None:
+            diagnostics.record_cache_lookup(hit=cached is not None)
         if cached is not None:
             emit_trace_event(
                 "model_cache_hit",
@@ -1559,7 +1811,15 @@ class VllmChatClient:
         total_tokens = 0
         for attempt in range(max_retries + 1):
             try:
-                response = self._post_completion(self._client, payload)
+                raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+                if diagnostics is not None:
+                    diagnostics.record_llm_call()
+                with self._request_completion_client() as request_client:
+                    response = self._post_completion(
+                        request_client,
+                        payload,
+                        **self._request_timeout_kwargs(),
+                    )
                 response.raise_for_status()
 
                 data = response.json()
@@ -1570,17 +1830,29 @@ class VllmChatClient:
                 prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
                 content = self._response_text(data)
                 if not content:
-                    raise RuntimeError("vllm-hust returned an empty model response")
-                answer = str(content)
+                    raise RuntimeError("vllm-hust returned an empty chat message")
+                visible_filter = VisibleAnswerFilter()
+                answer = visible_filter.feed(str(content)) + visible_filter.finish()
+                if not answer.strip():
+                    raise RuntimeError("vllm-hust returned an empty chat message")
                 finish_reason = self._response_finish_reason(data)
                 if finish_reason == "length" and continue_on_length:
                     answer = self._continue_truncated_answer(payload, answer)
+                elif finish_reason == "length":
+                    raise IncompleteCompletionError("answer reached token limit")
                 break
             except httpx.TimeoutException as exc:
                 if attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
+                if diagnostics is not None:
+                    diagnostics.record_llm_retry()
                 self._sleep_before_retry(attempt + 1)
+            except (httpx.ReadError, httpx.WriteError) as exc:
+                if request_was_cancelled():
+                    raise RequestCancelledError("model request interrupted after cancellation") from exc
+                self._record_request_error(exc)
+                raise
             except Exception as exc:
                 emit_trace_event(
                     "model_error",
@@ -1594,6 +1866,14 @@ class VllmChatClient:
                 self._record_request_error(exc)
                 raise
         elapsed_ms = (perf_counter() - started_at) * 1000.0
+        if diagnostics is not None:
+            diagnostics.record_llm_ttft(elapsed_ms)
+            diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1609,10 +1889,13 @@ class VllmChatClient:
         return answer
 
     def _continue_truncated_answer(self, payload: dict[str, Any], partial_answer: str) -> str:
+        started_at = perf_counter()
+        diagnostics = request_runtime_diagnostics()
         try:
+            raise_if_request_cancelled(minimum_remaining_seconds=0.1)
             messages = list(payload.get("messages") or [])
             if not messages:
-                return partial_answer
+                raise IncompleteCompletionError("cannot continue without messages")
 
             continuation_messages = list(messages)
             continuation_messages.append({"role": "assistant", "content": partial_answer})
@@ -1629,18 +1912,52 @@ class VllmChatClient:
                 "model_request",
                 {"mode": "continuation", "payload": continuation_payload},
             )
-            continuation_response = self._post_completion(self._client, continuation_payload)
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
+            with self._request_completion_client() as request_client:
+                continuation_response = self._post_completion(
+                    request_client,
+                    continuation_payload,
+                    **self._request_timeout_kwargs(),
+                )
             continuation_response.raise_for_status()
             data = continuation_response.json()
             emit_trace_event(
                 "model_response", {"mode": "continuation", "response": data}
             )
-            continuation_text = self._response_text(data).strip()
+            if self._response_finish_reason(data) == "length":
+                raise IncompleteCompletionError("continuation reached token limit")
+            visible_filter = VisibleAnswerFilter()
+            continuation_text = (
+                visible_filter.feed(self._response_text(data)) + visible_filter.finish()
+            ).strip()
             if not continuation_text:
-                return partial_answer + "\n\n[回答因长度限制被截断]"
+                raise IncompleteCompletionError("empty continuation")
+            elapsed_ms = (perf_counter() - started_at) * 1000.0
+            usage = data.get("usage") or {}
+            prompt_tokens = int(usage.get("prompt_tokens") or 0)
+            completion_tokens = int(usage.get("completion_tokens") or 0)
+            total_tokens = int(usage.get("total_tokens") or 0)
+            if diagnostics is not None:
+                # The parent completion records the end-to-end duration,
+                # including this continuation. Recording it here as well
+                # would double-count model wall time for a single request.
+                diagnostics.record_token_usage(
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                )
+            self._record_request_success(
+                latency_ms=elapsed_ms,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
             return partial_answer.rstrip() + "\n" + continuation_text
-        except Exception:
-            return partial_answer + "\n\n[回答因长度限制被截断]"
+        except RequestCancelledError:
+            raise
+        except Exception as exc:
+            raise IncompleteCompletionError("answer continuation did not complete") from exc
 
     def chat_with_tools_sync(
         self,
@@ -1680,8 +1997,17 @@ class VllmChatClient:
         started_at = perf_counter()
         emit_trace_event("model_request", {"mode": "tools", "payload": payload})
         self._record_request_start()
+        diagnostics = request_runtime_diagnostics()
         try:
-            response = self._post_completion(self._client, payload)
+            raise_if_request_cancelled(minimum_remaining_seconds=0.1)
+            if diagnostics is not None:
+                diagnostics.record_llm_call()
+            with self._request_completion_client() as request_client:
+                response = self._post_completion(
+                    request_client,
+                    payload,
+                    **self._request_timeout_kwargs(),
+                )
             response.raise_for_status()
             data = response.json()
             emit_trace_event("model_response", {"mode": "tools", "response": data})
@@ -1697,6 +2023,14 @@ class VllmChatClient:
 
         elapsed_ms = (perf_counter() - started_at) * 1000.0
         prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
+        if diagnostics is not None:
+            diagnostics.record_llm_ttft(elapsed_ms)
+            diagnostics.record_llm_complete(elapsed_ms)
+            diagnostics.record_token_usage(
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                total_tokens=total_tokens,
+            )
         self._record_request_success(
             latency_ms=elapsed_ms,
             prompt_tokens=prompt_tokens,
@@ -1825,6 +2159,17 @@ class VllmChatClient:
         decision_mode = payload.decision_mode
         retrieval_scopes = payload.retrieval_scopes or _DEFAULT_RETRIEVAL_SCOPES.get(domain, [])
         exclude_scopes = payload.exclude_scopes or _DEFAULT_EXCLUDE_SCOPES.get(domain, [])
+        retrieval_scopes = list(
+            dict.fromkeys(item for item in retrieval_scopes if item.strip())
+        )
+        included_scopes = set(retrieval_scopes)
+        exclude_scopes = list(
+            dict.fromkeys(
+                item
+                for item in exclude_scopes
+                if item.strip() and item not in included_scopes
+            )
+        )
         if decision_mode is None:
             decision_mode = (
                 action if action in {"review_queue", "human_handoff"} else "direct_answer"
@@ -1832,8 +2177,8 @@ class VllmChatClient:
         normalized_payload = {
             "action": action,
             "domain": domain,
-            "retrieval_scopes": [item for item in retrieval_scopes if item.strip()],
-            "exclude_scopes": [item for item in exclude_scopes if item.strip()],
+            "retrieval_scopes": retrieval_scopes,
+            "exclude_scopes": exclude_scopes,
             "decision_mode": str(decision_mode),
             "needs_clarification": payload.needs_clarification,
             "clarification_message": payload.clarification_message,
@@ -1895,7 +2240,7 @@ class VllmChatClient:
                     update={
                         "action": "answer",
                         "domain": "research",
-                        "retrieval_scopes": ["publications", "profile"],
+                        "retrieval_scopes": ["publications", "profile", "research_methodology"],
                         "exclude_scopes": ["courseware"],
                         "decision_mode": "direct_answer"
                         if intent.decision_mode == ""
@@ -1929,7 +2274,7 @@ class VllmChatClient:
                         "domain": "advising"
                         if intent.domain in {"", "general"}
                         else intent.domain,
-                        "retrieval_scopes": ["preparation", "profile", "publications"],
+                        "retrieval_scopes": ["preparation", "profile", "publications", "research_methodology"],
                         "exclude_scopes": ["courseware"],
                         "decision_mode": "advise_only",
                         "needs_clarification": False,
@@ -2071,7 +2416,7 @@ class VllmChatClient:
                 update={
                     "action": "answer",
                     "domain": "research",
-                    "retrieval_scopes": ["publications", "profile"],
+                    "retrieval_scopes": ["publications", "profile", "research_methodology"],
                     "exclude_scopes": ["courseware"],
                     "needs_clarification": False,
                     "clarification_message": None,
@@ -2119,6 +2464,8 @@ class VllmChatClient:
                 best_value = ""
                 for existing_key, (expires_at, value, existing_semantic_key) in self._response_cache.items():
                     if expires_at <= now:
+                        continue
+                    if semantic_key.split("|", 1)[0] != existing_semantic_key.split("|", 1)[0]:
                         continue
                     score = difflib.SequenceMatcher(
                         None,
@@ -2196,7 +2543,11 @@ class VllmChatClient:
         if system_text:
             normalized_system = re.sub(r"[\s\W_]+", "", system_text.lower())
             system_finger = normalized_system[:80]
-        merged = user_merged + "|" + system_finger
+        # Never fuzzily reuse a non-thinking answer for a native-thinking call
+        # (or an answer from another model / decoding contract).
+        generation_contract = {key: value for key, value in payload.items() if key != "messages"}
+        contract_hash = hashlib.sha256(json.dumps(generation_contract, sort_keys=True).encode()).hexdigest()
+        merged = contract_hash + "|" + user_merged + "|" + system_finger
         if namespace:
             merged = f"{namespace}::{merged}"
         if len(merged) > 2400:
@@ -2459,7 +2810,10 @@ class VllmChatClient:
 
         # Low-congestion path: keep the requested token budget (no shaping),
         # but still enforce a global policy ceiling to avoid pathological long outputs.
-        if not self._is_high_congestion(snapshot):
+        # Admission/deadlines govern waiting. Shrinking native reasoning to a
+        # prose-only congestion cap can consume every token before the answer.
+        native_thinking = (payload.get("chat_template_kwargs") or {}).get("enable_thinking") is True
+        if native_thinking or not self._is_high_congestion(snapshot):
             payload["max_tokens"] = int(min(requested_max_tokens, policy_max_tokens_cap))
             return
 
@@ -2511,8 +2865,22 @@ class VllmChatClient:
 
     def _sleep_before_retry(self, retry_number: int) -> None:
         delay_seconds = self._settings.llm_retry_backoff_seconds * (2 ** max(0, retry_number - 1))
+        remaining = request_remaining_seconds(reserve_seconds=0.25)
+        if remaining is not None:
+            if remaining <= delay_seconds:
+                raise_if_request_cancelled(minimum_remaining_seconds=delay_seconds)
+            delay_seconds = min(delay_seconds, remaining)
         if delay_seconds > 0:
             time.sleep(delay_seconds)
+
+    def _request_timeout_kwargs(self) -> dict[str, float]:
+        """Override the shared client timeout only inside a budgeted request."""
+
+        if request_remaining_seconds() is None:
+            return {}
+        return {
+            "timeout": bounded_request_timeout(float(self._settings.llm_timeout_seconds))
+        }
 
 
 def _looks_like_booking_request(lowered: str, question: str) -> bool:
@@ -2537,86 +2905,17 @@ def _looks_like_booking_request(lowered: str, question: str) -> bool:
 
 
 def _looks_like_booking_information_question(lowered: str, question: str) -> bool:
-    explicit_booking_markers = (
-        "请帮我预约",
-        "帮我预约",
-        "请预约",
-        "我要预约",
-        "我想预约",
-        "申请预约",
-        "提交预约",
-        "约在",
-        "约个会",
-        "book me",
-        "schedule a meeting",
-    )
-    if any(marker in lowered for marker in explicit_booking_markers) or any(
-        marker in question for marker in explicit_booking_markers
-    ):
-        return False
-
-    info_markers = (
-        "office hour",
-        "office hours",
-        "想了解",
-        "想知道",
-        "了解一下",
-        "告诉我",
-        "能否告诉我",
-        "可以告诉我",
-        "准备什么",
-        "先准备",
-        "提前准备",
-        "约时间前",
-        "预约前",
-        "什么时候",
-        "什么时间",
-        "哪几天",
-        "什么时候方便",
-        "哪些时候方便",
-        "这周",
-        "本周",
-        "开放时段",
-        "可预约时段",
-        "预约规则",
-        "如何预约",
-        "怎么预约",
-        "以便预约",
-        "方便预约",
-        "先发邮件",
-        "直接发邮件",
-        "发邮件",
-        "线下聊",
-        "当面聊",
-        "更合适",
-        "什么类型的问题",
-        "适合先邮件",
-        "等有更多内容再约",
-    )
-    booking_context_markers = (
-        "office hour",
-        "office hours",
-        "预约",
-        "约时间",
-        "约老师",
-        "时间安排",
-        "开放时段",
-        "找您",
-        "发邮件",
-        "线下聊",
-        "当面聊",
-    )
-    has_info_marker = any(marker in lowered for marker in info_markers) or any(
-        marker in question for marker in info_markers
-    )
-    has_booking_context = any(marker in lowered for marker in booking_context_markers) or any(
-        marker in question for marker in booking_context_markers
-    )
-    return has_info_marker and has_booking_context
+    del lowered
+    return asks_for_booking_information(question)
 
 
 def _looks_like_teaching_question(lowered: str, question: str) -> bool:
     if _looks_like_mixed_course_research_boundary_question(lowered, question):
+        return False
+    if any(
+        marker in question
+        for marker in ("七问", "研究课题", "课题评价", "科研方法", "研究方法", "论文写作方法")
+    ):
         return False
     if bool(re.search(r"第\s*\d+\s*讲", question)):
         return True
@@ -2753,46 +3052,13 @@ def _looks_like_decision_request(lowered: str, question: str) -> bool:
 
 
 def _looks_like_review_queue_request(lowered: str, question: str) -> bool:
-    markers = (
-        "破例",
-        "例外",
-        "延期",
-        "审批",
-        "审核",
-        "批准",
-        "同意我",
-        "推荐信",
-        "推荐一下",
-        "加入课题组",
-        "加入你们组",
-        "能收我吗",
-        "能不能给我",
-    )
-    return any(marker in lowered for marker in markers) or any(
-        marker in question for marker in markers
-    )
+    del lowered
+    return requires_faculty_review(question)
 
 
 def _looks_like_human_handoff_request(lowered: str, question: str) -> bool:
-    markers = (
-        "投诉",
-        "申诉",
-        "成绩",
-        "保密",
-        "隐私",
-        "紧急",
-        "马上联系",
-        "尽快联系",
-        "心理",
-        "危机",
-        "安全",
-        "举报",
-        "冲突",
-        "误会",
-    )
-    return any(marker in lowered for marker in markers) or any(
-        marker in question for marker in markers
-    )
+    del lowered
+    return requires_human_handoff(question)
 
 
 def _looks_like_research_question(lowered: str, question: str) -> bool:
@@ -2803,6 +3069,12 @@ def _looks_like_research_question(lowered: str, question: str) -> bool:
         "研究什么",
         "做什么研究",
         "科研",
+        "研究课题",
+        "课题评价",
+        "七问",
+        "研究方法",
+        "科研方法",
+        "论文写作方法",
         "flowrag",
         "libamm",
         "publication",

@@ -13,6 +13,39 @@ from pathlib import Path
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
+
+def test_no_evidence_answer_explains_absence_instead_of_hiding_support() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    renderer = app_js[app_js.index("function renderAssistantMessage("):]
+    assert 'title: "本次未引用可核验材料"' in renderer
+    assert 'count: 0' in renderer
+    assert '不应当作已核实的事实或文献结论' in renderer
+
+
+def test_mobile_source_scroll_targets_respect_composer_clearance() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    assert "scroll-padding-bottom: calc(var(--chat-composer-height, 140px) + 12px)" in css
+
+
+def test_long_source_identifiers_cannot_widen_support_grid() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    grid = css.split(".message-basis-list {", 1)[1].split("}", 1)[0]
+    card = css.split(".message-basis-item {", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr)" in grid
+    assert "min-width: 0" in card
+    assert "overflow-wrap: anywhere" in card
+
+
+def test_chat_stop_control_cancels_http_and_server_request() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    styles = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert 'chatSubmitButton.dataset.mode = loading ? "stop" : "send"' in app_js
+    assert 'activeChatAbortController?.abort("user-cancelled")' in app_js
+    assert "/chat/cancel?request_id=" in app_js
+    assert 'globalThis.addEventListener("pagehide"' in app_js
+    assert ".send-button.is-sending .send-button-spinner" in styles
+
 # Each entry: (endpoint, list_of_dom_ids_used_in_payload)
 # These IDs are read by app.js to construct JSON POST bodies.
 API_PAYLOAD_CONTRACTS = [
@@ -130,6 +163,118 @@ def test_send_button_uses_animation_state() -> None:
     assert "@keyframes send-button-pulse" in css
 
 
+def test_chat_scrollbar_is_edge_aligned_and_hidden_until_needed() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'id="chat-scroll-rail"' in html
+    assert 'id="chat-scroll-thumb"' in html
+    assert "width: 100%;" in css[css.index(".chat-stream {"):css.index(".chat-stream:has")]
+    assert "scrollbar-width: none;" in css
+    assert ".chat-scroll-rail" in css
+    assert "function syncChatScrollRail()" in js
+    assert "moveChatScrollFromPointer" in js
+
+
+def test_interface_icons_share_one_accessible_svg_system() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert 'class="ui-icon-sprite"' in html
+    for symbol in (
+        "menu", "companion", "dice", "brain", "globe-search", "mic",
+        "send", "workflow", "copy", "retry", "sparkle", "bean",
+    ):
+        assert f'id="icon-{symbol}"' in html
+    assert 'href="#icon-brain"' in html
+    assert 'href="#icon-globe-search"' in html
+    assert 'href="#icon-dice"' in html
+    assert "function uiIconSvg(name, className = \"\")" in js
+    assert 'return uiIconSvg(symbolName);' in js
+    assert ".ui-icon {" in css
+    assert ".ui-icon-dot {" in css
+    assert "@media (prefers-reduced-motion: reduce)" in css
+    assert "🧠 深度思考" not in html
+    assert "🌐 联网检索" not in html
+    assert "🎲" not in html
+    assert "👤" not in js
+
+
+def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    companion_css = (WEB_DIR / "companion.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    companion_js = (WEB_DIR / "companion.js").read_text(encoding="utf-8")
+
+    assert 'id="sage-companion"' in html
+    assert 'id="sage-companion-toggle"' in html
+    assert 'aria-controls="sage-companion-panel"' in html
+    assert 'aria-grabbed="false"' in html
+    assert "拖动小 Sage 移动" in html
+    assert 'id="sage-companion-message"' in html
+    assert 'aria-live="polite"' in html
+    assert "名字、外观与互动进度仅保存在当前浏览器" in html
+    assert 'id="open-companion-settings"' in html
+    assert 'id="sage-companion-name-input"' in html
+    assert 'id="sage-companion-temperament"' in html
+    assert 'id="sage-companion-sound"' in html
+    assert 'id="sage-companion-answers"' in html
+    assert 'id="sage-companion-streak"' in html
+    assert 'id="sage-companion-quest-text"' in html
+    assert 'data-companion-action="complete-quest"' in html
+    assert "sage-companion-accessory-crown" in html
+    assert 'role="tablist"' in html
+    assert 'data-companion-tab="companion"' in html
+    assert 'data-companion-tab="customize"' in html
+    assert 'id="sage-companion-scroll-cue"' in html
+
+    assert '<script src="./companion.js" defer></script>' in html
+    assert '<link rel="stylesheet" href="./companion.css" />' in html
+    assert 'const STORAGE_KEY = "sageMateCompanion:v3";' in companion_js
+    assert 'Object.freeze(["sageMateCompanion:v2", "sageMateCompanion:v1"])' in companion_js
+    assert "localStorage.setItem(STORAGE_KEY" in companion_js
+    assert "globalThis.SageCompanion = Object.freeze" in companion_js
+    assert "${message}。点击" not in companion_js
+    assert "${message} 点击${action}伙伴面板" in companion_js
+    assert 'sageCompanionController?.setState("thinking"' in js
+    assert js.count("sageCompanionController?.recordAnswerCompleted();") == 2
+    assert 'sageCompanionController?.setState("worried"' in js
+    persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("idleMessage() {")]
+    assert "question:" not in persist_block
+    assert "fetch(" not in companion_js
+    assert "XMLHttpRequest" not in companion_js
+    assert "question:" not in companion_js
+    assert "answer:" not in companion_js
+
+    assert ".sage-companion-toggle" not in css
+    assert "body.onboarding-active .sage-companion" in companion_css
+    assert ".chat-shell.view-active .sage-companion" in companion_css
+    assert '@media (prefers-reduced-motion: reduce)' in companion_css
+    assert '.sage-companion[data-appearance="mint"]' in companion_css
+    assert ".sage-companion-tabs" in companion_css
+    assert "handleTabKeydown(event)" in companion_js
+    assert "setPointerCapture" in companion_js
+    assert "saveManualPosition()" in companion_js
+    assert "positionX: null" in companion_js
+    assert "canWander()" in companion_js
+    assert "this.motionQuery?.matches" in companion_js
+    assert "prefers-reduced-motion: reduce" in companion_css
+    assert "sage-companion-panel-enter" in companion_css
+    assert "sage-companion-bond-shine" in companion_css
+    assert '.sage-companion[data-stage="confidant"]' in companion_css
+    assert "@keyframes sage-companion-spark" in companion_css
+    assert ".sage-companion-footprint" in companion_css
+    assert ".sage-companion-quest" in companion_css
+    assert ".sage-companion.is-dragging" in companion_css
+    assert ".sage-companion.is-walking" in companion_css
+    assert "touch-action: none" in companion_css
+    assert "@keyframes sage-companion-walk" in companion_css
+    assert 'data-panel-side="below"' in companion_css
+
+
 def test_local_code_setup_does_not_block_or_auto_open_profile_modal() -> None:
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     setup_fn = js[js.index("function shouldShowSageMateSetup"):js.index("async function maybeOpenSageMateSetup")]
@@ -173,17 +318,25 @@ def test_empty_chat_onboarding_sits_before_chat_stream() -> None:
     assert all("align-items: center;" not in block for block in empty_chat_blocks)
     assert ".chat-shell.chat-empty .onboarding-card" in css
     assert ".chat-shell.chat-empty .composer-shell" in css
-    assert "width: min(100%, 720px);" in css
+    assert "width: min(100%, var(--content-column-max));" in css
 
 
-def test_active_onboarding_keeps_chat_stream_visible() -> None:
+def test_active_onboarding_hides_empty_stream_to_keep_guidance_focused() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
-    selector = "body.onboarding-active .chat-shell .chat-stream"
+    selector = "body.onboarding-active .chat-shell.chat-empty .chat-stream"
     block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
 
     assert block_match, f"Missing CSS block for {selector}"
-    assert "display: none;" not in block_match.group(1)
-    assert "display: flex;" in block_match.group(1)
+    assert "display: none;" in block_match.group(1)
+
+
+def test_pending_assistant_process_surface_uses_answer_column_width() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    selector = ".message-assistant.message-pending .message-bubble"
+    block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
+
+    assert block_match, f"Missing CSS block for {selector}"
+    assert "width: min(100%, 800px);" in block_match.group(1)
 
 
 def test_active_onboarding_uses_one_centered_column_even_after_chat_starts() -> None:
@@ -258,7 +411,7 @@ def test_minimal_theme_is_shared_across_primary_and_secondary_surfaces() -> None
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     theme = (WEB_DIR / "minimal.1009.css").read_text(encoding="utf-8")
 
-    assert html.index("styles.4219.css") < html.index("minimal.1009.css")
+    assert html.index("styles.4222.css") < html.index("minimal.1009.css")
 
     assert "--bg: #ffffff;" in theme
     assert "--accent: #191918;" in theme
@@ -317,3 +470,44 @@ def test_compact_process_summary_hides_details_until_requested() -> None:
     assert ".message-workflow-summary .message-inline-process-preview" in css
     assert "text-overflow: ellipsis;" in css
     assert ".message-process-icon" in css
+
+
+def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    responsive_start = css.index(
+        "/* Keep guided onboarding inside tablet and phone visual viewports. */"
+    )
+    responsive_end = css.index("/* --- Onboarding guided question card --- */")
+    responsive_css = css[responsive_start:responsive_end]
+
+    assert "@media (max-width: 920px)" in responsive_css
+    assert "display: flex;" in responsive_css
+    assert "flex-direction: column;" in responsive_css
+    assert "flex: 0 0 auto;" in responsive_css
+    assert "width: min(100%, var(--content-column-max));" in responsive_css
+    assert "padding: var(--mobile-panel-padding);" in responsive_css
+    assert "overflow-x: hidden;" in responsive_css
+    assert "position: relative;" in responsive_css
+    assert "left: auto;" in responsive_css
+    assert "right: auto;" in responsive_css
+    assert "bottom: auto;" in responsive_css
+    assert "minmax(280px" not in responsive_css
+
+
+def test_cross_route_theme_contract_uses_split_semantic_roles() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    for role in ("info", "success", "warning", "error"):
+        assert f"--{role}-surface:" in css
+        assert f"--{role}-text:" in css
+        assert f"--{role}-border:" in css
+    assert "--control-border:" in css
+    assert "--focus-ring:" in css
+    assert "--success:" not in css
+    assert "--warning:" not in css
+    assert "--error:" not in css
+    assert 'id="sidebar-user-icon" class="rail-user rail-btn" title="账号设置"' in html
+    assert 'aria-label="账号设置"' in html
+    assert 'href="./styles.4222.css?rev=mobile-sidebar-20260907"' in html
+    assert 'src="./app.4222.js?rev=mobile-sidebar-20260907"' in html

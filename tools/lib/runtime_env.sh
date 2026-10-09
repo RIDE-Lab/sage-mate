@@ -20,6 +20,16 @@ load_repo_env_if_unset() {
     done < "$env_file"
 }
 
+require_runtime_setting() {
+    local name="$1"
+    local value="${!name:-}"
+    if [[ -z "$value" ]]; then
+        echo "Required deployment setting $name is empty. Set it in the machine-local .env." >&2
+        return 2
+    fi
+    printf '%s\n' "$value"
+}
+
 resolve_repo_python() {
     local repo_root="$1"
 

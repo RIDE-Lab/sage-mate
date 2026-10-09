@@ -275,3 +275,26 @@ def test_frontend_main_lucky_button_uses_curated_pool() -> None:
 
     assert "const selected = pickLuckyQuestion(profile);" in handler
     assert 'apiRequest("/lucky-question' not in handler
+
+
+def test_frontend_main_lucky_button_uses_combinatorial_templates() -> None:
+    from pathlib import Path
+
+    app_js = (
+        Path(__file__).resolve().parent.parent
+        / "src"
+        / "sage_faculty_twin"
+        / "web"
+        / "app.js"
+    )
+    content = app_js.read_text(encoding="utf-8")
+
+    assert "const LUCKY_QUESTION_TEMPLATES = [" in content
+    assert "const LUCKY_QUESTION_BLUEPRINTS = {" in content
+    assert "function fillLuckyQuestionTemplate(" in content
+    assert "function buildLuckyQuestionCandidates(" in content
+    assert "for (const template of LUCKY_QUESTION_TEMPLATES)" in content
+    assert "for (const topic of blueprint.topics)" in content
+    assert "for (const lens of blueprint.lenses)" in content
+    assert "for (const outcome of blueprint.outcomes)" in content
+    assert "luckyQuestionHistory.slice(-LUCKY_QUESTION_RECENT_LIMIT)" in content

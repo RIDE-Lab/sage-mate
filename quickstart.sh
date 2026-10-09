@@ -212,6 +212,13 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
+# Installation rewrites units and launch configuration. For enrolled instances,
+# require a separately approved profile migration instead of reinstalling live.
+if ! $mode_check; then
+	source "$repo_root/tools/lib/instance_control.sh"
+	sage_mate_route_instance_operation install
+fi
+
 if $local_target_hint && [[ "$install_target" == "hosted-web" ]]; then
 	install_target="local-mac-app"
 fi
@@ -605,7 +612,7 @@ EOF
 if $mode_no_siblings; then
 	log "Skipping sibling repo cloning (--no-siblings)"
 else
-	clone_if_missing SAGE      https://github.com/intellistream/SAGE.git
+	clone_if_missing SAGE      https://github.com/RIDE-Lab/SAGE.git
 	clone_if_missing neuromem  https://github.com/intellistream/neuromem.git
 	clone_if_missing sageVDB   https://github.com/intellistream/sageVDB.git
 	$mode_with_vllm && clone_if_missing vllm-hust https://github.com/intellistream/vllm-hust.git
@@ -628,6 +635,7 @@ else
 		warn "Falling back to base install"
 		run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root"
 	fi
+	ensure_neuromem_collection_runtime "$repo_root" "$python_bin"
 
 	if [[ -d "$parent_dir/sageVDB" ]]; then
 		log "Repairing sageVDB native extension wiring"
@@ -672,6 +680,13 @@ env_get() {
 	env_file_get "$env_file" "$key"
 }
 
+require_env_value() {
+	local key="$1" value
+	value="$(env_get "$key")"
+	[[ -n "$value" ]] || fail "$key must be set in $env_file"
+	printf '%s\n' "$value"
+}
+
 ensure_env_kv() {
 	local key="$1" default="$2"
 	if ! env_file_has_key "$env_file" "$key"; then
@@ -679,11 +694,11 @@ ensure_env_kv() {
 		log "  appended $key"
 	fi
 }
-ensure_env_kv DIGITAL_TWIN_STREAM_CHAT_ANSWER       true
+ensure_env_kv DIGITAL_TWIN_STREAM_CHAT_ANSWER       false
 ensure_env_kv DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS 80
 ensure_env_kv DIGITAL_TWIN_LLM_TIMEOUT_SECONDS       60
 ensure_env_kv DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS 15
-ensure_env_kv DIGITAL_TWIN_CHAT_PROMPT_SOFT_CAP_CHARS 12000
+ensure_env_kv DIGITAL_TWIN_PROMPT_SOFT_CAP          12000
 
 set_env_kv() {
 	local key="$1" value="$2"
@@ -696,9 +711,15 @@ if [[ "$install_target" == "hosted-web" ]]; then
 	set_env_kv DIGITAL_TWIN_APP_PROFILE faculty_twin
 	set_env_kv DIGITAL_TWIN_CODE_WORKBENCH_ENABLED false
 	set_env_kv DIGITAL_TWIN_CODE_WORKSPACE_ROOTS ""
+	proxy_host="$(require_env_value VLLM_PROXY_CONNECT_HOST)"
+	[[ "$proxy_host" != "0.0.0.0" && "$proxy_host" != "::" ]] || proxy_host="127.0.0.1"
+	proxy_port="$(require_env_value VLLM_PROXY_PORT)"
 	if $svc_nvidia_engine; then
-		set_env_kv DIGITAL_TWIN_LLM_BASE_URL "http://127.0.0.1:18001/v1"
-		set_env_kv VLLM_PROXY_UPSTREAM_BASE_URL "http://127.0.0.1:18000/v1"
+		nvidia_host="$(require_env_value VLLM_NVIDIA_CONNECT_HOST)"
+		nvidia_port="$(env_get VLLM_NVIDIA_PORT)"
+		nvidia_port="${nvidia_port:-18000}"
+		set_env_kv DIGITAL_TWIN_LLM_BASE_URL "http://${proxy_host}:${proxy_port}/v1"
+		set_env_kv VLLM_PROXY_UPSTREAM_BASE_URL "http://${nvidia_host}:${nvidia_port}/v1"
 		ensure_env_kv VLLM_NVIDIA_MODEL "Qwen/Qwen2.5-14B-Instruct-AWQ"
 		ensure_env_kv DIGITAL_TWIN_MODEL_NAME "Qwen/Qwen2.5-14B-Instruct-AWQ"
 		ensure_env_kv VLLM_NVIDIA_SERVED_MODEL_NAME "\${DIGITAL_TWIN_MODEL_NAME}"
@@ -711,13 +732,17 @@ if [[ "$install_target" == "hosted-web" ]]; then
 		set_env_kv TWIN_MONITOR_ENGINE_UNIT "sage-mate-vllm-nvidia-engine.service"
 	fi
 	if $svc_engine; then
-		set_env_kv DIGITAL_TWIN_LLM_BASE_URL "http://127.0.0.1:18001/v1"
-		set_env_kv VLLM_PROXY_UPSTREAM_BASE_URL "http://127.0.0.1:8000/v1"
-		ensure_env_kv VLLM_ENGINE_MODEL_PATH "/data/shared-models/Qwen3-32B"
-		ensure_env_kv DIGITAL_TWIN_MODEL_NAME "Qwen3-32B"
+		engine_model_path="$(env_get VLLM_ENGINE_MODEL_PATH)"
+		engine_devices="$(env_get VLLM_ENGINE_NPU_DEVICES)"
+		engine_devices="${engine_devices:-$(env_get ASCEND_RT_VISIBLE_DEVICES)}"
+		[[ -n "$engine_model_path" ]] || fail "--with-vllm-engine requires VLLM_ENGINE_MODEL_PATH in .env"
+		[[ -n "$engine_devices" ]] || fail "--with-vllm-engine requires VLLM_ENGINE_NPU_DEVICES in .env (the release installer can auto-select idle devices)"
+		engine_host="$(require_env_value VLLM_ENGINE_CONNECT_HOST)"
+		engine_port="$(require_env_value VLLM_ENGINE_PORT)"
+		set_env_kv DIGITAL_TWIN_LLM_BASE_URL "http://${proxy_host}:${proxy_port}/v1"
+		set_env_kv VLLM_PROXY_UPSTREAM_BASE_URL "http://${engine_host}:${engine_port}/v1"
 		ensure_env_kv VLLM_ENGINE_SERVED_MODEL_NAME "\${DIGITAL_TWIN_MODEL_NAME}"
-		ensure_env_kv VLLM_ENGINE_PORT "8000"
-		ensure_env_kv VLLM_ENGINE_TP_SIZE "4"
+		ensure_env_kv VLLM_ENGINE_PORT "$engine_port"
 		ensure_env_kv VLLM_ENGINE_MAX_MODEL_LEN "32768"
 		ensure_env_kv VLLM_ENGINE_MAX_NUM_SEQS "16"
 		set_env_kv TWIN_MONITOR_ENGINE_FLAG "--with-vllm-engine"
@@ -776,20 +801,22 @@ else
 fi
 
 # ── 7. Smoke test ────────────────────────────────────────────────────────────
-app_port="${APP_PORT:-55601}"
-if curl -sS --max-time 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$app_port/" 2>/dev/null | grep -q '^200$'; then
-	log "Smoke test: GET http://127.0.0.1:$app_port/ -> 200 OK"
+app_health_host="$(require_env_value APP_HEALTH_HOST)"
+app_port="$(require_env_value APP_PORT)"
+if curl --noproxy '*' -sS --max-time 3 -o /dev/null -w '%{http_code}' "http://${app_health_host}:$app_port/" 2>/dev/null | grep -q '^200$'; then
+	log "Smoke test: GET http://${app_health_host}:$app_port/ -> 200 OK"
 else
 	warn "App not yet listening on :$app_port — run: ./manage.sh restart, or ./quickstart.sh --start"
 fi
 
 if $mode_start && [[ "$install_target" == "hosted-web" ]]; then
 	log "Hosted/web verification: safety boundaries and model wiring"
-	verify_args=(--app-url "http://127.0.0.1:$app_port")
+	verify_args=(--app-url "http://${app_health_host}:$app_port")
 	if $svc_nvidia_engine; then
 		verify_vllm_port=$(env_get VLLM_NVIDIA_PORT)
 		verify_vllm_port="${verify_vllm_port:-8000}"
-		verify_args+=(--vllm-url "http://127.0.0.1:$verify_vllm_port/v1")
+		verify_vllm_host="$(require_env_value VLLM_NVIDIA_CONNECT_HOST)"
+		verify_args+=(--vllm-url "http://${verify_vllm_host}:$verify_vllm_port/v1")
 	fi
 	if ! "$python_bin" "$repo_root/tools/verify_hosted_web_deploy.py" "${verify_args[@]}"; then
 		fail "hosted/web verification failed; fix the issues above before exposing the service"

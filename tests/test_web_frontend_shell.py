@@ -18,7 +18,7 @@ def test_chat_shell_exposes_feedback_and_homepage_entrypoints() -> None:
     assert response.headers["content-type"].startswith("text/html")
     html = response.text
     assert 'id="lucky-question-button"' in html
-    assert "随便问" in html
+    assert "用模板随机组合一个新问题" in html
     assert 'id="open-suggestions"' in html
     assert 'id="suggestion-modal"' in html
     assert 'id="homepage-link"' in html
@@ -41,7 +41,14 @@ def test_overlay_modal_registry_and_frontend_shell() -> None:
 
     assert 'id="lucky-question-button"' in index_html
     assert 'id="knowledge-feedback-web-list"' in index_html
-    assert "const RANDOM_CHAT_QUESTION_BANKS = {" in app_js
+    assert "const LUCKY_QUESTION_TEMPLATES = [" in app_js
+    assert "const LUCKY_QUESTION_BLUEPRINTS = {" in app_js
+    assert "function buildLuckyQuestionCandidates(" in app_js
+    assert "LUCKY_QUESTION_RECENT_LIMIT" in app_js
+    assert "function syncDeepThinkingPresentation()" in app_js
+    assert 'const processingLabel = deepThinking ? "正在深度分析" : "正在处理";' in app_js
+    assert 'class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}"' in app_js
+    assert "优先使用模型原生 thinking" in index_html
     assert "function applyLuckyQuestionPreferences(selection)" in app_js
     assert "function handleLuckyQuestionClick()" in app_js
     assert "function isFeedbackWebKnowledgeRecord(record)" in app_js
@@ -60,8 +67,8 @@ def test_status_and_workflow_buttons_use_distinct_icons() -> None:
         "</button>", 1
     )[0]
 
-    assert '<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"' in status_button
-    assert '<rect x="3" y="3" width="8" height="8" rx="2"' in workflow_button
+    assert 'href="#icon-activity"' in status_button
+    assert 'href="#icon-workflow"' in workflow_button
     assert status_button != workflow_button
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from sage_faculty_twin.benchmark_adapter import LampQuestionSample, build_lamp_request
 from sage_faculty_twin.config import AppSettings, settings
+from sage_faculty_twin.auth import build_admin_session_token
 from sage_faculty_twin.models import (
     ChatRequest,
     InteractionIntent,
@@ -438,23 +439,10 @@ def test_simple_greeting_plan_skips_live_retrieval_stages(tmp_path: Path) -> Non
         )
     )
 
-    memory_retrieve_step = _trace_step(response, "memory_retrieve")
-    knowledge_retrieve_step = _trace_step(response, "knowledge_retrieve")
-
-    assert response.planner_preview is not None
-    assert response.planner_preview.goal == "respond_simple_greeting"
-    assert response.planner_preview.accepted is True
-    assert response.planner_preview.planned_steps == [
-        "detect_profile_context",
-        "classify_intent",
-        "assemble_prompt_context",
-        "answer_with_citations",
-        "render_user_response",
-    ]
-    assert memory_retrieve_step.status == "skipped"
-    assert memory_retrieve_step.summary == "当前工作流规划跳过对话记忆检索。"
-    assert knowledge_retrieve_step.status == "skipped"
-    assert knowledge_retrieve_step.summary == "当前工作流规划跳过知识检索。"
+    assert response.decision_mode == "direct_fast_path"
+    assert response.used_model == "sage-fast-path"
+    assert response.workflow_trace == []
+    assert response.planner_preview is None
     assert service._conversation_store.get_telemetry_summary()["query_count"] == 0
 
 
@@ -823,8 +811,11 @@ def test_chat_emits_trace_steps_via_callback(
     # predates that change and asserts post-answer keys are received via the
     # callback before ``service.answer`` returns; pin the inline path so the
     # synchronous emission contract still holds.
-    monkeypatch.setattr("sage_faculty_twin.service._POST_ANSWER_BACKGROUND_DEFAULT", False)
-    settings = AppSettings(knowledge_base_dir=tmp_path)
+    del monkeypatch
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path,
+        post_answer_background=False,
+    )
     service = DigitalTwinService(settings)
     service._llm_client = FailingLLMClient()
     emitted_steps = []
@@ -899,7 +890,10 @@ def test_chat_surfaces_llm_shadow_planner_comparison_without_affecting_execution
                 course_context="科研指导",
                 conversation_id="conv-shadow-live",
                 question="预约前我应该准备什么材料？",
-            )
+            ),
+            admin_session_token=build_admin_session_token(
+                settings, username=settings.admin_username, role="super_admin"
+            ),
         )
     )
 
@@ -1154,9 +1148,9 @@ def test_chat_reuses_neuromem_conversation_memory_in_follow_up_prompt(
     assert not any(item.basis_label == "近期交流记录" for item in follow_up.answer_basis)
     assert follow_up.memory_used is True
     assert follow_up.memory_write_back is True
-    assert len(follow_up.retrieved_items) >= 1
-    assert {item.memory_type for item in follow_up.retrieved_items} == {"short_term"}
-    assert any(item.source_label == "同会话上下文" for item in follow_up.retrieved_items)
+    # Immediate session context remains internal prompt grounding and is not
+    # repeated in the client-visible audit panel.
+    assert not any(item.source_label == "同会话上下文" for item in follow_up.retrieved_items)
     assert all(item.entry_id for item in follow_up.retrieved_items)
     usefulness_step = next(
         step for step in follow_up.workflow_trace if step.key == "memory_usefulness_score"
@@ -2190,6 +2184,51 @@ def test_chat_auto_web_searches_when_local_knowledge_is_empty(
 
     assert [hit.title for hit in response.web_search_hits] == ["vLLM Documentation"]
     assert any(item.basis_label == "联网检索" for item in response.answer_basis)
+
+
+def test_explicit_web_search_returns_bounded_sources_without_second_llm_turn(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge-base",
+        conversation_memory_dir=tmp_path / "conversation-memory",
+        knowledge_backend="local",
+        conversation_memory_index_type="segment",
+        web_search_enabled=True,
+    )
+    service = DigitalTwinService(settings)
+    llm = RecordingLLMClient(booking_intent=False, answer="不应调用模型")
+    service._llm_client = llm
+    monkeypatch.setattr(
+        "sage_faculty_twin.web_search.WebSearchClient.search",
+        lambda self, query, max_results=None: [
+            WebSearchResult(
+                title="官方推理系统资料",
+                url="https://example.com/inference",
+                snippet="介绍推理服务的关键指标与缓存机制。",
+                score=9.0,
+            )
+        ],
+    )
+
+    response = asyncio.run(
+        service.answer(
+            ChatRequest(
+                student_name="Alice",
+                question="请联网搜索推理系统资料。",
+                conversation_id="conv-explicit-web-fast",
+                web_search=True,
+                deep_thinking=False,
+            )
+        )
+    )
+
+    assert response.decision_mode == "web_search_direct"
+    assert "官方推理系统资料" in response.answer
+    assert "https://example.com/inference" in response.answer
+    assert any(item.basis_label == "联网检索" for item in response.answer_basis)
+    assert llm.prompts == []
 
 
 def test_positive_feedback_writes_web_sources_back_to_knowledge_base(

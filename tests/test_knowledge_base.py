@@ -1,19 +1,50 @@
+import json
 from importlib.util import find_spec
 from pathlib import Path
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 import pytest
 
 from conftest import available_knowledge_backends, requires_neuromem_model
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
+from sage_faculty_twin.knowledge_base import LocalKnowledgeStore, _build_query_profile
 from sage_faculty_twin.models import (
+    ChatRequest,
     InteractionIntent,
     KnowledgeDocumentCreate,
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
-from sage_faculty_twin.service import DigitalTwinService
+from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSupport
+
+
+def test_index_completeness_reports_local_and_neuromem_counts(tmp_path: Path) -> None:
+    store = LocalKnowledgeStore(
+        AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local")
+    )
+    store.add_document(
+        KnowledgeDocumentCreate(
+            title="Indexed policy",
+            content="A record used to verify direct index accounting.",
+            tags=["policy"],
+            source_name="test:indexed-policy",
+        )
+    )
+
+    assert store.indexed_document_count() == 1
+    assert store.index_is_complete() is True
+
+    store._backend = "neuromem"
+    store._neuromem_collection = SimpleNamespace(
+        indexes={"search": SimpleNamespace(data_to_segment={"data-1": "segment-1"})}
+    )
+    assert store.indexed_document_count() == 1
+    assert store.index_is_complete() is True
+
+    store._neuromem_collection.indexes["search"].data_to_segment = {}
+    assert store.indexed_document_count() == 0
+    assert store.index_is_complete() is False
 
 
 def test_knowledge_store_adds_and_searches_documents(tmp_path: Path) -> None:
@@ -35,6 +66,28 @@ def test_knowledge_store_adds_and_searches_documents(tmp_path: Path) -> None:
     assert len(store.list_documents()) == 1
     assert hits
     assert hits[0].title == "Lab onboarding policy"
+
+
+def test_project_policy_query_is_not_misclassified_as_teaching_experiment() -> None:
+    policy_profile = _build_query_profile(
+        "SAGE项目劳务津贴怎么考评", visitor_profile="lab_member"
+    )
+    course_profile = _build_query_profile("课程项目实验说明")
+
+    assert "experiment" not in policy_profile.document_types
+    assert "teaching" not in policy_profile.topic_domains
+    assert "experiment" in course_profile.document_types
+    assert "teaching" in course_profile.topic_domains
+
+
+def test_graduate_course_query_is_not_misclassified_as_research() -> None:
+    course_profile = _build_query_profile("2026年研究生课程教学大纲")
+    research_profile = _build_query_profile("张老师的主要研究方向")
+
+    assert "research" not in course_profile.topic_domains
+    assert course_profile.research_focus is None
+    assert "research" in research_profile.topic_domains
+    assert research_profile.research_focus == "overview"
 
 
 def test_knowledge_store_caches_searches_and_invalidates_on_write(tmp_path: Path) -> None:
@@ -156,6 +209,34 @@ def test_knowledge_store_backfills_metadata_for_legacy_records(tmp_path: Path) -
     assert loaded_record.metadata["domain"] == "teaching"
     assert loaded_record.metadata["course_id"] == "llm-inference"
     assert loaded_record.metadata["material_type"] == "lecture"
+
+
+def test_knowledge_store_loads_reviewed_curated_metadata(tmp_path: Path) -> None:
+    record = {
+        "document_id": "curated-team-policy",
+        "title": "课题组制度｜测试规则",
+        "content": "这是一条仅供课题组成员查询的制度。",
+        "tags": ["team-policy", "audience:team"],
+        "source_name": "wps-national-project:team-policy/test",
+        "metadata": {
+            "visibility": "team",
+            "source_files": ["制度.docx"],
+            "redactions": ["个人明细"],
+        },
+        "created_at": datetime.now(UTC).isoformat(),
+        "review_status": "reviewed",
+        "freshness_status": "current",
+        "reviewed_at": datetime.now(UTC).isoformat(),
+    }
+    (tmp_path / "curated-team-policy.json").write_text(
+        __import__("json").dumps(record, ensure_ascii=False), encoding="utf-8"
+    )
+
+    loaded = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path)).list_documents()[0]
+
+    assert loaded.review_status == "reviewed"
+    assert loaded.freshness_status == "current"
+    assert loaded.metadata["source_files"] == ["制度.docx"]
 
 
 def test_knowledge_store_supports_sagevdb_backend(tmp_path: Path) -> None:
@@ -890,6 +971,23 @@ def test_knowledge_store_enforces_audience_visibility_by_visitor_profile(
         }
 
 
+def test_team_visibility_is_authoritative_and_requires_lab_member(tmp_path: Path) -> None:
+    store = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path))
+    store.add_document(
+        KnowledgeDocumentCreate(
+            title="课题组制度｜内部评分规则",
+            content="内部评分规则采用二十分制。",
+            tags=["team-policy", "audience:public"],
+            source_name="wps-national-project:team-policy/scoring",
+            metadata={"visibility": "team"},
+        )
+    )
+
+    assert not store.search("内部评分规则", visitor_profile="general_visitor")
+    hits = store.search("内部评分规则", visitor_profile="lab_member")
+    assert hits and hits[0].title == "课题组制度｜内部评分规则"
+
+
 def test_infer_default_audience_restricts_sensitive_sources(
     tmp_path: Path,
 ) -> None:
@@ -1059,6 +1157,176 @@ def test_service_prompt_keeps_private_materials_out_of_materialized_prefix(
     assert "内部账号记录" in prompt
 
 
+def test_service_prompt_enforces_team_knowledge_answer_boundary(tmp_path: Path) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    prompt = service._build_student_prompt(
+        request=type(
+            "Request",
+            (),
+            {
+                "student_name": "Member",
+                "course_context": None,
+                "visitor_profile": "lab_member",
+                "question": "Copilot 报销分几档？",
+            },
+        )(),
+        knowledge_hits=[
+            KnowledgeSearchHit(
+                document_id="team-policy",
+                title="课题组制度｜报销规则",
+                excerpt="普通成员可查询通用报销档位。",
+                score=10.0,
+                tags=["team-policy", "audience:team"],
+                source_name="wps-national-project:team-policy/reimbursement",
+                metadata={"visibility": "team"},
+            )
+        ],
+    )
+
+    assert "Team-knowledge safety boundary" in prompt
+    assert "Never provide or infer individual performance" in prompt
+    assert "does not authorize Internet" in prompt
+    assert "responsible project lead must confirm" in prompt
+
+
+def test_structured_team_policy_fast_response_is_member_only_and_cited(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    hit = KnowledgeSearchHit(
+        document_id="team-policy",
+        title="课题组制度｜季度奖励",
+        excerpt="季度奖项规则。",
+        score=20.0,
+        tags=["team-policy", "audience:team"],
+        source_name="wps-national-project:team-policy/quarterly-ranking",
+        metadata={
+            "visibility": "team",
+            "qa_pairs": [
+                {
+                    "match_all": ["季度"],
+                    "match_any": ["奖项", "奖励"],
+                    "answer": "特别贡献奖、一等奖、二等奖、三等奖。",
+                }
+            ],
+        },
+    )
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [hit])
+
+    member = service.try_fast_answer(
+        ChatRequest(student_name="Member", visitor_profile="lab_member", question="季度有哪些奖项？")
+    )
+    guest = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="季度有哪些奖项？",
+        )
+    )
+
+    assert member is not None
+    assert member.answer == "特别贡献奖、一等奖、二等奖、三等奖。"
+    assert member.used_model == "sage-policy-fast-path"
+    assert member.knowledge_hits == [hit]
+    assert member.answer_basis[0].source_label == hit.source_name
+    assert guest is not None
+    assert guest.used_model == "sage-policy-access-boundary"
+    assert guest.knowledge_hits == []
+
+
+def test_structured_knowledge_fast_response_supports_strict_string_metadata(
+    tmp_path: Path, monkeypatch
+) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    member_hit = KnowledgeSearchHit(
+        document_id="member-policy",
+        title="固定学术交流安排",
+        excerpt="每周三下午学术路线交流。",
+        score=20.0,
+        tags=["audience:lab_member"],
+        source_name="wps-curated:member-schedule",
+        metadata={
+            "audience": "lab_member",
+            "qa_pairs_json": json.dumps(
+                [
+                    {
+                        "match_all": ["交流"],
+                        "match_any": ["时间", "固定"],
+                        "answer": "学术路线每周三下午14:00交流。",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        },
+    )
+    public_hit = KnowledgeSearchHit(
+        document_id="public-job",
+        title="系统研发工程师招聘",
+        excerpt="公开招聘系统研发工程师。",
+        score=20.0,
+        tags=["audience:public"],
+        source_name="wps-curated:public-job",
+        metadata={
+            "audience": "public",
+            "qa_pairs_json": json.dumps(
+                [
+                    {
+                        "match_all": ["工程师"],
+                        "match_any": ["招聘"],
+                        "answer": "公开招聘系统研发工程师3名。",
+                    }
+                ],
+                ensure_ascii=False,
+            ),
+        },
+    )
+
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [member_hit])
+    member = service.try_fast_answer(
+        ChatRequest(
+            student_name="Member",
+            visitor_profile="lab_member",
+            question="固定交流时间？",
+            deep_thinking=False,
+        )
+    )
+    guest = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="固定交流时间？",
+            deep_thinking=False,
+        )
+    )
+
+    assert member is not None
+    assert member.answer == "学术路线每周三下午14:00交流。"
+    assert guest is not None
+    assert guest.used_model == "sage-policy-access-boundary"
+    assert "不能向公开访客提供或推断" in guest.answer
+    assert guest.knowledge_hits == []
+
+    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [public_hit])
+    public = service.try_fast_answer(
+        ChatRequest(
+            student_name="Guest",
+            visitor_profile="general_visitor",
+            question="系统研发工程师招聘",
+            deep_thinking=False,
+        )
+    )
+
+    assert public is not None
+    assert public.answer == "公开招聘系统研发工程师3名。"
+    assert public.answer_basis[0].basis_label == "公开资料"
+
+
+def test_token_expense_question_is_not_treated_as_credential_exfiltration() -> None:
+    request = ChatRequest(student_name="Member", question="Copilot 和 Token 报销分几档？")
+
+    assert DigitalTwinService._check_sensitive_boundary_request(request) is None
+
+
 def test_service_materialized_context_uses_stable_hit_order(tmp_path: Path) -> None:
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
 
@@ -1187,6 +1455,148 @@ def test_service_filters_generic_profile_hits_for_preparation_guidance_queries(
     assert [hit.document_id for hit in filtered] == ["meeting-hit"]
 
 
+def test_research_methodology_scope_accepts_owner_method_documents(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    methodology = KnowledgeSearchHit(
+        document_id="method-seven-questions",
+        title="科研指导方法｜如何确定一个好的研究课题",
+        excerpt="七问依次检查问题、重要性、现有解法边界、机制、可行性、实验和知识增量。",
+        score=1.0,
+        tags=["research-advising", "topic-selection", "experiment-design"],
+        source_name="private-materials:how-to-think-about-research-topic",
+    )
+
+    assert support._matches_intent_scopes(methodology, ["research_methodology"])
+    filtered = support._filter_knowledge_hits_by_intent(
+        [methodology],
+        InteractionIntent(
+            action="answer",
+            domain="research",
+            retrieval_scopes=["publications", "profile", "research_methodology"],
+            exclude_scopes=["courseware"],
+        ),
+        question="请按七问法评价研究课题，并使用科研指导方法。",
+    )
+    assert [hit.document_id for hit in filtered] == ["method-seven-questions"]
+
+
+def test_prompt_selection_keeps_research_and_paper_writing_methods(tmp_path: Path) -> None:
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    hits = [
+        KnowledgeSearchHit(
+            document_id="method-seven-questions",
+            title="科研指导方法｜如何确定一个好的研究课题",
+            excerpt="七问方法。",
+            score=2.0,
+            tags=["research-advising", "topic-selection", "experiment-design"],
+            source_name="private-materials:how-to-think-about-research-topic",
+        ),
+        KnowledgeSearchHit(
+            document_id="paper-revision-lessons",
+            title="论文写作方法｜系统论文修改与打磨经验",
+            excerpt="系统论文修改经验。",
+            score=1.5,
+            tags=["paper-writing", "research-advising", "revision"],
+            source_name="private-materials:paper-revision-lessons",
+        ),
+    ]
+    intent = InteractionIntent(
+        action="answer",
+        domain="research",
+        retrieval_scopes=["publications", "profile", "research_methodology"],
+        exclude_scopes=["courseware"],
+    )
+
+    selected = support._select_prompt_knowledge_hits(
+        "请按七问法评价研究课题，并结合论文写作方法。", hits, intent
+    )
+
+    assert [hit.document_id for hit in selected] == [
+        "method-seven-questions",
+        "paper-revision-lessons",
+    ]
+
+
+def test_seven_question_method_prompt_routes_as_research(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    support = DigitalTwinService(settings)._build_support()
+    request = ChatRequest(
+        student_name="Alice",
+        question="请按七问法评价这个研究课题，并检查实验设计。",
+        visitor_profile="lab_member",
+    )
+
+    intent = support._build_fallback_interaction_intent(request)
+
+    assert intent.domain == "research"
+    assert "research_methodology" in intent.retrieval_scopes
+
+
+def test_owner_method_retrieval_query_requires_authenticated_lab_profile(tmp_path: Path) -> None:
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    authenticated = ChatRequest(
+        student_name="Alice",
+        question="请按七问法评价这个研究课题，并结合论文写作方法。",
+        visitor_profile="lab_member",
+    )
+    public = authenticated.model_copy(update={"visitor_profile": "general_visitor"})
+    unrelated = authenticated.model_copy(update={"question": "请介绍最近的论文。"})
+
+    assert support._owner_method_retrieval_queries(authenticated) == (
+        "科研指导方法 如何确定一个好的研究课题",
+        "论文写作方法 系统论文修改与打磨经验",
+    )
+    assert support._owner_method_retrieval_queries(public) == ()
+    assert support._owner_method_retrieval_queries(unrelated) == ()
+
+
+def test_explicit_owner_method_bypasses_generic_curated_direction_answer() -> None:
+    question = "请按七问研究方法评价候选研究方向是否值得继续，并检查 baseline、公平对比和消融。"
+
+    assert not FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(question)
+
+
+def test_service_drops_scope_matched_hit_without_query_evidence(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    support = service._build_support()
+    intent = InteractionIntent(
+        action="answer",
+        domain="research",
+        retrieval_scopes=["publications", "profile"],
+        exclude_scopes=["courseware"],
+        decision_mode="direct_answer",
+        confidence=0.94,
+    )
+
+    filtered = support._filter_knowledge_hits_by_intent(
+        [
+            KnowledgeSearchHit(
+                document_id="irrelevant-profile-pdf",
+                title="2026 parallel distributed state management survey（第16部分）",
+                excerpt="References and bibliography for distributed state management.",
+                score=515.0,
+                tags=["homepage", "profile", "attachment", "pdf"],
+                source_name="research-paper-part-16",
+            ),
+            KnowledgeSearchHit(
+                document_id="tensor-parallel-guide",
+                title="大模型张量并行入门",
+                excerpt="张量并行把矩阵按维度切分到多个设备上计算，再聚合结果。",
+                score=18.0,
+                tags=["research", "publication"],
+                source_name="public-guide",
+            ),
+        ],
+        intent,
+        question="请用一个简单例子解释大模型推理中的张量并行，控制在150字以内。",
+    )
+
+    assert [hit.document_id for hit in filtered] == ["tensor-parallel-guide"]
+
+
 def test_service_prompt_adds_meeting_preparation_checklist_guidance(
     tmp_path: Path,
 ) -> None:
@@ -1222,6 +1632,57 @@ def test_service_prompt_adds_meeting_preparation_checklist_guidance(
         "Do not ask for time slots unless the student explicitly asks to book a meeting."
         in prompt
     )
+
+
+def test_mixed_joining_question_repeats_owner_facts_next_to_question(tmp_path: Path) -> None:
+    settings = AppSettings(knowledge_base_dir=tmp_path)
+    service = DigitalTwinService(settings)
+    question = (
+        "张老师您好，请介绍一下您目前主要研究什么，并说明学生如果想加入课题组"
+        "应该提前准备什么？"
+    )
+    prompt = service._build_student_prompt(
+        request=type(
+            "Request",
+            (),
+            {
+                "student_name": "Alice",
+                "course_context": "科研指导",
+                "question": question,
+                "visitor_profile": "general_visitor",
+                "attachments": [],
+                "deep_thinking": False,
+                "deep_thinking_explicit": False,
+            },
+        )(),
+        knowledge_hits=[
+            KnowledgeSearchHit(
+                document_id="owner-current-focus",
+                title="公开资料精选｜当前研究主线",
+                excerpt=(
+                    "当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体"
+                    "中间件展开。"
+                ),
+                score=77.0,
+                tags=["profile", "research-agenda"],
+                source_name="public-profile:current-focus",
+            )
+        ],
+        interaction_intent=InteractionIntent(
+            action="answer",
+            domain="advising",
+            retrieval_scopes=["preparation", "meeting_policy", "profile"],
+            exclude_scopes=["courseware"],
+            decision_mode="advise_only",
+            confidence=0.9,
+        ),
+    )
+
+    grounding_position = prompt.index("Mandatory owner-fact grounding")
+    question_position = prompt.index("Current user question")
+    assert grounding_position < question_position
+    assert "大模型推理引擎、推理服务系统与记忆智能体中间件" in prompt
+    assert "do not substitute a plausible unrelated field" in prompt
 
 
 def test_service_prompt_adds_project_scoping_guidance(tmp_path: Path) -> None:

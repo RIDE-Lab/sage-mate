@@ -1,0 +1,1063 @@
+const { test, expect } = require("@playwright/test");
+const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
+
+const WEB_ROOT = path.resolve(__dirname, "../../src/sage_faculty_twin/web");
+const VIEWPORTS = [
+  { name: "phone-320", width: 320, height: 568 },
+  { name: "phone-393", width: 393, height: 659 },
+  { name: "tablet-768", width: 768, height: 1024 },
+  { name: "desktop-1280", width: 1280, height: 800 },
+];
+
+let fixtureServer;
+let fixtureBaseUrl;
+
+function sendFile(response, filename, contentType) {
+  response.writeHead(200, {
+    "cache-control": "no-store",
+    "content-type": contentType,
+  });
+  fs.createReadStream(path.join(WEB_ROOT, filename)).pipe(response);
+}
+
+function handleFixtureRequest(request, response) {
+  const pathname = new URL(request.url, "http://fixture.invalid").pathname;
+  if (pathname === "/" || pathname === "/index.html") {
+    sendFile(response, "index.html", "text/html; charset=utf-8");
+    return;
+  }
+  if (pathname === "/styles.4222.css" || pathname === "/styles.css") {
+    sendFile(response, "styles.css", "text/css; charset=utf-8");
+    return;
+  }
+  if (pathname === "/app.4222.js" || pathname === "/app.js") {
+    sendFile(response, "app.js", "text/javascript; charset=utf-8");
+    return;
+  }
+  if (pathname === "/companion.js") {
+    sendFile(response, "companion.js", "text/javascript; charset=utf-8");
+    return;
+  }
+  if (pathname === "/companion.css") {
+    sendFile(response, "companion.css", "text/css; charset=utf-8");
+    return;
+  }
+  if (pathname === "/health") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({
+      status: "ok",
+      app_version: "4.6.30",
+      model_name: "vllm-ascend/DeepSeek-V4-Flash-w8a8-mtp",
+      engine_image: "vllm-ascend-hust:graph-runtime",
+      npu_devices: "0,1,2,3,4,5,6,7",
+      npu_active_count: "8",
+      npu_utilization: "42%",
+      npu_memory_usage: "378 / 488 GiB",
+      npu_utilization_by_device: "0:40% · 1:43% · 2:41% · 3:44% · 4:40% · 5:43% · 6:41% · 7:44%",
+      registered_user_accounts: "12",
+      conversation_memory_records: "850",
+      llm_status: "healthy",
+      llm_request_count: "20",
+      llm_avg_latency_ms: "1250",
+      llm_app_cache_hit_rate: "0.4",
+      llm_request_throughput_rps: "1.5",
+    }));
+    return;
+  }
+  if (pathname === "/auth/user/session") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({ is_authenticated: false, mode: "public" }));
+    return;
+  }
+  if (pathname === "/chat/workflow-events") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "text/event-stream; charset=utf-8",
+    });
+    response.end([
+      `data: ${JSON.stringify({ type: "answer_done", response: {
+        answer: "这是测试回答，包含可核验的公开资料。",
+        answer_basis: [{
+          basis_label: "公开资料",
+          source_label: "研究主页",
+          title: "研究方向与公开项目",
+          detail: "依据公开主页与项目文档整理。",
+        }],
+        knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+      } })}\n\n`,
+      `data: ${JSON.stringify({ type: "complete" })}\n\n`,
+    ].join(""));
+    return;
+  }
+  if (pathname === "/chat" && request.method === "POST") {
+    response.writeHead(200, {
+      "cache-control": "no-store",
+      "content-type": "application/json; charset=utf-8",
+    });
+    response.end(JSON.stringify({
+      answer: "这是测试回答，包含可核验的公开资料。",
+      conversation_id: "fixture-conversation",
+      workflow_trace: [],
+      answer_basis: [{
+        basis_label: "公开资料",
+        source_label: "研究主页",
+        title: "研究方向与公开项目",
+        detail: "依据公开主页与项目文档整理。",
+      }],
+      follow_up_actions: [],
+      knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+    }));
+    return;
+  }
+  response.writeHead(200, {
+    "cache-control": "no-store",
+    "content-type": "application/json; charset=utf-8",
+  });
+  response.end("{}");
+}
+
+test.beforeAll(async () => {
+  fixtureServer = http.createServer(handleFixtureRequest);
+  await new Promise((resolve, reject) => {
+    fixtureServer.once("error", reject);
+    fixtureServer.listen(0, "127.0.0.1", resolve);
+  });
+  const address = fixtureServer.address();
+  fixtureBaseUrl = `http://127.0.0.1:${address.port}`;
+});
+
+test.afterAll(async () => {
+  await new Promise((resolve, reject) => {
+    fixtureServer.close((error) => (error ? reject(error) : resolve()));
+  });
+});
+
+async function openOnboarding(page, viewport) {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.route("**/chat/workflow-events**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream; charset=utf-8",
+    headers: { "cache-control": "no-store" },
+    body: [
+      `data: ${JSON.stringify({ type: "answer_done", response: {
+        answer: "这是测试回答，包含可核验的公开资料。",
+        answer_basis: [{
+          basis_label: "公开资料",
+          source_label: "研究主页",
+          title: "研究方向与公开项目",
+          detail: "依据公开主页与项目文档整理。",
+        }],
+        knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+      } })}\n\n`,
+      `data: ${JSON.stringify({ type: "complete" })}\n\n`,
+    ].join(""),
+  }));
+  await page.route("**/chat?**", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json; charset=utf-8",
+    headers: { "cache-control": "no-store" },
+    body: JSON.stringify({
+      answer: "这是测试回答，包含可核验的公开资料。",
+      conversation_id: "fixture-conversation",
+      workflow_trace: [],
+      answer_basis: [{
+        basis_label: "公开资料",
+        source_label: "研究主页",
+        title: "研究方向与公开项目",
+        detail: "依据公开主页与项目文档整理。",
+      }],
+      follow_up_actions: [],
+      knowledge_hits: [{ title: "研究方向与公开项目", source_name: "研究主页" }],
+    }),
+  }));
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  if (viewport.width <= 720) {
+    await page.getByRole("button", { name: "打开菜单" }).click();
+  }
+  await page.getByRole("button", { name: "新手引导" }).click();
+  await expect(page.locator("#onboarding-card")).toBeVisible();
+}
+
+async function expectInsideViewport(page, viewport) {
+  const card = page.locator("#onboarding-card");
+  const box = await card.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width + 0.5);
+  const pageWidth = await page.evaluate(() => ({
+    clientWidth: document.documentElement.clientWidth,
+    scrollWidth: document.documentElement.scrollWidth,
+  }));
+  expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.clientWidth);
+}
+
+for (const viewport of VIEWPORTS) {
+  test(`onboarding layout is safe at ${viewport.name}`, async ({ page }) => {
+    await openOnboarding(page, viewport);
+    await expectInsideViewport(page, viewport);
+
+    const shellDisplay = await page.locator(".chat-shell").evaluate(
+      (element) => getComputedStyle(element).display,
+    );
+    expect(shellDisplay).toBe("flex");
+    if (viewport.width <= 920) {
+      await page.getByRole("button", { name: "下一步" }).click();
+      await expect(page.locator("#onboarding-step-label")).toHaveText("2 / 2");
+      await expectInsideViewport(page, viewport);
+    } else {
+      const cardBox = await page.locator("#onboarding-card").boundingBox();
+      const chatShellBox = await page.locator(".chat-shell").boundingBox();
+      expect(cardBox.width).toBeLessThanOrEqual(640.5);
+      expect(Math.abs(
+        (cardBox.x + cardBox.width / 2) - (chatShellBox.x + chatShellBox.width / 2),
+      )).toBeLessThanOrEqual(1);
+    }
+  });
+}
+
+for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
+  test(`submitting from onboarding reveals the conversation at ${viewport.name}`, async ({ page }) => {
+    await openOnboarding(page, viewport);
+
+    const question = "如果我对 LLM 推理优化感兴趣，建议先了解哪些关键词或系统？";
+    await page.locator("#chat-question").fill(question);
+    await page.getByRole("button", { name: "发送问题" }).click();
+
+    await expect(page.locator("body")).not.toHaveClass(/onboarding-active/);
+    await expect(page.locator("#onboarding-card")).toBeHidden();
+    await expect(page.locator(".chat-stream")).toBeVisible();
+    await expect(page.locator(".message-user")).toContainText(question);
+    await expect(page.locator(".message-ready")).toBeVisible();
+    await expect(page.locator(".message-ready .message-reply-block > .message-body")).toContainText("这是测试回答");
+
+    const overlap = await page.evaluate(() => {
+      const stream = document.querySelector(".message-ready")?.getBoundingClientRect();
+      // The composer shell intentionally has a transparent fade above its
+      // solid control. Content must not intersect the actual control surface.
+      const composer = document.querySelector(".composer-row")?.getBoundingClientRect();
+      if (!stream || !composer) return null;
+      return Math.max(0, Math.min(stream.bottom, composer.bottom) - Math.max(stream.top, composer.top));
+    });
+    expect(overlap).toBe(0);
+  });
+}
+
+for (const viewport of [VIEWPORTS[0], VIEWPORTS[1], VIEWPORTS[3]]) {
+  test(`Sage companion is interactive at ${viewport.name}`, async ({ page }) => {
+    await openOnboarding(page, viewport);
+    await page.getByRole("button", { name: "跳过引导" }).click();
+
+    const companion = page.locator("#sage-companion");
+    const toggle = page.locator("#sage-companion-toggle");
+    await expect(companion).toBeVisible();
+    const toggleBox = await toggle.boundingBox();
+    const composerBox = await page.locator("#chat-form").boundingBox();
+    expect(toggleBox).not.toBeNull();
+    expect(composerBox).not.toBeNull();
+    expect(toggleBox.y + toggleBox.height).toBeLessThanOrEqual(composerBox.y + 0.5);
+    await toggle.click();
+    await expect(page.locator("#sage-companion-panel")).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    const panelBox = await page.locator("#sage-companion-panel").boundingBox();
+    expect(panelBox).not.toBeNull();
+    expect(panelBox.x).toBeGreaterThanOrEqual(0);
+    expect(panelBox.x + panelBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(panelBox.y).toBeGreaterThanOrEqual(0);
+    expect(panelBox.y + panelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+
+    if (viewport.width === 320) {
+      await expect(page.locator("#sage-companion-scroll-cue")).toBeVisible();
+      await page.locator("#sage-companion-scroll-area").evaluate((element) => element.scrollTo(0, element.scrollHeight));
+      await expect(page.locator("#sage-companion-scroll-cue")).toBeHidden();
+    }
+
+    await page.getByRole("tab", { name: "装扮" }).click();
+    await expect(page.locator("#sage-companion-panel-customize")).toBeVisible();
+    const settingsPanelBox = await page.locator("#sage-companion-panel").boundingBox();
+    expect(settingsPanelBox).not.toBeNull();
+    expect(settingsPanelBox.x).toBeGreaterThanOrEqual(0);
+    expect(settingsPanelBox.x + settingsPanelBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+    expect(settingsPanelBox.y).toBeGreaterThanOrEqual(0);
+    expect(settingsPanelBox.y + settingsPanelBox.height).toBeLessThanOrEqual(viewport.height + 0.5);
+    await page.getByRole("tab", { name: "陪伴" }).click();
+
+    await page.getByRole("button", { name: "摸摸它" }).click();
+    await expect(companion).toHaveAttribute("data-state", "happy");
+    await expect(page.locator("#sage-companion-bond-value")).toHaveText("24%");
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#sage-companion-panel")).toBeHidden();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  });
+}
+
+test("shared icons render from valid symbols on phone and desktop", async ({ page }) => {
+  for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
+    await openOnboarding(page, viewport);
+    await page.getByRole("button", { name: "跳过引导" }).click();
+
+    const iconAudit = await page.locator("svg.ui-icon use").evaluateAll((uses) => uses.map((use) => {
+      const icon = use.closest("svg");
+      const reference = use.getAttribute("href") || "";
+      const bounds = icon.getBoundingClientRect();
+      return {
+        reference,
+        symbolExists: reference.startsWith("#") && Boolean(document.querySelector(reference)),
+        hasSize: bounds.width > 0 && bounds.height > 0,
+        width: bounds.width,
+        height: bounds.height,
+      };
+    }));
+
+    expect(iconAudit.length).toBeGreaterThan(15);
+    expect(iconAudit.every((icon) => icon.symbolExists)).toBe(true);
+    const renderedIcons = iconAudit.filter((icon) => icon.hasSize);
+    expect(renderedIcons.length).toBeGreaterThan(8);
+    expect(renderedIcons.every((icon) => (
+      icon.width >= 12 && icon.width <= 24 && icon.height >= 12 && icon.height <= 24
+    ))).toBe(true);
+    await expect(page.locator('.pill-toggle-label use[href="#icon-brain"]')).toBeVisible();
+    await expect(page.locator('.pill-toggle-label use[href="#icon-globe-search"]')).toBeVisible();
+    await expect(page.locator('.send-button use[href="#icon-send"]')).toBeVisible();
+  }
+});
+
+test("system status remains readable in both themes and responsive viewports", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await page.setViewportSize(viewport);
+      await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+      await page.evaluate((selectedTheme) => {
+        localStorage.setItem("sageMateTheme", selectedTheme);
+        localStorage.setItem("sageOnboardingCompleted", "true");
+        localStorage.setItem("sageOnboardingDismissed", "true");
+      }, theme);
+      await page.reload({ waitUntil: "domcontentloaded" });
+      if (viewport.width <= 720) {
+        await page.getByRole("button", { name: "打开菜单" }).click();
+      }
+      await page.getByRole("button", { name: "系统状态" }).click();
+      await expect(page.locator("#view-model-name .status-value")).toContainText("DeepSeek-V4");
+
+      const audit = await page.evaluate(() => {
+        const parseColor = (value) => {
+          const values = value.match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+          return { r: values[0], g: values[1], b: values[2], a: values[3] ?? 1 };
+        };
+        const blend = (front, back) => ({
+          r: front.r * front.a + back.r * (1 - front.a),
+          g: front.g * front.a + back.g * (1 - front.a),
+          b: front.b * front.a + back.b * (1 - front.a),
+          a: 1,
+        });
+        const background = (element) => {
+          const layers = [];
+          for (let node = element; node; node = node.parentElement) {
+            layers.push(parseColor(getComputedStyle(node).backgroundColor));
+          }
+          return layers.reverse().reduce(
+            (result, layer) => (layer.a > 0 ? blend(layer, result) : result),
+            { r: 255, g: 255, b: 255, a: 1 },
+          );
+        };
+        const luminance = ({ r, g, b }) => {
+          const channels = [r, g, b].map((value) => {
+            const channel = value / 255;
+            return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+          });
+          return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+        };
+        const contrast = (foreground, backdrop) => {
+          const first = luminance(foreground);
+          const second = luminance(backdrop);
+          return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+        };
+        const sample = (selector) => {
+          const element = document.querySelector(selector);
+          const style = getComputedStyle(element);
+          const backdrop = background(element);
+          return {
+            selector,
+            color: style.color,
+            background: style.backgroundColor,
+            border: style.borderTopColor,
+            textContrast: contrast(parseColor(style.color), backdrop),
+          };
+        };
+        const card = document.querySelector("#view-model-name");
+        const cardStyle = getComputedStyle(card);
+        const cardBackdrop = background(card);
+        const pageWidth = {
+          clientWidth: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+        };
+        return {
+          theme: document.documentElement.dataset.theme,
+          state: document.querySelector("#status-view").dataset.state,
+          samples: [
+            sample(".chat-view-title"),
+            sample(".status-section-title"),
+            sample("#view-model-name .status-label"),
+            sample("#view-model-name .status-value"),
+            sample(".app-stack-chip"),
+            sample(".app-version-badge"),
+          ],
+          cardBorder: cardStyle.borderTopColor,
+          cardBackground: cardStyle.backgroundColor,
+          cardBorderContrast: contrast(parseColor(cardStyle.borderTopColor), cardBackdrop),
+          footerBorderContrasts: [".app-stack-chip", ".app-version-badge"].map((selector) => {
+            const element = document.querySelector(selector);
+            return contrast(parseColor(getComputedStyle(element).borderTopColor), background(element));
+          }),
+          pageWidth,
+        };
+      });
+
+      expect(audit.theme).toBe(theme);
+      expect(audit.state).toBe("ready");
+      expect(audit.samples.every((sample) => sample.textContrast >= 4.5)).toBe(true);
+      expect(audit.cardBorderContrast).toBeGreaterThanOrEqual(3);
+      expect(audit.footerBorderContrasts.every((value) => value >= 3)).toBe(true);
+      expect(audit.pageWidth.scrollWidth).toBeLessThanOrEqual(audit.pageWidth.clientWidth);
+    }
+  }
+});
+
+test("Sage companion customizes, grows, persists, hides, and restores", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.evaluate(() => {
+    localStorage.removeItem("sageMateCompanion:v3");
+    localStorage.setItem("sageMateCompanion:v2", JSON.stringify({ bond: 58 }));
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  const companion = page.locator("#sage-companion");
+  const toggle = page.locator("#sage-companion-toggle");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("58%");
+  await expect(page.locator("#sage-companion-stage")).toHaveText("熟悉伙伴");
+  await expect(page.locator(".sage-companion-accessory-star")).toBeVisible();
+  await toggle.click();
+  await page.getByRole("tab", { name: "装扮" }).click();
+  await page.locator("#sage-companion-name-input").fill("小火花");
+  await page.getByRole("button", { name: "保存" }).click();
+  await page.getByLabel("薄荷").check();
+  await page.locator("#sage-companion-temperament").selectOption("lively");
+  await page.locator("#sage-companion-sound").check();
+  await expect(companion).toHaveAttribute("data-appearance", "mint");
+  await expect(companion).toHaveAttribute("data-temperament", "lively");
+  await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
+
+  await page.getByRole("tab", { name: "陪伴" }).click();
+  await page.getByRole("button", { name: "喂颗灵感豆" }).click();
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("65%");
+  await expect(page.locator("#sage-companion-stage")).toHaveText("默契搭档");
+  await expect(page.locator(".sage-companion-accessory-scarf")).toBeVisible();
+  await expect(page.locator("#sage-companion-message")).toContainText("新的成长阶段");
+
+  const firstQuest = await page.locator("#sage-companion-quest-text").textContent();
+  await page.getByRole("button", { name: "换一张" }).click();
+  await expect(page.locator("#sage-companion-quest-text")).not.toHaveText(firstQuest);
+  await page.getByRole("button", { name: "完成啦" }).click();
+  await expect(page.locator("#sage-companion-quest-status")).toHaveText("今日完成");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("70%");
+
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(companion).toHaveAttribute("data-appearance", "mint");
+  await expect(companion).toHaveAttribute("data-temperament", "lively");
+  await expect(page.locator("#sage-companion-name")).toHaveText("小火花");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("70%");
+  await toggle.click();
+  await page.getByRole("tab", { name: "装扮" }).click();
+  await page.getByRole("button", { name: "隐藏伙伴" }).click();
+  await expect(companion).toBeHidden();
+
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await page.getByRole("button", { name: "恢复电子伙伴小火花" }).click();
+  await expect(companion).toBeVisible();
+  await expect(page.locator("#sage-companion-panel")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "装扮" })).toHaveAttribute("aria-selected", "true");
+  await expect.poll(() => page.locator("#sage-companion-scroll-area").evaluate((element) => element.scrollTop)).toBe(0);
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
+  expect(stored).toMatchObject({
+    version: 3,
+    name: "小火花",
+    appearance: "mint",
+    temperament: "lively",
+    soundEnabled: true,
+    hidden: false,
+    bond: 70,
+    dailyQuestCompleted: true,
+  });
+  expect(stored).not.toHaveProperty("question");
+});
+
+test("Sage companion records one learning footprint per completed request", async ({ page }) => {
+  const viewport = VIEWPORTS[3];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+
+  await page.locator("#chat-question").fill("用一句话解释测试驱动开发");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await expect(page.locator("#sage-companion")).toHaveClass(/is-conversation-docked/);
+  const dockedToggleBox = await page.locator("#sage-companion-toggle").boundingBox();
+  const contentColumnBox = await page.locator(".composer-inner").boundingBox();
+  expect(dockedToggleBox).not.toBeNull();
+  expect(contentColumnBox).not.toBeNull();
+  expect(dockedToggleBox.x).toBeGreaterThanOrEqual(contentColumnBox.x + contentColumnBox.width + 12);
+  await page.locator("#sage-companion-toggle").click();
+  await expect(page.locator("#sage-companion-answers")).toHaveText("1");
+  await expect(page.locator("#sage-companion-streak")).toHaveText("1 天");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("23%");
+  await expect(page.locator("#sage-companion-message")).toContainText("第 1 个问题");
+  await expect(page.getByRole("button", { name: "发送问题" })).toBeEnabled();
+
+  await page.keyboard.press("Escape");
+  await page.locator("#chat-question").fill("再解释一次测试驱动开发");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await page.locator("#sage-companion-toggle").click();
+  await expect(page.locator("#sage-companion-answers")).toHaveText("2");
+  await expect(page.locator("#sage-companion-streak")).toHaveText("1 天");
+  await expect(page.locator("#sage-companion-bond-value")).toHaveText("26%");
+
+  const stored = await page.evaluate(() => JSON.parse(localStorage.getItem("sageMateCompanion:v3")));
+  expect(stored).toMatchObject({
+    answersCompleted: 2,
+    streakDays: 1,
+    bond: 26,
+  });
+  expect(stored).not.toHaveProperty("question");
+  expect(stored).not.toHaveProperty("answer");
+});
+
+test("mobile conversation hides the floating companion without losing its sidebar entry", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.locator("#chat-question").fill("介绍一下主要研究方向");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await expect(page.locator(".message-ready")).toBeVisible();
+  await expect(page.locator("#sage-companion")).toHaveClass(/is-conversation-docked/);
+  await expect(page.locator("#sage-companion")).toBeHidden();
+
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(overflow).toBeLessThanOrEqual(0);
+  await page.getByRole("button", { name: "打开菜单" }).click();
+  await expect(page.getByRole("button", { name: /电子伙伴/ })).toBeVisible();
+});
+
+test("Sage companion tabs support keyboard navigation and reduced motion", async ({ page }) => {
+  const viewport = VIEWPORTS[1];
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openOnboarding(page, viewport);
+  await page.getByRole("button", { name: "跳过引导" }).click();
+  await page.locator("#sage-companion-toggle").click();
+
+  const companionTab = page.getByRole("tab", { name: "陪伴" });
+  const customizeTab = page.getByRole("tab", { name: "装扮" });
+  await expect(companionTab).toHaveAttribute("aria-selected", "true");
+  await companionTab.press("End");
+  await expect(customizeTab).toBeFocused();
+  await expect(customizeTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#sage-companion-panel-customize")).toBeVisible();
+  await customizeTab.press("Home");
+  await expect(companionTab).toBeFocused();
+  await expect(page.locator("#sage-companion-panel-companion")).toBeVisible();
+
+  const reducedMotion = await page.locator("#sage-companion-panel").evaluate((element) => ({
+    animationName: getComputedStyle(element).animationName,
+    indicatorTransition: getComputedStyle(element.querySelector(".sage-companion-tab-indicator")).transitionDuration,
+  }));
+  expect(reducedMotion.animationName).toBe("none");
+  expect(reducedMotion.indicatorTransition).toBe("0s");
+});
+
+test("active chat exposes a usable stop control and sends server cancellation", async ({ page }) => {
+  await page.setViewportSize({ width: 393, height: 659 });
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.route("**/chat/workflow-events**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/event-stream; charset=utf-8",
+    body: `data: ${JSON.stringify({ type: "keepalive" })}\n\n`,
+  }));
+  await page.route("**/chat?**", async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({
+        answer: "不应在取消后显示",
+        conversation_id: "cancel-test",
+        workflow_trace: [],
+        answer_basis: [],
+        follow_up_actions: [],
+        knowledge_hits: [],
+      }),
+    });
+  });
+  let cancelRequestUrl = "";
+  await page.route("**/chat/cancel?**", async (route) => {
+    cancelRequestUrl = route.request().url();
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json; charset=utf-8",
+      body: JSON.stringify({ cancelled: true }),
+    });
+  });
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate(() => {
+    localStorage.setItem("sageOnboardingCompleted", "true");
+    localStorage.setItem("sageOnboardingDismissed", "true");
+  });
+  await page.reload({ waitUntil: "domcontentloaded" });
+
+  await page.locator("#chat-question").fill("请开始一个需要较长时间的深度分析");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  const stopButton = page.getByRole("button", { name: "停止生成" });
+  await expect(stopButton).toBeEnabled();
+  await expect(stopButton).toHaveAttribute("data-mode", "stop");
+  await expect.poll(
+    () => stopButton.locator(".send-button-spinner").evaluate(
+      (element) => getComputedStyle(element).opacity,
+    ),
+  ).toBe("1");
+  await expect.poll(
+    () => stopButton.locator(".send-button-spinner").evaluate(
+      (element) => getComputedStyle(element).borderRadius,
+    ),
+  ).toBe("3px");
+
+  await stopButton.click();
+  await expect(page.getByText("已停止生成。你可以修改问题后重新发送。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "发送问题" })).toHaveAttribute("data-mode", "send");
+  expect(cancelRequestUrl).toContain("/chat/cancel?request_id=");
+});
+
+async function openThemeFixture(page, theme, viewport) {
+  await page.setViewportSize(viewport);
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await page.evaluate((selectedTheme) => {
+    localStorage.setItem("sageMateTheme", selectedTheme);
+    localStorage.setItem("sageOnboardingCompleted", "true");
+    localStorage.setItem("sageOnboardingDismissed", "true");
+  }, theme);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+}
+
+for (const viewport of [
+  { name: "desktop", width: 1280, height: 800 },
+  { name: "mobile", width: 390, height: 844 },
+]) {
+  test(`returning visitor ${viewport.name} landing does not wait for remote status initialization`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await page.addInitScript(() => {
+      localStorage.setItem("sageOnboardingCompleted", "true");
+      localStorage.setItem("sageOnboardingDismissed", "true");
+    });
+
+    let releaseVersions;
+    const versionsReleased = new Promise((resolve) => {
+      releaseVersions = resolve;
+    });
+    await page.route("**/stack/versions", async (route) => {
+      await versionsReleased;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json; charset=utf-8",
+        body: JSON.stringify({ app_version: "4.6.30" }),
+      });
+    });
+
+    await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("#welcome-greeting")).toBeVisible({ timeout: 750 });
+    await expect(page.locator("#seed-chips")).toBeVisible({ timeout: 750 });
+    await expect(page.locator("#seed-chips-list .seed-chip")).toHaveCount(3);
+
+    releaseVersions();
+    await expect(page.locator("#app-version-badge")).toHaveText("v4.6.30");
+  });
+}
+
+for (const viewport of [
+  { name: "phone-390", width: 390, height: 844 },
+  { name: "phone-430", width: 430, height: 932 },
+]) {
+  for (const theme of ["light", "dark"]) {
+    test(`mobile sidebar is a closed-by-default overlay at ${viewport.name} ${theme}`, async ({ page }) => {
+      await page.setViewportSize(viewport);
+      await page.route("https://fonts.**", (route) => route.abort());
+      await page.addInitScript((selectedTheme) => {
+        localStorage.setItem("sageMateTheme", selectedTheme);
+        localStorage.setItem("sageOnboardingCompleted", "true");
+        localStorage.setItem("sageOnboardingDismissed", "true");
+      }, theme);
+      await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+
+      const sidebar = page.locator("#primary-sidebar");
+      const menu = page.getByRole("button", { name: "打开菜单" });
+      const appShell = page.locator(".app-shell");
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await expect(sidebar).toBeHidden();
+      await expect(sidebar).toHaveAttribute("aria-hidden", "true");
+      await expect(sidebar).toHaveAttribute("inert", "");
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+
+      const assertMainFits = async ({ controls = true } = {}) => {
+        const shellBox = await appShell.boundingBox();
+        expect(shellBox).not.toBeNull();
+        expect(shellBox.x).toBeGreaterThanOrEqual(0);
+        expect(shellBox.x + shellBox.width).toBeLessThanOrEqual(viewport.width + 0.5);
+        const layout = await page.evaluate(() => ({
+          clientWidth: document.documentElement.clientWidth,
+          scrollWidth: document.documentElement.scrollWidth,
+        }));
+        expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+        if (!controls) return;
+        for (const selector of [
+          "#composer-upload-button",
+          "#voice-input-button",
+          '#chat-form button[type="submit"]',
+          "#lucky-question-button",
+          ".token-usage-toggle",
+          "#mobile-workflow-trigger",
+        ]) {
+          const box = await page.locator(selector).boundingBox();
+          expect(box, selector).not.toBeNull();
+          expect(box.x, selector).toBeGreaterThanOrEqual(0);
+          expect(box.x + box.width, selector).toBeLessThanOrEqual(viewport.width + 0.5);
+        }
+      };
+
+      await assertMainFits();
+      await page.evaluate(() => applyAppProfilePresentation({ app_profile: "code_assistant" }));
+      await expect(sidebar).toBeHidden();
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+      // Code Assistant intentionally replaces Faculty Twin's lucky/token tools;
+      // only the shared shell geometry is invariant across profiles.
+      await assertMainFits({ controls: false });
+
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+      await expect(sidebar).toBeHidden();
+      await assertMainFits();
+
+      const closedShell = await appShell.boundingBox();
+      await menu.click();
+      await expect(page.getByRole("button", { name: "关闭菜单" })).toHaveAttribute("aria-expanded", "true");
+      await expect(sidebar).toBeVisible();
+      await expect(sidebar).toHaveAttribute("aria-hidden", "false");
+      await expect(sidebar).not.toHaveAttribute("inert", "");
+      expect(await appShell.boundingBox()).toEqual(closedShell);
+
+      await page.keyboard.press("Escape");
+      await expect(sidebar).toBeHidden();
+      await expect(menu).toBeFocused();
+      await expect(menu).toHaveAttribute("aria-expanded", "false");
+      await assertMainFits();
+    });
+  }
+}
+
+test("desktop sidebar retains its collapsed rail and expanded layout", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.route("https://fonts.**", (route) => route.abort());
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  const sidebar = page.locator("#primary-sidebar");
+  const shell = page.locator(".app-shell");
+  await expect(sidebar).toBeVisible();
+  await expect(page.locator("#mobile-sidebar-toggle")).toBeHidden();
+  expect(Math.round((await sidebar.boundingBox()).width)).toBe(56);
+  expect(Math.round((await shell.boundingBox()).x)).toBe(56);
+  await page.getByRole("button", { name: "切换侧边栏" }).click();
+  await expect(sidebar).toHaveCSS("width", "280px");
+  // Preserve the existing desktop layout: the 280px rail overlaps the content
+  // edge by 20px while the application shell settles at its established 260px.
+  await expect.poll(async () => Math.round((await shell.boundingBox()).x)).toBe(260);
+  expect(Math.round((await sidebar.boundingBox()).width)).toBe(280);
+});
+
+async function openRailView(page, buttonName, viewport) {
+  if (viewport.width <= 720) {
+    const menu = page.getByRole("button", { name: "打开菜单" });
+    if (await menu.isVisible()) {
+      await menu.click();
+    }
+  }
+  const target = buttonName === "账号设置"
+    ? page.locator("#sidebar-user-icon")
+    : page.getByRole("button", { name: buttonName });
+  await target.click();
+}
+
+async function auditThemeSelectors(page, selectors) {
+  return page.evaluate((requestedSelectors) => {
+    const parseColor = (value) => {
+      const serialized = String(value || "").trim();
+      const values = serialized.match(/[\d.]+/g)?.map(Number) || [0, 0, 0, 0];
+      if (serialized.startsWith("color(srgb")) {
+        return {
+          r: values[0] * 255,
+          g: values[1] * 255,
+          b: values[2] * 255,
+          a: values[3] ?? 1,
+        };
+      }
+      return { r: values[0], g: values[1], b: values[2], a: values[3] ?? 1 };
+    };
+    const blend = (front, back) => ({
+      r: front.r * front.a + back.r * (1 - front.a),
+      g: front.g * front.a + back.g * (1 - front.a),
+      b: front.b * front.a + back.b * (1 - front.a),
+      a: 1,
+    });
+    const backdrop = (element, includeSelf = true) => {
+      const layers = [];
+      for (let node = includeSelf ? element : element.parentElement; node; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        layers.push({ color: parseColor(style.backgroundColor), opacity: Number(style.opacity || 1) });
+      }
+      return layers.reverse().reduce((result, layer) => {
+        const color = { ...layer.color, a: layer.color.a * layer.opacity };
+        return color.a > 0 ? blend(color, result) : result;
+      }, { r: 255, g: 255, b: 255, a: 1 });
+    };
+    const luminance = ({ r, g, b }) => {
+      const channels = [r, g, b].map((value) => {
+        const channel = value / 255;
+        return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+    };
+    const contrast = (firstColor, secondColor) => {
+      const first = luminance(firstColor);
+      const second = luminance(secondColor);
+      return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+    };
+    return requestedSelectors.map((selector) => {
+      const element = document.querySelector(selector);
+      if (!element) {
+        return { selector, missing: true };
+      }
+      const style = getComputedStyle(element);
+      const bounds = element.getBoundingClientRect();
+      const hidden = style.display === "none" || style.visibility === "hidden" || bounds.width === 0 || bounds.height === 0;
+      const ownBackdrop = backdrop(element);
+      const outsideBackdrop = backdrop(element, false);
+      const foreground = blend(parseColor(style.color), ownBackdrop);
+      const border = blend(parseColor(style.borderTopColor), outsideBackdrop);
+      return {
+        selector,
+        hidden,
+        color: style.color,
+        background: style.backgroundColor,
+        border: style.borderTopColor,
+        textContrast: contrast(foreground, ownBackdrop),
+        borderContrast: style.borderTopStyle === "none" || Number.parseFloat(style.borderTopWidth) === 0
+          ? null
+          : contrast(border, outsideBackdrop),
+      };
+    });
+  }, selectors);
+}
+
+function expectThemeAuditPasses(audit, { requireBorders = [] } = {}) {
+  expect(audit.filter((sample) => sample.missing || sample.hidden)).toEqual([]);
+  for (const sample of audit) {
+    expect(sample.textContrast, `${sample.selector} text contrast ${JSON.stringify(sample)}`).toBeGreaterThanOrEqual(4.5);
+    if (requireBorders.includes(sample.selector)) {
+      expect(sample.borderContrast, `${sample.selector} border contrast`).toBeGreaterThanOrEqual(3);
+    }
+  }
+}
+
+test("semantic theme contract covers chat, Support, status, account, settings, and feedback states", async ({ page }) => {
+  const viewports = [{ width: 1280, height: 800 }, { width: 390, height: 844 }];
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of viewports) {
+      await openThemeFixture(page, theme, viewport);
+      if (viewport.width <= 720) {
+        const composerBackground = await page.locator(".composer-shell").evaluate(
+          (element) => getComputedStyle(element).backgroundImage,
+        );
+        expect(composerBackground).not.toContain("247, 247, 248");
+        expect(composerBackground).not.toContain("7, 18, 37");
+      }
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".greeting-text",
+        ".greeting-subtitle",
+        ".seed-chips-label",
+        ".seed-chip",
+        "#chat-question",
+        ".composer-pill-toggle .pill-toggle-label",
+        "#lucky-question-button",
+        ".token-usage-toggle",
+      ]), { requireBorders: [".seed-chip", "#lucky-question-button", ".token-usage-toggle"] });
+
+      await page.locator("#chat-question").fill("请介绍研究方向并给出依据");
+      await page.getByRole("button", { name: "发送问题" }).click();
+      await expect(page.locator(".message-ready")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".message-ready .message-body",
+        ".message-section-title",
+        ".message-basis-copy",
+        ".message-basis-tag",
+        ".message-basis-title",
+        ".message-basis-detail",
+      ]), { requireBorders: [".message-basis-tag"] });
+
+      await openRailView(page, "系统状态", viewport);
+      await expect(page.locator("#status-view")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        ".chat-view-title",
+        ".status-section-title",
+        "#view-model-name .status-label",
+        "#view-model-name .status-value",
+      ]));
+
+      await openRailView(page, "账号设置", viewport);
+      await expect(page.locator("#settings-view")).toBeVisible();
+      await page.locator("#settings-view-body").evaluate((element) => {
+        const states = document.createElement("section");
+        states.id = "theme-contract-states";
+        states.innerHTML = `
+          <p class="inline-status inline-status-success">成功状态：操作已完成</p>
+          <p class="inline-status inline-status-warning">警告状态：需要确认</p>
+          <p class="inline-status inline-status-error">错误状态：请重试</p>
+        `;
+        element.prepend(states);
+      });
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        "#settings-view .chat-view-title",
+        "#settings-view .drawer-card",
+        ".inline-status-success",
+        ".inline-status-warning",
+        ".inline-status-error",
+      ]), {
+        requireBorders: [
+          "#settings-view .drawer-card",
+          ".inline-status-success",
+          ".inline-status-warning",
+          ".inline-status-error",
+        ],
+      });
+
+      await page.locator("#open-user-register").click();
+      await expect(page.locator("#account-view")).toBeVisible();
+      expectThemeAuditPasses(await auditThemeSelectors(page, [
+        "#account-view .chat-view-title",
+        "#account-view .chat-view-desc",
+        ".account-tab.active",
+        ".account-tab:not(.active)",
+        "#user-register-name",
+        "#user-register-profile-select",
+      ]), { requireBorders: ["#user-register-name", "#user-register-profile-select"] });
+
+      const pageWidth = await page.evaluate(() => ({
+        clientWidth: document.documentElement.clientWidth,
+        scrollWidth: document.documentElement.scrollWidth,
+      }));
+      expect(pageWidth.scrollWidth).toBeLessThanOrEqual(pageWidth.clientWidth);
+    }
+  }
+});
+
+test("theme release screenshots remain stable across light, dark, desktop, and narrow layouts", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+      await openThemeFixture(page, theme, viewport);
+      await openRailView(page, "系统状态", viewport);
+      await expect(page.locator("#status-view")).toBeVisible();
+      await expect(page).toHaveScreenshot(`theme-${theme}-${viewport.width}x${viewport.height}-status.png`, {
+        animations: "disabled",
+        caret: "hide",
+        fullPage: true,
+        maxDiffPixelRatio: 0.005,
+      });
+    }
+  }
+});
+
+test("composer modes retain native keyboard focus and visible boundaries", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    await openThemeFixture(page, theme, { width: 1280, height: 800 });
+    const deep = page.locator("#deep-thinking-checkbox");
+    await page.getByRole("button", { name: "发送问题" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(deep).toBeFocused();
+    const label = page.locator(".composer-pill-toggle").first();
+    expect(await label.evaluate(el => getComputedStyle(el).outlineStyle)).toBe("solid");
+    await page.keyboard.press("Space");
+    await expect(deep).toBeChecked();
+    await page.keyboard.press("Tab");
+    await expect(page.locator("#web-search-checkbox")).toBeFocused();
+    await page.keyboard.press("Space");
+    await expect(page.locator("#web-search-checkbox")).toBeChecked();
+    await deep.focus();
+    await page.keyboard.press("Space");
+    await expect(deep).not.toBeChecked();
+    await expect(label).not.toHaveClass(/is-active/);
+    await page.locator("#web-search-checkbox").focus();
+    await page.keyboard.press("Space");
+    await expect(page.locator("#web-search-checkbox")).not.toBeChecked();
+    // Sample the settled unselected foreground, not an in-flight CSS transition.
+    await expect.poll(() => label.evaluate(el => getComputedStyle(el).color))
+      .toBe(theme === "dark" ? "rgb(195, 208, 229)" : "rgb(59, 80, 109)");
+    expectThemeAuditPasses(await auditThemeSelectors(page, [
+      ".composer-pill-toggle", ".rail-user-avatar",
+    ]), { requireBorders: [".composer-pill-toggle", ".rail-user-avatar"] });
+  }
+});
+
+test("mobile long answers and citations stay inside the message and clear the composer", async ({ page }) => {
+  for (const theme of ["dark", "light"]) {
+    await openThemeFixture(page, theme, { width: 390, height: 844 });
+    // Mode status adds a composer row; test the largest actual composer.
+    await page.locator(".composer-pill-toggle").first().click();
+    await page.locator("#chat-question").fill("请解释长上下文实验");
+    await page.getByRole("button", { name: "发送问题" }).click();
+    await expect(page.locator(".message-ready")).toBeVisible();
+    // Reproduce mixed prose/list intrinsic grid sizing, not just body.scrollWidth:
+    // the shell intentionally clips horizontal overflow, masking a broken child.
+    await page.locator(".message-ready .message-body").first().evaluate(el => {
+      const list = document.createElement("ul");
+      for (let i = 0; i < 18; i++) {
+        const item = document.createElement("li");
+        item.textContent = `检查 ${i}: baseline_${"long_context_".repeat(12)} 公平对比与关键消融`;
+        list.append(item);
+      }
+      el.replaceChildren(list);
+    });
+    const geometry = await page.locator(".message-ready").evaluate(el => {
+      const frame = el.getBoundingClientRect();
+      return [...el.querySelectorAll(".message-frame, .message-main-copy, .message-body, .message-section, li")]
+        .map(child => ({ name: child.className || child.tagName, right: child.getBoundingClientRect().right, limit: frame.right }));
+    });
+    for (const box of geometry) expect(box.right, JSON.stringify(box)).toBeLessThanOrEqual(box.limit + 1);
+    await page.locator(".chat-stream").evaluate(el => { el.scrollTop = el.scrollHeight; });
+    const bottom = await page.evaluate(() => ({
+      reply: document.querySelector(".message-ready").getBoundingClientRect().bottom,
+      composer: document.querySelector("#chat-form").getBoundingClientRect().top,
+      width: document.documentElement.scrollWidth,
+    }));
+    expect(bottom.width).toBeLessThanOrEqual(390);
+    expect(bottom.reply).toBeLessThanOrEqual(bottom.composer + 1);
+  }
+});

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -27,6 +27,8 @@ class ChatRequest(BaseModel):
     attachments: list[ChatAttachment] = Field(default_factory=list, max_length=4)
     deep_thinking: bool = Field(default=True)
     deep_thinking_explicit: bool = Field(default=False)
+    skill_routing: bool = Field(default=True)
+    answer_max_tokens: int | None = Field(default=None, ge=128, le=2048)
     web_search: bool = Field(default=False)
     code_approval_mode: str = Field(default="ask", pattern="^(ask|auto|full)$")
 
@@ -204,10 +206,31 @@ class TokenUsage(BaseModel):
     max_context_length: int = 0
 
 
+class ChatRequestTiming(BaseModel):
+    """Request-boundary timings used to reconcile UI latency with workflow work."""
+
+    trace_id: str = Field(min_length=1, max_length=128)
+    route: str = Field(pattern="^(boundary|fast_path|sage_workflow)$")
+    total_duration_ms: float = Field(ge=0)
+    budget_ms: float = Field(gt=0)
+    remaining_budget_ms: float = Field(ge=0)
+    stage_durations_ms: dict[str, float] = Field(default_factory=dict)
+    workflow_trace_reported_ms: float = Field(default=0, ge=0)
+    accounted_duration_ms: float = Field(default=0, ge=0)
+    unattributed_duration_ms: float = Field(default=0, ge=0)
+    llm_call_count: int = Field(default=0, ge=0)
+    llm_retry_count: int = Field(default=0, ge=0)
+    llm_ttft_ms: float | None = Field(default=None, ge=0)
+    llm_total_duration_ms: float = Field(default=0, ge=0)
+    llm_cache_hits: int = Field(default=0, ge=0)
+    llm_cache_misses: int = Field(default=0, ge=0)
+
+
 class ChatResponse(BaseModel):
     answer: str
     owner_name: str
     used_model: str
+    finish_reason: Literal["stop", "length", "content_filter", "tool_calls"] = "stop"
     exchange_id: str | None = None
     knowledge_hits: list[KnowledgeSearchHit] = Field(default_factory=list)
     web_search_hits: list[WebSearchHit] = Field(default_factory=list)
@@ -227,6 +250,7 @@ class ChatResponse(BaseModel):
     memory_write_back: bool = False
     retrieved_items: list[MemoryAuditItem] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
+    request_timing: ChatRequestTiming | None = None
 
 
 class ConversationHistoryItemResponse(BaseModel):
@@ -339,11 +363,17 @@ class KnowledgeDocumentRecord(BaseModel):
     content: str
     tags: list[str] = Field(default_factory=list)
     source_name: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    # Runtime-private manifests retain structured provenance such as source
+    # file and redaction lists.  Preserve that audited JSON shape.
+    metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     is_feedback_web: bool = False
-    review_status: str = Field(default="unknown", pattern="^(unknown|pending|approved|stale)$")
-    freshness_status: str = Field(default="unknown", pattern="^(unknown|web|stale)$")
+    review_status: str = Field(
+        default="unknown", pattern="^(unknown|pending|approved|reviewed|stale)$"
+    )
+    freshness_status: str = Field(
+        default="unknown", pattern="^(unknown|current|web|stale)$"
+    )
     reviewed_at: datetime | None = None
     reviewable: bool = False
 
@@ -353,14 +383,18 @@ class KnowledgeDocumentRecord(BaseModel):
         tags = {str(tag).lower() for tag in self.tags}
         is_feedback_web = source_name.startswith("feedback-web:") or "feedback-web" in tags
 
-        review_status = str(self.metadata.get("review_status") or "").strip().lower()
-        if review_status not in {"unknown", "pending", "approved", "stale"}:
+        review_status = str(
+            self.metadata.get("review_status") or self.review_status or ""
+        ).strip().lower()
+        if review_status not in {"unknown", "pending", "approved", "reviewed", "stale"}:
             review_status = "pending" if is_feedback_web else "unknown"
         if not review_status:
             review_status = "pending" if is_feedback_web else "unknown"
 
-        freshness_status = str(self.metadata.get("freshness_status") or "").strip().lower()
-        if freshness_status not in {"unknown", "web", "stale"}:
+        freshness_status = str(
+            self.metadata.get("freshness_status") or self.freshness_status or ""
+        ).strip().lower()
+        if freshness_status not in {"unknown", "current", "web", "stale"}:
             freshness_status = (
                 "web"
                 if review_status == "approved"
@@ -397,6 +431,10 @@ class KnowledgeDocumentReviewSummary(BaseModel):
     stale_documents: int = 0
     reviewable_documents: int = 0
     pending_items: list[KnowledgeDocumentRecord] = Field(default_factory=list)
+    active_deployment_receipt_id: str = ""
+    active_deployment_receipt_schema: str = ""
+    active_deployment_receipt_age_seconds: str = "unknown"
+    deployment_receipt_sync_status: str = "unknown"
 
 
 class KnowledgeDocumentActionResponse(BaseModel):
@@ -413,7 +451,7 @@ class KnowledgeSearchHit(BaseModel):
     score: float
     tags: list[str] = Field(default_factory=list)
     source_name: str | None = None
-    metadata: dict[str, str] = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class KnowledgeSearchResponse(BaseModel):

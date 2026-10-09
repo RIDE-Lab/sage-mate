@@ -1,5 +1,4 @@
 from pathlib import Path
-
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -44,6 +43,25 @@ class AppSettings(BaseSettings):
     llm_timeout_seconds: int = Field(default=60, ge=1, le=300)
     llm_retry_attempts: int = Field(default=2, ge=0, le=5)
     llm_retry_backoff_seconds: float = Field(default=1.0, ge=0.0, le=30.0)
+    llm_tool_calling_mode: str = Field(
+        default="compat",
+        pattern="^(compat|native)$",
+        description="Tool execution transport. 'compat' runs approved read-only manifest tools "
+        "and uses an ordinary chat completion for synthesis; 'native' requires the upstream "
+        "OpenAI-compatible server to be launched with tool-call parsing enabled.",
+    )
+    skill_tool_parallelism: int = Field(
+        default=4,
+        ge=1,
+        le=16,
+        description="Maximum parallel read-only tool calls within one agent skill.",
+    )
+    skill_answer_max_tokens: int = Field(
+        default=768,
+        ge=128,
+        le=2048,
+        description="Maximum completion tokens for one agent-skill answer.",
+    )
     llm_policy_enabled: bool = Field(default=True)
     llm_policy_variant_kind: str = Field(default="ablation")
     llm_policy_variant_name: str = Field(default="adaptive-controller")
@@ -51,10 +69,22 @@ class AppSettings(BaseSettings):
     llm_policy_output_max_tokens_cap: int = Field(default=4096, ge=64, le=8192)
     llm_policy_output_min_tokens_floor: int = Field(default=192, ge=32, le=4096)
     llm_fast_answer_max_tokens: int = Field(
+        default=192,
+        ge=128,
+        le=4096,
+        description=(
+            "Default max_tokens for non-thinking interactive answers. Keep this "
+            "bounded on low-throughput accelerators; deep mode has its own budget."
+        ),
+    )
+    llm_deep_answer_max_tokens: int = Field(
         default=1024,
         ge=128,
         le=4096,
-        description="Default max_tokens for non-thinking interactive answers.",
+        description=(
+            "Maximum completion tokens for explicit deep-thinking answers. "
+            "Budget for a complete analytical answer; generation remains deadline-bound."
+        ),
     )
     llm_answer_temperature: float = Field(
         default=0.1,
@@ -85,6 +115,40 @@ class AppSettings(BaseSettings):
         default=False,
         description="When True, run chat through FlowNetEnvironment DAG runtime. "
         "When False, use the in-process stage chain to avoid per-request runtime compilation.",
+    )
+    post_answer_background: bool = Field(
+        default=True,
+        description="Run post-answer persistence outside the response critical path when a trace consumer is attached.",
+    )
+    prompt_soft_cap: int = Field(
+        default=24000,
+        ge=1,
+        le=1000000,
+        description="Maximum assembled chat prompt size in characters before deterministic truncation.",
+    )
+    chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
+    chat_max_inflight_requests: int = Field(
+        default=1,
+        ge=1,
+        le=64,
+        description=(
+            "Maximum number of interactive /chat workflows admitted at once. "
+            "Keep this aligned with the deployed engine's usable batching capacity."
+        ),
+    )
+    chat_admission_timeout_seconds: float = Field(
+        default=1.0,
+        ge=0.0,
+        le=30.0,
+        description=(
+            "How long an interactive request waits for a chat slot before receiving "
+            "a retryable 429 instead of timing out at the edge."
+        ),
+    )
+    chat_sse_keepalive_seconds: float = Field(default=1.0, ge=1.0, le=90.0)
+    stream_chat_answer: bool = Field(
+        default=False,
+        description="Use upstream streaming transport internally; public delivery remains validated-answer-only.",
     )
     warm_service_on_startup: bool = Field(
         default=True,
@@ -194,6 +258,12 @@ class AppSettings(BaseSettings):
     neuromem_embedding_model: str = Field(default="BAAI/bge-small-zh-v1.5")
     neuromem_embedding_dim: int = Field(default=512, ge=32, le=4096)
     retrieval_top_k: int = Field(default=3, ge=1, le=10)
+    knowledge_link_expansion_enabled: bool = Field(
+        default=False,
+        description="Enable experimental one-hop authored-link expansion after retrieval.",
+    )
+    knowledge_link_expansion_decay: float = Field(default=0.6, ge=0.0, le=1.0)
+    knowledge_link_expansion_max_documents: int = Field(default=8, ge=0, le=100)
     knowledge_search_cache_ttl_seconds: int = Field(default=300, ge=0, le=3600)
     knowledge_search_cache_max_entries: int = Field(default=256, ge=0, le=4096)
     web_search_enabled: bool = Field(default=True)
@@ -226,6 +296,25 @@ class AppSettings(BaseSettings):
     planner_metrics_dir: Path | None = Field(default=None)
     thinking_token_budget: int | None = Field(
         default=2048, ge=64, le=4096,
+    )
+    llm_thinking_mode: Literal["auto", "native", "application"] = Field(
+        default="auto",
+        description="Native thinking first. auto probes the served tokenizer; native is an "
+        "operator-verified capability; application declares that native thinking is unsupported.",
+    )
+    llm_tokenize_url: str = Field(
+        default="",
+        description="Optional trusted tokenizer endpoint for CPU-only capability detection. "
+        "Uses the same API credentials as the LLM; never point at an untrusted service.",
+    )
+    llm_reasoning_effort: Literal["low", "medium", "high", "xhigh"] = Field(default="medium")
+    llm_thinking_temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    llm_thinking_top_p: float | None = Field(default=None, gt=0.0, le=1.0)
+    llm_thinking_top_k: int | None = Field(default=None, ge=1)
+    llm_thinking_budget_supported: bool = Field(
+        default=False,
+        description="Enable thinking_token_budget only when the server explicitly supports it; "
+        "native reasoning alone does not imply support for this optional extension.",
     )
     auto_disable_thinking_intents: str = Field(
         default="general,booking",
@@ -306,6 +395,14 @@ class AppSettings(BaseSettings):
     changelog_path: Path = Field(default=Path("data/changelog.json"))
     # --- Context Digest (rolling conversation compression) ---
     context_digest_enabled: bool = Field(default=True)
+    context_digest_llm_enabled: bool = Field(
+        default=False,
+        description=(
+            "Use an extra LLM call to summarize rolling conversation digests. "
+            "The deterministic bounded digest is the default so manual compression "
+            "never waits behind the interactive NPU queue."
+        ),
+    )
     context_digest_turn_threshold: int = Field(
         default=4, ge=2, le=16,
     )

@@ -6,15 +6,30 @@ __pycache__/
 .benchmarks/
 .DS_Store
 .env
+.env.orig
+.env.backup-*
+*.orig
 .runtime/
 .preview/
+.playwright-cli/
+.planning/
 deps/.faculty-twin-primary-model
+deps/.sage-mate-primary-model
+deps/.sage-mate-runtime-logs
+output/
+artifacts/
+findings.md
+progress.md
+task_plan.md
 logs/
 htmlcov/
 .coverage
 coverage.xml
+playwright-report/
+test-results/
+node_modules/
 # Production runtime data lives in the separate private runtime repository
-# (DIGITAL_TWIN_RUNTIME_DIR, normally ../sage-faculty-twin-runtime-private).
+# (DIGITAL_TWIN_RUNTIME_DIR, normally ../sage-mate-runtime-private).
 # Keep this code repository limited to source, tests, tooling, and examples.
 data/_seed_faq.json
 data/alerts/

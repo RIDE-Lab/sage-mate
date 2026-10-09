@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from sage_faculty_twin import api as api_module
+from sage_faculty_twin.chat_delivery import DeliveredChatResponse
 from sage_faculty_twin.conversation_trace_store import ConversationTraceStore
-from sage_faculty_twin.models import ChatResponse, WorkflowTraceStep
+from sage_faculty_twin.models import WorkflowTraceStep
 
 
 def test_trace_store_persists_full_request_response_and_events(tmp_path: Path) -> None:
@@ -68,24 +70,32 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
     store = ConversationTraceStore(db_path)
     monkeypatch.setattr(api_module, "get_conversation_trace_store", lambda: store)
 
-    async def fake_answer(request, admin_session_token=None):
-        return ChatResponse(
+    async def fake_answer(request, admin_session_token=None, trace_callback=None, **_kwargs):
+        step = WorkflowTraceStep(
+            key="response_render",
+            title="render",
+            summary="rendered",
+            detail="rendered response",
+            duration_ms=3,
+        )
+        trace_callback(step)
+        return DeliveredChatResponse(
             answer="实验回答",
             owner_name="Twin",
             used_model="test-model",
             conversation_id=request.conversation_id,
-            workflow_trace=[
-                WorkflowTraceStep(
-                    key="response_render",
-                    title="render",
-                    summary="rendered",
-                    detail="rendered response",
-                    duration_ms=3,
-                )
-            ],
+            workflow_trace=[step],
         )
 
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
+    monkeypatch.setattr(
+        api_module,
+        "service",
+        SimpleNamespace(
+            answer=fake_answer,
+            try_fast_answer=lambda _request: None,
+            _check_sensitive_boundary_request=lambda _request: None,
+        ),
+    )
     response = TestClient(api_module.app).post(
         "/chat",
         json={
@@ -106,7 +116,7 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
     assert "trace-step" in [event["event_type"] for event in trace["events"]]
 
 
-def test_sse_chat_persists_stream_chunks_and_background_steps(
+def test_sse_chat_persists_validated_answer_and_background_steps(
     monkeypatch, tmp_path: Path
 ) -> None:
     db_path = tmp_path / "traces.sqlite3"
@@ -132,7 +142,7 @@ def test_sse_chat_persists_stream_chunks_and_background_steps(
         answer_chunk_callback("流式")
         answer_chunk_callback("回答")
         on_post_answer_complete()
-        return ChatResponse(
+        return DeliveredChatResponse(
             answer="流式回答",
             owner_name="Twin",
             used_model="test-model",
@@ -140,7 +150,15 @@ def test_sse_chat_persists_stream_chunks_and_background_steps(
             workflow_trace=[step],
         )
 
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
+    monkeypatch.setattr(
+        api_module,
+        "service",
+        SimpleNamespace(
+            answer=fake_answer,
+            try_fast_answer=lambda _request: None,
+            _check_sensitive_boundary_request=lambda _request: None,
+        ),
+    )
     response = TestClient(api_module.app).post(
         "/chat?request_id=req-sse",
         json={
@@ -154,8 +172,7 @@ def test_sse_chat_persists_stream_chunks_and_background_steps(
     trace = store.get_trace(response.headers["x-trace-id"])
     assert trace is not None
     assert trace["status"] == "completed"
-    stream_event = next(
-        event for event in trace["events"] if event["event_type"] == "answer_stream"
-    )
-    assert stream_event["payload"]["chunks"] == ["流式", "回答"]
+    assert trace["response"]["answer"] == "流式回答"
+    assert "answer_stream" not in [event["event_type"] for event in trace["events"]]
+    assert "answer_done" in [event["event_type"] for event in trace["events"]]
     assert trace["events"][-1]["event_type"] == "complete"

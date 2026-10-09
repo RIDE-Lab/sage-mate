@@ -17,11 +17,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+from sage_faculty_twin.chat_contracts import ChatIntake, InteractionDecision
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.memory_store import ConversationMemoryHit
 from sage_faculty_twin.models import (
     ChatAttachment,
     ChatRequest,
+    InteractionIntent,
     KnowledgeSearchHit,
 )
 from sage_faculty_twin.service import (
@@ -41,11 +43,22 @@ def _make_context(
     memory_hits: list[ConversationMemoryHit] | None = None,
     knowledge_hits: list[KnowledgeSearchHit] | None = None,
 ) -> ChatWorkflowContext:
+    conversation_id = request.conversation_id or "conv-prompt-cap"
     return ChatWorkflowContext(
         request=request,
-        conversation_id=request.conversation_id or "conv-prompt-cap",
+        conversation_id=conversation_id,
         owner_name=settings.owner_name,
         used_model=settings.model_name,
+        intake=ChatIntake.from_request(request, conversation_id=conversation_id),
+        interaction_decision=InteractionDecision(
+            intent=InteractionIntent(
+                action="answer",
+                domain="general",
+                decision_mode="direct_answer",
+                confidence=1.0,
+            ),
+            source="test",
+        ),
         memory_hits=memory_hits or [],
         knowledge_hits=knowledge_hits or [],
     )
@@ -217,6 +230,9 @@ def test_prompt_caps_oversized_knowledge_excerpts(tmp_path: Path) -> None:
 
     # No single original 6k Z-run survives; the cap is well below 6000.
     assert "Z" * (_KNOWLEDGE_HIT_BODY_CAP + 100) not in context.user_prompt
+    assert len(context.knowledge_hits) == len(knowledge_hits)
+    assert all(len(hit.excerpt) <= _KNOWLEDGE_HIT_BODY_CAP + 1 for hit in context.knowledge_hits)
+    assert all("truncated" in hit.excerpt or hit.excerpt.endswith("…") for hit in context.knowledge_hits)
 
     prompt_step = next(step for step in context.workflow_trace if step.key == "prompt_build")
     assert "knowledge" in prompt_step.detail

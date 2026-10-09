@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.models import ChatRequest, InteractionIntent
+from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.service import (
     ChatWorkflowContext,
     FacultyTwinWorkflowSupport,
@@ -9,6 +9,11 @@ from sage_faculty_twin.service import (
     _answer_is_irrelevant_to_question,
     _answer_language_mismatches_question,
     _strip_internal_thinking_content,
+)
+from sage_faculty_twin.chat_delivery import (
+    multipart_answer_guidance,
+    multipart_answer_issues,
+    requested_part_labels,
 )
 
 
@@ -52,8 +57,22 @@ def test_explicit_deep_thinking_adds_deep_answer_guidance() -> None:
 
     guidance = FacultyTwinWorkflowSupport._build_deep_answer_guidance(context.request)
 
-    assert "deeper analysis" in guidance
+    assert "Deep analysis mode is active" in guidance
     assert "<think>" in guidance
+    assert "核心判断" in guidance
+    assert "权衡与风险" in guidance
+    assert "建议行动" in guidance
+
+
+def test_explicit_deep_thinking_bypasses_compact_general_answer(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+
+    regular_context = _build_context(deep_thinking=True, deep_thinking_explicit=False)
+    deep_context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
+
+    assert service._should_use_compact_general_answer(regular_context) is True
+    assert service._should_use_compact_general_answer(deep_context) is False
 
 
 def test_strip_internal_thinking_content_removes_think_blocks() -> None:
@@ -135,6 +154,24 @@ def test_degenerate_answer_detection_keeps_normal_short_and_structured_answers()
     )
 
 
+def test_degenerate_answer_detection_keeps_substantive_answer_with_uncertainty() -> None:
+    answer = (
+        "当前公开资料能够确认三层协作关系。SAGE 位于应用层，负责组织知识检索、"
+        "对话记忆和可观察的工作流；它不替代底层推理引擎。vLLM-HUST 位于核心"
+        "运行时层，承载模型加载、批处理、调度、KV Cache 与并行执行，并保持与"
+        "官方 vLLM 主线同步。vLLM-Ascend-HUST 位于硬件适配层，为昇腾设备补齐"
+        "算子、图编译、通信和设备管理能力。部署时应先固定 core 与 plugin 的兼容"
+        "提交，再由应用消费同一份运行时回执；评测时则分别观察工作流延迟、引擎"
+        "吞吐和硬件利用率，避免把三层指标混为一谈。选择建议是：做应用研究时从"
+        "SAGE 入手，研究通用 serving 时进入 vLLM-HUST，处理昇腾专项性能或兼容性"
+        "时进入 vLLM-Ascend-HUST。其中一个组件的精确版本仍需要额外确认，建议"
+        "开启联网检索获取实时参考。"
+    )
+
+    assert len("".join(answer.split())) > 320
+    assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
+
+
 def test_chinese_question_rejects_long_english_identity_boilerplate() -> None:
     answer = (
         "My apologies for the roundabout question. My name is Zhang, and I am a "
@@ -191,7 +228,7 @@ def test_relevance_guard_rejects_domain_free_answers() -> None:
         "前文讨论 Ascend NPU 大模型推理。当前问题：请排成三步。",
         "第三步优化并行通信，提高模型训练速度。",
     )
-    assert _answer_is_irrelevant_to_question(
+    assert not _answer_is_irrelevant_to_question(
         "如何优化大模型在 Ascend NPU 上的推理效率？",
         "重点优化 NPU 推理的 KV Cache、内存生命周期和缓存碎片。",
     )
@@ -203,6 +240,35 @@ def test_relevance_guard_rejects_domain_free_answers() -> None:
         "为什么首 token 延迟和吞吐量往往互相冲突？",
         "首 token 延迟偏向小批次快速调度，吞吐则偏向大批次提高设备利用率。",
     )
+    assert not _answer_is_irrelevant_to_question(
+        "为什么 latency 和 throughput 往往互相冲突？",
+        "TTFT 偏向及时调度，而 QPS 依赖更大的批次来提高设备利用率。",
+    )
+
+
+def test_relevance_guard_does_not_apply_optimization_rubric_to_positioning_question() -> None:
+    answer = (
+        "SAGE 负责组织应用工作流，vLLM-HUST 提供推理运行时，"
+        "vLLM-Ascend-HUST 则提供昇腾平台适配；三者按应用、核心引擎和硬件插件协作。"
+    )
+
+    assert not _answer_is_irrelevant_to_question(
+        "比较 SAGE、vLLM-HUST 和 vLLM-Ascend-HUST 的定位与协作关系。",
+        answer,
+    )
+
+
+def test_relevance_guard_does_not_require_card_keywords_in_evidence_review() -> None:
+    question = (
+        "请依据匿名事实卡独立评价系统研究贡献，只输出合法JSON。"
+        "事实卡涉及 Ascend NPU 优化、延迟和吞吐。"
+    )
+    answer = (
+        '{"judgment":"机制已有实现线索，但当前材料缺少可复核的对照实验，'
+        '因此证据成熟度不足。"}'
+    )
+
+    assert not _answer_is_irrelevant_to_question(question, answer)
 
 
 def test_task_completion_guard_rejects_three_question_refusal() -> None:
@@ -228,6 +294,38 @@ def test_task_completion_guard_keeps_three_numbered_questions() -> None:
         "最值得先问哪三个问题？",
         answer,
     )
+
+
+def test_explicit_lettered_parts_are_complete_or_rejected() -> None:
+    question = (
+        "请分别回答 E/F 两题。\n"
+        "E. 这个机制的正确性条件是什么？\n"
+        "F. 哪个实验能区分它和强基线？"
+    )
+    partial = "E. 必须保持状态等价，并核对模型与请求配置……"
+    complete = (
+        "E. 正确性要求模型、状态、请求配置和权限语义一致。\n"
+        "F. 固定工作负载，与不启用机制的强基线做配对实验并执行机制消融。"
+    )
+
+    assert requested_part_labels(question) == ("E", "F")
+    assert multipart_answer_issues(question, partial) == (
+        "missing_part_f",
+        "terminal_ellipsis",
+    )
+    assert _answer_does_not_complete_requested_task(question, partial)
+    assert multipart_answer_issues(question, complete) == ()
+    assert not _answer_does_not_complete_requested_task(question, complete)
+    assert "以 E、F 为独立标题逐题作答" in multipart_answer_guidance(question)
+    assert "不要复述题目、嵌套重复标题、表格" in multipart_answer_guidance(question)
+
+
+def test_unseen_ab_parts_are_not_confused_with_technical_slashes() -> None:
+    question = "A：解释观察；B：给区分测量。不要把 KV/output 当成两个题号。"
+
+    assert requested_part_labels(question) == ("A", "B")
+    assert requested_part_labels("请比较 KV/output 复用成本") == ()
+    assert _answer_does_not_complete_requested_task(question, "A：可能存在排队开销。")
 
 
 def test_task_completion_guard_rejects_generic_guidance_refusal() -> None:
@@ -256,10 +354,28 @@ def test_compact_general_answer_is_used_without_grounding(tmp_path: Path) -> Non
     compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
     assert "KV Cache" in compact_prompt
     assert "不要把训练优化写成推理优化" in compact_prompt
+    assert "不得编造论文" in compact_prompt
+    assert "严格遵循用户指定的" in compact_prompt
+    assert "三条简短依据" not in compact_prompt
     assert service._should_use_curated_technical_guidance(context.request.question)
     assert service._should_use_curated_technical_guidance(
         "为什么首 token 延迟和吞吐量往往互相冲突？"
     )
+
+
+def test_tensor_parallel_explanation_uses_safe_compact_prompt(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    context = _build_context()
+    context.request.question = "请用一个简单例子解释大模型推理中的张量并行，控制在150字以内。"
+
+    assert service._should_use_compact_general_answer(context)
+    compact_prompt = service._build_compact_answer_system_prompt(context.request.question)
+    assert "提供简单具体的例子" in compact_prompt
+    assert "内容、格式和长度" in compact_prompt
+    assert "没有来源证据时直接依据通用知识回答" in compact_prompt
+    assert "推理阶段如何把同一层的矩阵计算切到多个设备" in compact_prompt
+    assert "不要改写成训练或数据并行示例" in compact_prompt
 
 
 def test_general_technical_fast_path_preempts_llm_handoff_classification(tmp_path: Path) -> None:
@@ -350,24 +466,24 @@ def test_medical_segmentation_is_a_general_technical_question(tmp_path: Path) ->
     assert "clinical validation" in guidance
 
 
-def test_general_question_ignores_incidental_knowledge_hits(tmp_path: Path) -> None:
+def test_general_question_preserves_selected_knowledge_hits(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context()
     context.request.question = "如何优化大模型推理？"
     context.knowledge_hits = [object()]  # type: ignore[list-item]
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
-def test_general_question_ignores_incidental_memory_hits(tmp_path: Path) -> None:
+def test_explicit_deep_question_keeps_full_path_with_incidental_memory_hits(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
     context.request.question = "如何判断哪个系统方向更适合作为研究主线？"
     context.memory_hits = [object()]  # type: ignore[list-item]
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
 def test_faculty_specific_question_keeps_knowledge_hits_on_full_path(tmp_path: Path) -> None:
@@ -389,13 +505,13 @@ def test_ungrounded_general_answer_uses_compact_path(tmp_path: Path) -> None:
     assert service._should_use_compact_general_answer(context)
 
 
-def test_explicit_deep_thinking_uses_compact_path_without_grounding(tmp_path: Path) -> None:
+def test_explicit_deep_thinking_uses_full_path_without_grounding(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
     context.request.question = "请深入比较两个常见方法的优缺点。"
 
-    assert service._should_use_compact_general_answer(context)
+    assert not service._should_use_compact_general_answer(context)
 
 
 def test_explicit_deep_thinking_keeps_grounded_answer_on_full_path(tmp_path: Path) -> None:
@@ -426,6 +542,113 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
 
     assert answer.startswith("1. 建立基线")
     assert service._llm_client.max_tokens == [384]
+
+
+def test_orientation_retry_is_concise_but_has_complete_output_budget(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.max_tokens: list[int | None] = []
+            self.system_prompts: list[str] = []
+
+        def answer_question_sync(
+            self, system_prompt: str, _user_prompt: str, **kwargs: object
+        ) -> str:
+            self.system_prompts.append(system_prompt)
+            self.max_tokens.append(kwargs.get("max_tokens"))  # type: ignore[arg-type]
+            return (
+                "1. PagedAttention：理解 KV Cache 分页管理；先读 vLLM 设计文档。\n"
+                "2. Continuous batching：理解请求调度；对照一次调度时间线。\n"
+                "3. Prefix caching：理解跨请求复用；跑一个命中与未命中对照。\n"
+                "第一步先用 vLLM 跑通基线并记录 TTFT、TPOT 和吞吐。"
+            )
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context()
+    context.request.question = (
+        "如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？"
+    )
+
+    answer = service._retry_answer_with_compact_prompt(context)
+
+    assert "PagedAttention" in answer
+    assert service._llm_client.max_tokens == [512]
+    assert "只给三个高信息量的起点" in service._llm_client.system_prompts[0]
+
+
+def test_orientation_guidance_is_applied_to_initial_research_answer(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    question = "如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？"
+
+    guidance = service._build_research_response_guidance(
+        question,
+        InteractionIntent(action="answer", domain="research"),
+    )
+
+    assert "exactly three high-signal starting points" in guidance
+    assert "450 Chinese characters" in guidance
+
+
+def test_owner_grounded_retry_keeps_retrieved_profile_facts(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.user_prompts: list[str] = []
+
+        def answer_question_sync(
+            self,
+            _system_prompt: str,
+            user_prompt: str,
+            **_kwargs: object,
+        ) -> str:
+            self.user_prompts.append(user_prompt)
+            return (
+                "当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体中间件展开。"
+                "加入前建议准备简历、项目代码和一两个具体研究问题。"
+            )
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context()
+    context.request.question = "张老师目前主要研究什么？加入课题组前应该准备什么？"
+    context.knowledge_hits = [
+        KnowledgeSearchHit(
+            document_id="owner-focus",
+            title="公开资料精选｜当前研究主线",
+            excerpt="当前工作主要围绕大模型推理引擎、推理服务系统与记忆智能体中间件展开。",
+            score=77.0,
+            tags=["profile", "research-agenda"],
+            source_name="public-profile:current-focus",
+        )
+    ]
+
+    answer = service._retry_answer_with_compact_prompt(context)
+
+    assert "大模型推理引擎" in answer
+    assert "Mandatory owner-fact grounding" in service._llm_client.user_prompts[0]
+    assert "记忆智能体中间件" in service._llm_client.user_prompts[0]
+
+
+def test_owner_fallback_extracts_research_summary_from_retrieved_hit(tmp_path: Path) -> None:
+    context = _build_context()
+    context.request.question = "张老师目前主要研究什么？加入课题组前应该准备什么？"
+    context.knowledge_hits = [
+        KnowledgeSearchHit(
+            document_id="portable-owner-focus",
+            title="公开资料精选｜当前研究主线",
+            excerpt="当前工作主要围绕可移植系统甲、服务系统乙与中间件丙展开。",
+            score=77.0,
+            tags=["profile", "research-agenda"],
+            source_name="public-profile:current-focus",
+        )
+    ]
+
+    answer = FacultyTwinWorkflowSupport._build_deterministic_fallback_answer(context)
+
+    assert "可移植系统甲、服务系统乙与中间件丙" in answer
+    assert "项目/代码证据" in answer
 
 
 def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
@@ -462,9 +685,11 @@ def test_explicit_deep_retry_regenerates_instead_of_using_generic_template(
     assert "背景、目标、约束和评估指标" not in answer
     assert len(service._llm_client.calls) == 1
     system_prompt, user_prompt, kwargs = service._llm_client.calls[0]
-    assert "先明确判断" in system_prompt
+    assert "严格遵循用户指定的" in system_prompt
+    assert "不得编造论文" in system_prompt
+    assert "先明确判断" not in system_prompt
     assert "背景：科研指导" in user_prompt
-    assert kwargs["max_tokens"] == 768
+    assert kwargs["max_tokens"] == service._settings.llm_deep_answer_max_tokens
     assert kwargs["temperature"] == 0.2
     assert kwargs["enable_thinking"] is False
 
@@ -598,8 +823,9 @@ def test_deterministic_fallback_handles_research_innovation_question() -> None:
     assert "背景、目标、约束和评估指标" not in answer
 
 
-def test_hosted_web_deep_call_does_not_enable_engine_thinking(tmp_path: Path) -> None:
+def test_hosted_web_deep_call_prefers_supported_engine_thinking(tmp_path: Path) -> None:
     class FakeLlmClient:
+        supports_native_thinking = True
         def __init__(self) -> None:
             self.kwargs: dict[str, object] | None = None
 
@@ -635,8 +861,8 @@ def test_hosted_web_deep_call_does_not_enable_engine_thinking(tmp_path: Path) ->
 
     assert answer == "OK"
     assert fake_llm.kwargs is not None
-    assert fake_llm.kwargs["enable_thinking"] is False
-    assert "thinking_token_budget" not in fake_llm.kwargs
+    assert fake_llm.kwargs["enable_thinking"] is True
+    assert fake_llm.kwargs["thinking_token_budget"] == service._settings.thinking_token_budget
     assert fake_llm.kwargs["reasoning_effort"] == "xhigh"
 
 

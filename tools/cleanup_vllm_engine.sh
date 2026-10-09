@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Best-effort cleanup for Faculty Twin's dedicated vLLM-HUST engine runtime.
+# Verified cleanup for Faculty Twin's dedicated vLLM-HUST engine runtime.
 
 set -euo pipefail
 
@@ -20,6 +20,8 @@ load_dotenv() {
 }
 
 load_dotenv "$repo_root/.env"
+source "$repo_root/tools/lib/instance_control.sh"
+sage_mate_route_instance_operation cleanup
 
 export VLLM_ENGINE_CONTAINER="${VLLM_ENGINE_CONTAINER:-faculty_twin_vllm_hust}"
 export VLLM_ENGINE_PORT="${VLLM_ENGINE_PORT:-8000}"
@@ -27,8 +29,11 @@ export VLLM_ENGINE_CONTAINER_LOG_FILE="${VLLM_ENGINE_CONTAINER_LOG_FILE:-/tmp/sa
 export VLLM_ENGINE_AGGRESSIVE_CLEANUP="${VLLM_ENGINE_AGGRESSIVE_CLEANUP:-1}"
 
 run_container_cleanup() {
-    [[ -x "$container_cleanup" ]] || return 0
-    "$container_cleanup" || true
+    if [[ ! -x "$container_cleanup" ]]; then
+        echo "ERROR: pinned vLLM-HUST cleanup is unavailable: $container_cleanup" >&2
+        return 1
+    fi
+    "$container_cleanup"
 }
 
 kill_process_group() {
@@ -36,6 +41,29 @@ kill_process_group() {
     local pgid="$2"
     [[ "$pgid" =~ ^[0-9]+$ ]] || return 0
     kill "-$signal" -- "-$pgid" 2>/dev/null || sudo kill "-$signal" -- "-$pgid" 2>/dev/null || true
+}
+
+process_group_exists() {
+    local pgid="$1"
+    ps -eo pgid= | awk -v target="$pgid" '$1 == target { found = 1 } END { exit !found }'
+}
+
+wait_for_process_groups() {
+    local groups="$1"
+    local attempts="$2"
+    local survivors=""
+    local pgid=""
+    while (( attempts > 0 )); do
+        survivors=""
+        for pgid in $groups; do
+            process_group_exists "$pgid" && survivors="$survivors $pgid"
+        done
+        [[ -z "$survivors" ]] && return 0
+        sleep 0.2
+        attempts=$((attempts - 1))
+    done
+    printf '%s\n' "${survivors# }"
+    return 1
 }
 
 cleanup_host_process_groups() {
@@ -63,10 +91,15 @@ cleanup_host_process_groups() {
     for pgid in $groups; do
         kill_process_group TERM "$pgid"
     done
-    sleep 2
-    for pgid in $groups; do
-        kill_process_group KILL "$pgid"
-    done
+    if ! survivors="$(wait_for_process_groups "$groups" 10)"; then
+        for pgid in $survivors; do
+            kill_process_group KILL "$pgid"
+        done
+        if ! survivors="$(wait_for_process_groups "$survivors" 10)"; then
+            echo "ERROR: residual vLLM host process group(s) survived cleanup: $survivors" >&2
+            return 1
+        fi
+    fi
     echo "[faculty-twin] cleaned residual vLLM host process group(s): $groups"
 }
 

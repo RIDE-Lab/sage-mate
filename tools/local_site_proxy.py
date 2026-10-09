@@ -27,7 +27,8 @@ def _normalize_header_name(name: str) -> str:
 
 class ProxyHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
-    app_port = 55601
+    app_host = ""
+    app_port = 0
 
     def do_GET(self) -> None:  # noqa: N802
         self._proxy_request()
@@ -68,7 +69,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if name.lower() in HOP_BY_HOP_HEADERS or name.lower() == "host":
                 continue
             request_headers[name] = value
-        request_headers["Host"] = f"127.0.0.1:{self.app_port}"
+        request_headers["Host"] = f"{self.app_host}:{self.app_port}"
         request_headers["X-Forwarded-For"] = self.client_address[0]
         request_headers["X-Forwarded-Host"] = self.headers.get("Host", "")
         request_headers["X-Forwarded-Proto"] = "http"
@@ -79,7 +80,7 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if content_length > 0:
                 body = self.rfile.read(content_length)
 
-        connection = http.client.HTTPConnection("127.0.0.1", self.app_port, timeout=180)
+        connection = http.client.HTTPConnection(self.app_host, self.app_port, timeout=180)
         try:
             connection.request(
                 self.command,
@@ -111,16 +112,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
 def main() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     runtime_dir = repo_root / ".runtime"
+    required_names = ("SITE_HOST", "SITE_PORT", "APP_HOST", "APP_PORT")
+    missing = [name for name in required_names if not os.environ.get(name)]
+    if missing:
+        raise SystemExit(f"Missing required deployment settings: {', '.join(missing)}")
+
+    site_host = os.environ["SITE_HOST"]
+    site_port = int(os.environ["SITE_PORT"])
+    ProxyHandler.app_host = os.environ["APP_HOST"]
+    ProxyHandler.app_port = int(os.environ["APP_PORT"])
+
     runtime_dir.mkdir(parents=True, exist_ok=True)
     (runtime_dir / "site-proxy.pid").write_text(str(os.getpid()), encoding="utf-8")
-
-    site_port = int(os.environ.get("SITE_PORT", "8088"))
-    ProxyHandler.app_port = int(os.environ.get("APP_PORT", "55601"))
-
-    server = ThreadingHTTPServer(("127.0.0.1", site_port), ProxyHandler)
+    server = ThreadingHTTPServer((site_host, site_port), ProxyHandler)
     server.daemon_threads = True
     try:
-        print(f"Local site proxy listening on 127.0.0.1:{site_port}", flush=True)
+        print(f"Local site proxy listening on {site_host}:{site_port}", flush=True)
         server.serve_forever()
     finally:
         try:

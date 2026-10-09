@@ -30,4 +30,10 @@ seed_runtime_data() {
         mkdir -p "$(dirname "$target")"
         [[ -f "$target" ]] || cp "$source" "$target"
     done
+
+    # Release notes are code-owned and must follow the deployed application;
+    # unlike user-authored runtime data, an older changelog must be replaced.
+    if [[ -f "$seed_root/changelog.json" ]]; then
+        cp "$seed_root/changelog.json" "$runtime_dir/data/changelog.json"
+    fi
 }

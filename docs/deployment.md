@@ -1,12 +1,12 @@
 # Deployment Guide
 
-This document describes the generic deployment shape for `sage-mate` after moving the
-repository into the IntelliStream organization.
+This document describes the generic deployment shape for `sage-mate` in the RIDE Lab
+organization.
 
 For a fresh-machine bring-up, the fastest path is:
 
 ```bash
-git clone https://github.com/intellistream/sage-mate.git
+git clone https://github.com/RIDE-Lab/sage-mate.git
 cd sage-mate
 ./quickstart.sh --target hosted-web
 ./quickstart.sh --with-vllm      # also pull and editable-install vllm-hust
@@ -18,13 +18,82 @@ cd sage-mate
 accidentally expose local repository features. See §7 below for the chunked-transfer / streaming
 gotcha that the latency rollout uncovered.
 
+## Portable deployment contract
+
+Tracked code and systemd templates do not select a machine path, accelerator ID, model, domain, or
+deployment port. Copy `.env.example` to the ignored `.env` and set the topology for that machine.
+In particular, an Ascend launch requires `VLLM_ENGINE_MODEL_PATH` and
+`VLLM_ENGINE_NPU_DEVICES`; `VLLM_ENGINE_TP_SIZE` must equal the number of selected devices. The
+release installer can choose currently idle NPUs, while the lower-level launcher deliberately
+fails instead of guessing.
+
+### Trusted one-shot Ascend CI
+
+Pull requests always use GitHub-hosted runners. The public repository must not
+attach a persistent NPU host to `pull_request` jobs. Hardware regression is a
+separate `workflow_dispatch` workflow on `main`, routed through the
+workflow-restricted `sage-mate-ascend` runner group and the `ascend-npu`
+environment.
+
+An operator starts one ephemeral runner and dispatches one job with:
+
+```bash
+SAGE_ASCEND_CI_CONTAINER_IMAGE=<locally-installed-ascend-image> \
+  tools/run_ascend_ci_once.sh
+```
+
+The job checks the trusted revision, Ascend device/control nodes, `npu-smi`,
+non-interactive Docker access, container device binding, graph-mode launcher
+contracts, and application health. It does not start or replace the managed
+model service. Set `VERIFY_ENGINE=true` only when an already-managed engine is
+expected to be healthy. The runner deregisters after its single job and its
+temporary work directory is removed; diagnostics are retained under the
+operator's XDG cache directory.
+
+The loopback addresses and ports shown in `.env.example` are editable sample configuration, not
+values embedded in generated systemd units. To move the deployment, copy its secret material
+separately and generate a new `.env` for the destination host.
+
+### Ascend 生产运行时身份
+
+线上页面和运维收据必须分开显示以下三层，不能用一个 `v0.23.0`
+概括整个推理栈：
+
+- `VLLM_ENGINE_COMPATIBILITY_BASE`：官方镜像/依赖的稳定兼容基座；
+- `VLLM_ENGINE_CORE_SOURCE_VERSION`、`VLLM_ENGINE_CORE_COMMIT`、
+  `VLLM_ENGINE_PLUGIN_SOURCE_VERSION`、`VLLM_ENGINE_PLUGIN_COMMIT`：实际挂载并运行的
+  core/plugin 源码快照；
+- `VLLM_ENGINE_IMAGE`、`VLLM_ENGINE_EXPECTED_IMAGE_ID`、
+  `VLLM_ENGINE_IMAGE_BUILD_TIME`：本机实际运行的派生镜像身份。
+
+这些值属于每台机器的部署合同，应写入 ignored `.env`，不得硬编码进应用。
+`/stack/versions` 和系统状态抽屉会按上述语义展示它们。版本化 deployment receipt
+负责记录模型、源码 commits、拓扑、图模式和推测解码状态；镜像 ID、构建时间和源码
+package version 由运行时合同补足。dev-hub 中的
+[`docs/sage-mate-production-runtime.md`](../deps/vllm-hust-dev-hub/docs/sage-mate-production-runtime.md)
+说明 production lock 字段、OCI labels、构建、验收和回滚流程。
+
+升级时先保留旧 image ID、gitlinks 和 receipt，再构建新候选；只有新候选完成两次
+冷启动、health/models、真实 completion、并发、取消和公网问答后才能切换。失败时
+恢复记录的旧 image ID 与 gitlinks，并仍通过 `tools/lock_sage_mate_engine.sh` 受管
+重启，禁止留下临时后台进程。
+
+当前 production lock 选择的 latest-HUST-main 原子组合为 core
+`88e606d0f0cde63c412db456f3e92da2609e0438`、plugin merged-main
+`c0d6294bc30f775151dba256d49a37a29ba939d7` 和 dev-hub
+`337757b23c3a78580d5c65f41150c3e082cdbe50`。对应不可变镜像标签为
+`sage-mate/vllm-ascend-hust:core-88e606d0-plugin-c0d6294b-cann9.1`；实际部署仍必须
+同时锁定并核对 image ID。plugin 的 verified-core 声明、dev-hub production lock
+和本仓三个 gitlink 必须一起推进，禁止只更新其中一层。官方 `v0.23.0` 仅标识
+openEuler/CANN filesystem 基座，不代表当前 core 或 plugin 的源码版本。
+
 ## Deployment Targets
 
 `quickstart.sh` is the single installer entry point, but it has separate targets for the two
 product shapes:
 
-- `hosted-web` is the default Linux/server browser deployment. Use this on hosts such as
-  `180-ascend-dev`. It explicitly sets `DIGITAL_TWIN_DEPLOYMENT_MODE=hosted`,
+- `hosted-web` is the default Linux/server browser deployment. It explicitly sets
+  `DIGITAL_TWIN_DEPLOYMENT_MODE=hosted`,
   `DIGITAL_TWIN_APP_PROFILE=faculty_twin`, `DIGITAL_TWIN_CODE_WORKBENCH_ENABLED=false`, and clears
   `DIGITAL_TWIN_CODE_WORKSPACE_ROOTS`.
 - `local-mac-app` is the default on macOS. It installs a user Sage Mate runtime, delegates to
@@ -46,7 +115,7 @@ Start the FastAPI app directly:
 ```bash
 cd /path/to/sage-mate
 PYTHONPATH="$PWD/src:$PWD/../SAGE/src:$PWD/../neuromem:$PWD/../sageVDB" \
-python -m uvicorn sage_faculty_twin.api:app --host 127.0.0.1 --port 55601
+python -m uvicorn sage_faculty_twin.api:app --host "$APP_HOST" --port "$APP_PORT"
 ```
 
 Or use the provided wrapper:
@@ -73,9 +142,10 @@ homepage compatibility route without writing into system-wide `/etc/nginx`.
 
 Relevant variables:
 
-- `APP_PORT`: upstream app port, default `55601`
-- `SITE_PORT`: local proxy port, default `8088`
-- `HOMEPAGE_REDIRECT_ORIGIN`: canonical public homepage origin, default `https://me.sage.org.ai`
+- `APP_HOST` / `APP_PORT`: upstream application listen address
+- `SITE_HOST` / `SITE_PORT`: local proxy listen address
+- `DIGITAL_TWIN_HOMEPAGE_PUBLIC_URL`: optional canonical public homepage URL
+- `TUNNEL_ORIGIN_HEALTH_URL`: local origin checked before cloudflared starts
 
 `/home` and `/home/` are compatibility paths at the site-proxy layer. They now redirect to the
 canonical public homepage origin, while local direct app access can still use the built-in FastAPI
@@ -126,14 +196,6 @@ install -m 600 /path/to/cloudflare-tunnel-token "$DIGITAL_TWIN_RUNTIME_DIR/cloud
 `TUNNEL_CONFIG_PATH`. The repository's `.runtime/cloudflared/config.yml`
 fallback is only for local scratch deployments.
 
-For the 180-ascend-bench hosted deployment, `twin.sage.org.ai` is served by the
-Cloudflare named tunnel `sage-local-235b`; the token is stored in the private
-runtime directory:
-
-```bash
-$DIGITAL_TWIN_RUNTIME_DIR/cloudflared/token
-```
-
 Do not commit Cloudflare tokens, origin certificates, or tunnel credentials.
 
 ## 5. Public Branding
@@ -143,8 +205,6 @@ Set the canonical public homepage URL for the web UI top-bar button with:
 ```bash
 export DIGITAL_TWIN_HOMEPAGE_PUBLIC_URL=https://faculty.example.edu/
 ```
-
-For this deployment, the canonical public homepage is `https://me.sage.org.ai/`.
 
 If the variable is empty, the top-bar homepage link falls back to the app-local `/home/` route.
 That fallback is useful for local development, but it should not be treated as the public-facing
@@ -256,12 +316,18 @@ SAGE, NeuroMem, vLLM-HUST, SageVDB, and SageANNS. Versions are resolved at
 runtime via `/stack/versions` (pip metadata → module import → pyproject.toml
 parse, in that order).
 
-## 8. LLM Streaming and the chunked-transfer gotcha
+## 8. Validated answers and optional token streaming
 
-Faculty-twin can stream LLM tokens to the browser per-token via SSE
-(`answer_delta` / `answer_done` events) when
-`DIGITAL_TWIN_STREAM_CHAT_ANSWER=true`. For this to work end-to-end the
-upstream OpenAI-compatible endpoint MUST emit `Transfer-Encoding: chunked`.
+Keep `DIGITAL_TWIN_STREAM_CHAT_ANSWER=false` in normal deployments. Workflow
+trace updates still use SSE, while the browser renders only the final answer
+after grounding, relevance, and retry validation succeeds. This avoids showing
+tokens from an attempt that the workflow later rejects.
+
+The legacy `true` setting may still use streaming transport between Sage Mate
+and the upstream model, but `/chat` buffers those chunks and emits only the
+validated `answer_done` payload to the browser. Raw model tokens never cross
+the public SSE boundary. For upstream streaming transport to work end-to-end,
+the OpenAI-compatible endpoint MUST emit `Transfer-Encoding: chunked`.
 
 Reproduction recipe to verify any candidate `LLM_BASE_URL`:
 
@@ -295,9 +361,8 @@ vllm itself behaves correctly. Either:
 The streaming flag and the latency knobs (`DIGITAL_TWIN_STREAM_CHAT_ANSWER`,
 `DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`,
 `DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS`,
-`DIGITAL_TWIN_CHAT_PROMPT_SOFT_CAP_CHARS`) are read at module import time
-via `os.environ.get(...)`. They are *not* loaded by pydantic-settings.
-`tools/run_app_server.sh` therefore exports `.env` into the process
-environment immediately before launching uvicorn so these values reach the
-app. If you write your own launcher, do the same — a value that lives only
-inside `.env` will be invisible to those code paths.
+`DIGITAL_TWIN_PROMPT_SOFT_CAP`) are read when application settings are created.
+`tools/run_app_server.sh` exports `.env` into the process environment before
+launching uvicorn, so both settings-backed and module-level latency controls
+see one consistent deployment contract. If you write your own launcher, load
+the same environment before importing the application.

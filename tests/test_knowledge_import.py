@@ -7,6 +7,10 @@ import sage_faculty_twin.knowledge_import as knowledge_import
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.knowledge_import import import_homepage_materials
+from sage_faculty_twin.knowledge_identity import (
+    build_search_aliases,
+    canonicalize_knowledge_title,
+)
 from sage_faculty_twin.models import KnowledgeDocumentRecord
 
 
@@ -332,6 +336,44 @@ def test_import_homepage_materials_includes_remaining_public_content(tmp_path: P
     cv_hits = store.search("Shuhao Zhang data systems")
     assert cv_hits
     assert any("attachment" in hit.tags for hit in cv_hits)
+
+
+def test_titleless_paper_chunks_use_source_aware_unique_titles(tmp_path: Path) -> None:
+    contents_dir = tmp_path / "contents"
+    paper_dir = contents_dir / "research_papers" / "2013"
+    paper_dir.mkdir(parents=True)
+    paper_path = paper_dir / "2013_omnidb_vldb_2013.md"
+    paper_path.write_text(
+        "OmniDB portable CPU GPU query processing. " * 1200,
+        encoding="utf-8",
+    )
+
+    payloads = knowledge_import._build_generic_markdown_payloads(paper_path, contents_dir)
+
+    assert len(payloads) > 1
+    assert len({payload.title for payload in payloads}) == len(payloads)
+    assert all(
+        payload.title.startswith("论文页面｜2013 omnidb vldb 2013（第")
+        for payload in payloads
+    )
+    assert all("2013 omnidb vldb 2013" in payload.metadata["search_aliases"] for payload in payloads)
+    assert all(
+        canonicalize_knowledge_title(payload.title, payload.source_name) == payload.title
+        for payload in payloads
+    )
+
+
+def test_source_aliases_preserve_meaningful_section_and_part() -> None:
+    source_name = (
+        "homepage:contents/research_papers/2016/2016_sc_paper_sc_2016.md"
+        "#Cores::part-3"
+    )
+    title = canonicalize_knowledge_title("论文页面｜Cores（第3部分）", source_name)
+    aliases = build_search_aliases(title, source_name)
+
+    assert title == "论文页面｜Cores｜2016 sc paper sc 2016（第3部分）"
+    assert "Cores 2016 sc paper sc 2016" in aliases
+    assert "第3部分 part 3" in aliases
 
 
 def _write_minimal_docx(path: Path, text: str) -> None:

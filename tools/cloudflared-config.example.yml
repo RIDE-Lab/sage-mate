@@ -2,6 +2,6 @@ tunnel: YOUR_TUNNEL_ID
 credentials-file: ~/.cloudflared/YOUR_TUNNEL_ID.json
 
 ingress:
-  - hostname: app.example.com
-    service: http://127.0.0.1:8088
+  - hostname: YOUR_PUBLIC_HOSTNAME
+    service: YOUR_TUNNEL_ORIGIN_URL
   - service: http_status:404

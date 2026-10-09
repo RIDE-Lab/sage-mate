@@ -21,7 +21,7 @@ def test_chat_shell_exposes_topbar_action_entries() -> None:
     assert 'id="lucky-question-button"' in html
     assert 'id="open-suggestions"' in html
     assert 'id="suggestion-modal"' in html
-    assert 'id="homepage-link" href="/home/"' in html
+    assert 'id="homepage-link" href="https://me.sage.org.ai/"' in html
     assert 'id="knowledge-feedback-web-list"' in html
     assert "联网资料审查区" in html
 
@@ -40,7 +40,9 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'apiRequest("/knowledge/reviews/summary")' in script
     assert "data-feedback-web-review" in script
     assert "/knowledge/${encodeURIComponent(documentId)}/review" in script
-    assert "const luckyEntries = RANDOM_CHAT_QUESTION_BANKS[profile] || RANDOM_CHAT_QUESTION_BANKS.general_visitor;" in script
+    assert "const luckyEntries = buildLuckyQuestionCandidates(profile);" in script
+    assert "const LUCKY_QUESTION_TEMPLATES = [" in script
+    assert "const LUCKY_QUESTION_BLUEPRINTS = {" in script
     assert "const overlayModals = [" in script
     assert "].filter(Boolean);" in script
     assert "function hasVisibleOverlayModal()" in script
@@ -53,11 +55,35 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'identityModal.classList.contains("hidden") &&' not in script
 
 
+def test_companion_module_is_served_without_cache() -> None:
+    response = client.get("/companion.js")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/javascript")
+    assert response.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert "globalThis.SageCompanion = Object.freeze" in response.text
+
+    stylesheet = client.get("/companion.css")
+    assert stylesheet.status_code == 200
+    assert stylesheet.headers["content-type"].startswith("text/css")
+    assert stylesheet.headers["cache-control"] == "no-store, no-cache, must-revalidate"
+    assert ".sage-companion-settings" in stylesheet.text
+
+
+def test_general_visitor_onboarding_preserves_the_typed_question() -> None:
+    response = client.get("/app.js")
+
+    assert response.status_code == 200
+    script = response.text
+    assert "step.question.replace(/_+/g, question)" not in script
+    assert "onboardingWrappedQuestion = effectiveQuestion;" in script
+
+
 def test_local_site_proxy_routes_home_to_embedded_app() -> None:
     nginx_template = NGINX_TEMPLATE.read_text(encoding="utf-8")
 
     assert "location /home/ {" in nginx_template
-    assert "proxy_pass http://127.0.0.1:__APP_PORT__/home/;" in nginx_template
+    assert "proxy_pass http://__APP_HOST__:__APP_PORT__/home/;" in nginx_template
     assert "example.invalid" not in nginx_template
     assert "__HOMEPAGE_UPSTREAM_HOST__" not in nginx_template
     assert "__HOMEPAGE_UPSTREAM_SCHEME__" not in nginx_template

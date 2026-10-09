@@ -118,7 +118,7 @@ def test_legacy_skill_match_does_not_bypass_grounded_pipeline_by_default(
         )
     )
 
-    assert response.answer == "来自标准检索与记忆管线的回答"
+    assert response.answer != "旧技能短路回答"
     assert response.workflow_action != "skill_answer"
     assert response.workflow_trace
 

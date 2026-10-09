@@ -15,7 +15,7 @@ Prefer the top-level entrypoints unless you are debugging one component.
     verifies with `manage.sh verify-hosted-web`.
 - `../manage.sh` - runtime management entrypoint.
   - Status/restart/logs for systemd user services.
-  - Hosted verification: `./manage.sh verify-hosted-web --public-url https://twin.sage.org.ai/`
+  - Hosted verification: `./manage.sh verify-hosted-web --public-url "https://$FACULTY_TWIN_PUBLIC_HOSTNAME/"`
 
 ## Runtime Launchers
 
@@ -23,6 +23,8 @@ These are systemd-facing scripts. They should stay small and source shared helpe
 
 - `run_app_server.sh` - Faculty Twin FastAPI app on `127.0.0.1:${APP_PORT:-55601}`.
 - `run_vllm_engine.sh` - Ascend vLLM-HUST engine path.
+- `lock_sage_mate_deployment.sh` - **唯一**的一键部署/锁定入口。读取机器本地 `.env`，清理旧 systemd 环境覆盖，锁定物理 NPU 到容器逻辑映射，并重启引擎。
+- `verify_sage_mate_deployment.sh` - 只读验证入口，检查 systemd、`/health`、`/v1/models` 和实际 vLLM 命令行。
 - `run_vllm_nvidia_engine.sh` - NVIDIA/CUDA vLLM-HUST engine path. Uses pinned `deps/vllm-hust`.
 - `run_vllm_openai_proxy.sh` - OpenAI-compatible auth proxy.
 - `run_local_proxy.sh` - local site proxy.
@@ -36,6 +38,11 @@ These are systemd-facing scripts. They should stay small and source shared helpe
   - app/public health checks,
   - vLLM `/v1/models`,
   - app model name, served model name, and actual model ID consistency.
+- `validate_operational_self_knowledge.py` - model-independent semantic deployment gate:
+  - derives expected runtime facts from `/health` or an independent fixture,
+  - checks 24 Chinese/English, typo, follow-up and misleading-premise questions,
+  - fails on answer/runtime contradictions, missing Support, `used_model` mismatch, or wrong route,
+  - writes a machine-readable JSON artifact with trace, stage timing, citation coverage and contradiction score.
 - `check_twin_inference.py` - low-level OpenAI-compatible LLM smoke test.
 - `monitor_twin_inference.sh` - recurring inference monitor for systemd timer.
 - `repair_sagevdb.sh` / `repair_sagevdb.py` - native extension repair.

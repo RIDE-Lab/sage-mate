@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 
 from .config import AppSettings
 from .knowledge_base import LocalKnowledgeStore
+from .knowledge_identity import build_search_aliases, canonicalize_knowledge_title
 from .models import KnowledgeDocumentCreate, KnowledgeDocumentRecord
 
 _FRONT_MATTER_RE = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.DOTALL)
@@ -122,6 +123,7 @@ def _payload_matches_record(
         and record.content == payload.content
         and record.tags == payload.tags
         and record.source_name == payload.source_name
+        and all(record.metadata.get(key) == value for key, value in payload.metadata.items())
     )
 
 
@@ -700,12 +702,17 @@ def _make_payloads(
     for index, chunk in enumerate(chunks, start=1):
         title_suffix = f"（第{index}部分）" if len(chunks) > 1 else ""
         source_suffix = f"::part-{index}" if len(chunks) > 1 else ""
+        source_name = f"{source_stub}{source_suffix}"
+        canonical_title = canonicalize_knowledge_title(f"{title}{title_suffix}", source_name)
         payloads.append(
             KnowledgeDocumentCreate(
-                title=f"{title}{title_suffix}",
+                title=canonical_title,
                 content=chunk,
                 tags=tags,
-                source_name=f"{source_stub}{source_suffix}",
+                source_name=source_name,
+                metadata={
+                    "search_aliases": build_search_aliases(canonical_title, source_name)
+                },
             )
         )
     return payloads

@@ -17,9 +17,9 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
-from sage_faculty_twin.models import KnowledgeDocumentCreate
+from sage_faculty_twin.config import AppSettings  # noqa: E402
+from sage_faculty_twin.knowledge_base import LocalKnowledgeStore  # noqa: E402
+from sage_faculty_twin.models import KnowledgeDocumentCreate  # noqa: E402
 
 
 @dataclass

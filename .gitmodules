@@ -1,19 +1,17 @@
 [submodule "deps/vllm-hust-dev-hub"]
 	path = deps/vllm-hust-dev-hub
 	url = git@github.com:vLLM-HUST/vllm-hust-dev-hub.git
-	branch = faculty-twin-runtime
+	branch = main
 [submodule "deps/vllm-hust"]
 	path = deps/vllm-hust
 	url = git@github.com:vLLM-HUST/vllm-hust.git
-	branch = faculty-twin-runtime
 [submodule "deps/vllm-ascend-hust"]
 	path = deps/vllm-ascend-hust
 	url = git@github.com:vLLM-HUST/vllm-ascend-hust.git
-	branch = faculty-twin-runtime
 [submodule "deps/ascend-runtime-manager"]
 	path = deps/ascend-runtime-manager
 	url = git@github.com:vLLM-HUST/ascend-runtime-manager.git
-	branch = faculty-twin-runtime
+	branch = main
 [submodule "deps/vllm-metal-hust"]
 	path = deps/vllm-metal-hust
 	url = https://github.com/vLLM-HUST/vllm-metal-hust.git

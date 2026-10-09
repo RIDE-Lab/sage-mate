@@ -15,6 +15,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .models import KnowledgeSearchHit
+
 
 class SkillToolParameter(BaseModel):
     """Parameter definition for a skill tool (OpenAI function-calling format)."""
@@ -111,6 +113,7 @@ class SkillResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     skill_id: str = Field(min_length=1, max_length=64)
+    knowledge_hits: list[KnowledgeSearchHit] = Field(default_factory=list)
     answer: str = Field(default="", max_length=16384)
     tool_calls_made: int = Field(default=0, ge=0)
     turns_used: int = Field(default=0, ge=0)

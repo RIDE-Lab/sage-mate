@@ -12,10 +12,11 @@ import time
 import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from . import __version__
 from .runtime_env import bootstrap_runtime_env
@@ -38,8 +39,17 @@ from .auth import (
     set_admin_session_cookie,
     set_user_session_cookie,
 )
+from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .conversation_trace_store import ConversationTraceStore
+from .chat_delivery import DeliveredChatResponse
+from .request_context import (
+    RequestCancellationController,
+    RequestCancelledError,
+    RequestRuntimeDiagnostics,
+    request_cancellation_scope,
+)
+from .request_timing import RequestTimingLedger
 from .models import (
     AdminLoginRequest,
     AdminSessionResponse,
@@ -115,7 +125,11 @@ from .models import (
 )
 from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
-from .service import DigitalTwinService, build_stack_versions_payload, build_hardware_payload
+from .service import (
+    DigitalTwinService,
+    build_stack_versions_payload,
+    build_hardware_payload,
+)
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
 from .trace_context import bind_trace_event_sink
@@ -136,7 +150,16 @@ def configure_local_cors(target_app: FastAPI) -> None:
     )
 
 
-llm_app = FastAPI(title="Sage Mate", version="1.1")
+@asynccontextmanager
+async def _app_lifespan(_app: FastAPI):
+    await startup_event()
+    try:
+        yield
+    finally:
+        await shutdown_event()
+
+
+llm_app = FastAPI(title="Sage Mate", version="1.1", lifespan=_app_lifespan)
 configure_local_cors(llm_app)
 
 
@@ -185,6 +208,7 @@ class LazyDigitalTwinService:
 
 service = LazyDigitalTwinService()
 slack_link_store = SlackUserLinkStore(settings.slack_user_link_dir)
+lab_member_api_token_store = LabMemberApiTokenStore(settings)
 web_dir = Path(__file__).with_name("web")
 NO_STORE_HEADERS = {"Cache-Control": "no-store, no-cache, must-revalidate"}
 MAX_CHAT_ATTACHMENTS = 4
@@ -195,26 +219,104 @@ MAX_CHAT_ATTACHMENT_TEXT_CHARS = 12000
 # trace progress before the proxy gives up. Tune via
 # ``DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`` if the upstream LLM is
 # consistently slower than this budget.
-CHAT_REQUEST_TIMEOUT_SECONDS = float(
-    os.environ.get("DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS", "80")
-)
+CHAT_REQUEST_TIMEOUT_SECONDS = settings.chat_request_timeout_seconds
+CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
+CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
+_chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
+_chat_waiting_requests = 0
+
+
+async def _run_chat_with_cancellation(
+    raw_request: Request,
+    *,
+    timeout_seconds: float,
+    deadline_at: float | None = None,
+    runtime_diagnostics: RequestRuntimeDiagnostics | None = None,
+    active_request_id: str | None = None,
+    **answer_kwargs,
+) -> ChatResponse:
+    """Run one chat request while propagating disconnect/timeout to workers.
+
+    The model call itself is synchronous in a worker thread, so cancelling the
+    asyncio wrapper alone would leave that thread free to perform validation
+    retries after the HTTP request has gone away.  The context-scoped event is
+    checked before every retry and post-answer branch.
+    """
+    cancellation = RequestCancellationController(diagnostics=runtime_diagnostics)
+    if active_request_id:
+        active_chat_request_registry.register(active_request_id, cancellation)
+    request_payload = answer_kwargs.pop("payload")
+
+    async def _run_answer():
+        with request_cancellation_scope(cancellation, deadline_at=deadline_at):
+            return await service.answer(request_payload, **answer_kwargs)
+
+    answer_task = asyncio.create_task(_run_answer())
+    watch_disconnect = not raw_request.headers.get("content-type", "").lower().startswith(
+        "multipart/"
+    )
+
+    async def _watch_disconnect():
+        while True:
+            try:
+                disconnected = await asyncio.wait_for(raw_request.is_disconnected(), timeout=0.5)
+            except asyncio.TimeoutError:
+                disconnected = False
+            if disconnected:
+                return
+            await asyncio.sleep(0.25)
+
+    watcher_task = asyncio.create_task(_watch_disconnect()) if watch_disconnect else None
+    try:
+        if watcher_task is None:
+            return await asyncio.wait_for(answer_task, timeout=timeout_seconds)
+        done, _ = await asyncio.wait(
+            {answer_task, watcher_task},
+            timeout=timeout_seconds,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if answer_task in done:
+            try:
+                return answer_task.result()
+            except RequestCancelledError as exc:
+                raise asyncio.TimeoutError from exc
+        cancellation.cancel()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        if watcher_task in done:
+            raise HTTPException(status_code=499, detail="客户端已断开，已停止后续模型重试。")
+        raise asyncio.TimeoutError
+    except asyncio.TimeoutError:
+        cancellation.cancel()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        raise
+    except asyncio.CancelledError:
+        cancellation.cancel()
+        answer_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        raise
+    finally:
+        cancellation.cancel()
+        if not answer_task.done():
+            answer_task.cancel()
+        if watcher_task is not None and not watcher_task.done():
+            watcher_task.cancel()
+        await asyncio.gather(answer_task, return_exceptions=True)
+        if watcher_task is not None:
+            await asyncio.gather(watcher_task, return_exceptions=True)
+        if active_request_id:
+            active_chat_request_registry.unregister(active_request_id, cancellation)
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
 # Cloudflare's idle proxy timeout (~100s on the free plan) can drop the SSE
 # connection mid-answer. We emit a typed ``{"type": "keepalive"}`` event
 # every ``CHAT_SSE_KEEPALIVE_SECONDS`` seconds so the connection stays warm.
-CHAT_SSE_KEEPALIVE_SECONDS = float(os.environ.get("DIGITAL_TWIN_CHAT_SSE_KEEPALIVE_SECONDS", "15"))
-# Chat Latency Optimizations Task 5: when this flag is enabled the LLM
-# stage emits each token chunk over the workflow-events SSE channel as a
-# typed ``answer_delta`` event, followed by a final ``answer_done`` event
-# carrying the full ChatResponse dict. The /chat POST still returns the
-# same JSON ChatResponse so CLI/test callers see the same contract; the
-# browser uses the SSE deltas to paint the answer progressively. Defaults
-# to on so streaming works out of the box; set to ``false`` to disable.
-STREAM_CHAT_ANSWER = os.environ.get(
-    "DIGITAL_TWIN_STREAM_CHAT_ANSWER", "true"
-).strip().lower() not in {"0", "false", "no", "off"}
+CHAT_SSE_KEEPALIVE_SECONDS = settings.chat_sse_keepalive_seconds
+# Upstream chunks are buffered until validation; the public SSE publishes
+# only the delivered answer, never an unvalidated partial attempt.
+STREAM_CHAT_ANSWER = settings.stream_chat_answer
 CONVERSATION_TRACE_RETENTION_DAYS = int(
     os.environ.get("DIGITAL_TWIN_CONVERSATION_TRACE_RETENTION_DAYS", "365")
 )
@@ -287,6 +389,41 @@ SUPPORTED_CHAT_ATTACHMENT_MEDIA_TYPES = {
 }
 
 
+class ActiveChatRequestRegistry:
+    """Maps public request IDs to the controller that owns downstream work."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._controllers: dict[str, RequestCancellationController] = {}
+
+    def register(self, request_id: str, controller: RequestCancellationController) -> None:
+        with self._lock:
+            previous = self._controllers.get(request_id)
+            self._controllers[request_id] = controller
+        if previous is not None and previous is not controller:
+            previous.cancel()
+
+    def unregister(
+        self,
+        request_id: str,
+        controller: RequestCancellationController,
+    ) -> None:
+        with self._lock:
+            if self._controllers.get(request_id) is controller:
+                self._controllers.pop(request_id, None)
+
+    def cancel(self, request_id: str) -> bool:
+        with self._lock:
+            controller = self._controllers.pop(request_id, None)
+        if controller is None:
+            return False
+        controller.cancel()
+        return True
+
+
+active_chat_request_registry = ActiveChatRequestRegistry()
+
+
 class WorkflowEventBroker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -295,12 +432,18 @@ class WorkflowEventBroker:
             tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, object] | None]],
         ] = {}
 
-    async def stream(self, request_id: str) -> AsyncIterator[str]:
+    async def stream(
+        self,
+        request_id: str,
+        *,
+        on_disconnect: Callable[[], None] | None = None,
+    ) -> AsyncIterator[str]:
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
         with self._lock:
             self._streams[request_id] = (loop, queue)
 
+        closed_by_server = False
         try:
             while True:
                 # Chat Latency Optimizations Task 4: emit a keepalive event
@@ -320,6 +463,7 @@ class WorkflowEventBroker:
                     )
                     continue
                 if payload is None:
+                    closed_by_server = True
                     break
                 yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
         finally:
@@ -327,6 +471,8 @@ class WorkflowEventBroker:
                 current = self._streams.get(request_id)
                 if current is not None and current[1] is queue:
                     self._streams.pop(request_id, None)
+            if not closed_by_server and on_disconnect is not None:
+                on_disconnect()
 
     def publish_step(self, request_id: str, step: object) -> None:
         payload = {
@@ -335,22 +481,17 @@ class WorkflowEventBroker:
         }
         self._publish(request_id, payload)
 
-    def publish_answer_chunk(self, request_id: str, delta: str) -> None:
-        # Chat Latency Optimizations Task 5: surface streaming LLM tokens
-        # to the browser. The frontend appends ``delta`` to the pending
-        # assistant message body. Empty deltas are dropped so we don't
-        # spam the SSE stream with no-op events when the upstream emits
-        # heartbeat/keepalive lines without content tokens.
-        if not delta:
-            return
-        self._publish(request_id, {"type": "answer_delta", "text": delta})
-
-    def publish_answer_done(self, request_id: str, response_dict: dict[str, object]) -> None:
-        # Final structured payload — the browser replaces the streamed text
-        # with the rendered ChatResponse so it can show ``answer_basis``,
-        # ``follow_up_actions``, ``knowledge_hits`` and ``booking_result``
-        # consistently with non-streaming sessions.
-        self._publish(request_id, {"type": "answer_done", "response": response_dict})
+    def publish_answer_done(
+        self,
+        request_id: str,
+        response: DeliveredChatResponse,
+    ) -> None:
+        if not isinstance(response, DeliveredChatResponse):
+            raise TypeError("answer_done requires a DeliveredChatResponse")
+        self._publish(
+            request_id,
+            {"type": "answer_done", "response": response.model_dump(mode="json")},
+        )
 
     def publish_error(self, request_id: str, message: str) -> None:
         self._publish(request_id, {"type": "error", "message": message})
@@ -540,6 +681,7 @@ async def _parse_chat_request(raw_request: Request) -> ChatRequest:
             in ("true", "1", "on", "yes"),
             "attachments": await _parse_chat_attachments(files),
         }
+        payload["visitor_profile"] = _normalize_visitor_profile(payload.get("visitor_profile"))
         try:
             return ChatRequest.model_validate(payload)
         except ValidationError as exc:
@@ -550,23 +692,57 @@ async def _parse_chat_request(raw_request: Request) -> ChatRequest:
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail="聊天请求体不是合法 JSON。") from exc
 
+    if isinstance(payload, dict):
+        payload["visitor_profile"] = _normalize_visitor_profile(payload.get("visitor_profile"))
     try:
         return ChatRequest.model_validate(payload)
     except ValidationError as exc:
         _raise_chat_validation_error(exc)
 
 
+def _normalize_visitor_profile(value: object) -> object:
+    """Accept common public aliases without weakening profile validation."""
+    aliases = {
+        "guest": "general_visitor",
+        "visitor": "general_visitor",
+        "student": "hust_undergraduate",
+    }
+    normalized = str(value or "").strip().lower()
+    return aliases.get(normalized, value)
+
+
 def _resolve_effective_chat_visitor_profile(
     raw_request: Request,
     requested_visitor_profile: str | None,
 ) -> str | None:
+    authorization = raw_request.headers.get("authorization", "").strip()
+    if authorization:
+        scheme, _, token = authorization.partition(" ")
+        identity = (
+            lab_member_api_token_store.authenticate(token.strip())
+            if scheme.lower() == "bearer" and token.strip()
+            else None
+        )
+        if identity is None:
+            raise HTTPException(status_code=401, detail="无效或过期的 API token。")
+        return identity.visitor_profile
     session_token = raw_request.cookies.get(USER_COOKIE_NAME)
     if not session_token:
-        return requested_visitor_profile
+        # Public profile hints may tailor course answers, but a client-owned
+        # request field must never grant access to team-only knowledge.
+        return (
+            "general_visitor"
+            if requested_visitor_profile == "lab_member"
+            else requested_visitor_profile
+        )
     user_session = service.get_user_session(session_token)
     if user_session.is_authenticated and user_session.account is not None:
         return user_session.account.visitor_profile
-    return requested_visitor_profile
+    return (
+        "general_visitor"
+        if requested_visitor_profile == "lab_member"
+        else requested_visitor_profile
+    )
 
 
 def _require_user_account(raw_request: Request):
@@ -1152,7 +1328,7 @@ async def home() -> FileResponse:
 
 @llm_app.api_route("/styles.css", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/styles.4217.css", methods=["GET", "HEAD"], include_in_schema=False)
-@llm_app.api_route("/styles.4219.css", methods=["GET", "HEAD"], include_in_schema=False)
+@llm_app.api_route("/styles.4222.css", methods=["GET", "HEAD"], include_in_schema=False)
 async def styles() -> FileResponse:
     return frontend_asset("styles.css")
 
@@ -1167,9 +1343,19 @@ async def homepage_redirect() -> RedirectResponse:
 @llm_app.api_route("/app.js", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/app.4217.js", methods=["GET", "HEAD"], include_in_schema=False)
 @llm_app.api_route("/app.4218.js", methods=["GET", "HEAD"], include_in_schema=False)
-@llm_app.api_route("/app.4219.js", methods=["GET", "HEAD"], include_in_schema=False)
+@llm_app.api_route("/app.4222.js", methods=["GET", "HEAD"], include_in_schema=False)
 async def app_js() -> FileResponse:
     return frontend_asset("app.js")
+
+
+@llm_app.api_route("/companion.js", methods=["GET", "HEAD"], include_in_schema=False)
+async def companion_js() -> FileResponse:
+    return frontend_asset("companion.js")
+
+
+@llm_app.api_route("/companion.css", methods=["GET", "HEAD"], include_in_schema=False)
+async def companion_css() -> FileResponse:
+    return frontend_asset("companion.css")
 
 
 @llm_app.get("/auth/session", response_model=AdminSessionResponse)
@@ -1474,7 +1660,18 @@ async def admin_health(_: dict = Depends(require_admin_session)) -> dict[str, ob
 
 @llm_app.get("/stack/versions")
 async def stack_versions() -> dict[str, str]:
-    return build_stack_versions_payload()
+    payload = build_stack_versions_payload()
+    # Environment preferences can be stale after the OpenAI-compatible engine
+    # resolves the actually served model. The public stack panel must report
+    # the model used by the live client, just like /health does.
+    payload["model_name"] = service._llm_client.model_name
+    runtime_snapshot = getattr(service._llm_client, "runtime_snapshot", None)
+    if callable(runtime_snapshot):
+        snapshot = runtime_snapshot()
+        for key in ("model_name", "engine_image", "npu_devices"):
+            if snapshot.get(key):
+                payload[key] = str(snapshot[key])
+    return payload
 
 
 @llm_app.get("/stack/hardware")
@@ -1546,7 +1743,10 @@ async def chat_workflow_events(
     request_id: str = Query(min_length=1, max_length=128),
 ) -> StreamingResponse:
     return StreamingResponse(
-        workflow_event_broker.stream(request_id),
+        workflow_event_broker.stream(
+            request_id,
+            on_disconnect=lambda: active_chat_request_registry.cancel(request_id),
+        ),
         media_type="text/event-stream",
         headers={
             **NO_STORE_HEADERS,
@@ -1554,6 +1754,14 @@ async def chat_workflow_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+@llm_app.post("/chat/cancel", include_in_schema=False)
+async def cancel_chat_request(
+    request_id: str = Query(min_length=1, max_length=128),
+) -> dict[str, bool | str]:
+    cancelled = active_chat_request_registry.cancel(request_id)
+    return {"request_id": request_id, "cancelled": cancelled}
 
 
 @llm_app.post("/slack/commands/twin", include_in_schema=False)
@@ -1679,17 +1887,23 @@ async def slack_events(
     return JSONResponse({"ok": True})
 
 
-@llm_app.on_event("startup")
 async def startup_event() -> None:
     if settings.warm_service_on_startup:
         instance = await asyncio.to_thread(service.ensure_initialized)
         await asyncio.to_thread(instance.warm_fixed_prefix_cache)
 
 
-@llm_app.on_event("shutdown")
 async def shutdown_event() -> None:
     if service.is_initialized():
         await service.aclose()
+
+
+def _untraced_answer_chunk_callback() -> Callable[[str], None] | None:
+    """Enable upstream streaming only when the deployment explicitly requests it."""
+
+    if not STREAM_CHAT_ANSWER:
+        return None
+    return lambda _delta: None
 
 
 @llm_app.post("/chat", response_model=ChatResponse)
@@ -1698,19 +1912,31 @@ async def chat(
     http_response: Response,
     request_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> ChatResponse:
+    timing = RequestTimingLedger(
+        trace_id=request_id or uuid4().hex,
+        budget_seconds=CHAT_REQUEST_TIMEOUT_SECONDS,
+    )
+    stage_started = time.perf_counter()
     payload = await _parse_chat_request(raw_request)
+    effective_visitor_profile = _resolve_effective_chat_visitor_profile(
+        raw_request,
+        payload.visitor_profile,
+    )
     payload = payload.model_copy(
         update={
-            "visitor_profile": _resolve_effective_chat_visitor_profile(
-                raw_request,
-                payload.visitor_profile,
-            )
+            "visitor_profile": effective_visitor_profile,
+            "answer_max_tokens": (
+                payload.answer_max_tokens
+                if effective_visitor_profile == "lab_member"
+                else None
+            ),
         }
     )
+    timing.record("request_parse", stage_started)
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
-    timeout_seconds = CHAT_REQUEST_TIMEOUT_SECONDS
     trace_id = secrets.token_hex(16)
     http_response.headers["X-Trace-Id"] = trace_id
+    http_response.headers["X-Sage-Trace-ID"] = timing.trace_id
     trace_store = get_conversation_trace_store()
     trace_store.begin(
         trace_id=trace_id,
@@ -1722,43 +1948,146 @@ async def chat(
         request_payload=payload.model_dump(mode="json"),
     )
 
+    def _record_success(response: ChatResponse, *, route: str) -> ChatResponse:
+        delivered = timing.attach(response, route=route)
+        trace_store.set_response(trace_id, delivered.model_dump(mode="json"))
+        trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
+        trace_store.append_event(trace_id, "complete", {})
+        trace_store.finish(trace_id, status="completed")
+        return delivered
+
+    def _record_error(exc: Exception, *, status: str = "error") -> None:
+        error_payload = {"type": type(exc).__name__, "message": str(exc)}
+        trace_store.append_event(trace_id, "error", error_payload)
+        trace_store.finish(trace_id, status=status, error=error_payload)
+
+    # Safety-boundary replies do not need the model or NPU.  Resolve them
+    # before the single-model admission gate so a slow deep/web request cannot
+    # make an obvious credential-exfiltration refusal return 429.
+    boundary_response = service._check_sensitive_boundary_request(payload)
+    if boundary_response is not None:
+        return _record_success(boundary_response, route="boundary")
+
+    # Public greetings and bounded local-evidence FAQs do not consume the
+    # model/NPU slot.  Probe this lane before admission so a long DeepSeek
+    # request cannot make a lightweight student question return 429.  Keep a
+    # short guard: an unexpectedly slow local index falls back to the normal
+    # admission path instead of creating an unbounded side queue.
+    fast_response = None
+    if not payload.attachments:
+        stage_started = time.perf_counter()
+        try:
+            fast_response = await asyncio.wait_for(
+                asyncio.to_thread(service.try_fast_answer, payload),
+                timeout=min(2.5, timing.remaining_seconds()),
+            )
+        except asyncio.TimeoutError:
+            fast_response = None
+        finally:
+            timing.record("fast_path_probe", stage_started)
+    if fast_response is not None:
+        # Fast answers skip the workflow DAG by design, but must still write
+        # the exchange before returning so the next turn can resolve short
+        # follow-ups against the same conversation.
+        stage_started = time.perf_counter()
+        try:
+            persisted = await asyncio.wait_for(
+                asyncio.to_thread(service.persist_fast_answer, payload, fast_response),
+                timeout=min(2.0, timing.remaining_seconds()),
+            )
+            timing.record("fast_path_persist", stage_started)
+            return _record_success(persisted, route="fast_path")
+        except asyncio.TimeoutError:
+            _logger.exception("fast-path memory persistence timed out")
+            timing.record("fast_path_persist", stage_started)
+            return _record_success(fast_response, route="fast_path")
+        except Exception:
+            _logger.exception("fast-path memory persistence failed")
+            timing.record("fast_path_persist", stage_started)
+            return _record_success(fast_response, route="fast_path")
+
+    global _chat_waiting_requests
+    if timing.remaining_seconds() <= 0:
+        exc = HTTPException(
+            status_code=504,
+            detail="后端在本次请求总预算内未完成响应，请稍后重试。",
+            headers={"X-Sage-Trace-ID": timing.trace_id},
+        )
+        _record_error(exc, status="timeout")
+        raise exc
+    queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
+    _chat_waiting_requests += 1
+    stage_started = time.perf_counter()
+    try:
+        await asyncio.wait_for(
+            _chat_admission.acquire(),
+            timeout=min(CHAT_ADMISSION_TIMEOUT_SECONDS, timing.remaining_seconds()),
+        )
+    except asyncio.TimeoutError as exc:
+        timing.record("admission_wait", stage_started)
+        _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
+        estimated_wait = max(2, min(15, int(round(CHAT_ADMISSION_TIMEOUT_SECONDS * max(1, queue_position)))))
+        admission_error = HTTPException(
+            status_code=429,
+            detail=(
+                f"当前请求正在排队，前方约 {queue_position} 个请求，"
+                f"预计 {estimated_wait} 秒后重试。"
+            ),
+            headers={
+                "Retry-After": str(estimated_wait),
+                "X-Queue-Position": str(queue_position),
+                "X-Queue-Estimated-Wait": str(estimated_wait),
+                "X-Sage-Trace-ID": timing.trace_id,
+            },
+        )
+        _record_error(admission_error, status="rejected")
+        raise admission_error from exc
+    timing.record("admission_wait", stage_started)
+    _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
+
     if request_id is None:
+        # API clients do not always open the workflow-events SSE channel.
+        # Still attach a no-op trace callback so the same production path
+        # can run post-answer persistence in the background. This keeps
+        # memory/profile bookkeeping out of the HTTP critical path without
+        # changing the public response schema.
         try:
             with bind_trace_event_sink(
                 lambda event_type, event_payload: trace_store.append_event(
                     trace_id, event_type, event_payload
                 )
             ):
-                chat_response = await asyncio.wait_for(
-                    service.answer(payload, admin_session_token=admin_session_token),
-                    timeout=timeout_seconds,
+                stage_started = time.perf_counter()
+                response = await _run_chat_with_cancellation(
+                    raw_request,
+                    timeout_seconds=timing.remaining_seconds(),
+                    deadline_at=timing.deadline_at,
+                    runtime_diagnostics=timing.runtime_diagnostics,
+                    active_request_id=timing.trace_id,
+                    payload=payload,
+                    admin_session_token=admin_session_token,
+                    trace_callback=lambda step: trace_store.append_event(
+                        trace_id, "trace-step", step.model_dump(mode="json")
+                    ),
+                    answer_chunk_callback=_untraced_answer_chunk_callback(),
                 )
+                timing.record("sage_workflow", stage_started)
+            return _record_success(response, route="sage_workflow")
         except asyncio.TimeoutError as exc:
-            error_payload = {
-                "type": "timeout",
-                "message": f"Chat exceeded the {int(timeout_seconds)} second budget.",
-            }
-            trace_store.append_event(trace_id, "error", error_payload)
-            trace_store.finish(trace_id, status="timeout", error=error_payload)
+            timing.record("sage_workflow", stage_started)
+            _record_error(exc, status="timeout")
             raise HTTPException(
                 status_code=504,
-                detail=(f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"),
-                headers={"X-Trace-Id": trace_id},
+                detail="后端在本次请求总预算内未完成响应，请稍后重试。",
+                headers={"X-Sage-Trace-ID": timing.trace_id},
             ) from exc
         except Exception as exc:
-            error_payload = {"type": type(exc).__name__, "message": str(exc)}
-            trace_store.append_event(trace_id, "error", error_payload)
-            trace_store.finish(trace_id, status="error", error=error_payload)
+            _record_error(exc)
             raise
-
-        response_payload = chat_response.model_dump(mode="json")
-        for step in chat_response.workflow_trace:
-            trace_store.append_event(trace_id, "trace-step", step.model_dump(mode="json"))
-        trace_store.set_response(trace_id, response_payload)
-        trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
-        trace_store.append_event(trace_id, "complete", {})
-        trace_store.finish(trace_id, status="completed")
-        return chat_response
+        finally:
+            # A return still executes this finally; the slot is released
+            # before the response leaves the endpoint.
+            _chat_admission.release()
 
     # When ``request_id`` is supplied the chat workflow streams trace events
     # over the workflow-events SSE channel. With
@@ -1782,25 +2111,11 @@ async def chat(
         workflow_event_broker.publish_step(request_id, step)
 
     def _on_post_answer_complete() -> None:
-        if STREAM_CHAT_ANSWER:
-            answer_complete_gate.mark_post_answer_complete()
-        else:
-            _publish_complete_and_finish_trace()
+        answer_complete_gate.mark_post_answer_complete()
 
-    answer_chunk_callback = None
-    answer_chunks: list[str] = []
-    if STREAM_CHAT_ANSWER:
-        # Chat Latency Optimizations Task 5: only attach the streaming
-        # callback when the feature flag is on. The service then asks
-        # the LLM client for a streaming completion and forwards each
-        # chunk to the SSE broker so the browser can paint tokens as
-        # they arrive.
-        def _on_answer_chunk(delta: str) -> None:
-            if delta:
-                answer_chunks.append(delta)
-            workflow_event_broker.publish_answer_chunk(request_id, delta)
-
-        answer_chunk_callback = _on_answer_chunk
+    # The upstream may stream internally, but only a validated delivered
+    # answer may cross the public SSE boundary.
+    answer_chunk_callback = _untraced_answer_chunk_callback()
 
     try:
         with bind_trace_event_sink(
@@ -1808,55 +2123,52 @@ async def chat(
                 trace_id, event_type, event_payload
             )
         ):
-            chat_response = await asyncio.wait_for(
-                service.answer(
-                    payload,
-                    admin_session_token=admin_session_token,
-                    trace_callback=_publish_trace_step,
-                    on_post_answer_complete=_on_post_answer_complete,
-                    answer_chunk_callback=answer_chunk_callback,
-                ),
-                timeout=timeout_seconds,
+            stage_started = time.perf_counter()
+            response = await _run_chat_with_cancellation(
+                raw_request,
+                timeout_seconds=timing.remaining_seconds(),
+                deadline_at=timing.deadline_at,
+                runtime_diagnostics=timing.runtime_diagnostics,
+                active_request_id=timing.trace_id,
+                payload=payload,
+                admin_session_token=admin_session_token,
+                trace_callback=_publish_trace_step,
+                on_post_answer_complete=_on_post_answer_complete,
+                answer_chunk_callback=answer_chunk_callback,
             )
+            timing.record("sage_workflow", stage_started)
     except asyncio.TimeoutError as exc:
-        message = f"后端在 {int(timeout_seconds)} 秒内未完成响应，请稍后重试。"
-        error_payload = {"type": "timeout", "message": message}
-        trace_store.append_event(trace_id, "error", error_payload)
-        trace_store.finish(trace_id, status="timeout", error=error_payload)
+        timing.record("sage_workflow", stage_started)
+        _record_error(exc, status="timeout")
+        message = "后端在本次请求总预算内未完成响应，请稍后重试。"
         workflow_event_broker.publish_error(request_id, message)
         raise HTTPException(
             status_code=504,
             detail=message,
-            headers={"X-Trace-Id": trace_id},
+            headers={"X-Sage-Trace-ID": timing.trace_id},
         ) from exc
     except Exception as exc:
-        error_payload = {"type": type(exc).__name__, "message": str(exc)}
-        trace_store.append_event(trace_id, "error", error_payload)
-        trace_store.finish(trace_id, status="error", error=error_payload)
+        _record_error(exc)
         workflow_event_broker.publish_error(request_id, str(exc))
         raise
+    finally:
+        _chat_admission.release()
 
-    response_payload = chat_response.model_dump(mode="json")
+    response_payload = timing.attach(response, route="sage_workflow").model_dump(mode="json")
     trace_store.set_response(trace_id, response_payload)
+    trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
     if STREAM_CHAT_ANSWER:
         # Surface the final structured ChatResponse to the SSE channel so
         # the streaming UI can swap the progressively-painted text for the
         # rendered fields (answer_basis, follow_up_actions, etc.) without
         # re-fetching anything.
         try:
-            trace_store.append_event(
-                trace_id,
-                "answer_stream",
-                {"chunks": answer_chunks, "chunk_count": len(answer_chunks)},
-            )
-            trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
-            workflow_event_broker.publish_answer_done(request_id, response_payload)
+            workflow_event_broker.publish_answer_done(request_id, response)
         except Exception:  # pragma: no cover - defensive
             pass
-        finally:
-            answer_complete_gate.mark_answer_done()
+    answer_complete_gate.mark_answer_done()
 
-    return chat_response
+    return timing.attach(response, route="sage_workflow")
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
@@ -1899,8 +2211,6 @@ async def get_conversation_trace(
 async def compress_context(raw_request: Request) -> JSONResponse:
     """Manually trigger context compression for a conversation."""
     user_session = service.get_user_session(raw_request.cookies.get(USER_COOKIE_NAME))
-    if not user_session.is_authenticated:
-        raise HTTPException(status_code=401, detail="请先登录后再压缩对话上下文。")
     try:
         payload = await raw_request.json()
     except json.JSONDecodeError:
@@ -1909,6 +2219,18 @@ async def compress_context(raw_request: Request) -> JSONResponse:
     conversation_id = str(payload.get("conversation_id", "") or "").strip()
     if not conversation_id:
         raise HTTPException(status_code=422, detail="conversation_id 不能为空")
+
+    # Guest conversations are browser-generated UUIDs and contain no account
+    # data.  Allow compression for that scoped capability; reject arbitrary
+    # strings so the endpoint cannot be used as a write primitive against
+    # internal digest paths. Authenticated users retain the existing behavior.
+    if not user_session.is_authenticated:
+        try:
+            parsed_id = UUID(conversation_id)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。") from None
+        if parsed_id.version != 4:
+            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。")
 
     result = service.compress_conversation_context(conversation_id)
     return JSONResponse(content=result)

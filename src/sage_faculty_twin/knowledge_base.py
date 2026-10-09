@@ -325,7 +325,7 @@ class LocalKnowledgeStore:
         # linked document_ids.  Built from ``metadata["linked_source_names"]``
         # at load time.  See wiki-link-retrieval repo for research context.
         self._link_graph: dict[str, list[str]] = {}
-        self._link_expansion_enabled = True
+        self._link_expansion_enabled = settings.knowledge_link_expansion_enabled
         self._load_documents_from_disk()
         self._rebuild_link_graph()
         if self._backend == "sagevdb":
@@ -563,6 +563,9 @@ class LocalKnowledgeStore:
                 str(top_k or self._settings.retrieval_top_k),
                 visitor_profile or "",
                 admin_role or "",
+                str(self._link_expansion_enabled),
+                str(self._settings.knowledge_link_expansion_decay),
+                str(self._settings.knowledge_link_expansion_max_documents),
                 normalized_query,
             )
         )
@@ -616,6 +619,30 @@ class LocalKnowledgeStore:
 
     def count_documents(self) -> int:
         return len(self._documents)
+
+    def indexed_document_count(self) -> int:
+        """Return how many documents are represented by the active search index."""
+
+        if self._backend == "sagevdb":
+            return len(self._document_id_to_vector_id)
+        if self._backend == "neuromem":
+            if self._neuromem_collection is None:
+                return 0
+            search_index = self._neuromem_collection.indexes.get("search")
+            if search_index is None:
+                return 0
+            for attribute in ("data_to_segment", "id_to_idx", "data_ids"):
+                entries = getattr(search_index, attribute, None)
+                if entries is not None:
+                    try:
+                        return len(entries)
+                    except TypeError:
+                        continue
+            return 0
+        return self.count_documents()
+
+    def index_is_complete(self) -> bool:
+        return self.indexed_document_count() == self.count_documents()
 
     def backend_name(self) -> str:
         return self._backend
@@ -1544,15 +1571,17 @@ class LocalKnowledgeStore:
 
     def _build_excerpt(self, content: str, query_tokens: set[str]) -> str:
         compact = " ".join(content.split())
-        lowercase = compact.lower()
-        hit_index = min(
-            (lowercase.find(token) for token in query_tokens if token in lowercase), default=-1
-        )
-        if hit_index == -1:
-            return compact[:220]
-        start = max(hit_index - 60, 0)
-        end = min(hit_index + 160, len(compact))
-        return compact[start:end]
+        # Earliest-hit snippets usually stop at a PDF's title/author list.
+        # Rank bounded windows by the same non-overlapping anchors used by the
+        # retriever, so the model and Support receive the supporting passage.
+        window = 480
+        # Fixed overlapping windows keep the scan linear in document length;
+        # evaluating a new window for every frequent-token hit is quadratic.
+        starts = range(0, max(1, len(compact)), window // 2)
+        start = max(starts, key=lambda pos: _span_overlap_score(
+            compact[pos:pos + window], query_tokens
+        ))
+        return compact[start:start + window]
 
     def _tokenize(self, text: str) -> set[str]:
         return _tokenize_text(_expand_query_synonyms(text))
@@ -1561,7 +1590,7 @@ class LocalKnowledgeStore:
         title = ((document.title + " ") * 3).strip()
         tags = " ".join(document.tags + document.tags)
         tag_aliases = " ".join(_expand_document_aliases(document))
-        metadata_text = " ".join(document.metadata.values())
+        metadata_text = " ".join(str(value) for value in document.metadata.values())
         source_tokens = _normalize_retrieval_text(document.source_name or "")
         return f"{title} {tags} {tag_aliases} {metadata_text} {source_tokens} {document.content}".strip()
 
@@ -1854,7 +1883,11 @@ class LocalKnowledgeStore:
             linked_sources = (doc.metadata or {}).get("linked_source_names", "")
             if not linked_sources:
                 continue
-            for src_name in linked_sources.split("|"):
+            if isinstance(linked_sources, list):
+                source_values = (str(item) for item in linked_sources)
+            else:
+                source_values = str(linked_sources).split("|")
+            for src_name in source_values:
                 src_name = src_name.strip()
                 if src_name and src_name in source_to_id:
                     target_id = source_to_id[src_name]
@@ -1925,7 +1958,8 @@ class LocalKnowledgeStore:
         query_tokens: set[str],
         query_profile: "QueryProfile",
         *,
-        max_expansion: int = 8,
+        max_expansion: int | None = None,
+        decay: float | None = None,
     ) -> list[KnowledgeSearchHit]:
         """Post-retrieval 1-hop link expansion.
 
@@ -1935,20 +1969,30 @@ class LocalKnowledgeStore:
         hit's score so they rank below the primary result but above
         unrelated documents.
         """
-        if not self._link_graph or not hits:
+        expansion_limit = (
+            self._settings.knowledge_link_expansion_max_documents
+            if max_expansion is None
+            else max_expansion
+        )
+        score_decay = (
+            self._settings.knowledge_link_expansion_decay
+            if decay is None
+            else decay
+        )
+        if not self._link_graph or not hits or expansion_limit <= 0 or score_decay <= 0:
             return hits
 
         seen_ids = {h.document_id for h in hits}
         expanded: list[KnowledgeSearchHit] = list(hits)
 
         for hit in hits:
-            if len(expanded) - len(hits) >= max_expansion:
+            if len(expanded) - len(hits) >= expansion_limit:
                 break
             neighbors = self._link_graph.get(hit.document_id, [])
             for neighbor_id in neighbors:
                 if neighbor_id in seen_ids:
                     continue
-                if len(expanded) - len(hits) >= max_expansion:
+                if len(expanded) - len(hits) >= expansion_limit:
                     break
                 doc = self._documents.get(neighbor_id)
                 if doc is None:
@@ -1958,7 +2002,7 @@ class LocalKnowledgeStore:
                 ):
                     continue
                 # Linked docs get a fraction of the parent hit's score
-                link_score = hit.score * 0.6
+                link_score = hit.score * score_decay
                 expanded.append(
                     KnowledgeSearchHit(
                         document_id=doc.document_id,
@@ -2130,7 +2174,7 @@ _AUDIENCE_ALIASES = {
         "paper-writing-student",
         "postgraduate",
     },
-    "lab_member": {"group", "internal", "lab_member", "lab-member", "member"},
+    "lab_member": {"group", "internal", "lab_member", "lab-member", "member", "team"},
     "manager": {"manager", "management", "staff_manager"},
     "admin": {"admin", "administrator", "super_admin", "super-admin"},
 }
@@ -2177,6 +2221,9 @@ _TEACHING_ALIAS_MAP = {
     "meeting": ("meeting", "预约", "office hour", "沟通"),
     "preparation": ("preparation", "准备", "提前准备", "材料"),
     "policy": ("policy", "建议", "要求", "规范"),
+    "team-policy": ("课题组制度", "组内制度", "绩效", "报销", "执行规则"),
+    "performance": ("绩效", "有效贡献", "贡献认定", "计入绩效", "自评"),
+    "knowledge-boundary": ("知识边界", "可见性", "互联网公开", "对外发布"),
     "qa": ("qa", "答疑", "提问", "问题"),
     "course:llm-inference": (
         "大模型推理基础设施",
@@ -2213,6 +2260,12 @@ _TEACHING_ALIAS_MAP = {
 # use informal or colloquial phrasings (e.g. "KV部分复用" instead of
 # "KV Cache partial reuse").
 _QUERY_SYNONYM_GROUPS: list[frozenset[str]] = [
+    frozenset({
+        "计入绩效", "纳入绩效", "有效贡献", "贡献认定", "可纳入的工作",
+    }),
+    frozenset({
+        "发布到互联网", "互联网公开", "公开发布", "对外公开", "是否可以发布",
+    }),
     # KV Cache family
     frozenset({
         "KV Cache", "KV缓存", "KV cache", "kv cache",
@@ -2358,16 +2411,21 @@ def _build_query_profile(
         "做什么研究",
         "研究板块",
         "科研",
-        "研究",
         "flowrag",
         "libamm",
         "publication",
         "publications",
         "research",
     )
-    if any(marker in lowered for marker in research_markers) or any(
-        marker in query for marker in research_markers
-    ):
+    # “研究生课程/教学/招生” describes the audience, not a research-paper
+    # intent.  Only treat a bare 研究 occurrence outside 研究生 as research.
+    query_without_graduate = query.replace("研究生", "")
+    has_research_marker = (
+        any(marker in lowered for marker in research_markers)
+        or any(marker in query for marker in research_markers)
+        or "研究" in query_without_graduate
+    )
+    if has_research_marker:
         topic_domains.add("research")
         if has_project and any(
             marker in lowered for marker in ("roadmap", "proposal", "project")
@@ -2536,10 +2594,10 @@ def _document_course_ids(document: KnowledgeDocumentRecord) -> frozenset[str]:
     return frozenset(course_ids)
 
 
-def _normalize_audience_label(value: str | None) -> str | None:
+def _normalize_audience_label(value: object | None) -> str | None:
     if not value:
         return None
-    normalized = value.strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = str(value).strip().lower().replace("-", "_").replace(" ", "_")
     for canonical, aliases in _AUDIENCE_ALIASES.items():
         if normalized == canonical or normalized in aliases:
             return canonical
@@ -2547,6 +2605,12 @@ def _normalize_audience_label(value: str | None) -> str | None:
 
 
 def _document_visibility_audiences(document: KnowledgeDocumentRecord) -> frozenset[str]:
+    # Explicit runtime visibility is authoritative. Combining it with stale
+    # tags could otherwise widen a team-only document back to public access.
+    metadata_visibility = _normalize_audience_label(document.metadata.get("visibility"))
+    if metadata_visibility:
+        return frozenset({metadata_visibility})
+
     audiences: set[str] = set()
     metadata_audience = _normalize_audience_label(document.metadata.get("audience"))
     if metadata_audience:

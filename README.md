@@ -1,6 +1,10 @@
 # Sage Mate
 
+当前版本：**4.7.0**。本次升级聚焦完整问答、真实引用与日夜交互；详见 [4.7 更新说明](docs/releases/4.7.0.md)。
+
 Sage Mate 是面向教师数字分身、本地代码助手和自动科研流程的多 profile 应用。Faculty Twin 是数字分身 profile，Code Assistant 是本地代码工作台 profile，Auto Scientist 会结合分身记忆和 CC-hust 代码节点启动科研流程。
+
+Sage Mate 是基于共同旗舰产品 SAGE（Streaming-Augmented Generative Execution）构建的代表性应用，并通过 vLLM-HUST 或用户显式配置的兼容服务执行模型推理。SAGE 核心仓库由 RIDE Lab 负责主要维护，但产品愿景属于整个 IntelliStream 研究生态。
 
 ## 支持平台
 
@@ -52,6 +56,7 @@ macOS 用户安装:
 - Auto Scientist 只在本地模式使用 allowlisted workspace；默认生成科研计划和 propose-only 代码建议，不直接修改真实仓库。
 - macOS 本地模型使用我们的 `vllm-metal-hust` fork，并基于仓库固定的 `deps/vllm-hust` core。
 - Linux Ascend 使用仓库固定的 `deps/vllm-hust-dev-hub`、`deps/vllm-hust`、`deps/vllm-ascend-hust`、`deps/ascend-runtime-manager`。
+- Linux Ascend 的正式升级必须把兼容基座、core/plugin 精确源码版本和不可变镜像身份分层记录；详见 [部署指南](docs/deployment.md#ascend-生产运行时身份)。
 - token、私有 runtime 数据、Cloudflare 配置不要提交到仓库；运行时数据默认放在 `DIGITAL_TWIN_RUNTIME_DIR`。
 
 ## 常用配置
@@ -61,7 +66,7 @@ DIGITAL_TWIN_LLM_BASE_URL=http://127.0.0.1:8000/v1
 DIGITAL_TWIN_LLM_API_MODE=chat_completions
 DIGITAL_TWIN_API_KEY=EMPTY
 DIGITAL_TWIN_MODEL_NAME=qwen3-32b
-DIGITAL_TWIN_STREAM_CHAT_ANSWER=true
+DIGITAL_TWIN_STREAM_CHAT_ANSWER=false
 ```
 
 `DIGITAL_TWIN_LLM_API_MODE` accepts `chat_completions` or `responses`. Use
@@ -95,8 +100,10 @@ curl -s http://127.0.0.1:55601/healthz
 
 ## CI 覆盖
 
-- `ubuntu-latest`: lint、frontend、pytest、Linux CPU 一键安装检查。
-- `self-hosted, linux, server, ascend`: Linux Ascend 一键安装检查。
+- `ubuntu-latest`: lint、frontend 静态契约、Firefox 多视口布局回归、pytest、Linux CPU 一键安装检查。
+- `ubuntu-latest`: Ascend 启动脚本语法和部署契约检查。
+- 真实 NPU 主机回归：仅从 `main` 人工触发 `.github/workflows/ascend-npu.yml`，由
+  workflow-restricted 的一次性 runner 执行；公共 PR 永远不会直接使用 NPU 宿主机。
 
 ## 入口
 
