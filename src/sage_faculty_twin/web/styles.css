@@ -2842,6 +2842,7 @@ body.conversation-active .intro-card .message-body {
     margin: clamp(16px, 4vh, 42px) auto 12px;
 }
 
+
 body.onboarding-active .chat-shell {
     display: flex;
     flex-direction: column;

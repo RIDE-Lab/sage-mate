@@ -254,6 +254,28 @@ def test_diagnostics_do_not_compete_with_the_core_chat_surface() -> None:
     )
 
 
+def test_minimal_theme_is_shared_across_primary_and_secondary_surfaces() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    theme = (WEB_DIR / "minimal.1009.css").read_text(encoding="utf-8")
+
+    assert html.index("styles.4219.css") < html.index("minimal.1009.css")
+
+    assert "--bg: #ffffff;" in theme
+    assert "--accent: #191918;" in theme
+    assert "--shadow: none;" in theme
+    assert ".sidebar,\n.sidebar-rail" in theme
+    assert ".composer-row" in theme
+    assert ".message-user .message-bubble" in theme
+    assert ".onboarding-card," in theme
+    assert ".chat-shell.view-active .onboarding-card" in theme
+    assert ".inline-status," in theme
+    assert ".list-card::before," in theme
+    assert ".workflow-shell-head" in theme
+    assert ".modal-panel," in theme
+    assert "backdrop-filter: none;" in theme
+    assert "linear-gradient" not in theme
+
+
 def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
 
