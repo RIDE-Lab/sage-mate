@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import re
 import threading
@@ -10,12 +11,67 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import httpx
+
 from .config import AppSettings
 from .models import (
     KnowledgeDocumentCreate,
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _RerankPlan:
+    candidate_count: int
+    bypass_remote: bool
+    reason: str
+
+
+def _select_rerank_plan(
+    settings: AppSettings,
+    *,
+    available_candidates: int,
+    retrieval_scores: list[float],
+    deterministic_scores: list[float],
+    allow_deterministic_bypass: bool = True,
+) -> _RerankPlan:
+    """Choose a bounded remote-rerank budget without inspecting query text."""
+    available = max(0, int(available_candidates))
+    small = min(settings.sagevdb_reranker_small_candidates, available)
+    medium = min(settings.sagevdb_reranker_medium_candidates, available)
+    large = min(settings.sagevdb_reranker_large_candidates, available)
+
+    if not settings.sagevdb_reranker_adaptive_enabled:
+        return _RerankPlan(candidate_count=large, bypass_remote=False, reason="fixed")
+
+    strongest_deterministic = max(deterministic_scores, default=0.0)
+    if (
+        allow_deterministic_bypass
+        and strongest_deterministic
+        >= settings.sagevdb_reranker_bypass_deterministic_score
+    ):
+        return _RerankPlan(
+            candidate_count=small,
+            bypass_remote=True,
+            reason="strong_deterministic",
+        )
+
+    ordered_scores = sorted(retrieval_scores, reverse=True)
+    best = ordered_scores[0] if ordered_scores else float("-inf")
+    runner_up = ordered_scores[1] if len(ordered_scores) > 1 else float("-inf")
+    margin = best - runner_up if len(ordered_scores) > 1 else float("inf")
+    if (
+        best >= settings.sagevdb_reranker_high_confidence_similarity
+        and margin >= settings.sagevdb_reranker_high_confidence_margin
+    ):
+        return _RerankPlan(candidate_count=small, bypass_remote=False, reason="high_confidence")
+    if best >= settings.sagevdb_reranker_medium_confidence_similarity:
+        return _RerankPlan(candidate_count=medium, bypass_remote=False, reason="medium_confidence")
+    return _RerankPlan(candidate_count=large, bypass_remote=False, reason="low_confidence")
 
 
 class HashingTextEmbedder:
@@ -78,6 +134,115 @@ class SentenceTransformerTextEmbedder:
         return array
 
 
+class OpenAITextEmbedder:
+    """Authenticated OpenAI-compatible embedding client for SageVDB."""
+
+    def __init__(self, settings: AppSettings, np_module) -> None:
+        self._np = np_module
+        self._model_name = settings.sagevdb_embedding_model
+        self._query_instruction = settings.sagevdb_embedding_query_instruction.strip()
+        self.dimension = int(settings.sagevdb_dimension)
+        base_url = settings.sagevdb_embedding_base_url or settings.llm_base_url
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(settings.sagevdb_embedding_timeout_seconds),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    def encode(self, text: str, *, is_query: bool = False):
+        return self.encode_many([text], is_query=is_query)[0]
+
+    def encode_many(
+        self,
+        texts: list[str],
+        *,
+        is_query: bool = False,
+        workload: str = "interactive",
+    ):
+        if not texts:
+            return []
+        inputs = list(texts)
+        if is_query and self._query_instruction:
+            inputs = [f"Instruct: {self._query_instruction}\nQuery: {text}" for text in inputs]
+        response = self._client.post(
+            "embeddings",
+            headers={"X-Sage-Workload": workload},
+            json={
+                "model": self._model_name,
+                "input": inputs,
+                "encoding_format": "float",
+                "dimensions": self.dimension,
+            },
+        )
+        response.raise_for_status()
+        payload = response.json()
+        rows = sorted(payload.get("data", []), key=lambda item: int(item["index"]))
+        if len(rows) != len(inputs):
+            raise RuntimeError(
+                f"Embedding endpoint returned {len(rows)} vectors for {len(inputs)} inputs."
+            )
+        vectors = []
+        for row in rows:
+            array = self._np.asarray(row.get("embedding", []), dtype=self._np.float32)
+            if array.ndim != 1:
+                array = array.reshape(-1)
+            if int(array.shape[0]) != self.dimension:
+                raise RuntimeError(
+                    f"Embedding dimension mismatch: endpoint returned {array.shape[0]}, "
+                    f"expected {self.dimension}."
+                )
+            norm = float(self._np.linalg.norm(array))
+            if norm > 0.0:
+                array /= norm
+            vectors.append(array)
+        return vectors
+
+
+class OpenAIReranker:
+    """Authenticated Jina-compatible reranker client exposed by vLLM."""
+
+    def __init__(self, settings: AppSettings) -> None:
+        self._model_name = settings.sagevdb_reranker_model
+        base_url = settings.sagevdb_reranker_base_url or settings.llm_base_url
+        self._client = httpx.Client(
+            base_url=base_url.rstrip("/") + "/",
+            headers={
+                "Authorization": f"Bearer {settings.api_key}",
+                "Content-Type": "application/json",
+            },
+            timeout=float(settings.sagevdb_reranker_timeout_seconds),
+            limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+        )
+
+    def rerank(self, query: str, documents: list[str]) -> list[float]:
+        if not documents:
+            return []
+        response = self._client.post(
+            "rerank",
+            headers={"X-Sage-Workload": "interactive"},
+            json={
+                "model": self._model_name,
+                "query": query,
+                "documents": documents,
+                "top_n": len(documents),
+            },
+        )
+        response.raise_for_status()
+        results = response.json().get("results", [])
+        scores: list[float | None] = [None] * len(documents)
+        for result in results:
+            index = int(result["index"])
+            if 0 <= index < len(scores):
+                scores[index] = float(result["relevance_score"])
+        if any(score is None for score in scores):
+            raise RuntimeError("Reranker endpoint did not score every candidate document.")
+        return [float(score) for score in scores]
+
+
 class NeuromemBgeEmbedder:
     """Sentence-transformers wrapper used by the neuromem 'faiss' index branch.
 
@@ -129,6 +294,9 @@ class LocalKnowledgeStore:
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
         self._backend = settings.knowledge_backend.lower()
         self._sagevdb = None
+        self._sagevdb_persistence = None
+        self._sagevdb_open_result = None
+        self._sagevdb_last_sync = None
         self._neuromem_collection = None
         raw_index_type = (settings.neuromem_index_type or "auto").strip().lower()
         if raw_index_type == "auto":
@@ -144,6 +312,10 @@ class LocalKnowledgeStore:
         self._neuromem_embedder = None
         self._np = None
         self._text_embedder = None
+        self._reranker = OpenAIReranker(settings) if settings.sagevdb_reranker_enabled else None
+        self._last_rerank_plan: _RerankPlan | None = None
+        self._last_rerank_fallback = False
+        self._last_rerank_candidate_sources: tuple[str, ...] = ()
         self._document_id_to_vector_id: dict[str, int] = {}
         self._search_cache: OrderedDict[
             str, tuple[float, list[KnowledgeSearchHit]]
@@ -475,6 +647,15 @@ class LocalKnowledgeStore:
     def backend_name(self) -> str:
         return self._backend
 
+    def runtime_backend_name(self) -> str:
+        if self._backend == "sagevdb":
+            if self._sagevdb is None:
+                return "sagevdb:uninitialized"
+            return f"sagevdb:{type(self._sagevdb).__name__}"
+        if self._backend == "neuromem":
+            return f"neuromem:{self._neuromem_index_type}"
+        return self._backend
+
     def _load_documents_from_disk(self) -> None:
         for path in sorted(self._base_dir.glob("*.json")):
             document = KnowledgeDocumentRecord.model_validate_json(path.read_text(encoding="utf-8"))
@@ -546,10 +727,20 @@ class LocalKnowledgeStore:
             self._initialize_neuromem()
 
     def _normalize_sagevdb_backend(self) -> str:
-        return self._settings.sagevdb_backend.strip().lower().replace("_", "-")
+        backend = (
+            self._settings.knowledge_sagevdb_backend
+            or self._settings.sagevdb_backend
+        )
+        return backend.strip().lower().replace("_", "-")
 
     def _uses_sagevdb_anns_backend(self) -> bool:
         return self._normalize_sagevdb_backend() in {"sage-anns", "sageanns", "anns"}
+
+    def _sagevdb_similarity_score(self, raw_score: float) -> float:
+        """Normalize backend-specific search scores so larger always means better."""
+        if self._uses_sagevdb_anns_backend():
+            return float(raw_score)
+        return 1.0 - float(raw_score)
 
     def _document_metadata(self, document: KnowledgeDocumentRecord) -> dict[str, str]:
         return {
@@ -562,7 +753,15 @@ class LocalKnowledgeStore:
     def _initialize_sagevdb(self) -> None:
         try:
             import numpy as np
-            from sagevdb import DatabaseConfig, DistanceMetric, IndexType, create_database
+            from sagevdb import (
+                DatabaseConfig,
+                DistanceMetric,
+                IndexType,
+                PersistentRecord,
+                PersistentSageVDB,
+                create_database,
+                stable_content_hash,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "DIGITAL_TWIN_KNOWLEDGE_BACKEND is set to 'sagevdb' but sagevdb is not available. "
@@ -591,7 +790,58 @@ class LocalKnowledgeStore:
             database_kwargs["algorithm"] = algorithm
 
         try:
-            self._sagevdb = create_database(cfg, **database_kwargs)
+            if self._uses_sagevdb_anns_backend():
+                self._sagevdb = create_database(cfg, **database_kwargs)
+            else:
+                persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
+                if persistence_dir is None:
+                    persistence_dir = self._base_dir / ".sagevdb-index"
+
+                def database_factory():
+                    return create_database(cfg, **database_kwargs)
+
+                compatibility = {
+                    "backend": backend,
+                    "dimension": int(self._text_embedder.dimension),
+                    "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
+                    "embedding_model": self._settings.sagevdb_embedding_model,
+                    "index_type": "FLAT",
+                    "metric": "COSINE",
+                    "retrieval_text_format": 1,
+                }
+                self._sagevdb_persistence = PersistentSageVDB(
+                    persistence_dir,
+                    database_factory,
+                    compatibility=compatibility,
+                )
+                self._sagevdb_open_result = self._sagevdb_persistence.open()
+                documents_by_id = {
+                    document.document_id: document for document in self.list_documents()
+                }
+                persistent_records = [
+                    PersistentRecord(
+                        key=document.document_id,
+                        content_hash=stable_content_hash(
+                            self._compose_retrieval_text(document)
+                        ),
+                        metadata=self._document_metadata(document),
+                    )
+                    for document in documents_by_id.values()
+                ]
+
+                def vector_provider(records):
+                    texts = [
+                        self._compose_retrieval_text(documents_by_id[record.key])
+                        for record in records
+                    ]
+                    return self._embed_documents(texts)
+
+                self._sagevdb_last_sync = self._sagevdb_persistence.sync(
+                    persistent_records,
+                    vector_provider,
+                )
+                self._sagevdb = self._sagevdb_persistence.database
+                self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         except ImportError as exc:
             if self._uses_sagevdb_anns_backend():
                 raise RuntimeError(
@@ -602,14 +852,20 @@ class LocalKnowledgeStore:
         except ValueError as exc:
             raise RuntimeError(f"Failed to initialize sagevdb backend '{backend}': {exc}") from exc
 
+        if not self._uses_sagevdb_anns_backend():
+            logger.info(
+                "SageVDB persistence ready: open=%s sync=%s generation=%s",
+                self._sagevdb_open_result,
+                self._sagevdb_last_sync,
+                self._sagevdb_persistence.generation,
+            )
+            return
+
         self._document_id_to_vector_id.clear()
         if self._uses_sagevdb_anns_backend():
             self._rebuild_sagevdb_anns_index()
             return
 
-        for document in self.list_documents():
-            self._add_to_sagevdb(document, rebuild_index=False)
-        self._sagevdb.build_index()
 
     def embedding_backend_name(self) -> str:
         if self._backend != "sagevdb":
@@ -862,8 +1118,11 @@ class LocalKnowledgeStore:
             return HashingTextEmbedder(self._settings, np_module)
         if embedding_backend == "sentence-transformers":
             return SentenceTransformerTextEmbedder(self._settings, np_module)
+        if embedding_backend == "openai":
+            return OpenAITextEmbedder(self._settings, np_module)
         raise RuntimeError(
-            "Unsupported sagevdb embedding backend. Use 'sentence-transformers' or 'hash'."
+            "Unsupported sagevdb embedding backend. Use 'openai', "
+            "'sentence-transformers', or 'hash'."
         )
 
     def _rebuild_sagevdb_anns_index(self) -> None:
@@ -876,8 +1135,9 @@ class LocalKnowledgeStore:
 
         vectors = []
         metadata_batch = []
+        texts = [self._compose_retrieval_text(document) for document in documents]
+        vectors.extend(self._embed_documents(texts))
         for vector_id, document in enumerate(documents):
-            vectors.append(self._embed_text(self._compose_retrieval_text(document)))
             metadata_batch.append(self._document_metadata(document))
             self._document_id_to_vector_id[document.document_id] = int(vector_id)
 
@@ -890,6 +1150,11 @@ class LocalKnowledgeStore:
             return
 
         if self._uses_sagevdb_anns_backend():
+            if rebuild_index:
+                self._initialize_sagevdb()
+            return
+
+        if self._sagevdb_persistence is not None:
             if rebuild_index:
                 self._initialize_sagevdb()
             return
@@ -909,15 +1174,35 @@ class LocalKnowledgeStore:
         visitor_profile: str | None = None,
         admin_role: str | None = None,
     ) -> list[KnowledgeSearchHit]:
+        self._last_rerank_plan = None
+        self._last_rerank_fallback = False
+        self._last_rerank_candidate_sources = ()
         if self._sagevdb is None or self._np is None or not self._documents:
             return []
 
         limit = top_k or self._settings.retrieval_top_k
-        query_vector = self._embed_text(query)
+        query_vector = self._embed_text(query, is_query=True)
+        candidate_count = max(self.count_documents(), 1)
+        if self._reranker is not None:
+            if self._settings.sagevdb_reranker_adaptive_enabled:
+                candidate_count = min(
+                    candidate_count,
+                    self._settings.sagevdb_reranker_large_candidates,
+                    self._settings.sagevdb_reranker_max_candidates,
+                )
+            else:
+                candidate_count = min(
+                    candidate_count,
+                    max(
+                        limit * self._settings.sagevdb_reranker_candidate_multiplier,
+                        limit + 5,
+                    ),
+                    self._settings.sagevdb_reranker_max_candidates,
+                )
         if self._uses_sagevdb_anns_backend():
             results = self._sagevdb.search(
                 query_vector,
-                k=max(self.count_documents(), 1),
+                k=candidate_count,
                 include_metadata=True,
             )
         else:
@@ -926,7 +1211,7 @@ class LocalKnowledgeStore:
             results = search_numpy(
                 self._sagevdb,
                 query_vector,
-                SearchParams(k=max(self._sagevdb.size(), 1)),
+                SearchParams(k=candidate_count),
             )
 
         query_tokens = self._tokenize(query)
@@ -936,11 +1221,14 @@ class LocalKnowledgeStore:
             admin_role=admin_role,
         )
         hits: list[KnowledgeSearchHit] = []
+        hit_documents: list[KnowledgeDocumentRecord] = []
+        retrieval_scores: list[float] = []
         for result in results:
             if self._uses_sagevdb_anns_backend():
                 metadata = dict(getattr(result, "metadata", {}) or {})
             else:
                 metadata = dict(self._sagevdb.get_metadata(int(result.id)))
+            retrieval_score = self._sagevdb_similarity_score(float(result.score))
             document_id = metadata.get("document_id")
             if not document_id:
                 continue
@@ -956,7 +1244,7 @@ class LocalKnowledgeStore:
             # ordering is delegated to _score_document which handles Chinese
             # text and tag relevance far better than hash cosine similarity.
             rerank_score = self._score_document(document, query_tokens, query_profile)
-            if rerank_score <= 0:
+            if self._reranker is None and rerank_score <= 0:
                 continue
             hits.append(
                 KnowledgeSearchHit(
@@ -969,6 +1257,186 @@ class LocalKnowledgeStore:
                     metadata=document.metadata,
                 )
             )
+            hit_documents.append(document)
+            retrieval_scores.append(retrieval_score)
+
+        if self._reranker is not None:
+            # Build one deduplicated hybrid pool.  Previously the semantic budget
+            # and lexical budget were each allowed to reach candidate_count,
+            # silently doubling the payload sent to the remote reranker.
+            candidates: dict[
+                str,
+                tuple[
+                    KnowledgeSearchHit,
+                    KnowledgeDocumentRecord,
+                    float,
+                    float,
+                ],
+            ] = {}
+            semantic_document_ids: list[str] = []
+            for hit, document, retrieval_score in zip(
+                hits, hit_documents, retrieval_scores, strict=True
+            ):
+                deterministic_score = float(hit.score)
+                semantic_document_ids.append(hit.document_id)
+                candidates[hit.document_id] = (
+                    hit,
+                    document,
+                    retrieval_score,
+                    deterministic_score,
+                )
+
+            for document in self.list_documents():
+                if document.document_id in candidates:
+                    continue
+                if not _document_is_visible_to_requester(
+                    document, query_profile.visitor_profile, query_profile.admin_role
+                ):
+                    continue
+                deterministic_score = self._score_document(
+                    document, query_tokens, query_profile
+                )
+                if deterministic_score <= 0:
+                    continue
+                candidates[document.document_id] = (
+                    KnowledgeSearchHit(
+                        document_id=document.document_id,
+                        title=document.title,
+                        excerpt=self._build_excerpt(document.content, query_tokens),
+                        score=deterministic_score,
+                        tags=document.tags,
+                        source_name=document.source_name,
+                        metadata=document.metadata,
+                    ),
+                    document,
+                    0.0,
+                    deterministic_score,
+                )
+
+            def preliminary_score(
+                candidate: tuple[
+                    KnowledgeSearchHit,
+                    KnowledgeDocumentRecord,
+                    float,
+                    float,
+                ],
+            ) -> float:
+                retrieval_score = max(min(candidate[2], 1.0), 0.0)
+                deterministic_score = max(min(candidate[3], 100.0), 0.0) / 100.0
+                return (0.60 * retrieval_score) + (0.40 * deterministic_score)
+
+            if not self._settings.sagevdb_reranker_adaptive_enabled:
+                # Preserve the pre-adaptive candidate set exactly so the fixed
+                # mode remains a trustworthy A/B control: all semantic hits,
+                # followed by at most the same number of strongest lexical hits.
+                semantic_candidates = [
+                    candidates[document_id] for document_id in semantic_document_ids
+                ]
+                semantic_document_id_set = set(semantic_document_ids)
+                lexical_candidates = sorted(
+                    (
+                        candidate
+                        for document_id, candidate in candidates.items()
+                        if document_id not in semantic_document_id_set
+                    ),
+                    key=lambda item: item[3],
+                    reverse=True,
+                )
+                remaining_candidates = min(
+                    candidate_count,
+                    max(
+                        self._settings.sagevdb_reranker_max_candidates
+                        - len(semantic_candidates),
+                        0,
+                    ),
+                )
+                selected = semantic_candidates + lexical_candidates[:remaining_candidates]
+                plan = _RerankPlan(
+                    candidate_count=len(selected),
+                    bypass_remote=False,
+                    reason="fixed",
+                )
+            else:
+                ordered_deterministic_scores = sorted(
+                    (item[3] for item in candidates.values()),
+                    reverse=True,
+                )
+                deterministic_margin = (
+                    ordered_deterministic_scores[0] - ordered_deterministic_scores[1]
+                    if len(ordered_deterministic_scores) > 1
+                    else (ordered_deterministic_scores[0] if ordered_deterministic_scores else 0.0)
+                )
+                has_structured_query_signal = bool(
+                    query_profile.named_entities
+                    or query_profile.ordinal_numbers
+                    or query_profile.topic_domains
+                )
+                plan = _select_rerank_plan(
+                    self._settings,
+                    available_candidates=len(candidates),
+                    retrieval_scores=[item[2] for item in candidates.values()],
+                    deterministic_scores=[item[3] for item in candidates.values()],
+                    allow_deterministic_bypass=(
+                        has_structured_query_signal
+                        or deterministic_margin
+                        >= self._settings.sagevdb_reranker_bypass_deterministic_margin
+                    ),
+                )
+                if plan.bypass_remote:
+                    ordered_candidates = sorted(
+                        candidates.values(),
+                        key=lambda item: (item[3], item[2]),
+                        reverse=True,
+                    )
+                else:
+                    ordered_candidates = sorted(
+                        candidates.values(),
+                        key=preliminary_score,
+                        reverse=True,
+                    )
+                selected = ordered_candidates[: plan.candidate_count]
+            self._last_rerank_plan = plan
+            hits = [item[0] for item in selected]
+            hit_documents = [item[1] for item in selected]
+            retrieval_scores = [item[2] for item in selected]
+            deterministic_scores = [item[3] for item in selected]
+            self._last_rerank_candidate_sources = tuple(
+                (item[1].source_name or "") for item in selected
+            )
+
+            if not plan.bypass_remote and hits:
+                max_chars = self._settings.sagevdb_reranker_document_max_chars
+                rerank_documents = [
+                    self._compose_retrieval_text(document)[:max_chars]
+                    for document in hit_documents
+                ]
+                try:
+                    semantic_scores = self._reranker.rerank(query, rerank_documents)
+                    for hit, semantic_score, retrieval_score, deterministic_score in zip(
+                        hits,
+                        semantic_scores,
+                        retrieval_scores,
+                        deterministic_scores,
+                        strict=True,
+                    ):
+                        normalized_retrieval = max(min(retrieval_score, 1.0), 0.0)
+                        normalized_semantic = max(min(float(semantic_score), 1.0), 0.0)
+                        normalized_deterministic = (
+                            max(min(deterministic_score, 100.0), 0.0) / 100.0
+                        )
+                        hit.score = (
+                            0.40 * normalized_retrieval
+                            + 0.35 * normalized_semantic
+                            + 0.25 * normalized_deterministic
+                        )
+                except (httpx.HTTPError, RuntimeError, TypeError, ValueError):
+                    self._last_rerank_fallback = True
+                    logger.warning(
+                        "Remote SageVDB reranker failed; retaining hybrid candidate scores.",
+                        exc_info=True,
+                    )
+                    for hit, candidate in zip(hits, selected, strict=True):
+                        hit.score = preliminary_score(candidate)
         hits.sort(key=lambda h: h.score, reverse=True)
         # Wiki-link retrieval: 1-hop expansion after reranking.
         if self._link_expansion_enabled:
@@ -1556,10 +2024,28 @@ class LocalKnowledgeStore:
             return text
         return f"{text} {' '.join(tokens)}".strip()
 
-    def _embed_text(self, text: str):
+    def _embed_text(self, text: str, *, is_query: bool = False):
         if self._np is None or self._text_embedder is None:
             raise RuntimeError("sagevdb backend is not initialized")
+        if isinstance(self._text_embedder, OpenAITextEmbedder):
+            return self._text_embedder.encode(text, is_query=is_query)
         return self._text_embedder.encode(text)
+
+    def _embed_documents(self, texts: list[str]):
+        if self._np is None or self._text_embedder is None:
+            raise RuntimeError("sagevdb backend is not initialized")
+        if not isinstance(self._text_embedder, OpenAITextEmbedder):
+            return [self._text_embedder.encode(text) for text in texts]
+        batch_size = self._settings.sagevdb_embedding_batch_size
+        vectors = []
+        for start in range(0, len(texts), batch_size):
+            vectors.extend(
+                self._text_embedder.encode_many(
+                    texts[start : start + batch_size],
+                    workload="reindex",
+                )
+            )
+        return vectors
 
 
 def _tokenize_text(text: str) -> set[str]:
@@ -1899,28 +2385,18 @@ def _build_query_profile(
     ):
         document_types.add("lecture")
         topic_domains.add("teaching")
-    project_is_teaching = (
-        ("project" in lowered or "项目" in query)
-        and any(
-            marker in lowered
-            for marker in (
-                "course",
-                "课程",
-                "教学",
-                "实验",
-                "作业",
-                "tutorial",
-                "lecture",
-                "workshop",
-            )
-        )
+    has_explicit_experiment = bool(
+        re.search(r"\bexperiments?\b", lowered)
+        or re.search(r"\blab(?:oratory)?\b", lowered)
+        or re.search(r"实验(?!室)", query)
     )
-    if (
-        "experiment" in lowered
-        or "lab" in lowered
-        or "实验" in query
-        or project_is_teaching
-    ):
+    has_project = bool(re.search(r"\bprojects?\b", lowered) or "项目" in query)
+    has_teaching_project_context = bool(
+        course_ids
+        or any(marker in query for marker in ("课程", "作业", "实验课", "教学", "课件"))
+        or any(marker in lowered for marker in ("course", "assignment", "class project"))
+    )
+    if has_explicit_experiment or (has_project and has_teaching_project_context):
         document_types.add("experiment")
         topic_domains.add("teaching")
 
@@ -1951,7 +2427,11 @@ def _build_query_profile(
     )
     if has_research_marker:
         topic_domains.add("research")
-        if any(
+        if has_project and any(
+            marker in lowered for marker in ("roadmap", "proposal", "project")
+        ) or any(marker in query for marker in ("路线图", "项目", "研究目标")):
+            research_focus = "overview"
+        elif any(
             marker in query
             for marker in ("研究主线", "研究方向", "主要研究", "研究什么", "研究板块")
         ):

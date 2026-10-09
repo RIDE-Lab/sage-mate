@@ -323,7 +323,7 @@ def test_empty_chat_onboarding_sits_before_chat_stream() -> None:
 
 def test_active_onboarding_hides_empty_stream_to_keep_guidance_focused() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
-    selector = "body.onboarding-active .chat-shell .chat-stream"
+    selector = "body.onboarding-active .chat-shell.chat-empty .chat-stream"
     block_match = re.search(rf"{re.escape(selector)} \{{\n(.*?)\n\}}", css, re.S)
 
     assert block_match, f"Missing CSS block for {selector}"
@@ -339,7 +339,7 @@ def test_pending_assistant_process_surface_uses_answer_column_width() -> None:
     assert "width: min(100%, 800px);" in block_match.group(1)
 
 
-def test_active_onboarding_uses_centered_bounded_guidance_panel() -> None:
+def test_active_onboarding_uses_one_centered_column_even_after_chat_starts() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     shell_selector = "body.onboarding-active .chat-shell"
     selector = "body.onboarding-active .chat-shell .onboarding-card"
@@ -349,11 +349,127 @@ def test_active_onboarding_uses_centered_bounded_guidance_panel() -> None:
     assert shell_block, f"Missing CSS block for {shell_selector}"
     assert "display: flex;" in shell_block.group(1)
     assert "flex-direction: column;" in shell_block.group(1)
-    assert "align-items: center;" in shell_block.group(1)
+    assert "grid-template-columns:" not in shell_block.group(1)
     assert block_match, f"Missing CSS block for {selector}"
-    assert "width: min(100%, 640px);" in block_match.group(1)
-    assert "max-height: min(58vh, 560px);" in block_match.group(1)
-    assert "margin: 0 auto 20px;" in block_match.group(1)
+    assert "width: min(100%, 720px);" in block_match.group(1)
+    assert "margin: clamp(16px, 4vh, 36px) auto 12px;" in block_match.group(1)
+    assert "grid-column:" not in block_match.group(1)
+
+
+def test_restoring_a_conversation_hides_the_empty_state_onboarding() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    restore_fn = js[
+        js.index("async function restoreConversationFromHistory"):
+        js.index("async function fetchConversationTranscript")
+    ]
+    transcript_fn = js[
+        js.index("function renderConversationTranscript"):
+        js.index("function ", js.index("function renderConversationTranscript") + 1)
+    ]
+
+    assert 'chatStream.querySelector(".message-user")' in restore_fn
+    assert "hideOnboardingCard();" in restore_fn
+    assert "hideOnboardingCard();" in transcript_fn
+
+    hide_fn = js[js.index("function hideOnboardingCard"):js.index("let onboardingHintTimer")]
+    assert 'document.getElementById("seed-chips")?.classList.add("hidden");' in hide_fn
+
+
+def test_default_chat_is_quiet_and_guidance_is_opt_in() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    initialize_fn = js[js.index("async function initializePage"):js.index("initializePage().catch")]
+    session_fn = js[js.index("function applyUserSession"):js.index("async function loadManagedServices")]
+    restart_fn = js[js.index("function restartOnboarding"):js.index("// --- iOS Safari")]
+
+    assert "startOnboarding(" not in initialize_fn
+    assert "startOnboarding(" not in session_fn
+    assert "showDefaultLandingContent();" in initialize_fn
+    assert "startOnboarding(profile, { force: true });" in restart_fn
+
+
+def test_advanced_composer_controls_are_collapsed_into_one_tools_disclosure() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert '<details class="composer-tools-disclosure">' in html
+    assert 'class="composer-tools-summary"' in html
+    assert html.index('class="composer-tools-summary"') < html.index('class="composer-tools-row"')
+    assert ".composer-tools-disclosure:not([open]) .composer-tools-row" in css
+    assert ".composer-tools-disclosure:has(input:checked) .composer-tools-active-label" in css
+
+
+def test_diagnostics_do_not_compete_with_the_core_chat_surface() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert re.search(
+        r"\.app-stack-banner,\s*\n\.app-version-badge \{\s*\n\s*display: none;",
+        css,
+    )
+
+
+def test_minimal_theme_is_shared_across_primary_and_secondary_surfaces() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    theme = (WEB_DIR / "minimal.1009.css").read_text(encoding="utf-8")
+
+    assert html.index("styles.4222.css") < html.index("minimal.1009.css")
+
+    assert "--bg: #ffffff;" in theme
+    assert "--accent: #191918;" in theme
+    assert "--shadow: none;" in theme
+    assert ".sidebar,\n.sidebar-rail" in theme
+    assert ".composer-row" in theme
+    assert ".message-user .message-bubble" in theme
+    assert ".onboarding-card," in theme
+    assert ".chat-shell.view-active .onboarding-card" in theme
+    assert ".inline-status," in theme
+    assert ".list-card::before," in theme
+    assert ".workflow-shell-head" in theme
+    assert ".modal-panel," in theme
+    assert "backdrop-filter: none;" in theme
+    assert "linear-gradient" not in theme
+
+
+def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    assert "const INLINE_WORKFLOW_TRACE_ENABLED = true;" in js
+    summary_fn = js[
+        js.index("function buildWorkflowStatusSummaryHtml"):
+        js.index("function buildWorkflowPhaseRailHtml")
+    ]
+    assert 'class="message-workflow-summary message-section"' in summary_fn
+    assert 'aria-expanded="false"' in summary_fn
+    assert '<strong class="message-section-title">处理过程</strong>' in summary_fn
+    assert '<div class="message-section-content" hidden>' in summary_fn
+    assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
+        "buildWorkflowPhaseRailHtml"
+    )
+
+
+def test_live_progress_uses_one_compact_surface_inside_the_message() -> None:
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+
+    pending_fn = js[
+        js.index("function renderPendingAssistantMessage"):
+        js.index("function updatePendingAssistantMessage")
+    ]
+    compact_fn = js[
+        js.index("function buildPendingWorkflowTraceCompactHtml"):
+        js.index("function buildWorkflowChipRowHtml")
+    ]
+    assert 'aria-label="实时处理进度"' in pending_fn
+    assert "thinking-phase-rail" not in pending_fn
+    assert "thinking-trace-chip-row" not in compact_fn
+    assert "已完成 ${completedSteps.length} 步" in compact_fn
+
+
+def test_compact_process_summary_hides_details_until_requested() -> None:
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+
+    assert ".message-workflow-summary .message-section-content[hidden]" in css
+    assert ".message-workflow-summary .message-inline-process-preview" in css
+    assert "text-overflow: ellipsis;" in css
+    assert ".message-process-icon" in css
 
 
 def test_active_onboarding_collapses_to_viewport_safe_mobile_column() -> None:

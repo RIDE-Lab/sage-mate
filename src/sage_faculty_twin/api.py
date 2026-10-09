@@ -41,6 +41,7 @@ from .auth import (
 )
 from .api_token_store import LabMemberApiTokenStore
 from .config import settings
+from .conversation_trace_store import ConversationTraceStore
 from .chat_delivery import DeliveredChatResponse
 from .request_context import (
     RequestCancellationController,
@@ -131,6 +132,7 @@ from .service import (
 )
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
+from .trace_context import bind_trace_event_sink
 
 
 _logger = logging.getLogger(__name__)
@@ -144,6 +146,7 @@ def configure_local_cors(target_app: FastAPI) -> None:
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Trace-Id"],
     )
 
 
@@ -311,11 +314,44 @@ async def _run_chat_with_cancellation(
 # connection mid-answer. We emit a typed ``{"type": "keepalive"}`` event
 # every ``CHAT_SSE_KEEPALIVE_SECONDS`` seconds so the connection stays warm.
 CHAT_SSE_KEEPALIVE_SECONDS = settings.chat_sse_keepalive_seconds
-# Legacy upstream-streaming switch. Even when explicitly enabled, /chat now
-# buffers generation chunks inside the request and emits only the validated
-# ``answer_done`` payload. The workflow may reject and regenerate an attempt,
-# so publishing raw chunks would expose internal or degenerate text.
+# Upstream chunks are buffered until validation; the public SSE publishes
+# only the delivered answer, never an unvalidated partial attempt.
 STREAM_CHAT_ANSWER = settings.stream_chat_answer
+CONVERSATION_TRACE_RETENTION_DAYS = int(
+    os.environ.get("DIGITAL_TWIN_CONVERSATION_TRACE_RETENTION_DAYS", "365")
+)
+_conversation_trace_stores: dict[tuple[Path, Path | None], ConversationTraceStore] = {}
+_conversation_trace_stores_lock = threading.Lock()
+
+
+def get_conversation_trace_store() -> ConversationTraceStore:
+    explicit_db = os.environ.get("DIGITAL_TWIN_CONVERSATION_TRACE_DB", "").strip()
+    if explicit_db:
+        db_path = Path(explicit_db)
+    else:
+        # The dynamic environment lookup keeps pytest's per-test runtime
+        # isolation effective even though this module is imported at collection time.
+        isolated_memory_dir = os.environ.get("DIGITAL_TWIN_CONVERSATION_MEMORY_DIR", "").strip()
+        if isolated_memory_dir:
+            db_path = Path(isolated_memory_dir).parent / "conversation_traces" / "traces.sqlite3"
+        else:
+            db_path = settings.runtime_dir / "data/conversation_traces/traces.sqlite3"
+    db_path = db_path.expanduser().resolve()
+    archive_value = os.environ.get(
+        "DIGITAL_TWIN_CONVERSATION_TRACE_ARCHIVE_DB", ""
+    ).strip()
+    archive_db_path = Path(archive_value).expanduser().resolve() if archive_value else None
+    store_key = (db_path, archive_db_path)
+    with _conversation_trace_stores_lock:
+        store = _conversation_trace_stores.get(store_key)
+        if store is None:
+            store = ConversationTraceStore(
+                db_path,
+                retention_days=CONVERSATION_TRACE_RETENTION_DAYS,
+                archive_db_path=archive_db_path,
+            )
+            _conversation_trace_stores[store_key] = store
+    return store
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
 SLACK_TWIN_ALLOWED_USER_IDS = {
     user_id.strip()
@@ -1596,19 +1632,29 @@ async def health() -> dict[str, object]:
     if not service.is_initialized():
         return {
             "status": "starting",
+            "readiness": "starting",
             "app_version": __version__,
             "message": "Service is initializing in background.",
-            "model": settings.model_name or "detecting...",
             "owner_name": settings.owner_name,
             "owner_role": settings.owner_role,
             "homepage_public_url": settings.homepage_public_url,
-            "stack_version_sage": "unknown",
-            "stack_version_neuromem": "unknown",
-            "stack_version_vllm_hust": "unknown",
-            "stack_version_sagevdb": "unknown",
-            "stack_version_sage_anns": "unknown",
-            "sage_runtime": "FlowNetEnvironment",
         }
+    snapshot = service.health()
+    return {
+        "status": snapshot.get("status", "ok"),
+        "readiness": "ready",
+        "app_version": snapshot.get("app_version", __version__),
+        "owner_name": snapshot.get("owner_name", settings.owner_name),
+        "owner_role": snapshot.get("owner_role", settings.owner_role),
+        "homepage_public_url": snapshot.get(
+            "homepage_public_url", settings.homepage_public_url
+        ),
+        "model_name": snapshot.get("model_name", settings.model_name or "sage-auto"),
+    }
+
+
+@llm_app.get("/admin/health")
+async def admin_health(_: dict = Depends(require_admin_session)) -> dict[str, object]:
     return service.health()
 
 
@@ -1629,7 +1675,9 @@ async def stack_versions() -> dict[str, str]:
 
 
 @llm_app.get("/stack/hardware")
-async def stack_hardware() -> dict[str, str]:
+async def stack_hardware(
+    _: dict = Depends(require_admin_session),
+) -> dict[str, str]:
     return build_hardware_payload()
 
 
@@ -1861,6 +1909,7 @@ def _untraced_answer_chunk_callback() -> Callable[[str], None] | None:
 @llm_app.post("/chat", response_model=ChatResponse)
 async def chat(
     raw_request: Request,
+    http_response: Response,
     request_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> ChatResponse:
     timing = RequestTimingLedger(
@@ -1885,13 +1934,39 @@ async def chat(
     )
     timing.record("request_parse", stage_started)
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
+    trace_id = secrets.token_hex(16)
+    http_response.headers["X-Trace-Id"] = trace_id
+    http_response.headers["X-Sage-Trace-ID"] = timing.trace_id
+    trace_store = get_conversation_trace_store()
+    trace_store.begin(
+        trace_id=trace_id,
+        request_id=request_id,
+        conversation_id=payload.conversation_id,
+        student_name=payload.student_name,
+        student_email=payload.student_email,
+        source="http_sse" if request_id is not None else "http",
+        request_payload=payload.model_dump(mode="json"),
+    )
+
+    def _record_success(response: ChatResponse, *, route: str) -> ChatResponse:
+        delivered = timing.attach(response, route=route)
+        trace_store.set_response(trace_id, delivered.model_dump(mode="json"))
+        trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
+        trace_store.append_event(trace_id, "complete", {})
+        trace_store.finish(trace_id, status="completed")
+        return delivered
+
+    def _record_error(exc: Exception, *, status: str = "error") -> None:
+        error_payload = {"type": type(exc).__name__, "message": str(exc)}
+        trace_store.append_event(trace_id, "error", error_payload)
+        trace_store.finish(trace_id, status=status, error=error_payload)
 
     # Safety-boundary replies do not need the model or NPU.  Resolve them
     # before the single-model admission gate so a slow deep/web request cannot
     # make an obvious credential-exfiltration refusal return 429.
     boundary_response = service._check_sensitive_boundary_request(payload)
     if boundary_response is not None:
-        return timing.attach(boundary_response, route="boundary")
+        return _record_success(boundary_response, route="boundary")
 
     # Public greetings and bounded local-evidence FAQs do not consume the
     # model/NPU slot.  Probe this lane before admission so a long DeepSeek
@@ -1921,23 +1996,25 @@ async def chat(
                 timeout=min(2.0, timing.remaining_seconds()),
             )
             timing.record("fast_path_persist", stage_started)
-            return timing.attach(persisted, route="fast_path")
+            return _record_success(persisted, route="fast_path")
         except asyncio.TimeoutError:
             _logger.exception("fast-path memory persistence timed out")
             timing.record("fast_path_persist", stage_started)
-            return timing.attach(fast_response, route="fast_path")
+            return _record_success(fast_response, route="fast_path")
         except Exception:
             _logger.exception("fast-path memory persistence failed")
             timing.record("fast_path_persist", stage_started)
-            return timing.attach(fast_response, route="fast_path")
+            return _record_success(fast_response, route="fast_path")
 
     global _chat_waiting_requests
     if timing.remaining_seconds() <= 0:
-        raise HTTPException(
+        exc = HTTPException(
             status_code=504,
             detail="后端在本次请求总预算内未完成响应，请稍后重试。",
             headers={"X-Sage-Trace-ID": timing.trace_id},
         )
+        _record_error(exc, status="timeout")
+        raise exc
     queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
     _chat_waiting_requests += 1
     stage_started = time.perf_counter()
@@ -1950,7 +2027,7 @@ async def chat(
         timing.record("admission_wait", stage_started)
         _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
         estimated_wait = max(2, min(15, int(round(CHAT_ADMISSION_TIMEOUT_SECONDS * max(1, queue_position)))))
-        raise HTTPException(
+        admission_error = HTTPException(
             status_code=429,
             detail=(
                 f"当前请求正在排队，前方约 {queue_position} 个请求，"
@@ -1962,7 +2039,9 @@ async def chat(
                 "X-Queue-Estimated-Wait": str(estimated_wait),
                 "X-Sage-Trace-ID": timing.trace_id,
             },
-        ) from exc
+        )
+        _record_error(admission_error, status="rejected")
+        raise admission_error from exc
     timing.record("admission_wait", stage_started)
     _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
 
@@ -1973,27 +2052,38 @@ async def chat(
         # memory/profile bookkeeping out of the HTTP critical path without
         # changing the public response schema.
         try:
-            stage_started = time.perf_counter()
-            response = await _run_chat_with_cancellation(
-                raw_request,
-                timeout_seconds=timing.remaining_seconds(),
-                deadline_at=timing.deadline_at,
-                runtime_diagnostics=timing.runtime_diagnostics,
-                active_request_id=timing.trace_id,
-                payload=payload,
-                admin_session_token=admin_session_token,
-                trace_callback=lambda _step: None,
-                answer_chunk_callback=_untraced_answer_chunk_callback(),
-            )
-            timing.record("sage_workflow", stage_started)
-            return timing.attach(response, route="sage_workflow")
+            with bind_trace_event_sink(
+                lambda event_type, event_payload: trace_store.append_event(
+                    trace_id, event_type, event_payload
+                )
+            ):
+                stage_started = time.perf_counter()
+                response = await _run_chat_with_cancellation(
+                    raw_request,
+                    timeout_seconds=timing.remaining_seconds(),
+                    deadline_at=timing.deadline_at,
+                    runtime_diagnostics=timing.runtime_diagnostics,
+                    active_request_id=timing.trace_id,
+                    payload=payload,
+                    admin_session_token=admin_session_token,
+                    trace_callback=lambda step: trace_store.append_event(
+                        trace_id, "trace-step", step.model_dump(mode="json")
+                    ),
+                    answer_chunk_callback=_untraced_answer_chunk_callback(),
+                )
+                timing.record("sage_workflow", stage_started)
+            return _record_success(response, route="sage_workflow")
         except asyncio.TimeoutError as exc:
             timing.record("sage_workflow", stage_started)
+            _record_error(exc, status="timeout")
             raise HTTPException(
                 status_code=504,
                 detail="后端在本次请求总预算内未完成响应，请稍后重试。",
                 headers={"X-Sage-Trace-ID": timing.trace_id},
             ) from exc
+        except Exception as exc:
+            _record_error(exc)
+            raise
         finally:
             # A return still executes this finally; the slot is released
             # before the response leaves the endpoint.
@@ -2008,46 +2098,48 @@ async def chat(
     # ``publish_complete`` until that background task finishes so the SSE
     # consumer still sees the post-answer trace steps before the stream
     # closes.
-    answer_complete_gate = _AnswerDoneCompleteGate(
-        lambda: workflow_event_broker.publish_complete(request_id)
-    )
+    def _publish_complete_and_finish_trace() -> None:
+        trace_store.append_event(trace_id, "complete", {})
+        trace_store.finish(trace_id, status="completed")
+        workflow_event_broker.publish_complete(request_id)
+
+    answer_complete_gate = _AnswerDoneCompleteGate(_publish_complete_and_finish_trace)
+
+    def _publish_trace_step(step: object) -> None:
+        step_payload = getattr(step, "model_dump")(mode="json")
+        trace_store.append_event(trace_id, "trace-step", step_payload)
+        workflow_event_broker.publish_step(request_id, step)
 
     def _on_post_answer_complete() -> None:
-        if STREAM_CHAT_ANSWER:
-            answer_complete_gate.mark_post_answer_complete()
-        else:
-            workflow_event_broker.publish_complete(request_id)
+        answer_complete_gate.mark_post_answer_complete()
 
-    answer_chunk_callback = None
-    if STREAM_CHAT_ANSWER:
-        # The upstream completion may still use streaming transport, but raw
-        # chunks are request-local until answer validation and retry handling
-        # finish. Only ``answer_done`` below crosses the public SSE boundary.
-        buffered_answer_chunks: list[str] = []
-
-        def _on_answer_chunk(delta: str) -> None:
-            if delta:
-                buffered_answer_chunks.append(delta)
-
-        answer_chunk_callback = _on_answer_chunk
+    # The upstream may stream internally, but only a validated delivered
+    # answer may cross the public SSE boundary.
+    answer_chunk_callback = _untraced_answer_chunk_callback()
 
     try:
-        stage_started = time.perf_counter()
-        response = await _run_chat_with_cancellation(
-            raw_request,
-            timeout_seconds=timing.remaining_seconds(),
-            deadline_at=timing.deadline_at,
-            runtime_diagnostics=timing.runtime_diagnostics,
-            active_request_id=timing.trace_id,
-            payload=payload,
-            admin_session_token=admin_session_token,
-            trace_callback=lambda step: workflow_event_broker.publish_step(request_id, step),
-            on_post_answer_complete=_on_post_answer_complete,
-            answer_chunk_callback=answer_chunk_callback,
-        )
-        timing.record("sage_workflow", stage_started)
+        with bind_trace_event_sink(
+            lambda event_type, event_payload: trace_store.append_event(
+                trace_id, event_type, event_payload
+            )
+        ):
+            stage_started = time.perf_counter()
+            response = await _run_chat_with_cancellation(
+                raw_request,
+                timeout_seconds=timing.remaining_seconds(),
+                deadline_at=timing.deadline_at,
+                runtime_diagnostics=timing.runtime_diagnostics,
+                active_request_id=timing.trace_id,
+                payload=payload,
+                admin_session_token=admin_session_token,
+                trace_callback=_publish_trace_step,
+                on_post_answer_complete=_on_post_answer_complete,
+                answer_chunk_callback=answer_chunk_callback,
+            )
+            timing.record("sage_workflow", stage_started)
     except asyncio.TimeoutError as exc:
         timing.record("sage_workflow", stage_started)
+        _record_error(exc, status="timeout")
         message = "后端在本次请求总预算内未完成响应，请稍后重试。"
         workflow_event_broker.publish_error(request_id, message)
         raise HTTPException(
@@ -2056,11 +2148,15 @@ async def chat(
             headers={"X-Sage-Trace-ID": timing.trace_id},
         ) from exc
     except Exception as exc:
+        _record_error(exc)
         workflow_event_broker.publish_error(request_id, str(exc))
         raise
     finally:
         _chat_admission.release()
 
+    response_payload = timing.attach(response, route="sage_workflow").model_dump(mode="json")
+    trace_store.set_response(trace_id, response_payload)
+    trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
     if STREAM_CHAT_ANSWER:
         # Surface the final structured ChatResponse to the SSE channel so
         # the streaming UI can swap the progressively-painted text for the
@@ -2070,8 +2166,7 @@ async def chat(
             workflow_event_broker.publish_answer_done(request_id, response)
         except Exception:  # pragma: no cover - defensive
             pass
-        finally:
-            answer_complete_gate.mark_answer_done()
+    answer_complete_gate.mark_answer_done()
 
     return timing.attach(response, route="sage_workflow")
 
@@ -2079,6 +2174,37 @@ async def chat(
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
 async def submit_chat_feedback(request: ChatFeedbackRequest) -> ChatFeedbackResponse:
     return service.submit_chat_feedback(request)
+
+
+@llm_app.get("/admin/conversation-traces")
+async def list_conversation_traces(
+    limit: int = Query(default=50, ge=1, le=500),
+    conversation_id: str | None = Query(default=None, max_length=128),
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    store = get_conversation_trace_store()
+    return {
+        "traces": store.list_traces(limit=limit, conversation_id=conversation_id),
+        "stats": store.stats(),
+    }
+
+
+@llm_app.get("/admin/conversation-traces/stats")
+async def get_conversation_trace_stats(
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    return get_conversation_trace_store().stats()
+
+
+@llm_app.get("/admin/conversation-traces/{trace_id}")
+async def get_conversation_trace(
+    trace_id: str,
+    _: dict = Depends(require_admin_session),
+) -> dict[str, object]:
+    trace = get_conversation_trace_store().get_trace(trace_id)
+    if trace is None:
+        raise HTTPException(status_code=404, detail="Trace not found.")
+    return trace
 
 
 @llm_app.post("/context/compress")

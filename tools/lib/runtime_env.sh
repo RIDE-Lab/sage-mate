@@ -76,8 +76,16 @@ build_repo_pythonpath() {
     local entries=(
         "$repo_root/src"
         "$repo_root/../SAGE/src"
-        "$repo_root/../neuromem"
     )
+
+    # Production uses the version-pinned isage-neuromem package. A sibling
+    # checkout may be older than that package and can silently shadow fixed
+    # SageVDB/SageANNS integration code, so local NeuroMem source is opt-in.
+    case "${DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE:-}" in
+        1|true|TRUE|yes|YES|on|ON)
+            entries+=("$repo_root/../neuromem")
+            ;;
+    esac
 
     # Only put a sibling sageVDB checkout on PYTHONPATH when its native
     # extension is built for this host. Otherwise it shadows the pip-installed

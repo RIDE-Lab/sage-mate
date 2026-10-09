@@ -405,6 +405,51 @@ class _FakeChatCompletionResponse:
         return {"choices": [{"message": {"content": self._content}}]}
 
 
+class _FakeResponsesResponse:
+    def __init__(
+        self,
+        content: str = "",
+        *,
+        output: list[dict] | None = None,
+        status: str = "completed",
+    ) -> None:
+        self._content = content
+        self._output = output
+        self._status = status
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        output = self._output
+        if output is None:
+            output = [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": self._content}],
+                }
+            ]
+        return {
+            "status": self._status,
+            "output": output,
+            "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+        }
+
+
+class _CapturingResponsesClient:
+    def __init__(self, response: _FakeResponsesResponse) -> None:
+        self._response = response
+        self.calls: list[tuple[str, dict]] = []
+
+    def post(self, path: str, json: dict) -> _FakeResponsesResponse:
+        self.calls.append((path, dict(json)))
+        return self._response
+
+    def close(self) -> None:
+        return None
+
+
 class _SequencedChatCompletionResponse:
     def __init__(
         self,
@@ -542,6 +587,139 @@ def test_request_intent_classification_disables_thinking_even_when_answer_llm_ca
     assert payload["model"] == "Qwen3-8B"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 0.0
+
+
+def test_responses_mode_converts_messages_limits_and_tools() -> None:
+    client = object.__new__(VllmChatClient)
+    client._settings = AppSettings(llm_api_mode="responses")
+    payload = {
+        "model": "demo",
+        "messages": [
+            {"role": "developer", "content": "Use the tool."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"name":"alpha"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call-1", "content": "42"},
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "description": "Lookup a value",
+                    "parameters": {"type": "object"},
+                    "strict": True,
+                },
+            }
+        ],
+        "max_tokens": 128,
+        "stream_options": {"include_usage": True},
+    }
+
+    converted = client._wire_payload(payload)
+
+    assert "messages" not in converted
+    assert converted["max_output_tokens"] == 128
+    assert "max_tokens" not in converted
+    assert "stream_options" not in converted
+    assert converted["input"][1] == {
+        "type": "function_call",
+        "call_id": "call-1",
+        "name": "lookup",
+        "arguments": '{"name":"alpha"}',
+    }
+    assert converted["input"][2] == {
+        "type": "function_call_output",
+        "call_id": "call-1",
+        "output": "42",
+    }
+    assert converted["tools"] == [
+        {
+            "type": "function",
+            "name": "lookup",
+            "description": "Lookup a value",
+            "parameters": {"type": "object"},
+            "strict": True,
+        }
+    ]
+
+
+def test_responses_mode_buffered_request_extracts_text_and_usage() -> None:
+    settings = AppSettings(
+        llm_api_mode="responses",
+        llm_cache_ttl_seconds=0,
+        llm_cache_max_entries=0,
+        llm_retry_attempts=0,
+    )
+    transport = _CapturingResponsesClient(_FakeResponsesResponse("responses ok"))
+    client = _build_retry_test_client(settings, transport)
+
+    answer = client._request_chat_completion_sync(
+        {"model": "demo", "messages": [{"role": "user", "content": "hello"}]}
+    )
+
+    assert answer == "responses ok"
+    assert transport.calls[0][0] == "/responses"
+    assert transport.calls[0][1]["input"] == [{"role": "user", "content": "hello"}]
+    assert client.last_request_usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "total_tokens": 18,
+    }
+
+
+def test_responses_mode_normalizes_function_calls() -> None:
+    settings = AppSettings(llm_api_mode="responses")
+    transport = _CapturingResponsesClient(
+        _FakeResponsesResponse(
+            output=[
+                {
+                    "type": "function_call",
+                    "call_id": "call-7",
+                    "name": "lookup",
+                    "arguments": '{"name":"alpha"}',
+                }
+            ]
+        )
+    )
+    client = _build_retry_test_client(settings, transport)
+    client.model_name = "demo"
+
+    result = client.chat_with_tools_sync(
+        [{"role": "user", "content": "lookup alpha"}],
+        [
+            {
+                "type": "function",
+                "function": {
+                    "name": "lookup",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+    )
+
+    assert result == {
+        "content": None,
+        "tool_calls": [
+            {"id": "call-7", "name": "lookup", "arguments": {"name": "alpha"}}
+        ],
+        "finish_reason": "tool_calls",
+    }
+    assert transport.calls[0][0] == "/responses"
+    snapshot = client.runtime_snapshot()
+    assert snapshot["llm_request_count"] == "1"
+    assert snapshot["llm_success_count"] == "1"
+    assert snapshot["llm_error_count"] == "0"
+    assert snapshot["llm_metrics_scope"] == "process_lifetime"
+    assert snapshot["llm_throughput_window_seconds"] == "60"
 
 
 def test_request_chat_completion_retries_timeout_then_succeeds(
@@ -1169,6 +1347,29 @@ def test_answer_question_can_disable_reuse_hints_for_recovery_retry() -> None:
     assert "cache_salt" not in payload
     assert "extra_key" not in payload
     assert "kv_transfer_params" not in payload
+
+
+def test_answer_question_sends_quality_routing_effort_in_responses_payload() -> None:
+    transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("OK")])
+    client = _build_retry_test_client(
+        AppSettings(llm_api_mode="responses"),
+        transport,
+    )
+    client.model_name = "sage-auto"
+
+    answer = client.answer_question_sync(
+        "system",
+        "user",
+        enable_thinking=False,
+        reasoning_effort="xhigh",
+        max_tokens=8,
+        use_reuse_hints=False,
+    )
+
+    assert answer == "OK"
+    _, payload = transport.calls[0]
+    assert payload["reasoning"] == {"effort": "xhigh"}
+    assert "input" in payload
 
 
 def test_glm4_answer_uses_neutral_sampling_penalties() -> None:

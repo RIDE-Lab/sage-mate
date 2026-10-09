@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "description": "Curated Twin retrieval intents over the production knowledge corpus.",
+  "queries": [
+    {
+      "id": "flowrag-paper",
+      "query": "FlowRAG 的核心思想和主要贡献是什么？",
+      "visitor_profile": "general_visitor",
+      "relevant_source_groups": [
+        ["2026_flowrag_www_2026", "publications_summary.md#0.3"]
+      ]
+    },
+    {
+      "id": "research-overview",
+      "query": "张书豪老师目前主要有哪些研究方向？",
+      "visitor_profile": "general_visitor",
+      "relevant_source_groups": [
+        ["homepage:contents/publications.md", "homepage:publications-index"]
+      ]
+    },
+    {
+      "id": "meeting-preparation",
+      "query": "第一次和张老师开会前需要准备什么？",
+      "visitor_profile": "lab_member",
+      "relevant_source_groups": [
+        ["onboarding-handbook", "curated_faq"]
+      ]
+    },
+    {
+      "id": "inference-lecture-seven",
+      "query": "大模型推理基础设施课程第七讲推理系统架构的材料在哪里？",
+      "visitor_profile": "lab_member",
+      "relevant_source_groups": [
+        ["第07讲_推理系统架构.pdf", "Tutorial_07_执行优化与异构路径.pdf"]
+      ]
+    },
+    {
+      "id": "paper-writing-lecture-seven",
+      "query": "研究生论文写作课程第七讲如何发表高水平论文？",
+      "visitor_profile": "paper_writing_student",
+      "relevant_source_groups": [
+        ["graduate-paper-writing-course:lecture-7", "lecture-7-beamer.pdf"]
+      ]
+    },
+    {
+      "id": "kv-cache",
+      "query": "KV Cache 的组织方式和优化方法有哪些？",
+      "visitor_profile": "general_visitor",
+      "relevant_source_groups": [
+        ["wiki:tech-notes/kv-cache-optimization", "wiki:tech-notes/kv", "第05讲_KV缓存.pdf", "Tutorial_04_KV_Cache"]
+      ]
+    },
+    {
+      "id": "vamos",
+      "query": "VAMOS 项目当前研究目标和路线图是什么？",
+      "visitor_profile": "lab_member",
+      "relevant_source_groups": [
+        ["workspace/vamos"]
+      ]
+    },
+    {
+      "id": "new-student-first-month",
+      "query": "实验室新生第一个月应该完成哪些事情？",
+      "visitor_profile": "lab_member",
+      "relevant_source_groups": [
+        ["onboarding-handbook"]
+      ]
+    },
+    {
+      "id": "semantic-dynamic-retriever",
+      "query": "面对持续变化的数据分布，检索器怎样在线适应而不频繁全量重训？",
+      "visitor_profile": "general_visitor",
+      "relevant_source_groups": [
+        ["2026_flowrag_www_2026", "publications_summary.md#0.3"]
+      ]
+    },
+    {
+      "id": "semantic-meeting-preparation",
+      "query": "和导师沟通之前，怎样组织信息才能让讨论更高效？",
+      "visitor_profile": "lab_member",
+      "relevant_source_groups": [
+        ["onboarding-handbook", "curated_faq"]
+      ]
+    },
+    {
+      "id": "semantic-state-reuse",
+      "query": "如何保存中间状态来减少长上下文推理中的重复计算？",
+      "visitor_profile": "general_visitor",
+      "relevant_source_groups": [
+        ["wiki:tech-notes/kv-cache-optimization", "wiki:tech-notes/kv", "第05讲_KV缓存.pdf", "Tutorial_04_KV_Cache"]
+      ]
+    }
+  ]
+}

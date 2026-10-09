@@ -836,9 +836,11 @@ def test_hosted_web_deep_call_prefers_supported_engine_thinking(tmp_path: Path) 
             *,
             enable_thinking: bool = True,
             thinking_token_budget: int | None = None,
+            reasoning_effort: str | None = None,
             **kwargs: object,
         ) -> str:
             kwargs["enable_thinking"] = enable_thinking
+            kwargs["reasoning_effort"] = reasoning_effort
             if thinking_token_budget is not None:
                 kwargs["thinking_token_budget"] = thinking_token_budget
             self.kwargs = kwargs
@@ -861,6 +863,37 @@ def test_hosted_web_deep_call_prefers_supported_engine_thinking(tmp_path: Path) 
     assert fake_llm.kwargs is not None
     assert fake_llm.kwargs["enable_thinking"] is True
     assert fake_llm.kwargs["thinking_token_budget"] == service._settings.thinking_token_budget
+    assert fake_llm.kwargs["reasoning_effort"] == "xhigh"
+
+
+def test_default_call_does_not_request_quality_route(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.reasoning_effort: str | None = "unexpected"
+
+        def answer_question_sync(
+            self,
+            system_prompt: str,
+            user_prompt: str,
+            *,
+            reasoning_effort: str | None = None,
+            **kwargs: object,
+        ) -> str:
+            self.reasoning_effort = reasoning_effort
+            return "OK"
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+
+    service._call_answer_question_sync(
+        "system",
+        "user",
+        context=_build_context(deep_thinking=False, deep_thinking_explicit=False),
+        enable_thinking=False,
+    )
+
+    assert service._llm_client.reasoning_effort is None
 
 
 def test_compact_call_can_disable_vllm_reuse_hints(tmp_path: Path) -> None:

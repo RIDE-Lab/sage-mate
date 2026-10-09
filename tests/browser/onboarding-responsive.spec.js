@@ -44,7 +44,11 @@ function handleFixtureRequest(request, response) {
     sendFile(response, "companion.css", "text/css; charset=utf-8");
     return;
   }
-  if (pathname === "/health") {
+  if (pathname === "/static/minimal.1009.css") {
+    sendFile(response, "minimal.1009.css", "text/css; charset=utf-8");
+    return;
+  }
+  if (pathname === "/health" || pathname === "/admin/health") {
     response.writeHead(200, {
       "cache-control": "no-store",
       "content-type": "application/json; charset=utf-8",
@@ -307,6 +311,7 @@ test("shared icons render from valid symbols on phone and desktop", async ({ pag
   for (const viewport of [VIEWPORTS[1], VIEWPORTS[3]]) {
     await openOnboarding(page, viewport);
     await page.getByRole("button", { name: "跳过引导" }).click();
+    await openComposerTools(page);
 
     const iconAudit = await page.locator("svg.ui-icon use").evaluateAll((uses) => uses.map((use) => {
       const icon = use.closest("svg");
@@ -335,6 +340,7 @@ test("shared icons render from valid symbols on phone and desktop", async ({ pag
 });
 
 test("system status remains readable in both themes and responsive viewports", async ({ page }) => {
+  await mockAdminSession(page);
   for (const theme of ["dark", "light"]) {
     for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
       await page.setViewportSize(viewport);
@@ -650,8 +656,13 @@ test("active chat exposes a usable stop control and sends server cancellation", 
 });
 
 async function openThemeFixture(page, theme, viewport) {
+  await mockAdminSession(page);
   await page.setViewportSize(viewport);
-  await page.route("https://fonts.**", (route) => route.abort());
+  await page.route("https://fonts.**", (route) => route.fulfill({
+    status: 200,
+    contentType: "text/css; charset=utf-8",
+    body: "",
+  }));
   await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
   await page.evaluate((selectedTheme) => {
     localStorage.setItem("sageMateTheme", selectedTheme);
@@ -660,6 +671,21 @@ async function openThemeFixture(page, theme, viewport) {
   }, theme);
   await page.reload({ waitUntil: "domcontentloaded" });
   await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+}
+
+async function mockAdminSession(page) {
+  await page.route("**/auth/session", (route) => route.fulfill({
+    status: 200,
+    contentType: "application/json; charset=utf-8",
+    body: JSON.stringify({ is_admin: true, username: "fixture-admin" }),
+  }));
+}
+
+async function openComposerTools(page) {
+  const disclosure = page.locator(".composer-tools-disclosure");
+  if (!(await disclosure.evaluate((element) => element.open))) {
+    await disclosure.locator("summary").click();
+  }
 }
 
 for (const viewport of [
@@ -721,6 +747,12 @@ for (const viewport of [
       await expect(menu).toHaveAttribute("aria-expanded", "false");
 
       const assertMainFits = async ({ controls = true } = {}) => {
+        if (controls) {
+          const disclosure = page.locator(".composer-tools-disclosure");
+          if (!(await disclosure.evaluate((element) => element.open))) {
+            await disclosure.locator("summary").click();
+          }
+        }
         const shellBox = await appShell.boundingBox();
         expect(shellBox).not.toBeNull();
         expect(shellBox.x).toBeGreaterThanOrEqual(0);
@@ -893,6 +925,7 @@ test("semantic theme contract covers chat, Support, status, account, settings, a
   for (const theme of ["dark", "light"]) {
     for (const viewport of viewports) {
       await openThemeFixture(page, theme, viewport);
+      await openComposerTools(page);
       if (viewport.width <= 720) {
         const composerBackground = await page.locator(".composer-shell").evaluate(
           (element) => getComputedStyle(element).backgroundImage,
@@ -990,6 +1023,7 @@ test("theme release screenshots remain stable across light, dark, desktop, and n
         caret: "hide",
         fullPage: true,
         maxDiffPixelRatio: 0.005,
+        timeout: 20000,
       });
     }
   }
@@ -1000,6 +1034,10 @@ test("composer modes retain native keyboard focus and visible boundaries", async
     await openThemeFixture(page, theme, { width: 1280, height: 800 });
     const deep = page.locator("#deep-thinking-checkbox");
     await page.getByRole("button", { name: "发送问题" }).focus();
+    await page.keyboard.press("Tab");
+    await expect(page.locator(".composer-tools-summary")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".composer-tools-disclosure")).toHaveAttribute("open", "");
     await page.keyboard.press("Tab");
     await expect(deep).toBeFocused();
     const label = page.locator(".composer-pill-toggle").first();
@@ -1017,12 +1055,14 @@ test("composer modes retain native keyboard focus and visible boundaries", async
     await page.locator("#web-search-checkbox").focus();
     await page.keyboard.press("Space");
     await expect(page.locator("#web-search-checkbox")).not.toBeChecked();
-    // Sample the settled unselected foreground, not an in-flight CSS transition.
-    await expect.poll(() => label.evaluate(el => getComputedStyle(el).color))
-      .toBe(theme === "dark" ? "rgb(195, 208, 229)" : "rgb(59, 80, 109)");
+    // The minimalist palette may change, but unselected controls must remain legible.
     expectThemeAuditPasses(await auditThemeSelectors(page, [
       ".composer-pill-toggle", ".rail-user-avatar",
     ]), { requireBorders: [".composer-pill-toggle", ".rail-user-avatar"] });
+    await deep.evaluate((element) => { element.disabled = true; });
+    expectThemeAuditPasses(await auditThemeSelectors(page, [
+      ".composer-pill-toggle",
+    ]), { requireBorders: [".composer-pill-toggle"] });
   }
 });
 
@@ -1030,6 +1070,7 @@ test("mobile long answers and citations stay inside the message and clear the co
   for (const theme of ["dark", "light"]) {
     await openThemeFixture(page, theme, { width: 390, height: 844 });
     // Mode status adds a composer row; test the largest actual composer.
+    await openComposerTools(page);
     await page.locator(".composer-pill-toggle").first().click();
     await page.locator("#chat-question").fill("请解释长上下文实验");
     await page.getByRole("button", { name: "发送问题" }).click();

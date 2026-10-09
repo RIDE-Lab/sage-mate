@@ -14,12 +14,17 @@ def _repo_root() -> Path:
 
 
 def _candidate_pythonpath_entries(repo_root: Path) -> list[Path]:
-    return [
+    entries = [
         repo_root / "src",
         repo_root.parent / "SAGE" / "src",
         repo_root.parent / "sageVDB",
-        repo_root.parent / "neuromem",
     ]
+    use_local_neuromem = os.environ.get(
+        "DIGITAL_TWIN_USE_LOCAL_NEUROMEM_SOURCE", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if use_local_neuromem:
+        entries.append(repo_root.parent / "neuromem")
+    return entries
 
 
 def _prepend_repo_paths(repo_root: Path) -> list[Path]:

@@ -1,11 +1,12 @@
 """Regression tests for the post-answer background-execution split.
 
-Task 2 of the Chat Latency Optimizations plan moves the four post-answer
-fan-out stages (`memory_persist`, `memory_profile_consolidate`,
-`follow_up_plan`, `memory_usefulness_score`) off the critical path. With
+The latency split keeps the conversation-memory write on the critical path
+so an immediate follow-up cannot race its preceding turn. The remaining
+post-answer stages (`memory_profile_consolidate`, `follow_up_plan`, and
+`memory_usefulness_score`) stay off the critical path. With
 ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND=true`` (default) and a trace callback
 attached, ``service.answer`` returns the rendered ``ChatResponse``
-immediately after ``response_render`` and runs the post-answer side-effects
+after the durable exchange write and runs the remaining side-effects
 on a background ``asyncio.create_task`` instead of blocking the HTTP
 response.
 """
@@ -71,7 +72,7 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     tmp_path: Path,
 ) -> None:
     """With background mode + trace_callback, ``service.answer`` resolves
-    while the four post-answer stages are still in flight on a background
+    while the three non-critical post-answer stages are still in flight on a background
     ``asyncio.create_task``. The interim response carries the critical-path
     trace (10 keys) and an empty ``follow_up_actions`` list."""
 
@@ -87,12 +88,12 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     started_event = threading.Event()
     finished_event = threading.Event()
 
-    def gated_run(context, support):
+    def gated_run(context, support, **kwargs):
         started_event.set()
         # Wait until the test releases the gate or 5s budget elapses.
         persist_gate.wait(timeout=5.0)
         try:
-            return original_run_post_answer(context, support)
+            return original_run_post_answer(context, support, **kwargs)
         finally:
             finished_event.set()
 
@@ -124,6 +125,12 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
             "post-answer should still be running on the background task — "
             "service.answer must not block on it when "
             "DIGITAL_TWIN_POST_ANSWER_BACKGROUND is on"
+        )
+        recent = service._conversation_store.list_recent_conversation_records(
+            "conv-bg-task2", limit=1
+        )
+        assert recent and recent[0].question == "给我一些下一步建议。", (
+            "the exchange must be durable before service.answer returns"
         )
         # Release the gate and wait for the background task to finish so we
         # can also confirm the trace_callback eventually surfaced the
@@ -157,8 +164,8 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     assert "response_render" in response_keys
     assert "llm_answer" in response_keys
 
-    # The trace callback should have emitted the post-answer steps after the
-    # response was returned.
+    # The trace callback emits memory_persist before the response and the
+    # remaining post-answer steps after it.
     assert post_answer_keys.issubset(set(captured_steps)), (
         "Background post-answer must still publish trace steps via the "
         f"callback so the SSE stream stays informative. Got: {captured_steps}"

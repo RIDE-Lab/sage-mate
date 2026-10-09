@@ -87,7 +87,12 @@ def test_health_includes_online_presence_metrics(isolated_online_presence_store)
     )
     assert heartbeat.status_code == 200
 
-    health_response = client.get("/health")
+    login_response = client.post(
+        "/auth/admin/login",
+        json={"username": settings.admin_username, "password": settings.admin_password},
+    )
+    assert login_response.status_code == 200
+    health_response = client.get("/admin/health")
     assert health_response.status_code == 200
     payload = health_response.json()
 

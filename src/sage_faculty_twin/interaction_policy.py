@@ -300,6 +300,24 @@ class InteractionPolicyEngine:
                 reasons=("human_handoff_required",),
             )
 
+        if (
+            request.attachments
+            and proposed.action == "review_queue"
+            and not requires_faculty_review(request.question)
+            and any(marker in request.question for marker in ("根据附件", "总结附件", "概括附件"))
+        ):
+            return InteractionPolicyResult(
+                intent=proposed.model_copy(
+                    update={
+                        "action": "answer",
+                        "decision_mode": "direct_answer",
+                        "escalation_reason": None,
+                    }
+                ),
+                changed=True,
+                reasons=("attached_material_is_for_analysis_not_review",),
+            )
+
         if requires_faculty_review(request.question):
             return InteractionPolicyResult(
                 intent=InteractionIntent(

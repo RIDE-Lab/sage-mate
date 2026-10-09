@@ -20,6 +20,27 @@ _WEATHER_QUERY_MARKERS = (
 _NEWS_QUERY_MARKERS = (
     "新闻", "资讯", "动态", "最新", "最近", "近况", "发布", "announcement", "news", "update",
 )
+_KNOWN_OFFICIAL_RELEASE_REPOS = {
+    "vllm": ("vllm-project", "vllm"),
+    "sglang": ("sgl-project", "sglang"),
+}
+_RELEASE_QUERY_MARKERS = ("latest", "newest", "release", "version", "最新", "版本", "发布")
+_AWARD_QUERY_ALIASES = {
+    "图灵奖": ("图灵奖", "turing award"),
+    "诺贝尔奖": ("诺贝尔奖", "nobel prize"),
+}
+_OFFICIAL_AWARD_PAGES = {
+    "图灵奖": (
+        "ACM A.M. Turing Award official winners",
+        "https://amturing.acm.org/?pg=awards.html",
+    ),
+    "诺贝尔奖": (
+        "The Nobel Prize official prize list",
+        "https://www.nobelprize.org/prizes/lists/all-nobel-prizes/",
+    ),
+}
+_TEACHER_NAME_RE = re_compile(r"([\u4e00-\u9fff]{2,4})老师")
+_YEAR_RE = re_compile(r"(?<!\d)(20\d{2})(?!\d)")
 _SEARCH_FILLER_RE = re_compile(
     r"请问|帮我|帮忙|查一下|查下|查询一下|查询|告诉我|想知道|看下|看一下|了解一下|搜一下|搜索一下|"
     r"实时|最新|当前|现在|此刻|最近|刚刚|今天|今日|目前|"
@@ -119,7 +140,23 @@ class WebSearchClient:
             return []
 
         limit = self._max_results if max_results is None else max(1, min(int(max_results), 8))
+        official_repo = self._known_official_release_repo(normalized_query)
+        if official_repo is not None:
+            try:
+                official_result = self._search_github_latest_release(*official_repo)
+                if official_result is not None:
+                    return [official_result]
+            except Exception:
+                pass  # Preserve Tavily/Bing fallback when GitHub is unavailable.
 
+        official_award_page = self._known_official_award_page(normalized_query)
+        if official_award_page is not None:
+            try:
+                official_result = self._search_official_award_page(*official_award_page)
+                if official_result is not None:
+                    return [official_result]
+            except Exception:
+                pass
         # Treat the configured timeout as a budget for the *whole* provider
         # chain, not once per fallback. Otherwise an RSS timeout followed by
         # an HTML timeout can silently double the latency of /chat.
@@ -132,7 +169,7 @@ class WebSearchClient:
                 try:
                     tavily_results = self._search_tavily(normalized_query, limit)
                     if tavily_results:
-                        return tavily_results
+                        return self._rerank_results(normalized_query, tavily_results, limit)
                 except Exception:
                     pass  # fall through to Bing
 
@@ -152,6 +189,81 @@ class WebSearchClient:
             return []
         finally:
             self._search_deadline = previous_deadline
+
+    @staticmethod
+    def _known_official_release_repo(query: str) -> tuple[str, str] | None:
+        lowered = str(query or "").lower()
+        if not any(marker in lowered for marker in _RELEASE_QUERY_MARKERS):
+            return None
+        for alias, repository in _KNOWN_OFFICIAL_RELEASE_REPOS.items():
+            if alias in lowered:
+                return repository
+        return None
+
+    def _search_github_latest_release(
+        self,
+        owner: str,
+        repository: str,
+    ) -> WebSearchResult | None:
+        api_url = f"https://api.github.com/repos/{owner}/{repository}/releases/latest"
+        with self._client() as client:
+            response = client.get(
+                api_url,
+                headers={"Accept": "application/vnd.github+json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+
+        tag_name = str(payload.get("tag_name") or "").strip()
+        html_url = str(payload.get("html_url") or "").strip()
+        if not tag_name or not html_url:
+            return None
+        release_name = str(payload.get("name") or "").strip()
+        published_at = str(payload.get("published_at") or "").strip()
+        title = release_name or f"{repository} {tag_name}"
+        snippet = f"Official GitHub release tag: {tag_name}."
+        if published_at:
+            snippet += f" Published at {published_at}."
+        return WebSearchResult(
+            title=title[:300],
+            url=html_url[:1000],
+            snippet=snippet[:500],
+            score=100.0,
+        )
+
+    @staticmethod
+    def _known_official_award_page(query: str) -> tuple[str, str] | None:
+        lowered = str(query or "").lower()
+        for marker, page in _OFFICIAL_AWARD_PAGES.items():
+            aliases = _AWARD_QUERY_ALIASES[marker]
+            if marker in query or any(alias.lower() in lowered for alias in aliases):
+                return page
+        return None
+
+    def _search_official_award_page(
+        self,
+        title: str,
+        url: str,
+    ) -> WebSearchResult | None:
+        with self._client() as client:
+            response = client.get(url)
+            if response.status_code not in {401, 403}:
+                response.raise_for_status()
+            access_note = (
+                " Content access is restricted from this service network."
+                if response.status_code in {401, 403}
+                else ""
+            )
+        return WebSearchResult(
+            title=title,
+            url=url,
+            snippet=(
+                "Official award recipient directory maintained by the awarding institution."
+                f"{access_note}"
+            ),
+            score=100.0,
+        )
+
 
     # ---- Tavily backend ----
 
@@ -227,6 +339,17 @@ class WebSearchClient:
     @staticmethod
     def _rewrite_query_for_bing(query: str) -> str:
         lowered = query.lower()
+        award_aliases = WebSearchClient._award_result_terms(query)
+        if award_aliases:
+            person_match = _TEACHER_NAME_RE.search(query)
+            year_match = _YEAR_RE.search(query)
+            parts = []
+            if person_match is not None:
+                parts.append(f'"{person_match.group(1)}"')
+            parts.append(f'"{award_aliases[0]}"')
+            if year_match is not None:
+                parts.append(year_match.group(1))
+            return " ".join(parts)
         if any(marker in query or marker in lowered for marker in _WEATHER_QUERY_MARKERS):
             location = WebSearchClient._extract_weather_location(query)
             if location:
@@ -284,6 +407,7 @@ class WebSearchClient:
         max_results: int,
     ) -> list[WebSearchResult]:
         news_intent = cls._is_news_query(original_query)
+        award_terms = cls._award_result_terms(original_query)
         query_tokens = cls._query_tokens(original_query)
         seen_urls: set[str] = set()
         rescored: list[WebSearchResult] = []
@@ -293,6 +417,9 @@ class WebSearchClient:
             if canonical_url in seen_urls:
                 continue
             seen_urls.add(canonical_url)
+            combined = f"{result.title} {result.snippet} {result.url}".lower()
+            if award_terms and not any(term.lower() in combined for term in award_terms):
+                continue
             score = cls._score_result(result, query_tokens=query_tokens, index=index, news_intent=news_intent)
             if news_intent and score < -5:
                 continue
@@ -307,6 +434,14 @@ class WebSearchClient:
 
         rescored.sort(key=lambda item: item.score, reverse=True)
         return rescored[:max_results]
+
+    @staticmethod
+    def _award_result_terms(query: str) -> tuple[str, ...]:
+        lowered = str(query or "").lower()
+        for marker, aliases in _AWARD_QUERY_ALIASES.items():
+            if marker in query or any(alias.lower() in lowered for alias in aliases):
+                return aliases
+        return ()
 
     @classmethod
     def _score_result(

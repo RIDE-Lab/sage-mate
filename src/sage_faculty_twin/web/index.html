@@ -24,6 +24,7 @@
         rel="stylesheet" media="print" onload="this.media='all'" />
     <link rel="stylesheet" href="./styles.4222.css?rev=mobile-sidebar-20260907" />
     <link rel="stylesheet" href="./companion.css" />
+    <link rel="stylesheet" href="./static/minimal.1009.css" />
     <style>
         html {
             opacity: 0;
@@ -135,7 +136,7 @@
                             <svg class="ui-icon" aria-hidden="true"><use href="#icon-companion"></use></svg>
                             <span class="rail-label">电子伙伴</span>
                         </button>
-                        <button type="button" id="open-status-drawer" class="rail-btn" title="系统状态">
+                        <button type="button" id="open-status-drawer" class="rail-btn hidden" title="系统状态">
                             <svg class="ui-icon" aria-hidden="true"><use href="#icon-activity"></use></svg>
                             <span class="rail-label">系统状态</span>
                         </button>
@@ -571,8 +572,15 @@
                                 <span class="send-button-spinner" aria-hidden="true"></span>
                             </button>
                         </div>
-                        <div class="composer-tools-row" aria-label="发送附加操作">
-                            <div class="composer-tools-left">
+                        <details class="composer-tools-disclosure">
+                            <summary class="composer-tools-summary" aria-label="展开工具与高级选项">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 21v-7"/><path d="M4 10V3"/><path d="M12 21v-9"/><path d="M12 8V3"/><path d="M20 21v-5"/><path d="M20 12V3"/><path d="M1 14h6"/><path d="M9 8h6"/><path d="M17 16h6"/></svg>
+                                <span>工具</span>
+                                <span class="composer-tools-active-label">已启用</span>
+                                <svg class="composer-tools-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+                            </summary>
+                            <div class="composer-tools-row" aria-label="发送附加操作">
+                                <div class="composer-tools-left">
                                 <label class="composer-pill-toggle" title="优先使用模型原生 thinking；模型不支持时使用应用层深度分析。保留完整上下文与引用依据。">
                                     <input type="checkbox" id="deep-thinking-checkbox" />
                                     <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-brain"></use></svg>深度思考</span>
@@ -581,8 +589,8 @@
                                     <input type="checkbox" id="web-search-checkbox" />
                                     <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-globe-search"></use></svg>联网检索</span>
                                 </label>
-                            </div>
-                            <div class="composer-tools-right">
+                                </div>
+                                <div class="composer-tools-right">
                                 <button type="button" id="lucky-question-button"
                                     class="composer-icon-button" aria-label="用模板随机组合一个新问题"
                                     title="组合主题、角度和目标，生成一个新问题">
@@ -613,8 +621,9 @@
                                     aria-label="打开推理路径" title="查看推理路径">
                                     <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-workflow"></use></svg>
                                 </button>
+                                </div>
                             </div>
-                        </div>
+                        </details>
                         <div id="composer-mode-status" class="composer-mode-status" aria-live="polite" hidden></div>
                         <div id="code-composer-context-row" class="code-composer-context-row" hidden></div>
                     </div>

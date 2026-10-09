@@ -79,11 +79,12 @@ jobs:
       - name: Run test suite
         env:
           PYTHONPATH: src
+          DIGITAL_TWIN_RUNTIME_DIR: ${{ runner.temp }}/twin-test-runtime
+          DIGITAL_TWIN_SAGEVDB_EMBEDDING_BACKEND: hash
           DIGITAL_TWIN_NEUROMEM_INDEX_TYPE: segment
           DIGITAL_TWIN_CONVERSATION_MEMORY_INDEX_TYPE: segment
         run: |
           python -m pytest tests/ -q --tb=short \
-            --ignore=tests/test_sagevdb_knowledge_store.py \
             --ignore=tests/test_identity_eval.py
 
   install-linux-cpu:

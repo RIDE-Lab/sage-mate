@@ -114,6 +114,12 @@ def answer_language_mismatches_question(question: str, answer: str | None) -> bo
     language_text = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", language_text)
     if question_cjk < 4:
         return False
+    # A requested experiment ID or similar short code is data, not an
+    # English-language answer. Keep rejecting prose-only English replies.
+    if len(answer_text) <= 64 and re.fullmatch(
+        r"[A-Za-z][A-Za-z0-9._-]*\d[A-Za-z0-9._-]*", answer_text
+    ):
+        return False
     answer_cjk = len(re.findall(r"[\u4e00-\u9fff]", language_text))
     if (
         answer_cjk == 0

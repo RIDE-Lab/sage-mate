@@ -477,8 +477,9 @@ const MAX_CHAT_UPLOAD_FILES = 4;
 const MAX_CHAT_UPLOAD_BYTES = 5 * 1024 * 1024;
 const DEFAULT_COMPOSER_UPLOAD_HINT = "支持 PDF、TXT、MD、CSV、JSON、PY、YAML、LOG，最多 4 个文件。";
 const SUPPORTED_CHAT_UPLOAD_SUFFIXES = new Set([".pdf", ".txt", ".md", ".csv", ".json", ".py", ".yaml", ".yml", ".log"]);
-// Keep workflow trace in the dedicated bottom panel to avoid duplicated UI in chat bubbles.
-const INLINE_WORKFLOW_TRACE_ENABLED = false;
+// Keep a compact, durable workflow summary with each completed answer. The
+// dedicated DAG remains available as an optional advanced view.
+const INLINE_WORKFLOW_TRACE_ENABLED = true;
 const WORKFLOW_PHASE_DEFINITIONS = [
     { key: "intake", label: "接入", icon: "inbox" },
     { key: "decide", label: "判断", icon: "branch" },
@@ -1884,8 +1885,11 @@ function hideOnboardingCard() {
     const hasMessages = chatStream && chatStream.querySelectorAll(".message-user").length > 0;
     if (!hasMessages) {
         document.getElementById("welcome-greeting")?.classList.remove("hidden");
+        document.getElementById("seed-chips")?.classList.remove("hidden");
+    } else {
+        document.getElementById("welcome-greeting")?.classList.add("hidden");
+        document.getElementById("seed-chips")?.classList.add("hidden");
     }
-    document.getElementById("seed-chips")?.classList.remove("hidden");
 }
 
 let onboardingHintTimer = null;
@@ -2280,6 +2284,7 @@ async function handleLuckyQuestionClick() {
 }
 
 const adminOnlyDrawerButtons = [
+    document.getElementById("open-status-drawer"),
     openKnowledgeButton,
     openAvailabilityEditorButton,
     openBookingListButton,
@@ -3609,7 +3614,7 @@ async function refreshStatus() {
         let lastError = null;
         for (let attempt = 0; attempt <= HEALTH_REQUEST_RETRY_COUNT; attempt += 1) {
             try {
-                return await apiRequest("/health", { timeoutMs: HEALTH_REQUEST_TIMEOUT_MS });
+                return await apiRequest(isAdminSession ? "/admin/health" : "/health", { timeoutMs: HEALTH_REQUEST_TIMEOUT_MS });
             } catch (error) {
                 lastError = error;
             }
@@ -3734,7 +3739,7 @@ async function refreshHardwareBar() {
 function renderLlmMetrics(data) {
     const container = document.getElementById("app-llm-metrics");
     if (!container) return;
-    if (!data) {
+    if (!data || !isAdminSession) {
         container.style.display = "none";
         return;
     }
@@ -4033,13 +4038,14 @@ function renderOnlineBenchmarkTable(data) {
     const cacheHitRate = requestCount > 0 ? `${Math.round((cacheHitCount / requestCount) * 100)}%` : "--";
     const fallbackRate = plannerTotal > 0 ? `${Math.round((plannerFallbacks / plannerTotal) * 100)}%` : "--";
 
+    const throughputWindow = Math.max(1, Number(data.llm_throughput_window_seconds || 60));
     const rows = [
         ["模型状态", formatLlmStatus(data.llm_status, errorCount)],
-        ["请求总数", formatCount(requestCount)],
+        ["请求总数（本进程）", formatCount(requestCount)],
         ["成功数 / 失败数", `${formatCount(successCount)} / ${formatCount(errorCount)}`],
         ["成功率", successRate],
-        ["吞吐（请求/s）", llmRps > 0 ? llmRps.toFixed(3) : "0.000"],
-        ["吞吐（Token/s）", llmTps > 0 ? llmTps.toFixed(2) : "0.00"],
+        [`最近 ${throughputWindow} 秒吞吐（请求/s）`, llmRps > 0 ? llmRps.toFixed(3) : "0.000"],
+        [`最近 ${throughputWindow} 秒吞吐（Token/s）`, llmTps > 0 ? llmTps.toFixed(2) : "0.00"],
         ["平均 LLM 延迟", Number.isFinite(avgLlmLatency) ? `${avgLlmLatency.toFixed(2)} ms` : "--"],
         ["峰值 LLM 延迟", Number.isFinite(p95LikeLlmLatency) ? `${p95LikeLlmLatency.toFixed(2)} ms` : "--"],
         ["缓存命中率（总）", cacheHitRate],
@@ -4356,11 +4362,6 @@ function applyUserSession(session) {
         applyVisitorProfilePresentation();
         switchConversationHistoryScope(resolveConversationHistoryStorageScope());
         updateWelcomeGreeting();
-        // Trigger progressive onboarding for newly authenticated users
-        if (!isCodeAssistantProfile() && !wasAuthenticated && !hasCompletedOnboarding()) {
-            const profile = account.visitor_profile || "general_visitor";
-            startOnboarding(profile);
-        }
         refreshSlackTwinLinkStatus();
         return;
     }
@@ -7465,6 +7466,9 @@ async function restoreConversationFromHistory(conversationId) {
         currentConversationTitle = conversationHistoryMeta.titleOverrides[conversationId] || entry.title || DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = entry.preview || "";
         chatStream.innerHTML = entry.html || initialChatStreamMarkup;
+        if (chatStream.querySelector(".message-user")) {
+            hideOnboardingCard();
+        }
         hydrateConversationInteractiveState();
         renderConversationHistoryList();
         renderWorkflowTrace([], {
@@ -7523,6 +7527,7 @@ function renderConversationTranscript(transcript) {
         appendMessage("user", speakerName, exchange.question, {});
         appendMessage("assistant", assistantLabel, exchange.answer, {});
     });
+    hideOnboardingCard();
     syncConversationMode();
 }
 
@@ -7680,12 +7685,7 @@ function renderPendingAssistantMessage(
                         </div>
                         <div class="thinking-progress" aria-hidden="true"><span></span></div>
                         ${INLINE_WORKFLOW_TRACE_ENABLED
-            ? `<div class="thinking-phase-rail" aria-live="polite">
-                            ${buildWorkflowPhaseRailHtml({ currentStage, workflowSteps, complete: false })}
-                        </div>`
-            : ""}
-                        ${INLINE_WORKFLOW_TRACE_ENABLED
-            ? `<div class="thinking-trace" aria-label="实时处理过程">
+            ? `<div class="thinking-trace" aria-label="实时处理进度" aria-live="polite">
                             <div class="thinking-trace-list"></div>
                         </div>`
             : ""}
@@ -7758,7 +7758,6 @@ function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
             complete: false,
         });
     }
-
     if (INLINE_WORKFLOW_TRACE_ENABLED) {
         syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
     }
@@ -7870,7 +7869,6 @@ function renderAssistantMessage(
                     ${processingMetaHtml}
                     <div class="message-main-copy">
                         <div class="message-reply-block">
-                            <span class="message-section-kicker">Reply</span>
                             <div class="${bodyClass}">${formatMessageContent(cleanedText)}</div>
                             <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
                                 ${uiIconSvg("copy", "ui-icon-sm")}
@@ -7916,26 +7914,18 @@ function buildWorkflowStatusSummaryHtml(workflowTrace) {
 
     return `
         <section class="message-workflow-summary message-section" data-expanded="false" aria-label="本次处理过程">
-            <div class="message-workflow-summary-head">
-                <div class="message-workflow-summary-copy">
-                    <span class="message-section-kicker">Workflow</span>
-                    <strong class="message-section-title">处理进展</strong>
-                </div>
-                <div class="message-workflow-summary-meta">
+            <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
+                <div class="message-section-toggle-copy">
+                    <span class="message-process-icon" aria-hidden="true"></span>
+                    <strong class="message-section-title">处理过程</strong>
                     <span class="message-inline-process-preview">${escapeHtml(preview)}</span>
                 </div>
-            </div>
-            ${buildWorkflowPhaseRailHtml({ workflowSteps: workflowTrace, complete: true })}
-            <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开完整步骤" data-open-label="收起详情">
-                <div class="message-section-toggle-copy">
-                    <span class="message-workflow-summary-note">默认只显示简化阶段，完整步骤按需展开。</span>
-                </div>
                 <div class="message-section-toggle-meta">
-                    <span class="message-section-count">${escapeHtml(`${workflowTrace.length} 步`)}</span>
-                    <span class="message-section-chevron">展开完整步骤</span>
+                    <span class="message-section-chevron">展开</span>
                 </div>
             </button>
             <div class="message-section-content" hidden>
+                ${buildWorkflowPhaseRailHtml({ workflowSteps: workflowTrace, complete: true })}
                 <div class="message-workflow-chip-row">
                     ${buildWorkflowChipRowHtml(workflowTrace)}
                 </div>
@@ -8120,15 +8110,9 @@ function buildPendingWorkflowTraceCompactHtml(steps, options = {}) {
                 <strong>${escapeHtml(latestStep?.title || "处理中")}</strong>
                 ${typeof latestStep?.duration_ms === "number" ? `<span class="thinking-trace-duration">${escapeHtml(formatWorkflowDuration(latestStep.duration_ms))}</span>` : ""}
             </div>
-            <div class="thinking-trace-progress-meta">
-                <span>阶段 ${completedPhaseCount + 1}/${WORKFLOW_PHASE_DEFINITIONS.length}</span>
-                <span>步骤 ${currentStepIndex + 1}/${steps.length}</span>
-            </div>
+            <div class="thinking-trace-progress-meta">阶段 ${Math.min(completedPhaseCount + 1, WORKFLOW_PHASE_DEFINITIONS.length)}/${WORKFLOW_PHASE_DEFINITIONS.length} · 步骤 ${currentStepIndex + 1}/${steps.length}</div>
             <p class="thinking-trace-compact-copy">${escapeHtml(latestStep?.summary || latestStep?.detail || "正在继续推进这次请求。")}</p>
-            <div class="thinking-trace-chip-row">
-                ${buildWorkflowChipRowHtml(steps, { compact: true, currentIndex: currentStepIndex })}
-            </div>
-            ${completedSteps.length ? `<p class="thinking-trace-compact-history">已完成 ${completedSteps.length} 个实际步骤，后续会继续补齐剩余环节。</p>` : ""}
+            ${completedSteps.length ? `<p class="thinking-trace-compact-history">已完成 ${completedSteps.length} 步</p>` : ""}
         </div>
     `;
 }
@@ -11194,22 +11178,21 @@ async function initializePage() {
     markPresentationReady();
     startOnlinePresenceHeartbeat();
     startStatusAutoRefresh();
-    await refreshPoweredByVersions();
-    refreshHardwareBar();
-    await refreshStatus();
     await refreshSession();
+    await refreshPoweredByVersions();
+    if (isAdminSession) {
+        refreshHardwareBar();
+    }
+    await refreshStatus();
     await refreshUserSession();
     applyVisitorProfilePresentation({ syncCourseContext: true });
     // Auto-mark identity as guest for unauthenticated users — no landing page needed
     if (!isAdminSession && !isUserAuthenticated) {
         markVisitorIdentitySelected(visitorProfileInput?.value || "general_visitor");
     }
-    // Start Faculty Twin onboarding for new users, or show profile-specific landing content.
-    const profile = visitorProfileInput?.value || "general_visitor";
+    // Keep the default conversation surface quiet. The full guided tour is
+    // available from the sidebar help button instead of opening automatically.
     if (!isCodeAssistantProfile()) {
-        startOnboarding(profile);
-    }
-    if (!onboardingActive && !isCodeAssistantProfile()) {
         showDefaultLandingContent();
     }
     if (isCodeAssistantProfile() && !chatStream?.querySelector(".message-user")) {

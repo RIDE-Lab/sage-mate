@@ -53,23 +53,38 @@ def main() -> int:
     base_url = env.get("DIGITAL_TWIN_LLM_BASE_URL", "http://127.0.0.1:8000/v1").rstrip("/")
     api_key = env.get("DIGITAL_TWIN_API_KEY", "EMPTY")
     model = env.get("DIGITAL_TWIN_MODEL_NAME", "qwen3-32b") or "qwen3-32b"
+    api_mode = env.get("DIGITAL_TWIN_LLM_API_MODE", "chat_completions").strip()
     started = time.time()
 
     if args.mode == "models":
         status, body = _request_json(f"{base_url}/models", api_key=api_key, payload=None, timeout=args.timeout)
     else:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Reply with OK only."},
-                {"role": "user", "content": "health check"},
-            ],
-            "temperature": 0,
-            "max_tokens": 8,
-            "stream": False,
-        }
+        if api_mode == "responses":
+            endpoint = "responses"
+            payload = {
+                "model": model,
+                "input": [
+                    {"role": "developer", "content": "Reply with OK only."},
+                    {"role": "user", "content": "health check"},
+                ],
+                "temperature": 0,
+                "max_output_tokens": 8,
+                "stream": False,
+            }
+        else:
+            endpoint = "chat/completions"
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "Reply with OK only."},
+                    {"role": "user", "content": "health check"},
+                ],
+                "temperature": 0,
+                "max_tokens": 8,
+                "stream": False,
+            }
         status, body = _request_json(
-            f"{base_url}/chat/completions",
+            f"{base_url}/{endpoint}",
             api_key=api_key,
             payload=payload,
             timeout=args.timeout,
@@ -79,13 +94,22 @@ def main() -> int:
     if ok and args.mode == "completion":
         try:
             parsed = json.loads(body)
-            choices = parsed.get("choices") if isinstance(parsed, dict) else None
-            ok = bool(
-                choices
-                and isinstance(choices, list)
-                and isinstance(choices[0], dict)
-                and (choices[0].get("message") or {}).get("content")
-            )
+            if api_mode == "responses":
+                ok = any(
+                    part.get("type") == "output_text" and part.get("text")
+                    for item in parsed.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                    for part in item.get("content", [])
+                    if isinstance(part, dict)
+                )
+            else:
+                choices = parsed.get("choices") if isinstance(parsed, dict) else None
+                ok = bool(
+                    choices
+                    and isinstance(choices, list)
+                    and isinstance(choices[0], dict)
+                    and (choices[0].get("message") or {}).get("content")
+                )
         except json.JSONDecodeError:
             ok = False
     result = {
@@ -94,6 +118,7 @@ def main() -> int:
         "mode": args.mode,
         "base_url": base_url,
         "model": model,
+        "api_mode": api_mode,
         "elapsed_seconds": round(time.time() - started, 3),
         "body_preview": body[:300],
     }

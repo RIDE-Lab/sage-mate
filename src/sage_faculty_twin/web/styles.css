@@ -830,10 +830,7 @@ body.mobile-topbar-actions-open .topbar-actions {
 }
 
 .topbar-subtitle {
-    margin: 2px 0 0;
-    color: var(--muted);
-    font-size: 0.78rem;
-    line-height: 1.3;
+    display: none;
 }
 
 .workflow-mobile-handle,
@@ -1998,9 +1995,9 @@ body.drawer-pinned .history-rail {
 }
 
 .message-avatar {
-    width: 32px;
-    height: 32px;
-    border-radius: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 9px;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2046,7 +2043,7 @@ body.drawer-pinned .history-rail {
 .message-frame {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
+    gap: 10px;
 }
 
 .message-processing-meta {
@@ -2366,6 +2363,10 @@ body.drawer-pinned .history-rail {
     color: var(--muted);
 }
 
+.message-assistant .message-role {
+    display: none;
+}
+
 .message-main-copy {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
@@ -2506,6 +2507,14 @@ body.drawer-pinned .history-rail {
     55%, 100% { transform: translateX(290%); }
 }
 
+.message-workflow-summary {
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.34);
+    box-shadow: none;
+}
+
 .thinking-panel-head,
 .message-workflow-summary-head {
     display: flex;
@@ -2515,9 +2524,53 @@ body.drawer-pinned .history-rail {
 }
 
 .message-workflow-summary-toggle {
-    margin-top: 2px;
-    padding-top: 10px;
-    border-top: 1px dashed rgba(22, 35, 56, 0.1);
+    margin: 0;
+    padding: 9px 12px;
+    border: 0;
+}
+
+.message-workflow-summary .message-section-toggle-copy {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+}
+
+.message-workflow-summary .message-section-title {
+    flex: 0 0 auto;
+    font-size: 0.86rem;
+    font-weight: 600;
+}
+
+.message-workflow-summary .message-inline-process-preview {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.message-workflow-summary .message-section-content {
+    display: grid;
+    gap: 12px;
+    padding: 12px;
+    border-top: 1px solid rgba(22, 35, 56, 0.07);
+}
+
+.message-workflow-summary .message-section-content[hidden] {
+    display: none;
+}
+
+.message-process-icon {
+    width: 8px;
+    height: 8px;
+    flex: 0 0 auto;
+    border-radius: 999px;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(47, 111, 237, 0.08);
+}
+
+.message-workflow-summary[data-expanded="true"] .message-process-icon {
+    background: var(--warm-accent);
 }
 
 .thinking-panel-head strong,
@@ -2666,7 +2719,7 @@ body.drawer-pinned .history-rail {
 
 .thinking-trace-compact {
     display: grid;
-    gap: 10px;
+    gap: 6px;
 }
 
 .thinking-trace-compact-current {
@@ -2677,9 +2730,6 @@ body.drawer-pinned .history-rail {
 }
 
 .thinking-trace-progress-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
     color: var(--muted);
     font-size: 0.76rem;
 }
@@ -2711,6 +2761,10 @@ body.drawer-pinned .history-rail {
     color: var(--muted);
     line-height: 1.55;
     font-size: 0.84rem;
+}
+
+.thinking-trace-compact-history {
+    font-size: 0.74rem;
 }
 
 @keyframes workflow-beacon {
@@ -3610,15 +3664,41 @@ html[data-theme="light"] .inline-status-error { background: var(--error-surface)
 body.onboarding-active .chat-shell {
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: stretch;
     justify-content: flex-start;
     position: relative;
     height: 100%;
-    padding: clamp(18px, 5vh, 52px) clamp(18px, 4vw, 64px) 0;
+    padding: 0;
 }
 
 body.onboarding-active .chat-shell .chat-stream {
+    display: flex;
+    order: 2;
+    flex: 1;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: min(100%, 720px);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 0 12px;
+    min-height: 0;
+    overflow: auto;
+}
+
+body.onboarding-active .chat-shell.chat-empty .chat-stream {
     display: none;
+}
+
+body.onboarding-active .chat-shell .composer-shell {
+    order: 3;
+    position: relative;
+    width: min(100%, 720px);
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 0 0 calc(16px + var(--safe-bottom));
+    background: transparent;
+    overflow: visible;
 }
 
 body.onboarding-active .chat-shell .onboarding-card::before,
@@ -3626,32 +3706,19 @@ body.onboarding-active .chat-shell .composer-shell::before {
     display: none;
 }
 
-body.onboarding-active .chat-shell .composer-shell {
-    position: relative;
-    width: min(100%, var(--content-column-max));
-    max-width: var(--content-column-max);
-    margin: auto auto 0;
-    padding: 18px 0 calc(16px + var(--safe-bottom));
-    overflow: visible;
-}
-
 body.onboarding-active .chat-shell .composer-inner {
     width: 100%;
-    max-width: none;
 }
 
 body.onboarding-active .chat-shell .onboarding-card {
+    order: 1;
     position: relative;
-    flex: 0 1 auto;
-    width: min(100%, 640px);
-    max-width: 640px;
-    max-height: min(58vh, 560px);
-    margin: 0 auto 20px;
-    padding: 24px 26px;
-    border: 1px solid var(--line-strong);
-    border-radius: 20px;
-    overflow: auto;
-    box-shadow: var(--shadow-strong), var(--glow);
+    width: min(100%, 720px);
+    max-width: 720px;
+    height: auto;
+    margin: clamp(16px, 4vh, 36px) auto 12px;
+    padding: 18px 20px;
+    overflow: visible;
 }
 
 body.onboarding-active .chat-shell .onboarding-body {
@@ -3660,7 +3727,7 @@ body.onboarding-active .chat-shell .onboarding-body {
 
 body.onboarding-active .chat-shell .onboarding-nav,
 body.onboarding-active .chat-shell .onboarding-done {
-    margin-top: auto;
+    margin-top: 4px;
 }
 
 /* Keep guided onboarding inside tablet and phone visual viewports. */
@@ -4917,7 +4984,64 @@ body.sidebar-expanded .rail-user {
     justify-content: space-between;
     gap: 8px;
     width: 100%;
-    padding: 12px 8px 0;
+    padding: 10px;
+    border: 1px solid rgba(22, 35, 56, 0.08);
+    border-radius: 14px;
+    background: rgba(248, 250, 252, 0.88);
+}
+
+.composer-tools-disclosure {
+    width: 100%;
+    margin-top: 4px;
+}
+
+.composer-tools-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 30px;
+    padding: 4px 9px;
+    border-radius: 9px;
+    color: rgba(32, 33, 35, 0.52);
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+    transition: color 150ms ease, background 150ms ease;
+}
+
+.composer-tools-summary::-webkit-details-marker {
+    display: none;
+}
+
+.composer-tools-summary:hover,
+.composer-tools-disclosure[open] .composer-tools-summary {
+    color: var(--ink);
+    background: rgba(32, 33, 35, 0.05);
+}
+
+.composer-tools-chevron {
+    transition: transform 150ms ease;
+}
+
+.composer-tools-disclosure[open] .composer-tools-chevron {
+    transform: rotate(180deg);
+}
+
+.composer-tools-active-label {
+    display: none;
+    color: var(--accent-deep);
+    font-size: 0.7rem;
+    font-weight: 600;
+}
+
+.composer-tools-disclosure:has(input:checked) .composer-tools-active-label {
+    display: inline;
+}
+
+.composer-tools-disclosure:not([open]) .composer-tools-row {
+    display: none;
 }
 
 .composer-tools-left {
@@ -6470,8 +6594,8 @@ label span {
     }
 
     .message-workflow-summary {
-        gap: 8px;
-        padding: 10px 12px;
+        gap: 0;
+        padding: 0;
         border-radius: 12px;
     }
 
@@ -8351,7 +8475,7 @@ body.profile-code-assistant .composer-tools-row {
         width: 100%;
     }
 
-    .app-version-badge {
+.app-version-badge {
         right: 8px;
         bottom: calc(6px + var(--safe-bottom));
         font-size: 0.72rem;
@@ -8460,6 +8584,12 @@ body.profile-code-assistant .composer-tools-row {
         border-radius: 8px;
         font-size: 0.66rem;
     }
+}
+
+/* Product diagnostics stay in the status/admin surfaces, not the core chat. */
+.app-stack-banner,
+.app-version-badge {
+    display: none;
 }
 
 /* ── Token usage badge (inline in composer tools row) ── */

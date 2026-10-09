@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import builtins
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -342,6 +343,80 @@ def test_explicit_sage_vdb_ann_index_fails_fast_without_sage_anns(
 
     with pytest.raises(RuntimeError, match="requires optional dependency 'sage_anns'"):
         NeuroMemConversationStore(settings)
+
+
+def test_sage_vdb_ann_profile_index_uses_real_backend_and_reports_it(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sagevdb")
+    pytest.importorskip("sage_anns")
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        conversation_memory_dir=tmp_path / "conversation-memory",
+        conversation_memory_collection_type="neural_continual",
+        conversation_memory_index_type="sage_vdb_ann",
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+        sagevdb_dimension=128,
+    )
+
+    store = NeuroMemConversationStore(settings)
+    profile_index = store._profile_collection.indexes["search"]
+
+    assert profile_index.active_backend == "sage-anns:faiss_hnsw"
+    profile_index.add("alpha", "faculty inference systems", {})
+    assert profile_index.query("faculty inference systems", top_k=1) == ["alpha"]
+    assert store.runtime_snapshot()["profile_stats"]["index_backends"] == {
+        "search": "sage-anns:faiss_hnsw"
+    }
+
+
+def test_stale_sage_vdb_snapshot_config_is_migrated_without_faiss_fallback(
+    tmp_path: Path,
+) -> None:
+    pytest.importorskip("sagevdb")
+    pytest.importorskip("sage_anns")
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        conversation_memory_dir=tmp_path / "conversation-memory",
+        conversation_memory_collection_type="neural_continual",
+        conversation_memory_index_type="sage_vdb_ann",
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+        sagevdb_dimension=128,
+    )
+    store = NeuroMemConversationStore(settings)
+    store._persist_collection(
+        store._profile_collection,
+        store._profile_collection_dir,
+    )
+    with sqlite3.connect(store._sqlite_db_path) as connection:
+        raw_metadata = connection.execute(
+            "SELECT index_metadata FROM collection_snapshots WHERE name = ?",
+            ("conversation-profile-memory",),
+        ).fetchone()[0]
+        metadata = json.loads(raw_metadata)
+        metadata["search"]["config"]["backend_name"] = "cpp"
+        metadata["search"]["config"]["allow_faiss_fallback"] = True
+        connection.execute(
+            "UPDATE collection_snapshots SET index_metadata = ? WHERE name = ?",
+            (json.dumps(metadata), "conversation-profile-memory"),
+        )
+        connection.commit()
+
+    reloaded = NeuroMemConversationStore(settings)
+    profile_index = reloaded._profile_collection.indexes["search"]
+
+    assert profile_index.active_backend == "sage-anns:faiss_hnsw"
+    assert profile_index.allow_faiss_fallback is False
+    with sqlite3.connect(reloaded._sqlite_db_path) as connection:
+        migrated_raw = connection.execute(
+            "SELECT index_metadata FROM collection_snapshots WHERE name = ?",
+            ("conversation-profile-memory",),
+        ).fetchone()[0]
+    migrated_config = json.loads(migrated_raw)["search"]["config"]
+    assert migrated_config["backend_name"] == "sage-anns"
+    assert migrated_config["allow_faiss_fallback"] is False
 
 
 def test_neural_conversation_memory_question_set_supports_followup_recall(tmp_path: Path) -> None:

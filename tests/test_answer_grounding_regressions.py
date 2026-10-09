@@ -324,7 +324,13 @@ def test_skill_tool_provenance_survives_both_transports(native):
 
 @pytest.mark.asyncio
 async def test_skill_answer_uses_same_support_builder_as_workflow(tmp_path, monkeypatch):
-    service = DigitalTwinService(AppSettings(_env_file=None, knowledge_base_dir=tmp_path))
+    service = DigitalTwinService(
+        AppSettings(
+            _env_file=None,
+            knowledge_base_dir=tmp_path,
+            legacy_skill_shortcut_enabled=True,
+        )
+    )
     monkeypatch.setattr(service, "_build_lightweight_chat_response", lambda _: None)
     monkeypatch.setattr(service, "_build_lightweight_fact_response", lambda _: None)
     monkeypatch.setattr(service, "_is_light_request", lambda _: False)
@@ -334,7 +340,9 @@ async def test_skill_answer_uses_same_support_builder_as_workflow(tmp_path, monk
         skill_id="profile", answer="研究方向是推理系统。", knowledge_hits=[
             hit("研究主页", ["profile", "research"], excerpt="老师的研究方向是推理系统。")
         ]))
-    response = await service.answer_in_process(ChatRequest(student_name="test", question="研究方向是什么？", deep_thinking=False))
+    response = await service.answer_in_process(
+        ChatRequest(student_name="test", question="请介绍推理系统研究方法。", deep_thinking=False)
+    )
     assert response.workflow_action == "skill_answer"
     assert response.knowledge_hits
     assert response.answer_basis[0].title == "研究主页"
