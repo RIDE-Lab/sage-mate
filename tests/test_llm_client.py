@@ -20,6 +20,68 @@ from sage_faculty_twin.llm_client import (
 from sage_faculty_twin.models import InteractionIntent
 
 
+def _model_catalog_client(configured_model: str, models: list[dict]) -> VllmChatClient:
+    client = object.__new__(VllmChatClient)
+    client._settings = AppSettings(model_name=configured_model)
+    client.model_name = configured_model
+    client._runtime_model_refresh_at = 0.0
+    client._client = httpx.Client(
+        base_url="http://localhost/v1",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"data": models})
+        ),
+    )
+    return client
+
+
+def test_model_catalog_preserves_configured_auto_route_across_probes() -> None:
+    client = _model_catalog_client(
+        "sage-auto",
+        [
+            {"id": "Qwen/Qwen3.8-27B", "max_model_len": 32768},
+            {"id": "Qwen/Qwen3.5-35B-A3B", "max_model_len": 131072},
+            {"id": "sage-auto", "max_model_len": 131072,
+             "speculative_capability": {"enabled": True}},
+        ],
+    )
+    try:
+        assert client._detect_model_name() == "sage-auto"
+        assert client._model_max_len == 131072
+        assert client.probe_runtime_model_name() == "sage-auto"
+        assert client.probe_runtime_model_metadata() == {
+            "id": "sage-auto",
+            "speculative_capability": {"enabled": True},
+        }
+        client.model_name = "Qwen/Qwen3.8-27B"
+        assert client.refresh_runtime_model_name() == "sage-auto"
+        client._model_max_len = 0
+        client._probe_model_max_len()
+        assert client._model_max_len == 131072
+    finally:
+        client._client.close()
+
+
+@pytest.mark.parametrize(
+    ("configured_model", "expected_model"),
+    [
+        ("Qwen/Qwen3.5-35B-A3B", "Qwen/Qwen3.5-35B-A3B"),
+        ("retired-model", "Qwen/Qwen3.8-27B"),
+        ("", "Qwen/Qwen3.8-27B"),
+    ],
+)
+def test_model_catalog_preserves_explicit_routes_and_stale_fallback(
+    configured_model: str, expected_model: str
+) -> None:
+    client = _model_catalog_client(
+        configured_model,
+        [{"id": "Qwen/Qwen3.8-27B"}, {"id": "Qwen/Qwen3.5-35B-A3B"}],
+    )
+    try:
+        assert client._detect_model_name() == expected_model
+    finally:
+        client._client.close()
+
+
 def test_coerce_interaction_intent_removes_conflicting_excluded_scopes() -> None:
     client = object.__new__(VllmChatClient)
     payload = _InteractionIntentPayload(

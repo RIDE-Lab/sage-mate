@@ -349,18 +349,32 @@ class VllmChatClient:
         """Whether tool schemas may be sent directly to the upstream server."""
         return self._settings.llm_tool_calling_mode == "native"
 
+    def _select_model_record(self, models: Any) -> dict[str, Any] | None:
+        """Prefer the configured route, including a virtual model, over list order."""
+        if not isinstance(models, list):
+            return None
+        records = [record for record in models if isinstance(record, dict) and record.get("id")]
+        if not records:
+            return None
+        for preferred in (self._settings.model_name, getattr(self, "model_name", "")):
+            if preferred:
+                match = next((record for record in records if record["id"] == preferred), None)
+                if match is not None:
+                    return match
+        return records[0]
+
     def _detect_model_name(self, *, timeout_seconds: float = 10.0) -> str:
         """Query the connected LLM's /models endpoint to discover the served model name."""
         try:
             response = self._client.get("/models", timeout=timeout_seconds)
             response.raise_for_status()
             data = response.json()
-            models = data.get("data", [])
-            if models:
-                detected = models[0].get("id", "")
+            record = self._select_model_record(data.get("data", []))
+            if record is not None:
+                detected = record["id"]
                 if detected:
                     logger.info("Auto-detected model name: %s", detected)
-                max_len = models[0].get("max_model_len")
+                max_len = record.get("max_model_len")
                 if isinstance(max_len, int) and max_len > 0:
                     self._model_max_len = max_len
                     logger.info("Auto-detected model max context: %d", max_len)
@@ -420,10 +434,9 @@ class VllmChatClient:
         try:
             response = self._client.get("/models", timeout=2.0)
             response.raise_for_status()
-            models = response.json().get("data", [])
-            if not models or not isinstance(models[0], dict):
+            record = self._select_model_record(response.json().get("data", []))
+            if record is None:
                 return {}
-            record = models[0]
             model_name = str(record.get("id") or "").strip()
             if model_name:
                 self.model_name = model_name
@@ -444,9 +457,9 @@ class VllmChatClient:
     def refresh_runtime_model_name(self) -> str:
         """Refresh the displayed model from the serving endpoint.
 
-        The engine can be restarted or swapped independently of the app
-        process, so the configured preference is not authoritative for health
-        and status views.
+        The engine can be restarted or swapped independently of the app process.
+        Preserve an explicitly configured route while it remains listed; only
+        fall back to another served model when it is absent.
         """
         now = time.monotonic()
         if now - self._runtime_model_refresh_at < 15.0:
@@ -464,9 +477,9 @@ class VllmChatClient:
             response = self._client.get("/models", timeout=10.0)
             response.raise_for_status()
             data = response.json()
-            models = data.get("data", [])
-            if models:
-                max_len = models[0].get("max_model_len")
+            record = self._select_model_record(data.get("data", []))
+            if record is not None:
+                max_len = record.get("max_model_len")
                 if isinstance(max_len, int) and max_len > 0:
                     self._model_max_len = max_len
                     logger.info("Probed model max context: %d", max_len)
