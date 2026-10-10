@@ -206,7 +206,9 @@ select {
 }
 
 .chat-stream {
-    width: min(100%, 760px);
+    /* Keep the scroll surface full-width; center each message in the same
+       readable column as the composer instead of pinning the whole stream left. */
+    width: 100%;
     padding-inline: 24px;
 }
 
@@ -388,6 +390,7 @@ select {
 
 .message {
     width: min(100%, 760px);
+    margin-inline: auto;
     padding-inline: 0;
     animation: none;
 }

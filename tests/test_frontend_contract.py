@@ -22,6 +22,24 @@ def test_no_evidence_answer_explains_absence_instead_of_hiding_support() -> None
     assert '不应当作已核实的事实或文献结论' in renderer
 
 
+def test_answer_basis_is_collapsed_by_default() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    answer_basis = app_js.split('title: "本次回答依据",', 1)[1].split("contentHtml:", 1)[0]
+    assert "defaultExpanded: true" not in answer_basis
+    assert "defaultExpanded = false" in app_js
+
+
+def test_chat_messages_share_centered_composer_column() -> None:
+    theme = (WEB_DIR / "minimal.1009.css").read_text(encoding="utf-8")
+    stream = theme.split(".chat-stream {", 1)[1].split("}", 1)[0]
+    message = theme.split(".message {", 1)[1].split("}", 1)[0]
+    composer = theme.split(".composer-inner {", 1)[1].split("}", 1)[0]
+    assert "width: 100%" in stream
+    assert "width: min(100%, 760px)" in message
+    assert "margin-inline: auto" in message
+    assert "width: min(100%, 760px)" in composer
+
+
 def test_mobile_source_scroll_targets_respect_composer_clearance() -> None:
     css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
     assert "scroll-padding-bottom: calc(var(--chat-composer-height, 140px) + 12px)" in css
