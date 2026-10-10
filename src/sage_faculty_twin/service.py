@@ -3469,6 +3469,14 @@ class FacultyTwinWorkflowSupport:
                 "Current user question (answer this directly):\n"
                 f"{compact_user_prompt}"
             )
+        # A recent exchange may arrive through NeuroMem rather than the
+        # immediate-session record store. Keep the same selected memory hits
+        # in repair; otherwise a follow-up can lose its only antecedent.
+        memory_context = self._format_memory_context(context.memory_hits)
+        if memory_context:
+            compact_user_prompt = (
+                f"{memory_context}\n当前问题：\n{compact_user_prompt}"
+            )
         # Repair must retain recent-turn evidence from the initial attempt.
         # A follow-up classifier can miss phrasing such as "接着上一题".
         if context.recent_session_context.strip():

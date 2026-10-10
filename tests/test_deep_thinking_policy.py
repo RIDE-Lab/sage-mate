@@ -1,7 +1,9 @@
+from datetime import datetime
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
+from sage_faculty_twin.memory_store import ConversationMemoryHit
 from sage_faculty_twin.service import (
     ChatWorkflowContext,
     FacultyTwinWorkflowSupport,
@@ -567,6 +569,35 @@ def test_compact_retry_keeps_recent_context_for_unclassified_followup(tmp_path: 
     assert service._retry_answer_with_compact_prompt(context) == "5"
     assert "2+2" in service._llm_client.user_prompts[0]
     assert service._llm_client.thinking == [True]
+
+
+def test_compact_retry_keeps_retrieved_memory_when_session_record_is_empty(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.user_prompts: list[str] = []
+
+        def answer_question_sync(self, _system_prompt: str, user_prompt: str, **_kwargs: object) -> str:
+            self.user_prompts.append(user_prompt)
+            return "5"
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context()
+    context.request.question = "接着上一题，结果再加 1 是多少？只给数字。"
+    context.recent_session_context = ""
+    context.memory_hits = [
+        ConversationMemoryHit(
+            memory_id="previous-turn",
+            conversation_id=context.conversation_id,
+            summary="用户问 2+2，助手回答 4。",
+            score=1.0,
+            created_at=datetime(2026, 10, 10),
+        )
+    ]
+
+    assert service._retry_answer_with_compact_prompt(context) == "5"
+    assert "2+2" in service._llm_client.user_prompts[0]
 
 
 def test_orientation_retry_is_concise_but_has_complete_output_budget(tmp_path: Path) -> None:
