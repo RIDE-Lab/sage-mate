@@ -7792,7 +7792,6 @@ function renderAssistantMessage(
             title: "本次回答依据",
             copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
             count: basisItems.length,
-            defaultExpanded: true,
             contentHtml: `
                 <div class="message-basis-list">
                     ${basisItems.map((item) => buildAnswerBasisItemHtml(item)).join("")}

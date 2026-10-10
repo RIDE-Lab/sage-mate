@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+from types import SimpleNamespace
 from urllib.parse import urlencode
 
 from fastapi.testclient import TestClient
@@ -12,6 +13,7 @@ from sage_faculty_twin import api as api_module
 from sage_faculty_twin.api import app
 from sage_faculty_twin.models import ChatResponse, UserAccountResponse, UserSessionResponse
 from sage_faculty_twin.slack_link_store import SlackUserLinkStore
+from sage_faculty_twin.slack_channel_context import SlackChannelContext, SlackHistoryUnavailable
 
 
 client = TestClient(app)
@@ -262,7 +264,7 @@ def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
     assert posted == [
         (
             "https://hooks.slack.test/response",
-            "你问：研究路线是什么？\n绑定回答。\n\n模型：`fake-model`",
+            "你问：研究路线是什么？\n绑定回答。\n\nSlack 上下文：本次未能读取频道历史，仅回答了当前问题。\n\n模型：`fake-model`",
         )
     ]
 
@@ -301,7 +303,7 @@ def test_slack_twin_command_whitelist_answers_in_background(monkeypatch, tmp_pat
     assert posted == [
         (
             "https://hooks.slack.test/response",
-            "你问：研究路线是什么？\n这是回答。\n\n模型：`fake-model`",
+            "你问：研究路线是什么？\n这是回答。\n\nSlack 上下文：本次未能读取频道历史，仅回答了当前问题。\n\n模型：`fake-model`",
         )
     ]
 
@@ -335,6 +337,73 @@ def test_slack_twin_response_url_failure_does_not_break_background_task(
     assert response.status_code == 200
     assert "正在问 twin" in response.json()["text"]
     assert seen_questions == ["研究路线是什么？"]
+
+
+def test_slack_twin_uses_current_dm_history_as_transient_twin_context(monkeypatch, tmp_path):
+    secret = "secret"
+    posted: list[str] = []
+    seen: list[tuple[str, str | None, dict[str, object]]] = []
+
+    async def fake_answer(request):
+        seen.append((request.question, request.slack_channel_context, request.model_dump()))
+        return ChatResponse(
+            answer="hongyi 和 debin 一起开会；冯威、刘世峰单独开会。",
+            owner_name="张书豪",
+            used_model="fake-model",
+        )
+
+    def fake_fetch(*, bot_token, channel_id, latest_ts):
+        assert bot_token == "test-bot-token"
+        assert channel_id == "D123456789"
+        assert latest_ts.isdigit()
+        return SlackChannelContext(
+            text="[10-10 14:39] U1: hongyi和debin一起开会\n"
+            "[10-10 14:51] U1: 冯威、刘世峰单独开会",
+            message_count=2,
+        )
+
+    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
+    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
+    monkeypatch.setattr(api_module, "fetch_slack_channel_context", fake_fetch)
+    monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=fake_answer))
+    monkeypatch.setattr(api_module, "_post_slack_response", lambda _url, text, **_kw: posted.append(text))
+    body = _body(channel_id="D123456789", text="总结一下前面的上下文")
+
+    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, secret))
+
+    assert response.status_code == 200
+    assert len(seen) == 1
+    assert seen[0][0] == "总结一下前面的上下文"
+    assert "hongyi和debin一起开会" in (seen[0][1] or "")
+    assert "slack_channel_context" not in seen[0][2]
+    assert "已读取当前会话最近 2 条消息" in posted[0]
+
+
+def test_slack_twin_does_not_invent_prior_context_without_history(monkeypatch, tmp_path):
+    secret = "secret"
+    posted: list[str] = []
+
+    async def should_not_answer(_request):
+        raise AssertionError("Twin must not answer a context request without history")
+
+    def missing_history(**_kwargs):
+        raise SlackHistoryUnavailable("not_in_channel")
+
+    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
+    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
+    monkeypatch.setattr(api_module, "fetch_slack_channel_context", missing_history)
+    monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=should_not_answer))
+    monkeypatch.setattr(api_module, "_post_slack_response", lambda _url, text, **_kw: posted.append(text))
+    body = _body(channel_id="D123456789", text="总结一下前面的上下文")
+
+    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, secret))
+
+    assert response.status_code == 200
+    assert "读不到当前 Slack 会话的历史消息" in posted[0]
 
 
 def test_slack_events_url_verification(monkeypatch):
