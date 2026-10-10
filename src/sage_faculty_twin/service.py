@@ -3469,10 +3469,9 @@ class FacultyTwinWorkflowSupport:
                 "Current user question (answer this directly):\n"
                 f"{compact_user_prompt}"
             )
-        if self._looks_like_contextual_follow_up(
-            context.request.question,
-            context.recent_session_context,
-        ):
+        # Repair must retain recent-turn evidence from the initial attempt.
+        # A follow-up classifier can miss phrasing such as "接着上一题".
+        if context.recent_session_context.strip():
             course_prefix = (
                 f"背景：{context.request.course_context.strip()}\n\n"
                 if context.request.course_context

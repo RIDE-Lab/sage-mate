@@ -544,6 +544,31 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
     assert service._llm_client.max_tokens == [384]
 
 
+def test_compact_retry_keeps_recent_context_for_unclassified_followup(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        supports_native_thinking = True
+
+        def __init__(self) -> None:
+            self.user_prompts: list[str] = []
+            self.thinking: list[bool] = []
+
+        def answer_question_sync(self, _system_prompt: str, user_prompt: str, **kwargs: object) -> str:
+            self.user_prompts.append(user_prompt)
+            self.thinking.append(bool(kwargs.get("enable_thinking")))
+            return "5"
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
+    context.request.question = "接着上一题，结果再加 1 是多少？只给数字。"
+    context.recent_session_context = "Immediate session context:\nUser: 2+2 是多少？\nAssistant: 4。"
+
+    assert service._retry_answer_with_compact_prompt(context) == "5"
+    assert "2+2" in service._llm_client.user_prompts[0]
+    assert service._llm_client.thinking == [True]
+
+
 def test_orientation_retry_is_concise_but_has_complete_output_budget(tmp_path: Path) -> None:
     class FakeLlmClient:
         def __init__(self) -> None:
