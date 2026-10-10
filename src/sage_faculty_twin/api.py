@@ -132,6 +132,11 @@ from .service import (
 )
 from .capability_plugins import CapabilityPluginRegistry, CapabilityPluginStatus
 from .slack_link_store import SlackUserLinkStore
+from .slack_channel_context import (
+    SlackHistoryUnavailable,
+    asks_about_prior_context,
+    fetch_slack_channel_context,
+)
 from .trace_context import bind_trace_event_sink
 
 
@@ -908,7 +913,13 @@ def _resolve_slack_twin_identity(user_id: str) -> tuple[str, str | None, str | N
     return linked_account.visitor_profile, linked_account.email, None
 
 
-def _format_slack_twin_answer(response: ChatResponse, *, question: str | None = None) -> str:
+def _format_slack_twin_answer(
+    response: ChatResponse,
+    *,
+    question: str | None = None,
+    slack_message_count: int = 0,
+    slack_history_unavailable: bool = False,
+) -> str:
     lines: list[str] = []
     normalized_question = (question or "").strip()
     if normalized_question:
@@ -918,6 +929,10 @@ def _format_slack_twin_answer(response: ChatResponse, *, question: str | None = 
         basis = "；".join(item.title for item in response.answer_basis[:2])
         if basis:
             lines.append(f"\n依据：{basis}")
+    if slack_message_count:
+        lines.append(f"\nSlack 上下文：已读取当前会话最近 {slack_message_count} 条消息。")
+    elif slack_history_unavailable:
+        lines.append("\nSlack 上下文：本次未能读取频道历史，仅回答了当前问题。")
     if response.used_model:
         lines.append(f"\n模型：`{response.used_model}`")
     return "\n".join(line for line in lines if line)
@@ -931,14 +946,43 @@ async def _answer_slack_twin_question(
     user_email: str | None = None,
     visitor_profile: str = "lab_member",
     course_context: str = "Slack /twin",
+    slack_channel_id: str | None = None,
+    slack_latest_ts: str | None = None,
     delivery_callback,
 ) -> None:
     try:
+        slack_context = None
+        slack_history_unavailable = False
+        if slack_channel_id:
+            try:
+                slack_context = await asyncio.to_thread(
+                    fetch_slack_channel_context,
+                    bot_token=SLACK_TWIN_BOT_TOKEN,
+                    channel_id=slack_channel_id,
+                    latest_ts=slack_latest_ts or "",
+                )
+                slack_history_unavailable = slack_context.message_count == 0
+            except SlackHistoryUnavailable as exc:
+                slack_history_unavailable = True
+                _logger.warning("Slack channel history unavailable: %s", exc.code)
+
+        if asks_about_prior_context(question) and (
+            slack_context is None or slack_context.message_count == 0
+        ):
+            await asyncio.to_thread(
+                delivery_callback,
+                "我已接入 Twin，但目前读不到当前 Slack 会话的历史消息，"
+                "不能可靠地总结前文。请管理员确认 Twin Bot 已加入该频道、"
+                "并具有对应的历史读取权限。",
+            )
+            return
+
         chat_request = ChatRequest(
             student_name=user_name or user_id,
             student_email=user_email,
             question=question,
             course_context=course_context,
+            slack_channel_context=slack_context.text if slack_context else None,
             visitor_profile=visitor_profile,
             conversation_id=f"slack-{user_id}-{uuid4().hex}",
             deep_thinking=False,
@@ -951,7 +995,12 @@ async def _answer_slack_twin_question(
         )
         await asyncio.to_thread(
             delivery_callback,
-            _format_slack_twin_answer(response, question=question),
+            _format_slack_twin_answer(
+                response,
+                question=question,
+                slack_message_count=slack_context.message_count if slack_context else 0,
+                slack_history_unavailable=slack_history_unavailable,
+            ),
         )
     except Exception as exc:
         await asyncio.to_thread(
@@ -968,6 +1017,8 @@ async def _answer_slack_twin_command(
     user_name: str | None,
     user_email: str | None = None,
     visitor_profile: str = "lab_member",
+    slack_channel_id: str | None = None,
+    slack_latest_ts: str | None = None,
 ) -> None:
     def deliver(text: str) -> bool:
         return _safe_post_slack_response(response_url, text, response_type="ephemeral")
@@ -979,6 +1030,8 @@ async def _answer_slack_twin_command(
         user_email=user_email,
         visitor_profile=visitor_profile,
         course_context="Slack /twin",
+        slack_channel_id=slack_channel_id,
+        slack_latest_ts=slack_latest_ts,
         delivery_callback=deliver,
     )
 
@@ -1805,6 +1858,8 @@ async def slack_twin_command(
         user_name=form.get("user_name") or user_id or None,
         user_email=user_email,
         visitor_profile=visitor_profile,
+        slack_channel_id=form.get("channel_id", "").strip(),
+        slack_latest_ts=raw_request.headers.get("x-slack-request-timestamp", ""),
     )
     question_preview = question if len(question) <= 80 else f"{question[:77]}..."
     return JSONResponse(

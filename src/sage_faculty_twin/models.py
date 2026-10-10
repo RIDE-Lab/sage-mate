@@ -18,6 +18,9 @@ class ChatRequest(BaseModel):
     student_email: str | None = Field(default=None, max_length=256)
     question: str = Field(min_length=1, max_length=4000)
     course_context: str | None = Field(default=None, max_length=512)
+    # Ephemeral request-local evidence. Excluded from serialized requests and
+    # conversation/artifact memory; never treat channel messages as an upload.
+    slack_channel_context: str | None = Field(default=None, max_length=3200, exclude=True)
     visitor_profile: str | None = Field(
         default=None,
         max_length=64,
