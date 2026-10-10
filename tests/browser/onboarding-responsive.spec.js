@@ -947,6 +947,11 @@ test("semantic theme contract covers chat, Support, status, account, settings, a
       await page.locator("#chat-question").fill("请介绍研究方向并给出依据");
       await page.getByRole("button", { name: "发送问题" }).click();
       await expect(page.locator(".message-ready")).toBeVisible();
+      const basisToggle = page.locator(".message-ready .message-section-support .message-section-toggle");
+      await expect(basisToggle).toHaveAttribute("aria-expanded", "false");
+      await expect(page.locator(".message-ready .message-section-support .message-section-content")).toBeHidden();
+      await basisToggle.click();
+      await expect(basisToggle).toHaveAttribute("aria-expanded", "true");
       expectThemeAuditPasses(await auditThemeSelectors(page, [
         ".message-ready .message-body",
         ".message-section-title",
