@@ -1017,6 +1017,33 @@ test("semantic theme contract covers chat, Support, status, account, settings, a
   }
 });
 
+test("dark minimal chrome keeps sidebar, composer, and answer controls readable", async ({ page }) => {
+  await openThemeFixture(page, "dark", { width: 1280, height: 800 });
+  await page.locator("#sidebar-toggle").click();
+  await page.locator("#sidebar-toggle").hover();
+  await expect(page.locator(".history-empty")).toBeVisible();
+  expectThemeAuditPasses(await auditThemeSelectors(page, [
+    ".rail-btn",
+    ".history-empty",
+    ".composer-tools-summary",
+    ".seed-chip",
+  ]));
+  const menuIcon = (await auditThemeSelectors(page, [".rail-brand-btn .brand-hover-icon"]))[0];
+  expect(menuIcon.textContrast, "hovered menu icon contrast").toBeGreaterThanOrEqual(3);
+
+  await page.locator("#chat-question").fill("请介绍研究方向并给出依据");
+  await page.getByRole("button", { name: "发送问题" }).click();
+  await expect(page.locator(".message-ready")).toBeVisible();
+  await page.locator(".message-ready .message-section-support .message-section-toggle").click();
+  expectThemeAuditPasses(await auditThemeSelectors(page, [
+    ".message-ready .message-main-copy",
+    ".message-ready .message-section-toggle",
+    ".message-ready .message-basis-copy",
+  ]));
+  const sendButton = (await auditThemeSelectors(page, [".send-button"]))[0];
+  expect(sendButton.textContrast, "send icon contrast").toBeGreaterThanOrEqual(3);
+});
+
 test("theme release screenshots remain stable across light, dark, desktop, and narrow layouts", async ({ page }) => {
   for (const theme of ["dark", "light"]) {
     for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
