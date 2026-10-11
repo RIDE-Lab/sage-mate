@@ -765,6 +765,86 @@ html[data-theme="dark"] .composer-pill-toggle[aria-disabled="true"] {
     border-color: var(--line-strong);
 }
 
+/* The minimal layer uses light-mode literals above. Keep its remaining
+   controls and secondary copy on dark semantic surfaces with readable ink. */
+html[data-theme="dark"] .rail-brand-btn,
+html[data-theme="dark"] .rail-btn,
+html[data-theme="dark"] .rail-user,
+html[data-theme="dark"] .profile-switcher-btn[data-profile="faculty_twin"],
+html[data-theme="dark"] .profile-switcher-btn[data-profile="code_assistant"],
+html[data-theme="dark"] .composer-plus-button,
+html[data-theme="dark"] .composer-mic-button,
+html[data-theme="dark"] .composer-icon-button,
+html[data-theme="dark"] .composer-tools-summary,
+html[data-theme="dark"] .composer-tools-active-label,
+html[data-theme="dark"] .message-workflow-summary-toggle,
+html[data-theme="dark"] .message-section-toggle,
+html[data-theme="dark"] .onboarding-question-hint,
+html[data-theme="dark"] .onboarding-badge,
+html[data-theme="dark"] .workflow-plan-badge,
+html[data-theme="dark"] .pill,
+html[data-theme="dark"] .status-badge,
+html[data-theme="dark"] .workflow-shell-button,
+html[data-theme="dark"] .chat-view-close,
+html[data-theme="dark"] .history-item-action,
+html[data-theme="dark"] .onboarding-random-btn {
+    color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .history-empty,
+html[data-theme="dark"] .history-item-actions,
+html[data-theme="dark"] .onboarding-question-card,
+html[data-theme="dark"] .workflow-plan-card,
+html[data-theme="dark"] .memory-profile-card,
+html[data-theme="dark"] .sage-mate-profile-option,
+html[data-theme="dark"] .onboarding-random-btn,
+html[data-theme="dark"] .workflow-shell-button,
+html[data-theme="dark"] .chat-view-close,
+html[data-theme="dark"] .history-item-action {
+    background: var(--surface-soft);
+    border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .history-item-active,
+html[data-theme="dark"] .rail-brand-btn:hover,
+html[data-theme="dark"] .rail-btn:hover,
+html[data-theme="dark"] .rail-user:hover,
+html[data-theme="dark"] .composer-plus-button:hover,
+html[data-theme="dark"] .composer-mic-button:hover,
+html[data-theme="dark"] .composer-icon-button:hover,
+html[data-theme="dark"] .composer-tools-summary:hover,
+html[data-theme="dark"] .composer-tools-disclosure[open] .composer-tools-summary {
+    color: var(--ink);
+    background: var(--surface-muted);
+}
+
+html[data-theme="dark"] .rail-user-avatar,
+html[data-theme="dark"] .topbar-user-badge-avatar,
+html[data-theme="dark"] .message-avatar {
+    color: var(--ink) !important;
+    background: var(--surface-muted) !important;
+}
+
+html[data-theme="dark"] .rail-brand-btn .brand-hover-icon {
+    color: var(--ink);
+}
+
+html[data-theme="dark"] .send-button,
+html[data-theme="dark"] .primary-button,
+html[data-theme="dark"] .composer-pill-toggle:has(input:checked),
+html[data-theme="dark"] .composer-pill-toggle.web-search-pill:has(input:checked) {
+    color: var(--bg);
+    background: var(--ink);
+    border-color: var(--ink);
+}
+
+html[data-theme="dark"] .send-button:hover,
+html[data-theme="dark"] .primary-button:hover {
+    color: var(--bg);
+    background: var(--text-secondary);
+    border-color: var(--text-secondary);
+}
+
 @media (max-width: 760px) {
     .chat-shell.chat-empty .sage-companion {
         transform: none;
