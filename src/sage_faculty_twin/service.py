@@ -3400,6 +3400,20 @@ class FacultyTwinWorkflowSupport:
             prompt += " " + multipart_guidance
         return prompt
 
+    @staticmethod
+    def _is_extended_research_question(context: ChatWorkflowContext) -> bool:
+        question = context.request.question.strip()
+        return len(question) >= 80 and (
+            (
+                context.interaction_intent is not None
+                and context.interaction_intent.domain == "research"
+            )
+            or any(
+                marker in question
+                for marker in ("研究问题", "实验设计", "推导", "误差上界")
+            )
+        )
+
     def _compact_repair_max_tokens(
         self,
         context: ChatWorkflowContext,
@@ -3430,8 +3444,8 @@ class FacultyTwinWorkflowSupport:
             context.request.question
         ):
             # The former 384-token repair repeatedly ended mid-sentence on
-            # research prompts. This is a ceiling, not a requested length.
-            budget = max(budget, 2048)
+            # research prompts. 4096 is a ceiling, not a requested length.
+            budget = max(budget, 4096)
         cap = int(self._settings.llm_policy_output_max_tokens_cap)
         if context.request.answer_max_tokens is not None:
             cap = min(cap, context.request.answer_max_tokens)
@@ -3545,6 +3559,12 @@ class FacultyTwinWorkflowSupport:
             deep_recovery=deep_recovery,
             structured_recovery=structured_recovery,
         )
+        remaining_seconds = request_remaining_seconds()
+        allow_length_continuation = (
+            repair_max_tokens >= 4096
+            and context.request.answer_max_tokens is None
+            and (remaining_seconds is None or remaining_seconds >= 25)
+        )
         # Recovery is single-shot and respects the existing request deadline.
         # A repair needs the same complete-answer budget as the initial call.
         # A malformed non-deep answer used to trigger two additional full NPU
@@ -3565,6 +3585,7 @@ class FacultyTwinWorkflowSupport:
                         f"{retry_id}:{attempt}"
                     ),
                     enable_thinking=deep_recovery and self._model_supports_native_thinking(),
+                    continue_on_length=allow_length_continuation,
                 )
             except RuntimeError as exc:
                 if isinstance(exc, RequestCancelledError):
@@ -3614,6 +3635,7 @@ class FacultyTwinWorkflowSupport:
         max_tokens: int,
         cache_namespace: str,
         enable_thinking: bool = False,
+        continue_on_length: bool = False,
     ) -> str:
         answer_fn = self._llm_client.answer_question_sync
         parameters = inspect.signature(answer_fn).parameters
@@ -3623,7 +3645,7 @@ class FacultyTwinWorkflowSupport:
             "max_tokens": max_tokens,
             "enable_thinking": enable_thinking,
             "use_reuse_hints": False,
-            "continue_on_length": False,
+            "continue_on_length": continue_on_length,
             "cache_namespace": cache_namespace,
         }
         accepts_var_kwargs = any(
@@ -4041,7 +4063,15 @@ class FacultyTwinWorkflowSupport:
             kwargs["reasoning_effort"] = policy_context.get("reasoning_effort")
         if "max_tokens" in signature.parameters:
             if enable_thinking:
-                kwargs["max_tokens"] = self._deep_completion_budget(engine_thinking)
+                deep_budget = self._deep_completion_budget(engine_thinking)
+                if self._is_extended_research_question(context):
+                    deep_budget = max(
+                        deep_budget,
+                        min(4096, int(self._settings.llm_policy_output_max_tokens_cap)),
+                    )
+                if context.request.answer_max_tokens is not None:
+                    deep_budget = min(deep_budget, context.request.answer_max_tokens)
+                kwargs["max_tokens"] = deep_budget
                 if "continue_on_length" in signature.parameters:
                     # Do not recursively continue a deep response. On a
                     # low-throughput NPU that turns one bounded request into
@@ -4120,11 +4150,16 @@ class FacultyTwinWorkflowSupport:
             }
 
         if decision_mode == "advise_only" or domain in {"research", "advising", "teaching"}:
+            max_tokens = int(self._settings.llm_fast_answer_max_tokens)
+            if self._is_extended_research_question(context):
+                max_tokens = max(max_tokens, 2048)
             return {
                 "deadline_class": "interactive-high",
                 "request_priority": 90,
                 "target_e2e_ms": 2200.0,
-                "max_tokens": int(self._settings.llm_fast_answer_max_tokens),
+                "max_tokens": min(
+                    max_tokens, int(self._settings.llm_policy_output_max_tokens_cap)
+                ),
                 "reasoning_effort": reasoning_effort,
             }
 

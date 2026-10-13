@@ -571,9 +571,11 @@ def test_research_retry_never_shrinks_to_384_tokens(tmp_path: Path) -> None:
     class FakeLlmClient:
         def __init__(self) -> None:
             self.max_tokens: list[int | None] = []
+            self.continuations: list[bool] = []
 
         def answer_question_sync(self, *_args: object, **kwargs: object) -> str:
             self.max_tokens.append(kwargs.get("max_tokens"))  # type: ignore[arg-type]
+            self.continuations.append(bool(kwargs.get("continue_on_length")))
             return "固定候选集与提示词，配对比较开启和关闭重排器后的正确率及延迟。"
 
     service = object.__new__(FacultyTwinWorkflowSupport)
@@ -584,12 +586,33 @@ def test_research_retry_never_shrinks_to_384_tokens(tmp_path: Path) -> None:
     context.interaction_intent = InteractionIntent(action="answer", domain="research")
 
     assert "配对比较" in service._retry_answer_with_compact_prompt(context)
-    assert service._llm_client.max_tokens == [2048]
+    assert service._llm_client.max_tokens == [4096]
+    assert service._llm_client.continuations == [True]
 
     context.request.answer_max_tokens = 768
     assert service._compact_repair_max_tokens(
         context, deep_recovery=False, structured_recovery=False
     ) == 768
+    assert "配对比较" in service._retry_answer_with_compact_prompt(context)
+    assert service._llm_client.continuations == [True, False]
+
+
+def test_extended_research_budget_raises_initial_ceiling_without_affecting_short_question(
+    tmp_path: Path,
+) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    context = _build_context(deep_thinking=False)
+    context.interaction_intent = InteractionIntent(action="answer", domain="research")
+    short_budget = service._build_llm_serving_policy_context(context)["max_tokens"]
+    context.request.question = (
+        "请针对分身系统的检索增强回答，比较固定语料与动态语料下的重排器贡献，"
+        "分别设计配对消融、统计显著性检验、延迟评估和失效案例分析，并说明结论边界。"
+    )
+
+    assert service._is_extended_research_question(context)
+    assert service._build_llm_serving_policy_context(context)["max_tokens"] == 2048
+    assert short_budget < 2048
 
 
 def test_compact_retry_keeps_recent_context_for_unclassified_followup(tmp_path: Path) -> None:
