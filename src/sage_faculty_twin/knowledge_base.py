@@ -143,12 +143,12 @@ class OpenAITextEmbedder:
         self._query_instruction = settings.sagevdb_embedding_query_instruction.strip()
         self.dimension = int(settings.sagevdb_dimension)
         base_url = settings.sagevdb_embedding_base_url or settings.llm_base_url
+        headers = {"Content-Type": "application/json"}
+        if settings.sagevdb_embedding_api_key:
+            headers["Authorization"] = f"Bearer {settings.sagevdb_embedding_api_key}"
         self._client = httpx.Client(
             base_url=base_url.rstrip("/") + "/",
-            headers={
-                "Authorization": f"Bearer {settings.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=float(settings.sagevdb_embedding_timeout_seconds),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )
@@ -208,12 +208,12 @@ class OpenAIReranker:
     def __init__(self, settings: AppSettings) -> None:
         self._model_name = settings.sagevdb_reranker_model
         base_url = settings.sagevdb_reranker_base_url or settings.llm_base_url
+        headers = {"Content-Type": "application/json"}
+        if settings.sagevdb_reranker_api_key:
+            headers["Authorization"] = f"Bearer {settings.sagevdb_reranker_api_key}"
         self._client = httpx.Client(
             base_url=base_url.rstrip("/") + "/",
-            headers={
-                "Authorization": f"Bearer {settings.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             timeout=float(settings.sagevdb_reranker_timeout_seconds),
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
         )

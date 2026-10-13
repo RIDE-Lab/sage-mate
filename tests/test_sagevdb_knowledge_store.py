@@ -229,7 +229,7 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
     class FakeClient:
         def __init__(self, **kwargs) -> None:
             assert kwargs["base_url"] == "https://gateway.example/v1/"
-            assert kwargs["headers"]["Authorization"] == "Bearer test-key"
+            assert kwargs["headers"]["Authorization"] == "Bearer model-key"
 
         def post(self, path: str, *, json: dict[str, object], headers=None):
             workload_headers.append(dict(headers or {}))
@@ -239,6 +239,7 @@ def test_openai_embedding_provider_batches_normalizes_and_marks_queries(
     monkeypatch.setattr(knowledge_base_module.httpx, "Client", FakeClient)
     settings = AppSettings(
         api_key="test-key",
+        sagevdb_embedding_api_key="model-key",
         llm_base_url="https://gateway.example/v1",
         sagevdb_embedding_backend="openai",
         sagevdb_embedding_model="embedding-model",
@@ -288,6 +289,7 @@ def test_openai_reranker_restores_scores_by_document_index(
     class FakeClient:
         def __init__(self, **kwargs) -> None:
             assert kwargs["base_url"] == "https://gateway.example/v1/"
+            assert kwargs["headers"]["Authorization"] == "Bearer model-key"
 
         def post(self, path: str, *, json: dict[str, object], headers=None):
             assert path == "rerank"
@@ -299,6 +301,7 @@ def test_openai_reranker_restores_scores_by_document_index(
     monkeypatch.setattr(knowledge_base_module.httpx, "Client", FakeClient)
     settings = AppSettings(
         api_key="test-key",
+        sagevdb_reranker_api_key="model-key",
         llm_base_url="https://gateway.example/v1",
         sagevdb_reranker_model="reranker-model",
         sagevdb_reranker_base_url="https://gateway.example/v1",
@@ -306,6 +309,29 @@ def test_openai_reranker_restores_scores_by_document_index(
     reranker = knowledge_base_module.OpenAIReranker(settings)
 
     assert reranker.rerank("question", ["first", "second"]) == [0.2, 0.9]
+
+
+def test_pooling_clients_do_not_forward_twin_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured_headers: list[dict[str, str]] = []
+
+    class FakeClient:
+        def __init__(self, **kwargs) -> None:
+            captured_headers.append(dict(kwargs["headers"]))
+
+    monkeypatch.setattr(knowledge_base_module.httpx, "Client", FakeClient)
+    settings = AppSettings(
+        api_key="twin-private-key",
+        sagevdb_embedding_base_url="http://11.11.11.34:18021/v1",
+        sagevdb_reranker_base_url="http://11.11.11.34:18022/v1",
+    )
+
+    knowledge_base_module.OpenAITextEmbedder(settings, np)
+    knowledge_base_module.OpenAIReranker(settings)
+
+    assert len(captured_headers) == 2
+    assert all("Authorization" not in headers for headers in captured_headers)
 
 
 def test_sagevdb_remote_reranker_reorders_semantic_candidates(

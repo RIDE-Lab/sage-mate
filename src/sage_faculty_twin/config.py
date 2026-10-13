@@ -350,6 +350,7 @@ class AppSettings(BaseSettings):
     sagevdb_embedding_model: str = Field(default="sentence-transformers/all-MiniLM-L6-v2")
     sagevdb_dimension: int = Field(default=256, ge=32, le=4096)
     sagevdb_embedding_base_url: str = Field(default="")
+    sagevdb_embedding_api_key: str = Field(default="")
     sagevdb_embedding_timeout_seconds: int = Field(default=60, ge=1, le=300)
     sagevdb_embedding_batch_size: int = Field(default=32, ge=1, le=256)
     sagevdb_embedding_query_instruction: str = Field(
@@ -358,6 +359,7 @@ class AppSettings(BaseSettings):
     sagevdb_reranker_enabled: bool = Field(default=False)
     sagevdb_reranker_model: str = Field(default="Qwen/Qwen3-Reranker-0.6B")
     sagevdb_reranker_base_url: str = Field(default="")
+    sagevdb_reranker_api_key: str = Field(default="")
     sagevdb_reranker_timeout_seconds: int = Field(default=60, ge=1, le=300)
     sagevdb_reranker_candidate_multiplier: int = Field(default=8, ge=2, le=32)
     sagevdb_reranker_max_candidates: int = Field(default=64, ge=4, le=256)
