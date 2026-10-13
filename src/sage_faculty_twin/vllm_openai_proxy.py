@@ -222,7 +222,7 @@ def _to_sage_mate_chat_payload(payload: dict[str, Any]) -> dict[str, Any]:
         max_tokens = payload.get("max_completion_tokens")
     answer_max_tokens = None
     if isinstance(max_tokens, int):
-        answer_max_tokens = max(128, min(2048, max_tokens))
+        answer_max_tokens = max(128, min(4096, max_tokens))
     metadata = payload.get("metadata")
     conversation_id = None
     if isinstance(metadata, dict):

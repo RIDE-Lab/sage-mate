@@ -7,14 +7,28 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+from sage_faculty_twin.models import ChatRequest
 from sage_faculty_twin.vllm_openai_proxy import (
     ProxySettings,
     _enter_upstream_until_disconnect,
     _iter_upstream_with_keepalive,
     _openai_completion_from_sage,
     _stream_completed_sage_response,
+    _to_sage_mate_chat_payload,
     create_app,
 )
+
+
+def test_sage_mate_proxy_accepts_4096_token_member_answer_budget() -> None:
+    payload = _to_sage_mate_chat_payload(
+        {
+            "messages": [{"role": "user", "content": "详细分析研究设计。"}],
+            "max_tokens": 4096,
+        }
+    )
+
+    assert payload["answer_max_tokens"] == 4096
+    assert ChatRequest.model_validate(payload).answer_max_tokens == 4096
 
 
 class _FakeStreamResponse:
