@@ -864,7 +864,7 @@
         "rubric": {
             "must_include_all": [],
             "must_include_any": ["先", "一起", "看看", "检查"],
-            "must_not_include": ["你不适合做研究", "保证能成功", "别想太多"],
+            "must_not_include": ["你不适合做研究", "保证能成功", "别想太多", "明天一起", "明天见"],
             "preferred_keywords": ["复现", "条件", "日志"],
             "min_chars": 30,
             "max_chars": 220,
@@ -882,7 +882,7 @@
         "rubric": {
             "must_include_all": [],
             "must_include_any": ["对照", "边界", "条件", "负结果"],
-            "must_not_include": ["你错了", "不要质疑我", "没价值就是没价值"],
+            "must_not_include": ["你错了", "不要质疑我", "没价值就是没价值", "结论不早"],
             "preferred_keywords": ["你说得对", "更准确", "验证"],
             "min_chars": 30,
             "max_chars": 220,

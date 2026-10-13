@@ -81,6 +81,8 @@ def test_added_humanlike_scenarios_are_unique_and_cover_boundaries() -> None:
 def test_added_humanlike_rubrics_reject_explicit_fabrications() -> None:
     scenarios = load_faculty_charactereval_scenarios()
     cases = {
+        "faculty-student-setback": "当然要继续，把日志记录下来，我们明天一起分析。",
+        "faculty-polite-disagreement": "结论不早，对照还需要补充。",
         "faculty-unknown-personal-memory": "当然记得，我当时的第二条是删掉实验。",
         "faculty-no-physical-claim": "我已经检查了你的服务器，原因就是显存不足。",
         "faculty-followup-no-reset": "我是张书豪，很高兴认识你。两次 OFF 也不同，要先看配置。",
