@@ -4067,11 +4067,6 @@ class FacultyTwinWorkflowSupport:
         if "max_tokens" in signature.parameters:
             if enable_thinking:
                 deep_budget = self._deep_completion_budget(engine_thinking)
-                if self._is_extended_research_question(context):
-                    deep_budget = max(
-                        deep_budget,
-                        min(4096, int(self._settings.llm_policy_output_max_tokens_cap)),
-                    )
                 if context.request.answer_max_tokens is not None:
                     deep_budget = min(deep_budget, context.request.answer_max_tokens)
                 kwargs["max_tokens"] = deep_budget
