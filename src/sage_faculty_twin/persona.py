@@ -53,11 +53,15 @@ def _load_installed_skill_prompt(settings: AppSettings) -> str:
     return f"Installed reusable skills, always available:\n{text}\n"
 
 
-def build_system_prompt(settings: AppSettings) -> str:
+def current_date_iso(settings: AppSettings) -> str:
     try:
-        current_date = datetime.now(ZoneInfo(settings.booking_timezone)).date().isoformat()
+        return datetime.now(ZoneInfo(settings.booking_timezone)).date().isoformat()
     except (ZoneInfoNotFoundError, ValueError):
-        current_date = datetime.now(timezone.utc).date().isoformat()
+        return datetime.now(timezone.utc).date().isoformat()
+
+
+def build_system_prompt(settings: AppSettings) -> str:
+    current_date = current_date_iso(settings)
     owner_style_profile = _load_owner_style_profile(settings.owner_style_profile_path)
     style_section = owner_style_profile or DEFAULT_STYLE_GUIDE
     installed_skill_section = _load_installed_skill_prompt(settings)

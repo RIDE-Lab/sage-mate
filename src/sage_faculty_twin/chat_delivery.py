@@ -9,6 +9,7 @@ import re
 
 from . import models as _models
 from .models import ChatResponse
+from .numeric_consistency import numeric_answer_issues
 
 _logger = logging.getLogger(__name__)
 
@@ -319,6 +320,7 @@ class ChatDeliveryGate:
         if not candidate.original_question.strip():
             issues.append("missing_original_question")
         issues.extend(answer_quality_issues(candidate.original_question, normalized))
+        issues.extend(numeric_answer_issues(candidate.original_question, normalized))
         lowered = normalized.lower()
         scaffold_marker_count = sum(
             marker in lowered for marker in _INTERNAL_SCAFFOLD_MARKERS

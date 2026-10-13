@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 
 from sage_faculty_twin.chat_delivery import (
     AnswerCandidate,
@@ -92,6 +93,42 @@ def test_delivery_gate_rejects_structurally_unsafe_candidates(
                 else "A real question"
             ),
         )
+
+
+def test_service_does_not_silently_slice_over_limit_answer() -> None:
+    service = object.__new__(DigitalTwinService)
+    service._delivery_gate = ChatDeliveryGate()
+    request = ChatRequest(student_name="Visitor", question="请控制在5字以内")
+    response = ChatResponse(
+        answer="超过五个字了",
+        owner_name="Owner",
+        used_model="model",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service._deliver_chat_response(request, response)
+
+    assert exc_info.value.status_code == 503
+    assert response.answer == "超过五个字了"
+
+
+def test_service_rejects_a_wrong_explicit_percentage_range() -> None:
+    service = object.__new__(DigitalTwinService)
+    service._delivery_gate = ChatDeliveryGate()
+    request = ChatRequest(
+        student_name="Visitor",
+        question="五次延迟变化是 -2%、+4%、-1%、+3%、0%，请计算极差。",
+    )
+    response = ChatResponse(
+        answer="极差是 7 个百分点。",
+        owner_name="Owner",
+        used_model="model",
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        service._deliver_chat_response(request, response)
+
+    assert exc_info.value.status_code == 503
 
 
 def test_candidate_keeps_original_question_separate_from_answer() -> None:

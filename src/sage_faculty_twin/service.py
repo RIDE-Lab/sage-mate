@@ -222,12 +222,14 @@ from .models import (
     WorkflowTraceStep,
 )
 from .notifications import BookingEmailNotifier, BookingNotificationError
+from .numeric_consistency import numeric_answer_issues, verified_percent_summary
 from .online_presence_store import OnlinePresenceStore
 from .operations_store import OperationsTaskStateStore
 from .runtime_feature_store import RuntimeFeatureFlagStore
 from .persona import (
     COMPACT_CITATION_GROUNDING_RULES,
     build_system_prompt,
+    current_date_iso,
 )
 from .research_review import (
     build_research_review_guidance,
@@ -629,12 +631,31 @@ def _strip_repeated_role_prefixes(answer: str | None) -> str:
     return cleaned.strip()
 
 
+def _answer_violates_requested_format(question: str, answer: str | None) -> bool:
+    """Detect explicit user limits before delivery, so repair can rewrite safely."""
+    if not answer:
+        return False
+    constraints = AnswerConstraints.from_question(question)
+    normalized = answer.strip()
+    return bool(
+        (constraints.max_chars is not None and len(normalized) > constraints.max_chars)
+        or (
+            constraints.max_sentences is not None
+            and len(split_answer_sentences(normalized)) > constraints.max_sentences
+        )
+    )
+
+
 def _answer_does_not_complete_requested_task(question: str, answer: str | None) -> bool:
     """Catch polite but non-responsive answers that pass basic text checks."""
     if not answer:
         return False
     normalized_question = re.sub(r"\s+", "", question)
     normalized_answer = answer.strip()
+    if normalized_answer.endswith(("…", "...")) and not any(
+        marker in question for marker in ("省略号", "ellipsis")
+    ):
+        return True
     compact_answer = re.sub(r"\s+", "", normalized_answer)
     required_items = requested_list_size(question)
     if required_items and answer_list_size(normalized_answer) < required_items:
@@ -1975,6 +1996,9 @@ class FacultyTwinWorkflowSupport:
             memory_hits=context.memory_hits,
         )
         context.system_prompt = build_system_prompt(self._settings)
+        numeric_summary = verified_percent_summary(context.request.question)
+        if numeric_summary:
+            context.system_prompt += "\n" + numeric_summary
         multipart_guidance = multipart_answer_guidance(context.request.question)
         if multipart_guidance:
             context.system_prompt += "\n" + multipart_guidance
@@ -2887,6 +2911,17 @@ class FacultyTwinWorkflowSupport:
                     ),
                 ),
                 (
+                    "requested_format",
+                    _answer_violates_requested_format(
+                        context.request.question,
+                        context.answer,
+                    ),
+                ),
+                (
+                    "numeric_consistency",
+                    bool(numeric_answer_issues(context.request.question, context.answer or "")),
+                ),
+                (
                     "irrelevant",
                     _answer_is_irrelevant_to_question(
                         relevance_question,
@@ -3369,13 +3404,16 @@ class FacultyTwinWorkflowSupport:
         )
         return has_learning_request and has_technical_topic
 
-    @staticmethod
-    def _build_compact_answer_system_prompt(question: str) -> str:
+    def _build_compact_answer_system_prompt(self, question: str) -> str:
         prompt = (
             "你是一位严谨的科研导师。请直接、准确地回答用户问题，严格遵循用户指定的"
             "内容、格式和长度。概念解释应给出清晰定义，并在用户要求时提供简单具体的例子。"
+            f" 当前日期：{current_date_iso(self._settings)}；涉及日期时不要把训练截止年份当作今天。"
             f" {COMPACT_CITATION_GROUNDING_RULES}"
         )
+        numeric_summary = verified_percent_summary(question)
+        if numeric_summary:
+            prompt += " " + numeric_summary
         lowered = question.lower()
         if any(marker in lowered for marker in ("ascend", "npu", "昇腾")):
             prompt += (
@@ -3612,6 +3650,12 @@ class FacultyTwinWorkflowSupport:
                 ("incomplete_task", _answer_does_not_complete_requested_task(
                     context.request.question, answer,
                 )),
+                ("requested_format", _answer_violates_requested_format(
+                    context.request.question, answer,
+                )),
+                ("numeric_consistency", bool(numeric_answer_issues(
+                    context.request.question, answer,
+                ))),
                 ("irrelevant", _answer_is_irrelevant_to_question(
                     relevance_question, answer,
                 )),
@@ -8996,33 +9040,25 @@ class DigitalTwinService:
                 origin=origin,
             )
         except AnswerDeliveryRejected as exc:
-            # Length constraints are user-facing formatting requirements. A
-            # model occasionally overshoots them by one paragraph; turn that
-            # recoverable mismatch into a bounded answer instead of exposing
-            # an HTTP 500. Keep all other safety rejections strict.
+            # Never turn an incomplete, over-limit answer into a successful
+            # response by slicing off its tail. The workflow gets one bounded
+            # rewrite opportunity; if it still fails, surface a retryable error.
             issue_text = str(exc)
-            if not any(
+            if any(
                 issue in issue_text
-                for issue in ("answer_exceeds_sentence_limit", "answer_exceeds_char_limit")
+                for issue in (
+                    "answer_exceeds_sentence_limit",
+                    "answer_exceeds_char_limit",
+                    "explicit_percent_range_mismatch",
+                    "explicit_percent_mean_mismatch",
+                )
             ):
-                raise
-            bounded = response.answer.strip()
-            constraints = AnswerConstraints.from_question(request.question)
-            if constraints.max_sentences is not None:
-                sentences = split_answer_sentences(bounded)
-                bounded = "".join(sentences[: constraints.max_sentences]).strip()
-            if constraints.max_chars is not None and len(bounded) > constraints.max_chars:
-                bounded = bounded[: max(0, constraints.max_chars - 1)].rstrip() + "…"
-            _logger.warning(
-                "bounded answer at delivery boundary origin=%s reason=%s",
-                origin.value,
-                issue_text,
-            )
-            return self._delivery_gate.deliver(
-                response=response.model_copy(update={"answer": bounded}),
-                original_question=request.question,
-                origin=origin,
-            )
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="本轮回答未能完整满足字数或句数要求，请稍后重试。",
+                    headers={"Retry-After": "2"},
+                ) from exc
+            raise
 
     async def _answer_with_execution_mode(
         self,

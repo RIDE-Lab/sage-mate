@@ -8,6 +8,7 @@ from sage_faculty_twin.service import (
     ChatWorkflowContext,
     FacultyTwinWorkflowSupport,
     _answer_does_not_complete_requested_task,
+    _answer_violates_requested_format,
     _answer_is_irrelevant_to_question,
     _answer_language_mismatches_question,
     _strip_internal_thinking_content,
@@ -44,6 +45,35 @@ def test_auto_disable_deep_thinking_for_simple_requests(tmp_path: Path) -> None:
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
 
     assert service._should_enable_deep_thinking(_build_context()) is False
+
+
+def test_explicit_format_limits_are_repaired_before_delivery() -> None:
+    assert _answer_violates_requested_format("请控制在5字以内", "超过五个字了")
+    assert _answer_violates_requested_format("请用一句话回答", "第一句。第二句。")
+    assert not _answer_violates_requested_format("请控制在5字以内", "五字以内")
+    assert _answer_does_not_complete_requested_task("请解释原因", "原因尚未讲完…")
+
+
+def test_compact_prompt_keeps_server_current_date(tmp_path: Path) -> None:
+    from sage_faculty_twin.persona import current_date_iso
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    prompt = service._build_compact_answer_system_prompt("昨天的仓库提交是什么？")
+
+    assert f"当前日期：{current_date_iso(service._settings)}" in prompt
+    assert "不要把训练截止年份当作今天" in prompt
+
+
+def test_compact_prompt_includes_verified_explicit_percent_arithmetic(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    prompt = service._build_compact_answer_system_prompt(
+        "五次延迟变化为 -2%、+4%、-1%、+3%、0%，求平均和极差。"
+    )
+
+    assert "算术平均变化为 +0.8%" in prompt
+    assert "极差为 6 个百分点" in prompt
 
 
 def test_explicit_deep_thinking_overrides_auto_disable(tmp_path: Path) -> None:
