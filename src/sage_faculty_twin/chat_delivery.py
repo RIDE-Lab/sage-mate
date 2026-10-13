@@ -180,6 +180,9 @@ class AnswerConstraints:
     def from_question(cls, question: str) -> AnswerConstraints:
         # Item-local limits must never become limits on the entire response.
         # In particular, “三项，每项用一句话” does not mean “one sentence total”.
+        # A role-play instruction to produce the next utterance is not a
+        # one-sentence length limit: “下一句回复” may contain several sentences.
+        question = re.sub(r"下一句(?:回复|答复|发言|台词)", "", question)
         question = re.sub(
             r"每(?:一)?(?:项|条|点|步|个[^，。；;\n]{0,8}?)[^，。；;\n]*",
             "",

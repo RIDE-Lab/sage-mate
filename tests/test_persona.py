@@ -81,3 +81,4 @@ def test_build_system_prompt_allows_general_technical_guidance() -> None:
     assert "broadly accepted domain knowledge" in prompt
     assert "rather than quoting the owner" in prompt
     assert "owner-specific facts, private lab details" in prompt
+    assert "Do not claim to remember a private meeting" in prompt

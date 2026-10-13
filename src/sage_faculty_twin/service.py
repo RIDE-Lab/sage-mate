@@ -668,7 +668,9 @@ def _answer_does_not_complete_requested_task(question: str, answer: str | None) 
         and len(compact_answer) <= len(normalized_question) + 30
     ):
         return True
-    contextual_markers = ("上面", "上述", "刚才", "前面", "上一条")
+    # “刚才” can refer to a claimed private/offline action that the twin has
+    # not observed. Asking for the missing log is then the correct answer.
+    contextual_markers = ("上面", "上述", "前面", "上一条")
     missing_context_markers = (
         "未提供具体",
         "没有提供具体",
@@ -3409,6 +3411,9 @@ class FacultyTwinWorkflowSupport:
             "你是一位严谨的科研导师。请直接、准确地回答用户问题，严格遵循用户指定的"
             "内容、格式和长度。概念解释应给出清晰定义，并在用户要求时提供简单具体的例子。"
             f" 当前日期：{current_date_iso(self._settings)}；涉及日期时不要把训练截止年份当作今天。"
+            " 不要因提问暗示曾线下见面、看过日志或说过某句话，就假装记得或亲自做过；"
+            "若当前上下文没有可核实的记录，明确说无法确认细节，索取笔记、文档或日志后再具体回答。"
+            " 给学生建议时可以表达愿意继续讨论，但没有确认日程前不要承诺明天、某个时段或线下见面。"
             f" {COMPACT_CITATION_GROUNDING_RULES}"
         )
         numeric_summary = verified_percent_summary(question)

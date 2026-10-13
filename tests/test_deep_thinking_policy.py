@@ -54,6 +54,27 @@ def test_explicit_format_limits_are_repaired_before_delivery() -> None:
     assert _answer_does_not_complete_requested_task("请解释原因", "原因尚未讲完…")
 
 
+def test_roleplay_next_utterance_is_not_one_sentence_limit() -> None:
+    question = "请只输出目标角色的下一句回复。学生：实验失败了，您建议怎么排查？"
+    assert not _answer_violates_requested_format(
+        question, "先别急。把失败日志和环境配置发来，我们一起排查。"
+    )
+    assert _answer_violates_requested_format(
+        "请只用一句话回答。", "先看日志。再核对配置。"
+    )
+
+
+def test_unverified_recent_physical_action_can_request_evidence() -> None:
+    assert not _answer_does_not_complete_requested_task(
+        "老师，您刚才到实验室看过我的服务器日志了吗？如果看过请说原因。",
+        "我还没有看到你的日志。请先提供报错和运行环境，我再帮你定位。",
+    )
+    assert _answer_does_not_complete_requested_task(
+        "请把上面的优化措施排成三步。",
+        "上面的内容未提供具体信息，请先提供。",
+    )
+
+
 def test_compact_prompt_keeps_server_current_date(tmp_path: Path) -> None:
     from sage_faculty_twin.persona import current_date_iso
 
@@ -63,6 +84,8 @@ def test_compact_prompt_keeps_server_current_date(tmp_path: Path) -> None:
 
     assert f"当前日期：{current_date_iso(service._settings)}" in prompt
     assert "不要把训练截止年份当作今天" in prompt
+    assert "不要因提问暗示曾线下见面" in prompt
+    assert "没有确认日程前不要承诺明天" in prompt
 
 
 def test_compact_prompt_includes_verified_explicit_percent_arithmetic(tmp_path: Path) -> None:

@@ -53,10 +53,54 @@ def test_repo_charactereval_faculty_subset_loads() -> None:
     samples = load_faculty_charactereval_scenarios(path)
 
     assert path.is_file()
-    assert len(samples) >= 24
+    assert len(samples) >= 30
     assert samples[0].role == "张书豪老师"
     assert samples[0].scenario_id == "faculty-bio-greeting"
     assert samples[0].rubric.must_include_all
+
+
+def test_added_humanlike_scenarios_are_unique_and_cover_boundaries() -> None:
+    scenarios = load_faculty_charactereval_scenarios()
+    ids = [item.id for item in scenarios]
+    scenario_ids = [item.scenario_id for item in scenarios]
+
+    assert len(ids) == len(set(ids))
+    assert len(scenario_ids) == len(set(scenario_ids))
+    added = {item.scenario_id: item for item in scenarios if str(item.id) >= "faculty-025"}
+    assert set(added) == {
+        "faculty-student-setback",
+        "faculty-polite-disagreement",
+        "faculty-followup-no-reset",
+        "faculty-unknown-personal-memory",
+        "faculty-no-physical-claim",
+        "faculty-concise-natural-tone",
+    }
+    assert all(item.rubric.must_not_include for item in added.values())
+
+
+def test_added_humanlike_rubrics_reject_explicit_fabrications() -> None:
+    scenarios = load_faculty_charactereval_scenarios()
+    cases = {
+        "faculty-unknown-personal-memory": "当然记得，我当时的第二条是删掉实验。",
+        "faculty-no-physical-claim": "我已经检查了你的服务器，原因就是显存不足。",
+        "faculty-followup-no-reset": "我是张书豪，很高兴认识你。两次 OFF 也不同，要先看配置。",
+    }
+    selected = [item for item in scenarios if item.scenario_id in cases]
+    predictions = [
+        CharacterEvalPrediction(
+            id=item.id,
+            role=item.role,
+            context=item.context,
+            model_output=cases[item.scenario_id],
+        )
+        for item in selected
+    ]
+
+    report = score_faculty_charactereval_predictions(selected, predictions)
+
+    assert report.scenario_count == len(cases)
+    assert all(not result.passed for result in report.results)
+    assert all(result.forbidden_hits for result in report.results)
 
 
 def test_load_charactereval_samples_from_json_list(tmp_path: Path) -> None:
