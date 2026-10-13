@@ -3403,7 +3403,7 @@ class FacultyTwinWorkflowSupport:
     @staticmethod
     def _is_extended_research_question(context: ChatWorkflowContext) -> bool:
         question = context.request.question.strip()
-        return len(question) >= 80 and (
+        return len(question) >= 48 and (
             (
                 context.interaction_intent is not None
                 and context.interaction_intent.domain == "research"
