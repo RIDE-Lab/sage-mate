@@ -87,6 +87,35 @@ def has_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
     return any(anchor in searchable for anchor in anchors)
 
 
+def has_strong_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
+    """Admit a source outside an intent's suggested scope only with clear text evidence.
+
+    This is deliberately stricter than the normal single-anchor check: source
+    tags and intent labels are hints, but a common two-character word must not
+    make an unrelated course handout answer a research-profile question.
+    """
+    searchable = f"{hit.title}\n{hit.excerpt}".casefold()
+    def numbers(text: str) -> set[str]:
+        return {
+            str(int(value)) if value.isdecimal() else value
+            for value in re.findall(r"[0-9]+(?:\.[0-9]+)*", text)
+        }
+
+    query_numbers = numbers(question)
+    if query_numbers:
+        evidence_numbers = numbers(searchable)
+        if not query_numbers.intersection(evidence_numbers):
+            return False
+    if has_named_query_evidence(question, hit):
+        return True
+    grams = {
+        span[index:index + 3]
+        for span in re.findall(r"[\u4e00-\u9fff]+", question)
+        for index in range(max(0, len(span) - 2))
+    }
+    return sum(gram in searchable for gram in grams) >= 2
+
+
 def has_named_query_evidence(question: str, hit: KnowledgeSearchHit) -> bool:
     """Return true when a query names an ASCII entity present in the evidence.
 

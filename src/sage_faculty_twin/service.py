@@ -86,6 +86,7 @@ from .evidence_policy import (
     rank_comparison_evidence,
     has_named_query_evidence,
     has_query_evidence,
+    has_strong_query_evidence,
     has_unsupported_source_quote,
     matches_document_purpose,
     is_public_evidence_hit,
@@ -6221,7 +6222,9 @@ class FacultyTwinWorkflowSupport:
                 hit for hit in knowledge_hits if hit.document_id not in seen_ids
             ]
         if interaction_intent is not None:
-            scoped_hits = self._filter_knowledge_hits_by_intent(knowledge_hits, interaction_intent)
+            scoped_hits = self._filter_knowledge_hits_by_intent(
+                knowledge_hits, interaction_intent, question=question
+            )
             if interaction_intent.domain == "research":
                 methodology_hits = []
                 if "research_methodology" in interaction_intent.retrieval_scopes:
@@ -6230,20 +6233,17 @@ class FacultyTwinWorkflowSupport:
                         for hit in scoped_hits
                         if self._matches_intent_scopes(hit, ["research_methodology"])
                     ]
-                research_hits = [
-                    hit
-                    for hit in scoped_hits
-                    if self._is_research_hit(hit) and not self._is_teaching_hit(hit)
-                ]
                 if methodology_hits:
                     methodology_ids = {hit.document_id for hit in methodology_hits}
                     return methodology_hits + [
                         hit
-                        for hit in research_hits
+                        for hit in scoped_hits
                         if hit.document_id not in methodology_ids
                     ]
-                if research_hits:
-                    return research_hits
+            if interaction_intent.action == "answer" and interaction_intent.domain in {
+                "general", "research", "teaching"
+            }:
+                return scoped_hits
             if scoped_hits:
                 return scoped_hits
 
@@ -7314,6 +7314,26 @@ class FacultyTwinWorkflowSupport:
         guidance_hits = self._prioritize_guidance_hits(knowledge_hits, interaction_intent)
         if guidance_hits:
             return guidance_hits
+
+        if question and interaction_intent.action == "answer" and interaction_intent.domain in {
+            "general", "research", "teaching"
+        }:
+            # These scopes are routing preferences, not evidence access rules.
+            # A factually relevant lecture may answer a research question and
+            # vice versa. Crossing a suggested scope requires stronger text
+            # evidence; document visibility remains enforced by the store.
+            return [
+                hit for hit in knowledge_hits
+                if has_query_evidence(question, hit)
+                and (
+                    self._matches_intent_scopes(hit, interaction_intent.retrieval_scopes)
+                    and not (
+                        interaction_intent.exclude_scopes
+                        and self._matches_intent_scopes(hit, interaction_intent.exclude_scopes)
+                    )
+                    or has_strong_query_evidence(question, hit)
+                )
+            ]
 
         scoped_hits = [
             hit

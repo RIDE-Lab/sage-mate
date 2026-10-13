@@ -2133,7 +2133,7 @@ def _tokenize_text(text: str) -> set[str]:
 def _matching_numbered_section_excerpt(
     content: str, query_tokens: set[str], *, limit: int = 800
 ) -> str | None:
-    """Locate an unambiguous numbered Markdown section by heading, not prose.
+    """Locate an unambiguous numbered section by its line structure, not prose.
 
     Numbers alone are not evidence: a matching heading must also share a
     non-numeric query anchor. Unstructured documents use the window scorer.
@@ -2142,28 +2142,42 @@ def _matching_numbered_section_excerpt(
     if len(query_numbers) != 1:
         return None
     query_number = next(iter(query_numbers))
-    headings = list(re.finditer(r"(?m)^[ \t]{0,3}(#{1,6})[ \t]+([^\r\n]+)", content))
-    candidates: list[tuple[float, int, re.Match[str]]] = []
+    headings: list[tuple[int, int, str]] = []
+    for line in re.finditer(r"(?m)^[^\r\n]+", content):
+        title = line.group().strip()
+        markdown = re.match(r"^(#{1,6})\s+(.+)$", title)
+        if markdown is not None:
+            headings.append((line.start(), len(markdown.group(1)), markdown.group(2)))
+            continue
+        # Text extracted from a PDF or slide export may have no Markdown.
+        # Accept a short numbered line at the beginning of a section, but not
+        # an ordinary sentence that happens to mention the same number.
+        if (
+            len(title) <= 100
+            and not re.search(r"[。！？；]", title)
+            and re.match(r"^(?:(?:[A-Za-z]{1,20}|[\u4e00-\u9fff]{1,3})\s*)?\d+", title)
+        ):
+            headings.append((line.start(), 1, title))
+    candidates: list[tuple[float, int]] = []
     text_tokens = {token for token in query_tokens if not token.isdecimal()}
-    for index, heading in enumerate(headings):
-        title = heading.group(2)
+    for index, (_, _, title) in enumerate(headings):
         heading_numbers = {int(value) for value in re.findall(r"\d+", title)}
         if query_number not in heading_numbers:
             continue
         overlap = _span_overlap_score(title, text_tokens)
         if overlap > 0:
-            candidates.append((overlap, index, heading))
+            candidates.append((overlap, index))
     if not candidates:
         return None
 
-    _, index, heading = max(candidates, key=lambda item: item[0])
-    level = len(heading.group(1))
+    _, index = max(candidates, key=lambda item: item[0])
+    start, level, _ = headings[index]
     section_end = len(content)
-    for following in headings[index + 1:]:
-        if len(following.group(1)) <= level:
-            section_end = following.start()
+    for following_start, following_level, _ in headings[index + 1:]:
+        if following_level <= level:
+            section_end = following_start
             break
-    return " ".join(content[heading.start():section_end].split())[:limit].strip()
+    return " ".join(content[start:section_end].split())[:limit].strip()
 
 
 def _span_overlap_score(text: str, query_tokens: set[str]) -> float:

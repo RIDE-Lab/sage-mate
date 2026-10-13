@@ -8,7 +8,9 @@ from fastapi import HTTPException
 
 from sage_faculty_twin.chat_delivery import AnswerConstraints, ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.evidence_policy import has_named_query_evidence, has_query_evidence
+from sage_faculty_twin.evidence_policy import (
+    has_named_query_evidence, has_query_evidence, has_strong_query_evidence,
+)
 from sage_faculty_twin.models import (
     ChatAttachment,
     ChatRequest,
@@ -124,6 +126,51 @@ def test_broad_technical_scope_still_rejects_unrelated_courseware():
     assert filtered == [relevant]
 
 
+def test_fact_evidence_can_cross_research_scope_without_phrase_allowlist(tmp_path):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    intent = InteractionIntent(
+        action="answer", domain="research",
+        retrieval_scopes=["publications", "profile"], exclude_scopes=["courseware"],
+    )
+    paper = hit("paper", ["research", "publication"], excerpt="请求调度与状态管理是推理系统问题。")
+    lecture = hit("lecture", ["courseware", "lecture"], excerpt="请求调度、状态管理和异构执行必须协同优化。")
+    question = "为什么大模型推理基础设施需要把请求调度、状态管理与异构执行一起优化？"
+
+    assert has_strong_query_evidence(question, lecture)
+    assert support._filter_knowledge_hits_by_intent(
+        [lecture, paper], intent, question=question
+    ) == [lecture, paper]
+    assert support._select_prompt_knowledge_hits(
+        question, [lecture, paper], intent
+    ) == [lecture, paper]
+
+
+def test_weak_research_word_does_not_promote_unrelated_courseware():
+    support = object.__new__(FacultyTwinWorkflowSupport)
+    intent = InteractionIntent(
+        action="answer", domain="research",
+        retrieval_scopes=["publications", "profile"], exclude_scopes=["courseware"],
+    )
+    research = hit("profile", ["profile"], excerpt="主要研究方向包括推理系统与数据管理。")
+    course = hit("course", ["courseware"], excerpt="研究生论文写作课程介绍论文结构。")
+    question = "你主要研究什么？"
+
+    assert not has_strong_query_evidence(question, course)
+    assert support._filter_knowledge_hits_by_intent(
+        [research, course], intent, question=question
+    ) == [research]
+
+
+def test_named_section_type_does_not_override_mismatched_number():
+    wrong = hit("wrong-slide", ["courseware"], excerpt="Slide 31 总结请求调度。")
+    right = hit("right-slide", ["courseware"], excerpt="Slide 32 总结请求调度。")
+
+    assert not has_strong_query_evidence("Slide 32 总结了什么？", wrong)
+    assert has_strong_query_evidence("Slide 32 总结了什么？", right)
+    different_version = hit("wrong-version", ["research"], excerpt="Qwen3.8 的请求调度与状态管理。")
+    assert not has_strong_query_evidence("Qwen3.5 的请求调度与状态管理如何协同？", different_version)
+
+
 def test_metadata_overlap_does_not_establish_factual_relevance():
     document = hit("unrelated", ["public"], excerpt="会议预约政策", metadata={"note": "长上下文推理公平对比"})
     assert not has_query_evidence("长上下文推理公平对比", document)
@@ -176,6 +223,21 @@ def test_excerpt_uses_numbered_section_structure_without_slide_vocabulary():
     assert excerpt.startswith("## 实验 7 结果")
     assert "吞吐提升而尾延迟持平" in excerpt
     assert "实验 8" not in excerpt
+
+
+def test_excerpt_uses_numbered_plain_text_line_without_markdown():
+    store = object.__new__(LocalKnowledgeStore)
+    content = (
+        "导言反复提到 Slide 32，但没有该页正文。\n" * 30
+        + "Slide 32 总结\n真正结论：请求、状态和异构执行协同。\n"
+        + "Slide 33 致谢\n这不是上一页的结论。"
+    )
+
+    excerpt = store._build_excerpt(content, {"slide", "32", "总结"})
+
+    assert excerpt.startswith("Slide 32 总结")
+    assert "真正结论：请求、状态和异构执行协同" in excerpt
+    assert "Slide 33" not in excerpt
 
 
 def test_constrained_fact_query_requires_model_formatting(tmp_path):
