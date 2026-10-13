@@ -1631,22 +1631,9 @@ class LocalKnowledgeStore:
 
     def _build_excerpt(self, content: str, query_tokens: set[str]) -> str:
         compact = " ".join(content.split())
-        # Section-specific questions need the named section, not the window
-        # with the most repeated topic words near the document introduction.
-        # Only anchor an unambiguous Slide number and an actual heading; a
-        # casual mention of that number elsewhere must not win the snippet.
-        slide_numbers = [
-            token for token in query_tokens
-            if token.isdecimal() and 1 <= int(token) <= 200
-        ]
-        if "slide" in query_tokens and len(slide_numbers) == 1:
-            heading = re.search(
-                rf"(?:^|\s)#{{1,6}}\s+Slide\s+{slide_numbers[0]}\b",
-                compact,
-                flags=re.IGNORECASE,
-            )
-            if heading is not None:
-                return compact[heading.start():heading.start() + 800].strip()
+        section_excerpt = _matching_numbered_section_excerpt(content, query_tokens)
+        if section_excerpt is not None:
+            return section_excerpt
         # Earliest-hit snippets usually stop at a PDF's title/author list.
         # Rank bounded windows by the same non-overlapping anchors used by the
         # retriever, so the model and Support receive the supporting passage.
@@ -2141,6 +2128,42 @@ def _tokenize_text(text: str) -> set[str]:
             for index in range(len(span) - width + 1):
                 tokens.add(span[index : index + width])
     return tokens
+
+
+def _matching_numbered_section_excerpt(
+    content: str, query_tokens: set[str], *, limit: int = 800
+) -> str | None:
+    """Locate an unambiguous numbered Markdown section by heading, not prose.
+
+    Numbers alone are not evidence: a matching heading must also share a
+    non-numeric query anchor. Unstructured documents use the window scorer.
+    """
+    query_numbers = {int(token) for token in query_tokens if token.isdecimal()}
+    if len(query_numbers) != 1:
+        return None
+    query_number = next(iter(query_numbers))
+    headings = list(re.finditer(r"(?m)^[ \t]{0,3}(#{1,6})[ \t]+([^\r\n]+)", content))
+    candidates: list[tuple[float, int, re.Match[str]]] = []
+    text_tokens = {token for token in query_tokens if not token.isdecimal()}
+    for index, heading in enumerate(headings):
+        title = heading.group(2)
+        heading_numbers = {int(value) for value in re.findall(r"\d+", title)}
+        if query_number not in heading_numbers:
+            continue
+        overlap = _span_overlap_score(title, text_tokens)
+        if overlap > 0:
+            candidates.append((overlap, index, heading))
+    if not candidates:
+        return None
+
+    _, index, heading = max(candidates, key=lambda item: item[0])
+    level = len(heading.group(1))
+    section_end = len(content)
+    for following in headings[index + 1:]:
+        if len(following.group(1)) <= level:
+            section_end = following.start()
+            break
+    return " ".join(content[heading.start():section_end].split())[:limit].strip()
 
 
 def _span_overlap_score(text: str, query_tokens: set[str]) -> float:

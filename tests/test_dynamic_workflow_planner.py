@@ -265,6 +265,22 @@ def test_prior_slide_reference_keeps_knowledge_retrieval_without_upload() -> Non
     assert "retrieve_hybrid_knowledge" in steps
 
 
+def test_profile_and_recent_memory_do_not_suppress_knowledge_retrieval() -> None:
+    context = WorkflowRequestContext.from_chat_request(ChatRequest(
+        student_name="Visitor",
+        question="结合之前的讨论解释请求调度和状态管理。",
+        conversation_id="conv-retrieval",
+    ))
+    context.profile_memory_available = True
+    context.consent_profile_memory = True
+
+    steps = [step.step_id for step in DeterministicWorkflowPlanner().plan(context).plan.steps]
+
+    assert "retrieve_recent_memory" in steps
+    assert "retrieve_profile_memory" in steps
+    assert "retrieve_hybrid_knowledge" in steps
+
+
 def test_standalone_definition_skips_unrelated_hybrid_knowledge() -> None:
     planner = DeterministicWorkflowPlanner()
     context = WorkflowRequestContext.from_chat_request(

@@ -465,6 +465,8 @@ def test_general_technical_fast_path_preempts_llm_handoff_classification(tmp_pat
     assert intent.action == "answer"
     assert intent.domain == "research"
     assert intent.decision_mode == "direct_answer"
+    assert "courseware" in intent.retrieval_scopes
+    assert "courseware" not in intent.exclude_scopes
 
 
 def test_explicit_owner_material_request_includes_matching_courseware(tmp_path: Path) -> None:

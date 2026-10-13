@@ -108,6 +108,22 @@ def test_document_purpose_applies_when_planner_leaves_scopes_empty():
     assert support._filter_knowledge_hits_by_intent([job], intent, question="团队招聘什么工程师") == [job]
 
 
+def test_broad_technical_scope_still_rejects_unrelated_courseware():
+    support = object.__new__(FacultyTwinWorkflowSupport)
+    intent = InteractionIntent(
+        action="answer", domain="research",
+        retrieval_scopes=["publications", "profile", "research_methodology", "courseware"],
+    )
+    unrelated = hit("unrelated-course", ["courseware"], excerpt="数据库事务隔离与 SQL 练习。")
+    relevant = hit("relevant-lecture", ["courseware"], excerpt="请求调度与状态管理协同优化推理服务。")
+
+    filtered = support._filter_knowledge_hits_by_intent(
+        [unrelated, relevant], intent, question="请求调度为什么需要状态管理？"
+    )
+
+    assert filtered == [relevant]
+
+
 def test_metadata_overlap_does_not_establish_factual_relevance():
     document = hit("unrelated", ["public"], excerpt="会议预约政策", metadata={"note": "长上下文推理公平对比"})
     assert not has_query_evidence("长上下文推理公平对比", document)
@@ -145,6 +161,21 @@ def test_excerpt_prefers_explicit_slide_heading_over_topic_overlap():
 
     assert excerpt.startswith("## Slide 32 总结")
     assert "真正结论：请求、状态和异构执行协同" in excerpt
+
+
+def test_excerpt_uses_numbered_section_structure_without_slide_vocabulary():
+    store = object.__new__(LocalKnowledgeStore)
+    content = (
+        "导言提到实验 7，但没有写结果。" * 100
+        + "\n## 实验 7 结果\n### 观察\n吞吐提升而尾延迟持平。"
+        + "\n## 实验 8 结果\n这不是实验 7 的结论。"
+    )
+
+    excerpt = store._build_excerpt(content, {"实验", "7", "结果"})
+
+    assert excerpt.startswith("## 实验 7 结果")
+    assert "吞吐提升而尾延迟持平" in excerpt
+    assert "实验 8" not in excerpt
 
 
 def test_constrained_fact_query_requires_model_formatting(tmp_path):

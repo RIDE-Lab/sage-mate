@@ -6982,22 +6982,16 @@ class FacultyTwinWorkflowSupport:
             return None
 
         if self._looks_like_general_technical_question(question):
-            # A technical question can explicitly ask for the owner's
-            # synchronized materials. Those may be tagged as courseware (for
-            # example, a lecture on inference systems), so do not exclude
-            # that scope when the user requests such evidence.
-            asks_for_owner_material = any(
-                marker in question
-                for marker in ("课题组资料", "知识库", "讲稿", "讲义", "课件", "课程资料")
-            )
+            # The semantic retriever and query-evidence filter, not a phrase
+            # allowlist, decide which source types support a technical answer.
+            # A lecture can be relevant research evidence too.
             return InteractionIntent(
                 action="answer",
                 domain="research",
                 retrieval_scopes=[
-                    "publications", "profile", "research_methodology",
-                    *(["courseware"] if asks_for_owner_material else []),
+                    "publications", "profile", "research_methodology", "courseware",
                 ],
-                exclude_scopes=[] if asks_for_owner_material else ["courseware"],
+                exclude_scopes=[],
                 decision_mode="direct_answer",
                 confidence=0.94,
             )

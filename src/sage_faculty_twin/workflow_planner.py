@@ -370,15 +370,15 @@ class DeterministicWorkflowPlanner:
             ]
             if include_profile_memory and include_recent_memory:
                 step_ids.append("retrieve_recent_memory")
-            # A mention of a slide or draft can select artifact memory even
-            # when nothing was uploaded in this request. Keep the shared KB
-            # search in that case; only an actual attachment-only request may
-            # omit it to avoid mixing unrelated knowledge into a summary.
-            elif (not include_artifact_memory or context.attachment_count == 0) and (
+            # Memory sources are independent: using recent/profile/artifact
+            # memory does not make the shared knowledge base unavailable.
+            # A request grounded in an attachment uploaded this turn remains
+            # isolated from unrelated KB material.
+            if (not include_artifact_memory or context.attachment_count == 0) and (
                 context.course_context or not _looks_like_standalone_definition(question)
             ):
                 step_ids.append("retrieve_hybrid_knowledge")
-                if include_recent_memory:
+                if include_recent_memory and "retrieve_recent_memory" not in step_ids:
                     step_ids.append("retrieve_recent_memory")
             if include_artifact_memory:
                 step_ids.append("retrieve_artifact_memory")
