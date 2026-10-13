@@ -623,6 +623,7 @@ def test_sage_anns_restart_loads_sagevdb_index_without_reembedding(
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     first = LocalKnowledgeStore(settings)
@@ -660,6 +661,7 @@ def test_sage_anns_changed_content_rebuilds_stale_index(
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     first = LocalKnowledgeStore(settings)
@@ -697,6 +699,7 @@ def test_sage_anns_corrupt_generation_is_rebuilt(tmp_path: Path, monkeypatch: py
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     first = LocalKnowledgeStore(settings)
@@ -731,6 +734,7 @@ def test_sage_anns_invalid_current_recovers_valid_generation(
         sagevdb_embedding_backend="hash",
         sagevdb_dimension=128,
         sagevdb_backend="sage-anns",
+        knowledge_sagevdb_backend="sage-anns",
         sagevdb_anns_algorithm="faiss_hnsw",
     )
     first = LocalKnowledgeStore(settings)
@@ -769,6 +773,7 @@ def test_sage_anns_incompatible_embedding_config_rebuilds(
         "sagevdb_embedding_backend": "hash",
         "sagevdb_dimension": 128,
         "sagevdb_backend": "sage-anns",
+        "knowledge_sagevdb_backend": "sage-anns",
         "sagevdb_anns_algorithm": "faiss_hnsw",
     }
     first = LocalKnowledgeStore(AppSettings(**base))
