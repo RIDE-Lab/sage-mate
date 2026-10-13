@@ -637,7 +637,9 @@ def test_compact_retry_keeps_recent_context_for_unclassified_followup(tmp_path: 
 
     assert service._retry_answer_with_compact_prompt(context) == "5"
     assert "2+2" in service._llm_client.user_prompts[0]
-    assert service._llm_client.thinking == [True]
+    # A deep first pass may exhaust its budget on hidden reasoning; repair
+    # keeps the analytical prompt but must produce visible answer text.
+    assert service._llm_client.thinking == [False]
 
 
 def test_compact_retry_keeps_retrieved_memory_when_session_record_is_empty(tmp_path: Path) -> None:

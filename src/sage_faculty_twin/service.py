@@ -3584,7 +3584,10 @@ class FacultyTwinWorkflowSupport:
                         f"{context.conversation_id or 'compact'}:compact-retry:"
                         f"{retry_id}:{attempt}"
                     ),
-                    enable_thinking=deep_recovery and self._model_supports_native_thinking(),
+                    # A native-thinking first pass can spend its entire
+                    # output allowance on reasoning. Recovery must reserve
+                    # the full allowance for a visible final answer.
+                    enable_thinking=False,
                     continue_on_length=allow_length_continuation,
                 )
             except RuntimeError as exc:
