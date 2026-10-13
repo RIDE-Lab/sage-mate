@@ -563,7 +563,8 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
     answer = service._retry_answer_with_compact_prompt(context)
 
     assert answer.startswith("1. 建立基线")
-    assert service._llm_client.max_tokens == [384]
+    # The original compact answer had 512 tokens; repair must not shrink it.
+    assert service._llm_client.max_tokens == [512]
 
 
 def test_research_retry_never_shrinks_to_384_tokens(tmp_path: Path) -> None:
