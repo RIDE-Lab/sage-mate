@@ -133,6 +133,20 @@ def test_excerpt_selects_supporting_passage_not_first_title_match():
     assert "作者：某某" not in excerpt
 
 
+def test_excerpt_prefers_explicit_slide_heading_over_topic_overlap():
+    store = object.__new__(LocalKnowledgeStore)
+    content = (
+        "导言反复提到 Slide 32，但这里没有该页正文。" * 100
+        + "\n## Slide 32 总结\n### 核心结论\n真正结论：请求、状态和异构执行协同。"
+        + "\n## Slide 33 致谢"
+    )
+
+    excerpt = store._build_excerpt(content, {"slide", "32", "总结"})
+
+    assert excerpt.startswith("## Slide 32 总结")
+    assert "真正结论：请求、状态和异构执行协同" in excerpt
+
+
 def test_constrained_fact_query_requires_model_formatting(tmp_path):
     service = DigitalTwinService(AppSettings(_env_file=None, knowledge_base_dir=tmp_path))
     assert service._build_lightweight_fact_response(ChatRequest(

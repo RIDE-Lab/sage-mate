@@ -1631,6 +1631,22 @@ class LocalKnowledgeStore:
 
     def _build_excerpt(self, content: str, query_tokens: set[str]) -> str:
         compact = " ".join(content.split())
+        # Section-specific questions need the named section, not the window
+        # with the most repeated topic words near the document introduction.
+        # Only anchor an unambiguous Slide number and an actual heading; a
+        # casual mention of that number elsewhere must not win the snippet.
+        slide_numbers = [
+            token for token in query_tokens
+            if token.isdecimal() and 1 <= int(token) <= 200
+        ]
+        if "slide" in query_tokens and len(slide_numbers) == 1:
+            heading = re.search(
+                rf"(?:^|\s)#{{1,6}}\s+Slide\s+{slide_numbers[0]}\b",
+                compact,
+                flags=re.IGNORECASE,
+            )
+            if heading is not None:
+                return compact[heading.start():heading.start() + 800].strip()
         # Earliest-hit snippets usually stop at a PDF's title/author list.
         # Rank bounded windows by the same non-overlapping anchors used by the
         # retriever, so the model and Support receive the supporting passage.

@@ -467,6 +467,22 @@ def test_general_technical_fast_path_preempts_llm_handoff_classification(tmp_pat
     assert intent.decision_mode == "direct_answer"
 
 
+def test_explicit_owner_material_request_includes_matching_courseware(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    context = _build_context()
+    context.request.question = (
+        "大模型推理基础设施为什么关注请求调度、状态管理和异构执行？"
+        "请优先引用课题组资料。"
+    )
+
+    intent = service._build_fast_path_interaction_intent(context)
+
+    assert intent is not None
+    assert "courseware" in intent.retrieval_scopes
+    assert "courseware" not in intent.exclude_scopes
+
+
 def test_curated_deep_guidance_covers_common_research_decisions() -> None:
     questions = (
         "这周如果想提高推进效率，我最该补哪块背景或工具链？",

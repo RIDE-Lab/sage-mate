@@ -245,6 +245,26 @@ def test_plain_attachment_summary_does_not_mix_unrelated_hybrid_knowledge() -> N
     assert "retrieve_hybrid_knowledge" not in planned_steps
 
 
+def test_prior_slide_reference_keeps_knowledge_retrieval_without_upload() -> None:
+    planner = DeterministicWorkflowPlanner()
+    context = WorkflowRequestContext.from_chat_request(
+        ChatRequest(
+            student_name="Visitor",
+            course_context="课程讲义",
+            question="课程讲义的 Slide 32 总结了什么？",
+        )
+    )
+    # The service may have historical artifacts, but this turn uploaded none.
+    context.artifact_context_available = True
+
+    decision = planner.plan(context)
+    steps = [step.step_id for step in decision.plan.steps]
+
+    assert context.attachment_count == 0
+    assert "retrieve_artifact_memory" in steps
+    assert "retrieve_hybrid_knowledge" in steps
+
+
 def test_standalone_definition_skips_unrelated_hybrid_knowledge() -> None:
     planner = DeterministicWorkflowPlanner()
     context = WorkflowRequestContext.from_chat_request(
