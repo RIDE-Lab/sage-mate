@@ -1,0 +1,3 @@
+# Copy to %h/.config/systemd/user/sage-mate-app.service.d/retrieval.conf
+[Service]
+EnvironmentFile=%h/.config/sage-mate/twin-retrieval.env

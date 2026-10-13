@@ -1,3 +1,4 @@
+import json
 from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
@@ -23,6 +24,15 @@ if missing_symbols:
         f"sagevdb is installed but missing required API symbols: {', '.join(missing_symbols)}",
         allow_module_level=True,
     )
+
+
+class _FakeANNSSnapshot:
+    def save(self, path: str) -> None:
+        Path(path).write_text(json.dumps(self._metadata), encoding="utf-8")
+        Path(f"{path}.sage_anns_adapter.json").write_text("{}", encoding="utf-8")
+
+    def load(self, path: str) -> None:
+        self._metadata = json.loads(Path(path).read_text(encoding="utf-8"))
 
 
 def test_knowledge_sagevdb_backend_can_differ_from_conversation_backend() -> None:
@@ -358,7 +368,7 @@ def test_sagevdb_remote_reranker_reorders_semantic_candidates(
         )
     )
 
-    class FakeANNSDatabase:
+    class FakeANNSDatabase(_FakeANNSSnapshot):
         def __init__(self) -> None:
             self._metadata: list[dict[str, str]] = []
 
@@ -431,7 +441,7 @@ def test_sagevdb_strong_deterministic_match_bypasses_remote_reranker(
         )
     )
 
-    class FakeANNSDatabase:
+    class FakeANNSDatabase(_FakeANNSSnapshot):
         def __init__(self) -> None:
             self._metadata: list[dict[str, str]] = []
 
@@ -506,7 +516,7 @@ def test_sagevdb_sage_anns_backend_uses_adapter_database(
 
     calls: list[dict[str, object]] = []
 
-    class FakeANNSDatabase:
+    class FakeANNSDatabase(_FakeANNSSnapshot):
         def __init__(self) -> None:
             self._metadata: list[dict[str, str]] = []
 
@@ -598,3 +608,182 @@ def test_sagevdb_sage_anns_backend_local_integration(tmp_path: Path) -> None:
     assert hits[0].title == "Office hour preference"
     assert hits[0].score > 0.0
     assert store.runtime_backend_name() == "sagevdb:SageANNSVectorStore"
+
+
+def test_sage_anns_restart_loads_sagevdb_index_without_reembedding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if find_spec("sage_anns") is None:
+        pytest.skip("sage_anns is not visible in this environment")
+
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+    )
+    first = LocalKnowledgeStore(settings)
+    first.add_document(
+        KnowledgeDocumentCreate(
+            title="Persistent ANN office hours",
+            content="Students should send an agenda before office hours.",
+            tags=["meeting"],
+            source_name="persistent-anns-note",
+        )
+    )
+    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    assert pointer.is_file()
+    generation = pointer.read_text(encoding="ascii")
+
+    def fail_if_embedded(self, texts):
+        raise AssertionError(f"restart unexpectedly embedded {len(texts)} documents")
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", fail_if_embedded)
+    restarted = LocalKnowledgeStore(settings)
+    assert pointer.read_text(encoding="ascii") == generation
+    assert restarted.search("agenda before office hours", top_k=1)[0].source_name == "persistent-anns-note"
+
+
+def test_sage_anns_changed_content_rebuilds_stale_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if find_spec("sage_anns") is None:
+        pytest.skip("sage_anns is not visible in this environment")
+
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+    )
+    first = LocalKnowledgeStore(settings)
+    record = first.add_document(
+        KnowledgeDocumentCreate(title="First", content="alpha", source_name="changed-note")
+    )
+    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    old_generation = pointer.read_text(encoding="ascii")
+    document_path = settings.knowledge_base_dir / f"{record.document_id}.json"
+    document = json.loads(document_path.read_text(encoding="utf-8"))
+    document["content"] = "beta changed"
+    document_path.write_text(json.dumps(document), encoding="utf-8")
+
+    calls: list[int] = []
+    original = LocalKnowledgeStore._embed_documents
+
+    def count_embeddings(self, texts):
+        calls.append(len(texts))
+        return original(self, texts)
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", count_embeddings)
+    restarted = LocalKnowledgeStore(settings)
+    assert calls == [1]
+    assert pointer.read_text(encoding="ascii") != old_generation
+    assert restarted.search("beta changed", top_k=1)[0].document_id == record.document_id
+
+
+def test_sage_anns_corrupt_generation_is_rebuilt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    if find_spec("sage_anns") is None:
+        pytest.skip("sage_anns is not visible in this environment")
+
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+    )
+    first = LocalKnowledgeStore(settings)
+    first.add_document(KnowledgeDocumentCreate(title="Index integrity", content="gamma"))
+    root = settings.knowledge_sagevdb_persistence_dir / "sage-anns"
+    old_generation = (root / "CURRENT").read_text(encoding="ascii").strip()
+    (root / "generations" / old_generation / "index").write_bytes(b"corrupt")
+
+    calls: list[int] = []
+    original = LocalKnowledgeStore._embed_documents
+
+    def count_embeddings(self, texts):
+        calls.append(len(texts))
+        return original(self, texts)
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", count_embeddings)
+    LocalKnowledgeStore(settings)
+    assert calls == [1]
+    assert (root / "CURRENT").read_text(encoding="ascii").strip() != old_generation
+
+
+def test_sage_anns_invalid_current_recovers_valid_generation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if find_spec("sage_anns") is None:
+        pytest.skip("sage_anns is not visible in this environment")
+
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash",
+        sagevdb_dimension=128,
+        sagevdb_backend="sage-anns",
+        sagevdb_anns_algorithm="faiss_hnsw",
+    )
+    first = LocalKnowledgeStore(settings)
+    first.add_document(KnowledgeDocumentCreate(title="Recovery", content="epsilon"))
+    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    generation = pointer.read_text(encoding="ascii")
+    pointer.write_bytes(b"\xffinvalid")
+
+    def fail_if_embedded(self, texts):
+        raise AssertionError(f"recovery unexpectedly embedded {len(texts)} documents")
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", fail_if_embedded)
+    restarted = LocalKnowledgeStore(settings)
+    assert restarted.count_documents() == 1
+    assert pointer.read_text(encoding="ascii") == generation
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"sagevdb_embedding_model": "different-embedding-model"},
+        {"sagevdb_dimension": 256},
+    ],
+)
+def test_sage_anns_incompatible_embedding_config_rebuilds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    override: dict[str, object],
+) -> None:
+    if find_spec("sage_anns") is None:
+        pytest.skip("sage_anns is not visible in this environment")
+
+    base = {
+        "knowledge_base_dir": tmp_path / "knowledge",
+        "knowledge_backend": "sagevdb",
+        "sagevdb_embedding_backend": "hash",
+        "sagevdb_dimension": 128,
+        "sagevdb_backend": "sage-anns",
+        "sagevdb_anns_algorithm": "faiss_hnsw",
+    }
+    first = LocalKnowledgeStore(AppSettings(**base))
+    first.add_document(KnowledgeDocumentCreate(title="Configuration", content="delta"))
+    pointer = first._settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    old_generation = pointer.read_text(encoding="ascii")
+
+    calls: list[int] = []
+    original = LocalKnowledgeStore._embed_documents
+
+    def count_embeddings(self, texts):
+        calls.append(len(texts))
+        return original(self, texts)
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", count_embeddings)
+    LocalKnowledgeStore(AppSettings(**(base | override)))
+    assert calls == [1]
+    assert pointer.read_text(encoding="ascii") != old_generation

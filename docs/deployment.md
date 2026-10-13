@@ -302,6 +302,22 @@ DIGITAL_TWIN_SAGEVDB_ANNS_ALGORITHM=faiss_hnsw
 DIGITAL_TWIN_SAGEVDB_EMBEDDING_BACKEND=hash
 ```
 
+For the A6000-5 Qwen retrieval pool, use
+[`deploy/env/twin-a6000-retrieval.env.example`](../deploy/env/twin-a6000-retrieval.env.example)
+and the corresponding
+[`systemd` drop-in](../deploy/systemd/user/sage-mate-app-retrieval.conf.example).
+Keep the installed environment file outside Git; the two model-service API
+keys are independent of `DIGITAL_TWIN_API_KEY` and may be omitted for the
+private-LAN endpoints. Do not send Twin's own API key to either model server.
+
+With `sage-anns`, SageVDB serializes the ANN index and metadata beneath
+`DIGITAL_TWIN_KNOWLEDGE_SAGEVDB_PERSISTENCE_DIR/sage-anns` (default:
+`knowledge_base_dir/.sagevdb-index/sage-anns`). On startup Twin loads a
+checksum-verified generation when the embedding backend/model/dimension,
+algorithm, document order/content, and metadata still match. A change or
+corruption rebuilds and publishes a new generation atomically. The previous
+generation is retained for recovery; index files are never stored in Git.
+
 ### Auto-dependency installation
 
 `tools/run_app_server.sh` validates knowledge backend imports before starting

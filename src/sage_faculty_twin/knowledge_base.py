@@ -19,6 +19,7 @@ from .models import (
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
+from .sage_anns_checkpoint import SageANNSCheckpoint, fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -863,7 +864,7 @@ class LocalKnowledgeStore:
 
         self._document_id_to_vector_id.clear()
         if self._uses_sagevdb_anns_backend():
-            self._rebuild_sagevdb_anns_index()
+            self._open_or_rebuild_sagevdb_anns_index(stable_content_hash)
             return
 
 
@@ -1125,12 +1126,71 @@ class LocalKnowledgeStore:
             "'sentence-transformers', or 'hash'."
         )
 
-    def _rebuild_sagevdb_anns_index(self) -> None:
+    def _open_or_rebuild_sagevdb_anns_index(self, stable_content_hash) -> None:
         if self._sagevdb is None or self._np is None:
             return
 
         documents = self.list_documents()
         if not documents:
+            return
+
+        persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
+        if persistence_dir is None:
+            persistence_dir = self._base_dir / ".sagevdb-index"
+        # Keep SageANNS snapshots separate from the mutable cpp backend's
+        # generations, including when both use the default persistence path.
+        checkpoint = SageANNSCheckpoint(persistence_dir / "sage-anns")
+        compatibility = {
+            "backend": "sage-anns",
+            "algorithm": self._settings.sagevdb_anns_algorithm.strip(),
+            "dimension": int(self._text_embedder.dimension),
+            "metric": "INNER_PRODUCT",
+            "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
+            "embedding_model": self._settings.sagevdb_embedding_model,
+            "retrieval_text_format": 1,
+        }
+        document_fingerprint = fingerprint(
+            [
+                (
+                    document.document_id,
+                    stable_content_hash(self._compose_retrieval_text(document)),
+                    self._document_metadata(document),
+                )
+                for document in documents
+            ]
+        )
+        with checkpoint.locked():
+            generation = checkpoint.load(
+                self._sagevdb,
+                compatibility=compatibility,
+                documents=document_fingerprint,
+            )
+            if generation is not None:
+                self._document_id_to_vector_id.update(
+                    (document.document_id, vector_id)
+                    for vector_id, document in enumerate(documents)
+                )
+                logger.info(
+                    "Loaded SageVDB SageANNS generation %s with %d documents",
+                    generation,
+                    len(documents),
+                )
+                return
+
+            self._rebuild_sagevdb_anns_index(documents)
+            generation = checkpoint.save(
+                self._sagevdb,
+                compatibility=compatibility,
+                documents=document_fingerprint,
+            )
+            logger.info(
+                "Built and persisted SageVDB SageANNS generation %s with %d documents",
+                generation,
+                len(documents),
+            )
+
+    def _rebuild_sagevdb_anns_index(self, documents) -> None:
+        if self._sagevdb is None or self._np is None:
             return
 
         vectors = []
