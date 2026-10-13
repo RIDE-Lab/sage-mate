@@ -163,7 +163,7 @@ def test_caveat_does_not_delete_valid_support():
     assert len(support._build_answer_basis(context)) == 1
 
 
-def test_structured_fast_answer_has_complete_budget_and_failed_repair_has_no_fake_sources(tmp_path):
+def test_structured_fast_answer_has_complete_budget_and_failed_repair_is_503(tmp_path):
     support = object.__new__(FacultyTwinWorkflowSupport)
     support._settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
     calls = []
@@ -180,12 +180,13 @@ def test_structured_fast_answer_has_complete_budget_and_failed_repair_has_no_fak
         knowledge_hits=[hit("paper", ["research"])],
     )
     assert support._build_llm_serving_policy_context(context)["max_tokens"] == 1024
-    answer = support._retry_answer_with_compact_prompt(context)
-    assert "未能生成通过完整性与引用校验" in answer
+    with pytest.raises(HTTPException) as exc_info:
+        support._retry_answer_with_compact_prompt(context)
+    assert exc_info.value.status_code == 503
+    assert exc_info.value.headers == {"Retry-After": "2"}
     assert len(calls) == 1
     assert "长上下文推理" in calls[0]  # repair preserved its original evidence
-    assert context.knowledge_hits == []
-    assert context.decision_mode == "answer_quality_unavailable"
+    assert len(context.knowledge_hits) == 1
 
 
 def test_compact_repair_preserves_the_exact_prompt_attachments(tmp_path):

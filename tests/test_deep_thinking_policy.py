@@ -15,6 +15,7 @@ from sage_faculty_twin.service import (
 from sage_faculty_twin.chat_delivery import (
     multipart_answer_guidance,
     multipart_answer_issues,
+    requested_list_size,
     requested_part_labels,
 )
 
@@ -154,6 +155,25 @@ def test_degenerate_answer_detection_keeps_normal_short_and_structured_answers()
     assert not FacultyTwinWorkflowSupport._is_degenerate_answer(
         "可以从算子融合、KV Cache 管理、批处理调度和通信重叠几个方向优化。"
     )
+
+
+def test_degenerate_answer_detection_keeps_markdown_table_separator() -> None:
+    answer = (
+        "已控制模型、硬件与负载，以下是三组对照。\n\n"
+        "| 解释 | 观测 | 结论 |\n"
+        "|---|-----------------------------------|--------------------------------------------------|\n"
+        "| 阈值未达 | 长请求触发后有收益 | 短请求未触发，而非机制无效 |\n"
+        "| 测量噪声 | 配对重复运行的区间收窄 | 继续增加样本验证 |"
+    )
+    assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
+    assert FacultyTwinWorkflowSupport._is_degenerate_answer("正常开头" + "-" * 100)
+
+
+def test_one_experiment_does_not_require_a_numbered_list() -> None:
+    question = "推导误差上界，并给出一项能推翻该假设的实验。"
+    answer = "误差上界为 εΣρ^k。构造每一步量化噪声同向的输入，检验误差是否越界。"
+    assert requested_list_size(question) is None
+    assert not _answer_does_not_complete_requested_task(question, answer)
 
 
 def test_degenerate_answer_detection_keeps_substantive_answer_with_uncertainty() -> None:
@@ -544,6 +564,31 @@ def test_compact_retry_uses_bounded_output_budget(tmp_path: Path) -> None:
 
     assert answer.startswith("1. 建立基线")
     assert service._llm_client.max_tokens == [384]
+
+
+def test_research_retry_never_shrinks_to_384_tokens(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        def __init__(self) -> None:
+            self.max_tokens: list[int | None] = []
+
+        def answer_question_sync(self, *_args: object, **kwargs: object) -> str:
+            self.max_tokens.append(kwargs.get("max_tokens"))  # type: ignore[arg-type]
+            return "固定候选集与提示词，配对比较开启和关闭重排器后的正确率及延迟。"
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context(deep_thinking=False)
+    context.request.question = "研究问题：如何验证 RAG 重排器的独立贡献？"
+    context.interaction_intent = InteractionIntent(action="answer", domain="research")
+
+    assert "配对比较" in service._retry_answer_with_compact_prompt(context)
+    assert service._llm_client.max_tokens == [2048]
+
+    context.request.answer_max_tokens = 768
+    assert service._compact_repair_max_tokens(
+        context, deep_recovery=False, structured_recovery=False
+    ) == 768
 
 
 def test_compact_retry_keeps_recent_context_for_unclassified_followup(tmp_path: Path) -> None:

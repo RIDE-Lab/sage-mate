@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from sage_faculty_twin import api as api_module
@@ -57,6 +58,30 @@ def test_chat_returns_504_when_service_exceeds_budget(
     assert "未完成响应" in detail
     assert "重试" in detail
     assert response.headers.get("x-sage-trace-id")
+
+
+def test_chat_does_not_report_failed_answer_as_http_200(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def failed_answer(*_args, **_kwargs):
+        raise HTTPException(
+            status_code=503,
+            detail="本轮回答未能完整生成或通过校验，请稍后重试或缩小问题范围。",
+            headers={"Retry-After": "2"},
+        )
+
+    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "answer", failed_answer)
+    client.cookies.clear()
+    response = client.post(
+        "/chat",
+        json={"student_name": "Alice", "question": "请推导量化状态误差上界。"},
+    )
+
+    assert response.status_code == 503
+    assert response.headers.get("retry-after") == "2"
+    assert "未能完整生成" in response.json()["detail"]
+    assert "answer" not in response.json()
 
 
 def test_chat_with_request_id_publishes_timeout_to_workflow_stream(

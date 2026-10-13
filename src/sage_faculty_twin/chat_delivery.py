@@ -241,13 +241,18 @@ def split_answer_sentences(text: str) -> list[str]:
 
 
 def requested_list_size(question: str) -> int | None:
-    """Extract explicit list cardinality, not arbitrary numbers in the topic."""
+    """Extract plural list cardinality, not a request for one prose example."""
     match = re.search(
         r"(?:列(?:出)?|给出|提出|提供|归纳|整理|排成)[^。！？\n]{0,20}?"
         r"([一二两三四五六七八九十\d]{1,2})\s*(?:项|条|点|步|个(?:问题|要点|行动|建议))",
         question,
     )
-    return _parse_small_number(match.group(1)) if match else None
+    if not match:
+        return None
+    count = _parse_small_number(match.group(1))
+    # "给出一项实验" asks for one experiment, not Markdown list formatting.
+    # Requiring a list marker here rejected complete mathematical answers.
+    return count if count > 1 else None
 
 
 def answer_list_size(answer: str) -> int:

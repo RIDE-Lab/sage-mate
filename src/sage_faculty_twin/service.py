@@ -3400,6 +3400,43 @@ class FacultyTwinWorkflowSupport:
             prompt += " " + multipart_guidance
         return prompt
 
+    def _compact_repair_max_tokens(
+        self,
+        context: ChatWorkflowContext,
+        *,
+        deep_recovery: bool,
+        structured_recovery: bool,
+    ) -> int:
+        """Never give a repair less room than the attempt it replaces."""
+        if deep_recovery or structured_recovery:
+            budget = self._deep_completion_budget(
+                deep_recovery and self._model_supports_native_thinking()
+            )
+        elif self._is_orientation_learning_path_question(context.request.question):
+            budget = 512
+        else:
+            budget = 384
+        initial_budget = self._build_llm_serving_policy_context(context).get("max_tokens")
+        if initial_budget is not None:
+            budget = max(budget, int(initial_budget))
+        research_question = (
+            context.interaction_intent is not None
+            and context.interaction_intent.domain == "research"
+        ) or any(
+            marker in context.request.question
+            for marker in ("研究问题", "实验设计", "推导", "误差上界")
+        )
+        if research_question and not self._is_orientation_learning_path_question(
+            context.request.question
+        ):
+            # The former 384-token repair repeatedly ended mid-sentence on
+            # research prompts. This is a ceiling, not a requested length.
+            budget = max(budget, 2048)
+        cap = int(self._settings.llm_policy_output_max_tokens_cap)
+        if context.request.answer_max_tokens is not None:
+            cap = min(cap, context.request.answer_max_tokens)
+        return min(budget, cap)
+
     def _retry_answer_with_compact_prompt(self, context: ChatWorkflowContext) -> str:
         remaining_seconds = request_remaining_seconds()
         if (
@@ -3439,6 +3476,10 @@ class FacultyTwinWorkflowSupport:
             compact_system_prompt += self._owner_review_style_guidance(
                 context.request,
                 context.interaction_intent,
+            )
+            compact_system_prompt += (
+                "\n恢复生成要求：直接完成当前问题，省略重复背景和内部推理；"
+                "保留必要的假设、公式、对照与失败判据，并以完整句结束。"
             )
         compact_user_prompt = context.request.question.strip()
         compact_user_prompt = re.sub(r"^请?深入分析[：:，,、\\s]*", "", compact_user_prompt)
@@ -3499,6 +3540,11 @@ class FacultyTwinWorkflowSupport:
         errors: list[str] = []
         relevance_question = self._build_answer_relevance_question(context)
         retry_id = uuid4().hex
+        repair_max_tokens = self._compact_repair_max_tokens(
+            context,
+            deep_recovery=deep_recovery,
+            structured_recovery=structured_recovery,
+        )
         # Recovery is single-shot and respects the existing request deadline.
         # A repair needs the same complete-answer budget as the initial call.
         # A malformed non-deep answer used to trigger two additional full NPU
@@ -3513,19 +3559,7 @@ class FacultyTwinWorkflowSupport:
                     system_prompt=compact_system_prompt,
                     user_prompt=compact_user_prompt,
                     temperature=0.2 if deep_recovery else 0.0,
-                    max_tokens=(
-                        self._deep_completion_budget(
-                            deep_recovery and self._model_supports_native_thinking()
-                        )
-                        if deep_recovery or structured_recovery
-                        else (
-                            512
-                            if self._is_orientation_learning_path_question(
-                                context.request.question
-                            )
-                            else (384 if attempt == 0 else 320)
-                        )
-                    ),
+                    max_tokens=repair_max_tokens,
                     cache_namespace=(
                         f"{context.conversation_id or 'compact'}:compact-retry:"
                         f"{retry_id}:{attempt}"
@@ -3535,39 +3569,40 @@ class FacultyTwinWorkflowSupport:
             except RuntimeError as exc:
                 if isinstance(exc, RequestCancelledError):
                     raise
-                errors.append(str(exc))
+                if not isinstance(exc, IncompleteCompletionError) and "empty chat message" not in str(exc):
+                    raise
+                errors.append("incomplete_generation")
                 continue
             answer = _strip_internal_thinking_content(answer)
             if _contains_internal_prompt_leak(answer):
                 errors.append("prompt leak compact retry")
                 continue
-            if (
-                not self._is_degenerate_answer(answer)
-                and not has_unsupported_source_quote(answer, [
+            validation_checks = (
+                ("degenerate", self._is_degenerate_answer(answer)),
+                ("unsupported_quote", has_unsupported_source_quote(answer, [
                     hit.excerpt for hit in context.knowledge_hits
-                ] + [hit.snippet or "" for hit in context.web_search_hits])
-                and not _answer_language_mismatches_question(
-                    context.request.question,
-                    answer,
-                )
-                and not _answer_does_not_complete_requested_task(
-                    context.request.question,
-                    answer,
-                )
-                and not _answer_is_irrelevant_to_question(
-                    relevance_question,
-                    answer,
-                )
-            ):
+                ] + [hit.snippet or "" for hit in context.web_search_hits])),
+                ("language_mismatch", _answer_language_mismatches_question(
+                    context.request.question, answer,
+                )),
+                ("incomplete_task", _answer_does_not_complete_requested_task(
+                    context.request.question, answer,
+                )),
+                ("irrelevant", _answer_is_irrelevant_to_question(
+                    relevance_question, answer,
+                )),
+            )
+            failed_checks = [name for name, failed in validation_checks if failed]
+            if not failed_checks:
                 return answer.strip()
-            errors.append("degenerate compact retry")
-        _logger.error("LLM compact retry failed completeness/grounding checks")
-        context.knowledge_hits = []
-        context.web_search_hits = []
-        context.decision_mode = "answer_quality_unavailable"
-        return (
-            "本轮未能生成通过完整性与引用校验的回答，因此不展示未核实的结论。"
-            "请缩小问题范围或补充具体资料后重试。"
+            errors.extend(failed_checks)
+        _logger.error("LLM compact retry failed: %s", ",".join(errors))
+        # Do not turn an incomplete upstream generation into HTTP 200/stop.
+        # The API records this as an error and the UI can offer a real retry.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="本轮回答未能完整生成或通过校验，请稍后重试或缩小问题范围。",
+            headers={"Retry-After": "2"},
         )
 
     def _call_compact_retry_sync(
@@ -3875,7 +3910,15 @@ class FacultyTwinWorkflowSupport:
             return True
         if _contains_internal_prompt_leak(text):
             return True
-        compact = re.sub(r"\s+", "", text)
+        # Markdown table separator rows are syntax, not generated repetition.
+        # Keep the original text for content checks, but exclude these rows
+        # from character/ngram repetition checks below.
+        repetition_text = re.sub(
+            r"(?m)^\s*\|?\s*:?-{3,}:?(?:\s*\|\s*:?-{3,}:?)+\s*\|?\s*$",
+            "",
+            text,
+        )
+        compact = re.sub(r"\s+", "", repetition_text)
         if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", compact):
             return True
         refusal_markers = (
