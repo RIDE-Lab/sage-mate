@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -81,6 +82,7 @@ class PlannerComparisonStore:
         self._db_path = self._path / "planner_comparisons.sqlite3"
         self._ensure_database()
         self._entries: dict[str, PlannerComparisonEntry] = {}
+        self._entries_lock = threading.RLock()
         self._load_from_db()
         self._migrate_legacy_json_files()
 
@@ -116,7 +118,8 @@ class PlannerComparisonStore:
             summary=summary.strip(),
             created_at=datetime.now(UTC),
         )
-        self._entries[entry.record_id] = entry
+        with self._entries_lock:
+            self._entries[entry.record_id] = entry
         self._persist_entry(entry)
         return entry
 
@@ -126,7 +129,9 @@ class PlannerComparisonStore:
         limit: int | None = None,
         actionable_only: bool = False,
     ) -> list[PlannerComparisonEntry]:
-        entries = sorted(self._entries.values(), key=lambda item: item.created_at, reverse=True)
+        with self._entries_lock:
+            snapshot = list(self._entries.values())
+        entries = sorted(snapshot, key=lambda item: item.created_at, reverse=True)
         if actionable_only:
             entries = [entry for entry in entries if entry.actionable]
         if limit is not None:
@@ -134,15 +139,18 @@ class PlannerComparisonStore:
         return entries
 
     def count_records(self) -> int:
-        return len(self._entries)
+        with self._entries_lock:
+            return len(self._entries)
 
     def count_actionable_records(self) -> int:
-        return sum(1 for entry in self._entries.values() if entry.actionable)
+        with self._entries_lock:
+            return sum(1 for entry in self._entries.values() if entry.actionable)
 
     def count_status(self, comparison_status: str) -> int:
-        return sum(
-            1 for entry in self._entries.values() if entry.comparison_status == comparison_status
-        )
+        with self._entries_lock:
+            return sum(
+                1 for entry in self._entries.values() if entry.comparison_status == comparison_status
+            )
 
     def _persist_entry(self, entry: PlannerComparisonEntry) -> None:
         self._ensure_database()

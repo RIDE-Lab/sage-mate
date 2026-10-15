@@ -8936,6 +8936,10 @@ class DigitalTwinService:
         self._operations_task_state_store = OperationsTaskStateStore(settings)
         self._runtime_feature_flag_store = RuntimeFeatureFlagStore(settings)
         self._planner_comparison_store = PlannerComparisonStore(settings)
+        # Planner comparison is operational telemetry, not a condition for
+        # delivering an answer. Keep at most one SQLite writer in flight so a
+        # stalled filesystem cannot accumulate unbounded background work.
+        self._planner_comparison_write_slot = threading.BoundedSemaphore(1)
         self._planner_metrics_store = PlannerMetricsStore(settings)
         self._suggestion_store = SuggestionBoardStore(settings)
         self._user_store = UserAccountStore(settings)
@@ -9335,7 +9339,7 @@ class DigitalTwinService:
                             )
 
             asyncio.create_task(_run_post_answer_background())
-            self._persist_planner_comparison_result(request, response)
+            self._persist_planner_comparison_background(request, response)
             return response
 
         # Inline path (DAG runtime, no background flag or no trace callback):
@@ -11799,6 +11803,43 @@ class DigitalTwinService:
             shadow_only_steps=list(comparison.shadow_only_steps),
             summary=comparison.summary,
         )
+
+    def _persist_planner_comparison_background(
+        self, request: ChatRequest, response: ChatResponse
+    ) -> None:
+        """Write non-critical planner telemetry without blocking the event loop.
+
+        If the sole writer is stalled, drop only this comparison record. The
+        warning makes the loss visible while preserving the validated answer.
+        """
+        if response.planner_comparison is None or response.planner_preview is None:
+            return
+        if not self._planner_comparison_write_slot.acquire(blocking=False):
+            _logger.warning("planner comparison write skipped: previous write still pending")
+            return
+
+        def _write() -> None:
+            started_at = perf_counter()
+            try:
+                self._persist_planner_comparison_result(request, response)
+            except Exception:
+                _logger.exception("planner comparison background write failed")
+            finally:
+                _logger.info(
+                    "planner comparison background write finished duration_ms=%.3f",
+                    (perf_counter() - started_at) * 1000.0,
+                )
+                self._planner_comparison_write_slot.release()
+
+        try:
+            threading.Thread(
+                target=_write,
+                name="planner-comparison-writer",
+                daemon=True,
+            ).start()
+        except Exception:
+            self._planner_comparison_write_slot.release()
+            _logger.exception("planner comparison background writer could not start")
 
     def _run_pipeline(
         self,
