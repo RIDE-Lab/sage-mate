@@ -317,6 +317,12 @@ class AppSettings(BaseSettings):
         description="Enable thinking_token_budget only when the server explicitly supports it; "
         "native reasoning alone does not imply support for this optional extension.",
     )
+    llm_responses_thinking_budget_supported: bool = Field(
+        default=False,
+        description="Use Responses for budgeted native thinking only after that endpoint "
+        "has been verified to enforce thinking_token_budget. Otherwise send budgeted "
+        "requests to Chat Completions on the same configured model endpoint.",
+    )
     auto_disable_thinking_intents: str = Field(
         default="general,booking",
     )

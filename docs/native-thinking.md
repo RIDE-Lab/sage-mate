@@ -45,6 +45,13 @@ reservation is not a promise that the model will obey a reasoning-only cap.
 The optional vLLM `thinking_token_budget` extension is sent only when
 `DIGITAL_TWIN_LLM_THINKING_BUDGET_SUPPORTED=true` was explicitly verified. Native
 reasoning support alone does not imply that extension is enabled on the server.
+The Chat Completions and Responses endpoints have independent support. When
+Responses support has not been verified, budgeted native requests use Chat
+Completions on the same model endpoint; normal traffic keeps the configured
+Responses API. Set `DIGITAL_TWIN_LLM_RESPONSES_THINKING_BUDGET_SUPPORTED=true`
+only after verifying that Responses enforces the budget in token usage, not
+merely that it accepts the field. A rejected budget request fails explicitly;
+the client never retries without the budget.
 
 The output ceiling is not the model's context window. The current defaults are
 16,384 tokens for a deep answer and 32,768 tokens for the combined native
@@ -119,10 +126,26 @@ An interim application-level mode completed the same question in about 9 seconds
 and a public `/chat/stream` request in about 8.7 seconds, but was replaced on
 user request. A direct native-engine test with an 8,192-token thinking budget
 used 5,006 reasoning tokens, generated a final answer, and finished normally.
-The app now explicitly selects native mode and enables the verified budget
+The app then explicitly selected native mode and enabled the verified budget
 parameter for this A100 endpoint. Two public `/chat/stream` probes returned
 validated answers; one workflow trace explicitly recorded “模型原生思考” for both
-prompt assembly and answer generation. The deep answer ceiling remains 16,384
-tokens; the 8,192-token thinking budget is separate. The research answer's
-specificity still needs quality review. Do not infer that raising the overall
-ceiling improves quality or latency from these tests.
+prompt assembly and answer generation. A later protocol-level probe revealed
+that the production Responses endpoint accepted but ignored this budget: with
+`thinking_token_budget=64` and `max_output_tokens=256`, all 256 output tokens
+were reasoning and no answer was produced. Those earlier public probes proved
+native mode, **not** budget enforcement. The client was repaired to route only
+budgeted native requests over the verified Chat Completions endpoint and to
+fail closed on errors. The research answer's specificity still needs quality
+review. Do not infer that raising the overall ceiling improves quality or
+latency from these tests.
+
+The production Twin base URL points at the authenticated SAGE control plane,
+not directly at the A100 engine. Its router was extended to proxy Chat
+Completions under the same key admission, model selection, hostname scope, and
+request metrics. After that deployment, a public research probe completed with
+native-thinking workflow steps. The durable trace recorded
+`thinking_token_budget=8192`, `max_tokens=24576`, 8,191 reasoning tokens and
+8,352 total completion tokens, so the engine enforced the separate budget and
+returned visible text. A normal public chat still traversed Responses and
+completed. This proves transport and budget correctness, **not** answer quality:
+the research answer was only 259 characters and was too superficial.

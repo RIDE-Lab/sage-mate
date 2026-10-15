@@ -735,6 +735,7 @@ def test_responses_mode_buffered_request_extracts_text_and_usage() -> None:
         "prompt_tokens": 11,
         "completion_tokens": 7,
         "total_tokens": 18,
+        "reasoning_tokens": 0,
     }
 
 
@@ -1446,6 +1447,56 @@ def test_answer_question_can_disable_reuse_hints_for_recovery_retry() -> None:
     assert "kv_transfer_params" not in payload
 
 
+def test_budgeted_native_request_uses_verified_chat_completions_transport() -> None:
+    settings = AppSettings(
+        llm_api_mode="responses",
+        llm_thinking_budget_supported=True,
+        _env_file=None,
+    )
+    client = object.__new__(VllmChatClient)
+    client._settings = settings
+    payload = {
+        "messages": [{"role": "user", "content": "answer"}],
+        "max_tokens": 512,
+        "thinking_token_budget": 64,
+        "chat_template_kwargs": {"enable_thinking": True},
+    }
+
+    assert client._completion_path(payload) == "/chat/completions"
+    assert client._wire_payload(payload) == payload
+    assert client._completion_path({"messages": payload["messages"]}) == "/responses"
+
+    settings.llm_responses_thinking_budget_supported = True
+    assert client._completion_path(payload) == "/responses"
+    assert client._wire_payload(payload)["max_output_tokens"] == 512
+
+
+def test_native_mode_rejects_unverified_thinking_budget_before_request() -> None:
+    transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("unexpected")])
+    client = _build_retry_test_client(
+        AppSettings(llm_thinking_mode="native", _env_file=None), transport
+    )
+    client.model_name = "Qwen/Qwen3.5-35B-A3B"
+    client._supports_thinking_budget = False
+
+    with pytest.raises(RuntimeError, match="endpoint support is disabled"):
+        client.answer_question_sync(
+            "system", "user", enable_thinking=True, thinking_token_budget=64,
+            use_reuse_hints=False,
+        )
+
+    assert transport.calls == []
+
+
+def test_reasoning_token_usage_supports_both_openai_wire_shapes() -> None:
+    assert VllmChatClient._response_reasoning_tokens(
+        {"usage": {"completion_tokens_details": {"reasoning_tokens": 63}}}
+    ) == 63
+    assert VllmChatClient._response_reasoning_tokens(
+        {"usage": {"output_tokens_details": {"reasoning_tokens": 72}}}
+    ) == 72
+
+
 def test_answer_question_sends_quality_routing_effort_in_responses_payload() -> None:
     transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("OK")])
     client = _build_retry_test_client(
@@ -1522,7 +1573,7 @@ def test_non_glm_answer_keeps_configured_sampling_penalties() -> None:
     assert payload["repetition_penalty"] == 1.08
 
 
-def test_answer_question_retries_without_thinking_budget_after_server_error() -> None:
+def test_answer_question_does_not_drop_thinking_budget_after_server_error() -> None:
     transport = _SequencedHttpxClient(
         [
             _FailingChatCompletionResponse(),
@@ -1536,20 +1587,19 @@ def test_answer_question_retries_without_thinking_budget_after_server_error() ->
     client.model_name = "demo-model"
     client._supports_thinking_budget = True
 
-    answer = client.answer_question_sync(
-        "system",
-        "user",
-        enable_thinking=True,
-        thinking_token_budget=256,
-        max_tokens=8,
-        use_reuse_hints=False,
-    )
+    with pytest.raises(httpx.HTTPStatusError):
+        client.answer_question_sync(
+            "system",
+            "user",
+            enable_thinking=True,
+            thinking_token_budget=256,
+            max_tokens=8,
+            use_reuse_hints=False,
+        )
 
-    assert answer == "OK"
-    assert client._supports_thinking_budget is False
-    assert len(transport.calls) == 2
+    assert client._supports_thinking_budget is True
+    assert len(transport.calls) == 1
     assert transport.calls[0][1]["thinking_token_budget"] == 256
-    assert "thinking_token_budget" not in transport.calls[1][1]
 
 
 def test_thinking_budget_is_an_explicit_server_capability_not_a_model_name() -> None:

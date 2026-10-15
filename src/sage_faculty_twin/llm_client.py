@@ -490,8 +490,20 @@ class VllmChatClient:
         settings = getattr(self, "_settings", None)
         return getattr(settings, "llm_api_mode", "chat_completions") == "responses"
 
-    def _completion_path(self) -> str:
-        return "/responses" if self._uses_responses_api() else "/chat/completions"
+    def _uses_responses_for_payload(self, payload: dict[str, Any]) -> bool:
+        if not self._uses_responses_api():
+            return False
+        if "thinking_token_budget" not in payload:
+            return True
+        return bool(self._settings.llm_responses_thinking_budget_supported)
+
+    def _completion_path(self, payload: dict[str, Any] | None = None) -> str:
+        use_responses = (
+            self._uses_responses_api()
+            if payload is None
+            else self._uses_responses_for_payload(payload)
+        )
+        return "/responses" if use_responses else "/chat/completions"
 
     @staticmethod
     def _responses_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -550,7 +562,7 @@ class VllmChatClient:
         return converted
 
     def _wire_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if not self._uses_responses_api():
+        if not self._uses_responses_for_payload(payload):
             return dict(payload)
 
         converted = dict(payload)
@@ -571,7 +583,7 @@ class VllmChatClient:
         payload: dict[str, Any],
         **kwargs: Any,
     ) -> Any:
-        return client.post(self._completion_path(), json=self._wire_payload(payload), **kwargs)
+        return client.post(self._completion_path(payload), json=self._wire_payload(payload), **kwargs)
 
     @staticmethod
     def _response_text(data: dict[str, Any]) -> str:
@@ -606,6 +618,14 @@ class VllmChatClient:
             usage.get("total_tokens") or prompt_tokens + completion_tokens
         )
         return prompt_tokens, completion_tokens, total_tokens
+
+    @staticmethod
+    def _response_reasoning_tokens(data: dict[str, Any]) -> int:
+        usage = data.get("usage") or {}
+        if not isinstance(usage, dict):
+            return 0
+        details = usage.get("completion_tokens_details") or usage.get("output_tokens_details") or {}
+        return int(details.get("reasoning_tokens") or 0) if isinstance(details, dict) else 0
 
     @staticmethod
     def _response_finish_reason(data: dict[str, Any]) -> str:
@@ -1363,6 +1383,13 @@ class VllmChatClient:
         use_reuse_hints: bool = True,
         continue_on_length: bool = True,
     ) -> str:
+        if (
+            enable_thinking
+            and self._settings.llm_thinking_mode == "native"
+            and thinking_token_budget is not None
+            and not self._supports_thinking_budget
+        ):
+            raise RuntimeError("native thinking budget was requested but endpoint support is disabled")
         answer_temperature = (
             self._settings.llm_answer_temperature if temperature is None else temperature
         )
@@ -1456,30 +1483,7 @@ class VllmChatClient:
                 return self._request_chat_completion_stream(
                     stream_payload, token_callback, continue_on_length=continue_on_length
                 )
-            except httpx.HTTPStatusError as exc:
-                if self._is_thinking_budget_unsupported(exc) or (
-                    "thinking_token_budget" in stream_payload
-                    and exc.response.status_code >= 400
-                ):
-                    self._supports_thinking_budget = False
-                    payload.pop("thinking_token_budget", None)
-                    stream_payload = dict(payload)
-                    stream_payload["stream"] = True
-                    stream_payload["stream_options"] = {"include_usage": True}
-                    return self._request_chat_completion_stream(
-                        stream_payload, token_callback, continue_on_length=continue_on_length
-                    )
-                raise
             except StreamingServerError as exc:
-                if self._is_thinking_budget_message(str(exc)):
-                    self._supports_thinking_budget = False
-                    payload.pop("thinking_token_budget", None)
-                    stream_payload = dict(payload)
-                    stream_payload["stream"] = True
-                    stream_payload["stream_options"] = {"include_usage": True}
-                    return self._request_chat_completion_stream(
-                        stream_payload, token_callback, continue_on_length=continue_on_length
-                    )
                 raise RuntimeError(str(exc)) from exc
             except EmptyStreamingResponseError:
                 logger.warning("Streaming chat response was empty; retrying once without streaming")
@@ -1490,23 +1494,10 @@ class VllmChatClient:
                     continue_on_length=continue_on_length,
                 )
 
-        try:
-            return self._request_chat_completion_sync(
-                payload,
-                continue_on_length=continue_on_length,
-            )
-        except httpx.HTTPStatusError as exc:
-            if self._is_thinking_budget_unsupported(exc) or (
-                "thinking_token_budget" in payload
-                and exc.response.status_code >= 400
-            ):
-                self._supports_thinking_budget = False
-                payload.pop("thinking_token_budget", None)
-                return self._request_chat_completion_sync(
-                    payload,
-                    continue_on_length=continue_on_length,
-                )
-            raise
+        return self._request_chat_completion_sync(
+            payload,
+            continue_on_length=continue_on_length,
+        )
 
     def _is_local_mlx_model(self) -> bool:
         base_url = self._settings.llm_base_url.strip().lower()
@@ -1520,27 +1511,6 @@ class VllmChatClient:
 
     def _model_supports_thinking_budget(self) -> bool:
         return self._settings.llm_thinking_budget_supported
-
-    def _is_thinking_budget_unsupported(self, exc: httpx.HTTPStatusError) -> bool:
-        """Return True when the 400 error indicates the vllm instance
-        was not started with ``--reasoning-config``."""
-        if exc.response.status_code != 400:
-            return False
-        try:
-            body = exc.response.json()
-        except Exception:
-            return False
-        error = body.get("error")
-        if isinstance(error, dict):
-            message = str(error.get("message", ""))
-        else:
-            message = str(body.get("message", ""))
-        return self._is_thinking_budget_message(message)
-
-    @staticmethod
-    def _is_thinking_budget_message(message: str) -> bool:
-        """Return True when an error message references thinking budget config."""
-        return "reasoning_config" in message or "thinking_token_budget" in message
 
     def _request_chat_completion_stream(
         self,
@@ -1591,6 +1561,7 @@ class VllmChatClient:
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
+        reasoning_tokens = 0
         for attempt in range(max_retries + 1):
             collected: list[str] = []
             raw_chunks: list[dict[str, Any]] = []
@@ -1603,7 +1574,7 @@ class VllmChatClient:
                     diagnostics.record_llm_call()
                 with self._request_completion_client() as request_client, request_client.stream(
                     "POST",
-                    self._completion_path(),
+                    self._completion_path(payload),
                     json=self._wire_payload(payload),
                     **self._request_timeout_kwargs(),
                 ) as response:
@@ -1662,6 +1633,10 @@ class VllmChatClient:
                         prompt_tokens = max(prompt_tokens, chunk_prompt)
                         completion_tokens = max(completion_tokens, chunk_completion)
                         total_tokens = max(total_tokens, chunk_total)
+                        reasoning_tokens = max(
+                            reasoning_tokens,
+                            self._response_reasoning_tokens(chunk.get("response") or chunk),
+                        )
                         if chunk.get("type") == "response.output_text.delta":
                             delta_content = chunk.get("delta")
                             choices = []
@@ -1770,6 +1745,7 @@ class VllmChatClient:
                     "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens,
                     "total_tokens": total_tokens,
+                    "reasoning_tokens": reasoning_tokens,
                 },
                 "latency_ms": elapsed_ms,
             },
@@ -1792,6 +1768,7 @@ class VllmChatClient:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "reasoning_tokens": reasoning_tokens,
         }
         return answer
 
@@ -1857,6 +1834,7 @@ class VllmChatClient:
         prompt_tokens = 0
         completion_tokens = 0
         total_tokens = 0
+        reasoning_tokens = 0
         for attempt in range(max_retries + 1):
             try:
                 raise_if_request_cancelled(minimum_remaining_seconds=0.1)
@@ -1876,6 +1854,7 @@ class VllmChatClient:
                     {"mode": "buffered", "attempt": attempt + 1, "response": data},
                 )
                 prompt_tokens, completion_tokens, total_tokens = self._response_usage(data)
+                reasoning_tokens = self._response_reasoning_tokens(data)
                 content = self._response_text(data)
                 if not content:
                     raise RuntimeError("vllm-hust returned an empty chat message")
@@ -1933,6 +1912,7 @@ class VllmChatClient:
             "prompt_tokens": prompt_tokens,
             "completion_tokens": completion_tokens,
             "total_tokens": total_tokens,
+            "reasoning_tokens": reasoning_tokens,
         }
         return answer
 
