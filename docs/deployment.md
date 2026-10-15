@@ -3,6 +3,25 @@
 This document describes the generic deployment shape for `sage-mate` in the RIDE Lab
 organization.
 
+## Wiki knowledge sync
+
+The optional `sage-mate-wiki-sync.timer` ingests the `main` branch of
+`RIDE-Lab/sage-wiki` into the live application's knowledge store. Its oneshot
+must run `tools/sync_wiki_kb.sh` from the same release as
+`sage-mate-app.service` and use a Python environment with the production KB
+backend installed. Set `SAGE_MATE_PYTHON_BIN` accordingly; when the timer is
+used, set `SAGE_MATE_RESTART_AFTER_WIKI_SYNC=1` and `SAGE_MATE_HEALTH_URL` to
+the app's loopback `/health` URL. The optional
+`SAGE_MATE_HEALTH_WAIT_SECONDS` defaults to 420 seconds. Keep the runtime
+directory and `.env` consistent with the app service.
+
+The script logs the source revision, verifies a clean `main` checkout, and
+retries a failed source pull on the next timer run. It rebuilds the index and
+refreshes the application only when Wiki records actually change. A successful
+no-change run must report all pages skipped and leave the app PID unchanged.
+After a changed run, verify the oneshot result, app health, and a real Wiki
+retrieval; a successful script run alone is not sufficient.
+
 For a fresh-machine bring-up, the fastest path is:
 
 ```bash

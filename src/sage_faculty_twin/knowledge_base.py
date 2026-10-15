@@ -2786,6 +2786,10 @@ def _infer_default_audience(document: "KnowledgeDocumentRecord") -> str | None:
     visible (the original allow-by-default behaviour for public content).
     """
     source = (document.source_name or "").lower()
+    # Older Wiki imports may predate audience tags.  Apply the same category
+    # boundary as the current importer so internal notes are not guest-visible.
+    if source.startswith(("wiki:tech-notes/", "wiki:standards/", "wiki:industry-docs/")):
+        return "lab_member"
     # 1. Workspace and private-materials sources are always internal
     for prefix in _SENSITIVE_SOURCE_PREFIXES:
         if source.startswith(prefix.lower()):

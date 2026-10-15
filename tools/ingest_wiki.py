@@ -91,6 +91,11 @@ def _wiki_url(rel_path: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Ingest sage-wiki into KB")
     parser.add_argument("--wiki-dir", default="/home/shuhao/sage-wiki", help="Path to sage-wiki clone")
+    parser.add_argument(
+        "--changed-marker",
+        type=Path,
+        help="Write a marker after a successful index sync only when documents changed",
+    )
     args = parser.parse_args()
 
     wiki_dir = Path(args.wiki_dir)
@@ -108,9 +113,14 @@ def main():
     print(f"Found {len(md_files)} wiki pages in {docs_dir}")
 
     created = updated = skipped = 0
+    existing_by_source = {
+        document.source_name: document for document in store.list_documents()
+        if document.source_name
+    }
     for md_file in md_files:
         text = md_file.read_text(encoding="utf-8", errors="replace")
         if not text.strip():
+            skipped += 1
             continue
 
         frontmatter, body = _parse_frontmatter(text)
@@ -153,15 +163,22 @@ def main():
         )
 
         # Upsert: create or update
-        existing, is_new = store.upsert_document(payload)
+        previous = existing_by_source.get(source_name)
+        record, is_new = store.upsert_document(payload, rebuild_indexes=False)
+        existing_by_source[source_name] = record
         if is_new:
             created += 1
             print(f"  CREATED: {source_name} ({len(wiki_links)} links)")
-        elif existing:
+        elif record != previous:
             updated += 1
             print(f"  UPDATED: {source_name} ({len(wiki_links)} links)")
         else:
             skipped += 1
+
+    if created or updated:
+        store.rebuild_indexes()
+        if args.changed_marker is not None:
+            args.changed_marker.write_text(f"{created + updated}\n", encoding="utf-8")
 
     print(f"\nDone: {created} created, {updated} updated, {skipped} skipped")
     print(f"Link graph: {len(store._link_graph)} nodes, {sum(len(v) for v in store._link_graph.values())} edges")

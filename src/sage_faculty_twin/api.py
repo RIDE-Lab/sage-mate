@@ -142,6 +142,7 @@ from .trace_context import bind_trace_event_sink
 
 
 _logger = logging.getLogger(__name__)
+STARTUP_WARMUP_MAX_WAIT_SECONDS = 5.0
 
 
 def configure_local_cors(target_app: FastAPI) -> None:
@@ -1948,7 +1949,15 @@ async def slack_events(
 async def startup_event() -> None:
     if settings.warm_service_on_startup:
         instance = await asyncio.to_thread(service.ensure_initialized)
-        await asyncio.to_thread(instance.warm_fixed_prefix_cache)
+        try:
+            # The model-side warmup is opportunistic.  A slow or stalled model
+            # must not hold the HTTP listener offline after the KB is ready.
+            await asyncio.wait_for(
+                asyncio.to_thread(instance.warm_fixed_prefix_cache),
+                timeout=STARTUP_WARMUP_MAX_WAIT_SECONDS,
+            )
+        except TimeoutError:
+            _logger.warning("Fixed-prefix KV warmup is still running after startup")
 
 
 async def shutdown_event() -> None:

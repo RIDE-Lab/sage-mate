@@ -1020,6 +1020,13 @@ def test_infer_default_audience_restricts_sensitive_sources(
                 ["research", "agenda"],
                 "workspace/vamos",
             ),
+            # Legacy Wiki records had no audience tags; their category still
+            # determines whether a guest may retrieve them.
+            (
+                "旧版 KV 技术笔记",
+                [],
+                "wiki:tech-notes/kv",
+            ),
             # Public content should remain unrestricted
             (
                 "公开论文｜MorphStream",
@@ -1058,6 +1065,7 @@ def test_infer_default_audience_restricts_sensitive_sources(
             "VAMOS Proposal",
             "VAMOS Roadmap",
             "VAMOS README",
+            "旧版 KV 技术笔记",
             "公开论文｜MorphStream",
             "公开资料｜实验室简介",
         }
