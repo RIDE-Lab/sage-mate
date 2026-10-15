@@ -230,7 +230,7 @@ def test_service_routing_budget_and_deep_streaming(supported, requested, expecte
     thinking, budget, used_callback = service._llm_client.call
     assert thinking is expected
     if requested:
-        assert budget == (3072 if expected else 1024)
+        assert budget == service._deep_completion_budget(expected)
     assert used_callback is callback
 
 

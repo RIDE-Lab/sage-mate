@@ -11,6 +11,7 @@ from sage_faculty_twin.service import (
     _answer_violates_requested_format,
     _answer_is_irrelevant_to_question,
     _answer_language_mismatches_question,
+    _experimental_design_has_unrequested_threshold,
     _strip_internal_thinking_content,
 )
 from sage_faculty_twin.chat_delivery import (
@@ -115,9 +116,9 @@ def test_explicit_deep_thinking_adds_deep_answer_guidance() -> None:
 
     assert "Deep analysis mode is active" in guidance
     assert "<think>" in guidance
-    assert "核心判断" in guidance
-    assert "权衡与风险" in guidance
-    assert "建议行动" in guidance
+    assert "components the user actually asks for" in guidance
+    assert "do not append unrelated generic sections" in guidance
+    assert "Finish every requested item" in guidance
 
 
 def test_explicit_deep_thinking_bypasses_compact_general_answer(tmp_path: Path) -> None:
@@ -220,6 +221,15 @@ def test_degenerate_answer_detection_keeps_markdown_table_separator() -> None:
     )
     assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
     assert FacultyTwinWorkflowSupport._is_degenerate_answer("正常开头" + "-" * 100)
+
+
+def test_degenerate_answer_detection_keeps_numbered_markdown_subheadings() -> None:
+    answer = (
+        "#### 2.1 控制变量\n固定模型与请求轨迹，记录质量和延迟。\n"
+        "#### 2.2 实验分组\n分别比较基线、压缩、路由和联合组。\n"
+        "#### 2.3 冷热缓存\n分别统计有无前缀 KV 命中的请求。"
+    )
+    assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
 
 
 def test_one_experiment_does_not_require_a_numbered_list() -> None:
@@ -557,6 +567,79 @@ def test_medical_segmentation_is_a_general_technical_question(tmp_path: Path) ->
     assert service._looks_like_general_technical_question(question)
     assert "cross-center generalization" in guidance
     assert "clinical validation" in guidance
+
+
+def test_research_experiment_prompt_does_not_inherit_memory_management_template(
+    tmp_path: Path,
+) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    question = (
+        "请用一个可证伪假设和配对对照实验设计，比较长上下文推理中 "
+        "KV 缓存压缩与请求路由对答案质量和端到端延迟的影响。"
+    )
+    guidance = service._build_general_technical_response_guidance(
+        question, InteractionIntent(action="answer", domain="research")
+    )
+
+    assert "hypothesis, matched controls, measurements, and falsification" in guidance
+    assert "exactly 4 numbered tactics" not in guidance
+    assert "one-sentence-per-item limit" in guidance
+    assert "fragmentation or memory pools" not in guidance
+    assert "control, each single-mechanism arm" in guidance
+    assert "not by model-weight loading" in guidance
+
+
+def test_falsifiable_experiment_rejects_invented_percentage_cutoffs() -> None:
+    question = "请给出一个可证伪假设和配对对照实验设计，并说明如何推翻假设。"
+    assert _experimental_design_has_unrequested_threshold(
+        question, "若质量下降超过 2% 则拒绝假设。"
+    )
+    assert _experimental_design_has_unrequested_threshold(
+        question, "若 p > 0.05 则证明质量等价。"
+    )
+    assert not _experimental_design_has_unrequested_threshold(
+        question, "用预注册的最小实际效应与配对置信区间判断。"
+    )
+    assert not _experimental_design_has_unrequested_threshold(
+        question + "以 2% 为门槛。", "若质量下降超过 2% 则拒绝假设。"
+    )
+
+
+def test_experiment_quality_retry_preserves_native_thinking(tmp_path: Path) -> None:
+    class FakeLlmClient:
+        supports_native_thinking = True
+
+        def answer_question_sync(self, *_args: object, **kwargs: object) -> str:
+            self.kwargs = kwargs
+            return "固定模型与轨迹，配对比较无压缩、单独压缩、单独路由及组合组；以预注册判据证伪。"
+
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    service._llm_client = FakeLlmClient()
+    context = _build_context(deep_thinking=True, deep_thinking_explicit=True)
+    context.request.question = "请给出可证伪假设和配对对照实验设计。"
+    context.interaction_intent = InteractionIntent(action="answer", domain="research")
+
+    answer = service._retry_answer_with_compact_prompt(
+        context, preserve_native_thinking=True
+    )
+
+    assert "组合组" in answer
+    assert service._llm_client.kwargs["enable_thinking"] is True
+    assert service._llm_client.kwargs["thinking_token_budget"] == service._settings.thinking_token_budget
+
+
+def test_generic_research_intent_does_not_inject_owner_biography(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    intent = InteractionIntent(action="answer", domain="research")
+
+    generic = service._build_intent_guidance(intent, "如何设计长上下文推理实验？")
+    identity = service._build_intent_guidance(intent, "张老师的主要研究方向是什么？")
+
+    assert "owner's profile" in generic
+    assert "owner's research" in identity
 
 
 def test_general_question_preserves_selected_knowledge_hits(tmp_path: Path) -> None:

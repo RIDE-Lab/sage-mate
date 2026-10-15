@@ -1131,7 +1131,7 @@ def test_service_prompt_allows_general_accelerator_memory_guidance(tmp_path: Pat
 
     assert "General technical guidance" in prompt
     assert "Do not answer it only with '我没有直接研究经验'" in prompt
-    assert "exactly 4 numbered tactics" in prompt
+    assert "do not force a fixed number" in prompt
     assert "KV-cache or activation residency" in prompt
     assert "fragmentation or memory pools" in prompt
     assert "Fast-answer guidance" not in prompt

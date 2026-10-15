@@ -725,6 +725,37 @@ def _answer_does_not_complete_requested_task(question: str, answer: str | None) 
     )
 
 
+def _is_falsifiable_experiment_request(question: str) -> bool:
+    return (
+        any(marker in question for marker in ("实验设计", "对照实验", "实验方案"))
+        and any(marker in question for marker in ("可证伪", "证伪", "推翻假设"))
+    )
+
+
+def _experimental_design_has_unrequested_threshold(question: str, answer: str | None) -> bool:
+    """Reject invented numeric cutoffs in a requested falsifiable design.
+
+    This is deliberately narrow: it does not treat P95/P99 metric names as
+    thresholds, and it does not second-guess numeric limits supplied by the
+    user. A proposal can pre-register its own cutoff later, but should not
+    present an unsupported percentage as if it were established evidence.
+    """
+    if not answer:
+        return False
+    if not _is_falsifiable_experiment_request(question):
+        return False
+    unrequested_percentage = (
+        "%" not in question
+        and "％" not in question
+        and bool(re.search(r"\d+(?:\.\d+)?\s*[%％]", answer))
+    )
+    unrequested_significance_cutoff = (
+        not re.search(r"(?i)\bp\s*[<>=]|显著性阈值|显著性水平", question)
+        and bool(re.search(r"(?i)\bp\s*[<>=]\s*0\.\d+", answer))
+    )
+    return unrequested_percentage or unrequested_significance_cutoff
+
+
 def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool:
     if not answer:
         return False
@@ -2915,6 +2946,12 @@ class FacultyTwinWorkflowSupport:
                     ),
                 ),
                 (
+                    "experimental_design",
+                    _experimental_design_has_unrequested_threshold(
+                        context.request.question, context.answer
+                    ),
+                ),
+                (
                     "requested_format",
                     _answer_violates_requested_format(
                         context.request.question,
@@ -2940,7 +2977,10 @@ class FacultyTwinWorkflowSupport:
                 "LLM answer failed validation (%s); retrying with compact prompt",
                 ",".join(validation_failures),
             )
-            context.answer = self._retry_answer_with_compact_prompt(context)
+            context.answer = self._retry_answer_with_compact_prompt(
+                context,
+                preserve_native_thinking=native_thinking and "experimental_design" in validation_failures,
+            )
         context.workflow_action = (
             "advise_only" if context.decision_mode == "advise_only" else "answer"
         )
@@ -3496,7 +3536,12 @@ class FacultyTwinWorkflowSupport:
             cap = min(cap, context.request.answer_max_tokens)
         return min(budget, cap)
 
-    def _retry_answer_with_compact_prompt(self, context: ChatWorkflowContext) -> str:
+    def _retry_answer_with_compact_prompt(
+        self,
+        context: ChatWorkflowContext,
+        *,
+        preserve_native_thinking: bool = False,
+    ) -> str:
         remaining_seconds = request_remaining_seconds()
         if (
             remaining_seconds is not None
@@ -3526,6 +3571,22 @@ class FacultyTwinWorkflowSupport:
         compact_system_prompt += self._build_research_response_guidance(
             context.request.question, context.interaction_intent
         )
+        compact_system_prompt += self._build_general_technical_response_guidance(
+            context.request.question, context.interaction_intent
+        )
+        if (
+            _is_falsifiable_experiment_request(context.request.question)
+            and "%" not in context.request.question
+            and "％" not in context.request.question
+        ):
+            compact_system_prompt += (
+                "\nThe user supplied no numeric success or failure thresholds. "
+                "Do not introduce percentage or p-value cutoffs, even as examples. "
+                "A non-significant difference does not prove quality equivalence; "
+                "use a pre-registered non-inferiority margin and paired confidence interval. "
+                "Specify the paired comparison and let the experiment pre-register "
+                "a practically meaningful threshold separately.\n"
+            )
         if context.interaction_intent and context.interaction_intent.domain == "research":
             compact_system_prompt += "\n" + self._experiment_validity_guidance()
             compact_system_prompt += build_research_review_guidance(
@@ -3604,6 +3665,12 @@ class FacultyTwinWorkflowSupport:
             deep_recovery=deep_recovery,
             structured_recovery=structured_recovery,
         )
+        if preserve_native_thinking:
+            repair_max_tokens = min(
+                max(repair_max_tokens, self._deep_completion_budget(True)),
+                context.request.answer_max_tokens
+                or int(self._settings.llm_policy_output_max_tokens_cap),
+            )
         remaining_seconds = request_remaining_seconds()
         allow_length_continuation = (
             repair_max_tokens >= 4096
@@ -3629,10 +3696,14 @@ class FacultyTwinWorkflowSupport:
                         f"{context.conversation_id or 'compact'}:compact-retry:"
                         f"{retry_id}:{attempt}"
                     ),
-                    # A native-thinking first pass can spend its entire
-                    # output allowance on reasoning. Recovery must reserve
-                    # the full allowance for a visible final answer.
-                    enable_thinking=False,
+                    # Preserve engine-native reasoning for a grounded quality
+                    # retry. Empty/length recovery still reserves the full
+                    # allowance for a visible answer.
+                    enable_thinking=preserve_native_thinking,
+                    thinking_token_budget=(
+                        int(self._settings.thinking_token_budget)
+                        if preserve_native_thinking else None
+                    ),
                     continue_on_length=allow_length_continuation,
                 )
             except RuntimeError as exc:
@@ -3655,6 +3726,9 @@ class FacultyTwinWorkflowSupport:
                     context.request.question, answer,
                 )),
                 ("incomplete_task", _answer_does_not_complete_requested_task(
+                    context.request.question, answer,
+                )),
+                ("experimental_design", _experimental_design_has_unrequested_threshold(
                     context.request.question, answer,
                 )),
                 ("requested_format", _answer_violates_requested_format(
@@ -3689,6 +3763,7 @@ class FacultyTwinWorkflowSupport:
         max_tokens: int,
         cache_namespace: str,
         enable_thinking: bool = False,
+        thinking_token_budget: int | None = None,
         continue_on_length: bool = False,
     ) -> str:
         answer_fn = self._llm_client.answer_question_sync
@@ -3698,6 +3773,7 @@ class FacultyTwinWorkflowSupport:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "enable_thinking": enable_thinking,
+            "thinking_token_budget": thinking_token_budget,
             "use_reuse_hints": False,
             "continue_on_length": continue_on_length,
             "cache_namespace": cache_namespace,
@@ -4039,9 +4115,13 @@ class FacultyTwinWorkflowSupport:
         unique_chars = set(compact)
         if len(compact) >= 80 and len(unique_chars) <= 4:
             return True
+        # Numbered Markdown headings such as "#### 2.1" and "#### 2.2"
+        # share the fragment "#### 2" when splitting on periods. They are
+        # structure, not three repeated answer sentences.
+        sentence_check_text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", text)
         sentence_fragments = [
             fragment.strip()
-            for fragment in re.split(r"[。！？.!?]+", text)
+            for fragment in re.split(r"[。！？.!?]+", sentence_check_text)
             if len(fragment.strip()) >= 4
         ]
         if len(sentence_fragments) >= 3:
@@ -5451,7 +5531,7 @@ class FacultyTwinWorkflowSupport:
             web_search_hits or [],
             requested=web_search_requested,
         )
-        intent_guidance = self._build_intent_guidance(interaction_intent)
+        intent_guidance = self._build_intent_guidance(interaction_intent, request.question)
         profile_grounding_guidance = self._build_profile_grounding_guidance(
             request, interaction_intent
         )
@@ -5501,7 +5581,8 @@ class FacultyTwinWorkflowSupport:
         return (
             "Task context for answering the current user question:\n"
             "Treat this block as context, not as a request to discuss your instructions or identity. "
-            "Answer the current question directly as the digital twin of the faculty owner. Keep the answer grounded and concise. "
+            "Answer the current question directly as the digital twin of the faculty owner. "
+            "Keep the answer grounded; be concise for simple questions but give enough detail to complete complex requests. "
             "If the current question is a follow-up that refers to 刚才, 前面, 上一个, this, that, it, or an omitted subject, resolve it against the immediate session context first. "
             "Use retrieved knowledge only when it directly answers this question; ignore adjacent topics and do not add unasked facts just because they appear in context. "
             "Never invent paper titles, author names, conference names, URLs, or any bibliographic reference. "
@@ -5585,7 +5666,7 @@ class FacultyTwinWorkflowSupport:
         structure = (
             "Use only the requested numbered list, with no preceding sections. "
             if requested_list_size(request.question)
-            else "When no format is requested, briefly cover 核心判断、关键依据、权衡与风险、建议行动. "
+            else "When no format is requested, organize the answer around the components the user actually asks for; do not append unrelated generic sections. "
         )
         return (
             "Deep analysis mode is active because the user explicitly selected it. "
@@ -6336,10 +6417,18 @@ class FacultyTwinWorkflowSupport:
     def _is_teaching_hit(self, hit: KnowledgeSearchHit) -> bool:
         return is_teaching_hit(hit)
 
-    def _build_intent_guidance(self, interaction_intent: InteractionIntent | None) -> str:
+    def _build_intent_guidance(
+        self, interaction_intent: InteractionIntent | None, question: str = ""
+    ) -> str:
         if interaction_intent is None:
             return ""
         if interaction_intent.domain == "research":
+            if question and not self._IDENTITY_QUESTION_PATTERN.search(question):
+                return (
+                    "Intent guidance: This is a research question, not necessarily a question about "
+                    "the owner's profile or publications. Answer the requested technical or "
+                    "methodological task directly; do not add owner biography or meeting advice.\n"
+                )
             return (
                 "Intent guidance: The student is asking about the owner's research. "
                 "Prioritize research overview, publications, and paper digests. "
@@ -6725,24 +6814,47 @@ class FacultyTwinWorkflowSupport:
                 "then still provide clearly labeled general technical considerations if useful. "
             )
 
-        domain_guidance = (
-            "For medical image segmentation questions, cover data annotation quality, suitable model families, "
-            "cross-center generalization, uncertainty or failure detection, and clinical validation or workflow integration. "
-            if any(marker in question or marker in question.lower() for marker in ("医学影像", "图像分割", "medical imaging", "segmentation"))
-            else (
+        lowered_question = question.lower()
+        if any(marker in lowered_question for marker in (
+            "医学影像", "图像分割", "medical imaging", "segmentation",
+        )):
+            domain_guidance = (
+                "For medical image segmentation questions, cover data annotation quality, suitable model families, "
+                "cross-center generalization, uncertainty or failure detection, and clinical validation or workflow integration. "
+            )
+        elif any(marker in lowered_question for marker in (
+            "内存管理", "显存管理", "memory management", "memory allocation",
+        )):
+            domain_guidance = (
                 "For accelerator memory-management questions, cover allocation/lifetime planning, "
                 "KV-cache or activation residency, batching and scheduling, fragmentation or memory pools, "
                 "operator/workspace buffers, and observability metrics when relevant. "
             )
+        else:
+            domain_guidance = ""
+        experiment_guidance = (
+            "For a paired comparison of two switchable mechanisms, include the control, "
+            "each single-mechanism arm, and a combined arm when interaction matters; "
+            "replay the same requests within each cache-state stratum. Define cold and hot "
+            "cache by prefix-KV availability, not by model-weight loading. Keep model and "
+            "hardware comparable across routing arms so a route change is not a model change. "
+            if _is_falsifiable_experiment_request(question) else ""
         )
         return (
             "General technical guidance: This is a technical academic question. "
             "Do not answer it only with '我没有直接研究经验' or a request for more details. "
             f"{owner_boundary}"
-            "Give a substantive answer from general systems knowledge, with exactly 4 numbered tactics. "
-            "Each tactic should be one complete sentence with a concrete action and the reason it helps. "
+            "Give a substantive answer from general systems knowledge. Follow the user's "
+            "requested task structure, format and level of detail; do not force a fixed number "
+            "of tips or a one-sentence-per-item limit. For experiment-design questions, make "
+            "the hypothesis, matched controls, measurements, and falsification condition explicit. "
+            "The falsification condition must negate that same hypothesis, not an unrelated "
+            "implementation concern; lack of statistical significance alone is not proof of equivalence. "
+            "Do not invent a particular model, workload distribution, cache-hit threshold, "
+            "statistical cutoff, or supporting paper when the supplied evidence does not establish it. "
+            f"{experiment_guidance}"
             f"{domain_guidance}"
-            "Use concise Chinese unless the user asks otherwise.\n"
+            "Use clear Chinese unless the user asks otherwise.\n"
         )
 
     @staticmethod
