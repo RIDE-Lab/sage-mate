@@ -7,6 +7,7 @@ import threading
 import time
 from pathlib import Path
 
+import sage_faculty_twin.service as service_module
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import (
     ChatRequest,
@@ -47,8 +48,11 @@ def _request_and_response() -> tuple[ChatRequest, ChatResponse]:
     return request, response
 
 
-def test_slow_planner_write_never_blocks_answer_and_backpressure_is_visible(caplog) -> None:
+def test_slow_planner_write_never_blocks_answer_and_backpressure_is_visible(
+    caplog, monkeypatch
+) -> None:
     service = _service_with_background_slot()
+    monkeypatch.setattr(service_module, "_PLANNER_COMPARISON_SLOW_WRITE_MS", 0.0)
     request, response = _request_and_response()
     entered = threading.Event()
     release = threading.Event()
@@ -75,6 +79,10 @@ def test_slow_planner_write_never_blocks_answer_and_backpressure_is_visible(capl
     finally:
         release.set()
     assert finished.wait(2)
+    deadline = time.monotonic() + 2
+    while "planner comparison background write slow duration_ms=" not in caplog.text:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
 
 
 def test_failed_planner_write_is_logged_and_next_write_can_start(caplog) -> None:

@@ -911,6 +911,7 @@ _ATTACHMENT_BODY_CAP: int = 4000
 _MIN_COMPACT_REPAIR_BUDGET_SECONDS: float = 12.0
 
 _logger = logging.getLogger(__name__)
+_PLANNER_COMPARISON_SLOW_WRITE_MS = 1000.0
 
 
 def _canonicalize_workflow_trace(
@@ -11825,10 +11826,17 @@ class DigitalTwinService:
             except Exception:
                 _logger.exception("planner comparison background write failed")
             finally:
-                _logger.info(
-                    "planner comparison background write finished duration_ms=%.3f",
-                    (perf_counter() - started_at) * 1000.0,
-                )
+                duration_ms = (perf_counter() - started_at) * 1000.0
+                if duration_ms >= _PLANNER_COMPARISON_SLOW_WRITE_MS:
+                    _logger.warning(
+                        "planner comparison background write slow duration_ms=%.3f",
+                        duration_ms,
+                    )
+                else:
+                    _logger.debug(
+                        "planner comparison background write finished duration_ms=%.3f",
+                        duration_ms,
+                    )
                 self._planner_comparison_write_slot.release()
 
         try:
