@@ -9,6 +9,8 @@ the proxy gives up. These tests pin that contract.
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -17,8 +19,19 @@ from fastapi.testclient import TestClient
 from sage_faculty_twin import api as api_module
 from sage_faculty_twin.api import app, service
 from sage_faculty_twin.request_context import RequestCancellationController
+from sage_faculty_twin.models import ChatResponse
 
 client = TestClient(app)
+
+
+@pytest.fixture
+def isolated_chat_service(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Exercise the HTTP boundary without loading optional embedding weights."""
+    monkeypatch.setattr(service, "_instance", SimpleNamespace(
+        _check_sensitive_boundary_request=lambda *_args: None,
+        try_fast_answer=lambda *_args: None,
+        answer=lambda *_args, **_kwargs: None,
+    ))
 
 
 @pytest.fixture
@@ -58,6 +71,82 @@ def test_chat_returns_504_when_service_exceeds_budget(
     assert "未完成响应" in detail
     assert "重试" in detail
     assert response.headers.get("x-sage-trace-id")
+
+
+def test_streamed_explicit_deep_chat_uses_long_budget_and_delivers_final_response(
+    monkeypatch: pytest.MonkeyPatch, isolated_chat_service: None,
+) -> None:
+    async def answer(*_args, **_kwargs):
+        return ChatResponse(answer="完整研究回答", owner_name="Twin", used_model="Qwen")
+
+    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "answer", answer)
+    client.cookies.clear()
+    response = client.post(
+        "/chat/stream",
+        json={
+            "student_name": "Alice",
+            "question": "请推导量化状态误差上界。",
+            "deep_thinking": True,
+            "deep_thinking_explicit": True,
+        },
+    )
+
+    assert response.status_code == 200
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert len(events) == 1
+    assert events[0]["type"] == "result"
+    assert events[0]["response"]["answer"] == "完整研究回答"
+    assert events[0]["response"]["request_timing"]["budget_ms"] == (
+        api_module.CHAT_LONG_REQUEST_TIMEOUT_SECONDS * 1000
+    )
+
+
+def test_streamed_non_deep_chat_keeps_normal_budget(
+    monkeypatch: pytest.MonkeyPatch, isolated_chat_service: None,
+) -> None:
+    async def answer(*_args, **_kwargs):
+        return ChatResponse(answer="普通回答", owner_name="Twin", used_model="Qwen")
+
+    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "answer", answer)
+    client.cookies.clear()
+    response = client.post(
+        "/chat/stream",
+        json={"student_name": "Alice", "question": "普通问题", "deep_thinking": False},
+    )
+    event = json.loads(next(
+        line.removeprefix("data: ") for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ))
+    assert event["type"] == "result"
+    assert event["response"]["request_timing"]["budget_ms"] == (
+        api_module.CHAT_REQUEST_TIMEOUT_SECONDS * 1000
+    )
+
+
+def test_streamed_chat_does_not_report_failed_answer_as_result(
+    monkeypatch: pytest.MonkeyPatch, isolated_chat_service: None,
+) -> None:
+    async def failed_answer(*_args, **_kwargs):
+        raise HTTPException(status_code=503, detail="生成未完成")
+
+    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(service, "answer", failed_answer)
+    client.cookies.clear()
+    response = client.post(
+        "/chat/stream",
+        json={"student_name": "Alice", "question": "请推导量化状态误差上界。", "deep_thinking_explicit": True},
+    )
+    event = json.loads(next(
+        line.removeprefix("data: ") for line in response.text.splitlines()
+        if line.startswith("data: ")
+    ))
+    assert event == {"type": "error", "status": 503, "detail": "生成未完成"}
 
 
 def test_chat_does_not_report_failed_answer_as_http_200(

@@ -973,6 +973,41 @@ def test_stream_length_finish_cannot_be_cached_as_success():
     assert not client._response_cache
 
 
+def test_stream_length_can_continue_once_without_restarting_original_prompt(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def iter_lines(self):
+            yield 'data: {"choices":[{"delta":{"content":"第一段"}}]}'
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"length"}]}'
+            yield 'data: [DONE]'
+
+    class Transport:
+        def stream(self, *args, **kwargs):
+            return nullcontext(Response())
+
+    client = _build_retry_test_client(AppSettings(_env_file=None, llm_retry_attempts=0), Transport())
+    client._ensure_runtime_state()
+    client._request_completion_client = lambda: nullcontext(client._client)
+    continued = []
+
+    def continue_answer(payload, partial):
+        continued.append((payload, partial))
+        return partial + "\n第二段"
+
+    monkeypatch.setattr(client, "_continue_truncated_answer", continue_answer)
+    answer = client._request_chat_completion_stream(
+        {"model": "test", "messages": [{"role": "user", "content": "问题"}], "stream": True},
+        lambda _: None,
+        continue_on_length=True,
+    )
+    assert answer == "第一段\n第二段"
+    assert len(continued) == 1
+    assert continued[0][1] == "第一段"
+    assert continued[0][0]["messages"] == [{"role": "user", "content": "问题"}]
+
+
 def test_cancellation_during_continuation_is_not_a_length_repair(monkeypatch):
     from sage_faculty_twin.request_context import RequestCancelledError
 

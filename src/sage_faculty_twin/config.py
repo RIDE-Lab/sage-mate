@@ -66,7 +66,7 @@ class AppSettings(BaseSettings):
     llm_policy_variant_kind: str = Field(default="ablation")
     llm_policy_variant_name: str = Field(default="adaptive-controller")
     llm_policy_execution_priority_mode: str = Field(default="off")
-    llm_policy_output_max_tokens_cap: int = Field(default=4096, ge=64, le=8192)
+    llm_policy_output_max_tokens_cap: int = Field(default=32768, ge=64, le=65536)
     llm_policy_output_min_tokens_floor: int = Field(default=192, ge=32, le=4096)
     llm_fast_answer_max_tokens: int = Field(
         default=192,
@@ -78,9 +78,9 @@ class AppSettings(BaseSettings):
         ),
     )
     llm_deep_answer_max_tokens: int = Field(
-        default=1024,
+        default=16384,
         ge=128,
-        le=4096,
+        le=32768,
         description=(
             "Maximum completion tokens for explicit deep-thinking answers. "
             "Budget for a complete analytical answer; generation remains deadline-bound."
@@ -127,6 +127,7 @@ class AppSettings(BaseSettings):
         description="Maximum assembled chat prompt size in characters before deterministic truncation.",
     )
     chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
+    long_chat_request_timeout_seconds: float = Field(default=240.0, ge=80.0, le=600.0)
     chat_max_inflight_requests: int = Field(
         default=1,
         ge=1,
@@ -295,12 +296,12 @@ class AppSettings(BaseSettings):
     planner_comparison_dir: Path | None = Field(default=None)
     planner_metrics_dir: Path | None = Field(default=None)
     thinking_token_budget: int | None = Field(
-        default=2048, ge=64, le=4096,
+        default=16384, ge=64, le=32768,
     )
     llm_thinking_mode: Literal["auto", "native", "application"] = Field(
         default="auto",
         description="Native thinking first. auto probes the served tokenizer; native is an "
-        "operator-verified capability; application declares that native thinking is unsupported.",
+        "operator-verified capability; application explicitly uses application-level analysis.",
     )
     llm_tokenize_url: str = Field(
         default="",

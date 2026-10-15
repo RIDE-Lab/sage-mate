@@ -1064,6 +1064,15 @@ def test_hosted_web_deep_call_prefers_supported_engine_thinking(tmp_path: Path) 
     assert fake_llm.kwargs["reasoning_effort"] == "xhigh"
 
 
+def test_default_deep_budget_reserves_substantial_thinking_and_answer_space(tmp_path: Path) -> None:
+    service = object.__new__(FacultyTwinWorkflowSupport)
+    service._settings = AppSettings(knowledge_base_dir=tmp_path)
+    assert service._settings.llm_deep_answer_max_tokens == 16384
+    assert service._settings.thinking_token_budget == 16384
+    assert service._deep_completion_budget(native=True) == 32768
+    assert service._deep_completion_budget(native=False) == 16384
+
+
 def test_default_call_does_not_request_quality_route(tmp_path: Path) -> None:
     class FakeLlmClient:
         def __init__(self) -> None:

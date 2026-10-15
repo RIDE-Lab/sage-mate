@@ -31,7 +31,7 @@ class ChatRequest(BaseModel):
     deep_thinking: bool = Field(default=True)
     deep_thinking_explicit: bool = Field(default=False)
     skill_routing: bool = Field(default=True)
-    answer_max_tokens: int | None = Field(default=None, ge=128, le=4096)
+    answer_max_tokens: int | None = Field(default=None, ge=128, le=32768)
     web_search: bool = Field(default=False)
     code_approval_mode: str = Field(default="ask", pattern="^(ask|auto|full)$")
 

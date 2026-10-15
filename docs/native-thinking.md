@@ -16,9 +16,11 @@ must not intercept a supported native-deep request.
   Do not configure an unrelated host. Without an override, the URL is derived
   from the configured LLM base URL, not a machine-specific port in code.
 - `native`: operator-verified enable_thinking protocol, for deployments without a
-  tokenizer endpoint. `application`: explicit declaration that native thinking
-  is unsupported. These declarations belong to the current endpoint deployment;
-  revalidate them when changing models.
+  tokenizer endpoint. `application`: operator choice to use application-level
+  analysis, either because native thinking is unsupported or because this
+  endpoint's native latency/answer behavior has failed acceptance. These
+  declarations belong to the current endpoint deployment; revalidate them when
+  changing models.
 - An unavailable/unknown capability is **not** evidence of unsupported reasoning:
   deep generation reports a configuration failure instead of silently downgrading.
   Other reasoning protocols require a verified adapter; no model-name allowlist.
@@ -43,6 +45,15 @@ reservation is not a promise that the model will obey a reasoning-only cap.
 The optional vLLM `thinking_token_budget` extension is sent only when
 `DIGITAL_TWIN_LLM_THINKING_BUDGET_SUPPORTED=true` was explicitly verified. Native
 reasoning support alone does not imply that extension is enabled on the server.
+
+The output ceiling is not the model's context window. The current defaults are
+16,384 tokens for a deep answer and 32,768 tokens for the combined native
+reasoning/answer reservation (subject to the configured output ceiling). An
+explicit deep web request uses `/chat/stream`, which sends keepalives and the
+same validated final response as `/chat` under a 240-second server deadline;
+ordinary `/chat` requests keep their shorter deadline. A length-limited deep
+stream can continue once only when it has visible answer text and enough time
+remains. A reasoning-only response never counts as an answer.
 
 Final output uses content, never reasoning/reasoning_content as a fallback.
 Streaming similarly separates reasoning from answer tokens. Reasoning-only or
@@ -92,3 +103,26 @@ incorrectly retained only one paper excerpt.
   Original `api.py` and `tests/test_chat_streaming.py` changes were retained and
   excluded from the policy commit. Secrets and machine-local endpoint settings
   stay in the ignored `.env`.
+
+## A100 Qwen3.5 deep-budget acceptance — 2026-10-15
+
+The served Qwen3.5 model and provider were unchanged. With native thinking but
+without `thinking_token_budget` in the request, a research question spent about
+200 seconds generating 32,768 output tokens with no visible answer. A short,
+non-thinking repair then produced text. Direct engine verification subsequently
+showed that this A100 engine **does** support `thinking_token_budget`; the Twin
+client had left its separate support flag disabled, so the native request was
+unbounded within the overall output ceiling. The measured failure was therefore
+not evidence that the model or engine cannot support bounded native thinking.
+
+An interim application-level mode completed the same question in about 9 seconds
+and a public `/chat/stream` request in about 8.7 seconds, but was replaced on
+user request. A direct native-engine test with an 8,192-token thinking budget
+used 5,006 reasoning tokens, generated a final answer, and finished normally.
+The app now explicitly selects native mode and enables the verified budget
+parameter for this A100 endpoint. Two public `/chat/stream` probes returned
+validated answers; one workflow trace explicitly recorded “模型原生思考” for both
+prompt assembly and answer generation. The deep answer ceiling remains 16,384
+tokens; the 8,192-token thinking budget is separate. The research answer's
+specificity still needs quality review. Do not infer that raising the overall
+ceiling improves quality or latency from these tests.

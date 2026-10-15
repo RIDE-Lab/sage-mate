@@ -1453,7 +1453,9 @@ class VllmChatClient:
             stream_payload["stream"] = True
             stream_payload["stream_options"] = {"include_usage": True}
             try:
-                return self._request_chat_completion_stream(stream_payload, token_callback)
+                return self._request_chat_completion_stream(
+                    stream_payload, token_callback, continue_on_length=continue_on_length
+                )
             except httpx.HTTPStatusError as exc:
                 if self._is_thinking_budget_unsupported(exc) or (
                     "thinking_token_budget" in stream_payload
@@ -1464,7 +1466,9 @@ class VllmChatClient:
                     stream_payload = dict(payload)
                     stream_payload["stream"] = True
                     stream_payload["stream_options"] = {"include_usage": True}
-                    return self._request_chat_completion_stream(stream_payload, token_callback)
+                    return self._request_chat_completion_stream(
+                        stream_payload, token_callback, continue_on_length=continue_on_length
+                    )
                 raise
             except StreamingServerError as exc:
                 if self._is_thinking_budget_message(str(exc)):
@@ -1473,7 +1477,9 @@ class VllmChatClient:
                     stream_payload = dict(payload)
                     stream_payload["stream"] = True
                     stream_payload["stream_options"] = {"include_usage": True}
-                    return self._request_chat_completion_stream(stream_payload, token_callback)
+                    return self._request_chat_completion_stream(
+                        stream_payload, token_callback, continue_on_length=continue_on_length
+                    )
                 raise RuntimeError(str(exc)) from exc
             except EmptyStreamingResponseError:
                 logger.warning("Streaming chat response was empty; retrying once without streaming")
@@ -1540,6 +1546,8 @@ class VllmChatClient:
         self,
         payload: dict[str, Any],
         token_callback: Callable[[str], None],
+        *,
+        continue_on_length: bool = False,
     ) -> str:
         # We deliberately skip the response cache for streaming requests:
         # the cache stores the final string and cannot replay deltas to
@@ -1692,7 +1700,27 @@ class VllmChatClient:
                             pass
                 answer = "".join(collected) + visible_filter.finish()
                 if finish_reason == "length":
-                    raise IncompleteCompletionError("streaming answer reached token limit")
+                    emit_trace_event(
+                        "model_incomplete",
+                        {
+                            "mode": "stream",
+                            "max_tokens": payload.get("max_tokens"),
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": total_tokens,
+                            "visible_chars": len(answer),
+                            "latency_ms": (perf_counter() - started_at) * 1000.0,
+                        },
+                    )
+                    remaining = request_remaining_seconds()
+                    if (
+                        continue_on_length
+                        and answer.strip()
+                        and (remaining is None or remaining >= 25)
+                    ):
+                        answer = self._continue_truncated_answer(cache_payload, answer)
+                    else:
+                        raise IncompleteCompletionError("streaming answer reached token limit")
                 if not answer:
                     raise EmptyStreamingResponseError(
                         "vllm-hust returned an empty streaming chat message"
@@ -1713,6 +1741,13 @@ class VllmChatClient:
                 self._record_request_error(exc)
                 raise
             except Exception as exc:
+                if isinstance(exc, IncompleteCompletionError) and diagnostics is not None:
+                    diagnostics.record_llm_complete((perf_counter() - started_at) * 1000.0)
+                    diagnostics.record_token_usage(
+                        prompt_tokens=prompt_tokens,
+                        completion_tokens=completion_tokens,
+                        total_tokens=total_tokens,
+                    )
                 emit_trace_event(
                     "model_error",
                     {
@@ -1921,6 +1956,12 @@ class VllmChatClient:
 
             continuation_payload = dict(payload)
             continuation_payload["messages"] = continuation_messages
+            template_kwargs = continuation_payload.get("chat_template_kwargs")
+            if isinstance(template_kwargs, dict):
+                continuation_payload["chat_template_kwargs"] = {
+                    **template_kwargs, "enable_thinking": False,
+                }
+            continuation_payload.pop("thinking_token_budget", None)
             emit_trace_event(
                 "model_request",
                 {"mode": "continuation", "payload": continuation_payload},

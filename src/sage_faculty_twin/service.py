@@ -4122,10 +4122,12 @@ class FacultyTwinWorkflowSupport:
                     deep_budget = min(deep_budget, context.request.answer_max_tokens)
                 kwargs["max_tokens"] = deep_budget
                 if "continue_on_length" in signature.parameters:
-                    # Do not recursively continue a deep response. On a
-                    # low-throughput NPU that turns one bounded request into
-                    # an unbounded sequence and triggers the outer timeout.
-                    kwargs["continue_on_length"] = False
+                    # Only long, keepalive-backed requests may continue once.
+                    # Ordinary 80-second /chat calls keep their bounded path.
+                    remaining = request_remaining_seconds()
+                    kwargs["continue_on_length"] = (
+                        remaining is not None and remaining >= 180
+                    )
             elif policy_context.get("max_tokens") is not None:
                 kwargs["max_tokens"] = policy_context["max_tokens"]
         if "cache_namespace" in signature.parameters and context.conversation_id:

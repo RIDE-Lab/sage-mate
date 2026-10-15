@@ -2960,12 +2960,16 @@ chatForm.addEventListener("submit", async (event) => {
     while (true) {
         attempt += 1;
         try {
-            const data = await apiRequest(`/chat?request_id=${encodeURIComponent(workflowRequestIdActive)}`, {
+            const chatPath = `${explicitDeepMode ? "/chat/stream" : "/chat"}?request_id=${encodeURIComponent(workflowRequestIdActive)}`;
+            const chatOptions = {
                 method: "POST",
                 body: requestBody,
-                timeoutMs: 120000,
+                timeoutMs: explicitDeepMode ? 300000 : 120000,
                 abortController: requestController,
-            });
+            };
+            const data = explicitDeepMode
+                ? await apiStreamRequest(chatPath, chatOptions)
+                : await apiRequest(chatPath, chatOptions);
             activeConversationId = data.conversation_id || activeConversationId;
             stopWorkflowTraceStream();
             renderWorkflowTrace(data.workflow_trace || [], {
@@ -6554,6 +6558,66 @@ async function apiRequest(path, options = {}) {
     }
 
     return response.json();
+}
+
+async function apiStreamRequest(path, options = {}) {
+    const { timeoutMs = 300000, abortController = null, ...fetchOptions } = options;
+    const controller = abortController || new AbortController();
+    const timeoutId = globalThis.setTimeout(() => controller.abort("timeout"), timeoutMs);
+    try {
+        const apiOrigin = await resolveApiOrigin();
+        const requestHeaders = new Headers(fetchOptions.headers || {});
+        if (!(fetchOptions.body instanceof FormData) && !requestHeaders.has("Content-Type")) {
+            requestHeaders.set("Content-Type", "application/json");
+        }
+        const response = await fetch(buildApiUrl(path, apiOrigin), {
+            headers: requestHeaders,
+            credentials: "include",
+            ...fetchOptions,
+            signal: controller.signal,
+        });
+        if (!response.ok) {
+            const error = new Error(friendlyHttpErrorMessage(response.status, await response.text()));
+            error.status = response.status;
+            throw error;
+        }
+        if (!response.body) {
+            throw new Error("服务器未提供长回答流，请稍后重试。");
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+            const { value, done } = await reader.read();
+            buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+            let boundary;
+            while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+                const frame = buffer.slice(0, boundary);
+                buffer = buffer.slice(boundary + 2);
+                const dataLine = frame.split("\n").find((line) => line.startsWith("data: "));
+                if (!dataLine) continue;
+                const event = JSON.parse(dataLine.slice(6));
+                if (event.type === "result") return event.response;
+                if (event.type === "error") {
+                    const error = new Error(event.detail || "回答生成失败，请稍后重试。");
+                    error.status = event.status;
+                    throw error;
+                }
+            }
+            if (done) break;
+        }
+        throw new Error("长回答流在返回完整结果前中断，请重试。");
+    } catch (error) {
+        if (error instanceof DOMException && error.name === "AbortError") {
+            const cancelled = controller.signal.reason === "user-cancelled";
+            const abortError = new Error(cancelled ? "已停止生成。" : "请求超时，请稍后重试。", { cause: error });
+            abortError.cancelled = cancelled;
+            throw abortError;
+        }
+        throw error;
+    } finally {
+        globalThis.clearTimeout(timeoutId);
+    }
 }
 
 async function cancelActiveChatRequest() {

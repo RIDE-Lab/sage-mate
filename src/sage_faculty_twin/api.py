@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -225,6 +226,8 @@ MAX_CHAT_ATTACHMENT_TEXT_CHARS = 12000
 # ``DIGITAL_TWIN_CHAT_REQUEST_TIMEOUT_SECONDS`` if the upstream LLM is
 # consistently slower than this budget.
 CHAT_REQUEST_TIMEOUT_SECONDS = settings.chat_request_timeout_seconds
+CHAT_LONG_REQUEST_TIMEOUT_SECONDS = settings.long_chat_request_timeout_seconds
+_streamed_chat_request: ContextVar[bool] = ContextVar("streamed_chat_request", default=False)
 CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
 CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
 _chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
@@ -1973,6 +1976,13 @@ async def chat(
     )
     stage_started = time.perf_counter()
     payload = await _parse_chat_request(raw_request)
+    long_deep_request = (
+        _streamed_chat_request.get()
+        and payload.deep_thinking
+        and payload.deep_thinking_explicit
+    )
+    if long_deep_request:
+        timing.budget_seconds = CHAT_LONG_REQUEST_TIMEOUT_SECONDS
     effective_visitor_profile = _resolve_effective_chat_visitor_profile(
         raw_request,
         payload.visitor_profile,
@@ -2224,6 +2234,64 @@ async def chat(
     answer_complete_gate.mark_answer_done()
 
     return timing.attach(response, route="sage_workflow")
+
+
+@llm_app.post("/chat/stream")
+async def stream_chat(
+    raw_request: Request,
+    request_id: str | None = Query(default=None, min_length=1, max_length=128),
+) -> StreamingResponse:
+    """Keep a deep web request alive while preserving the normal /chat API.
+
+    The final event contains the same validated ChatResponse as /chat. Progress
+    remains on the existing workflow-events channel; this stream only carries
+    keepalives and the final result, never an unvalidated partial answer.
+    """
+
+    # Starlette's streaming disconnect watcher reads the ASGI receive channel.
+    # Cache the upload first so it cannot race with chat's JSON/form parsing.
+    await raw_request.body()
+
+    async def events() -> AsyncIterator[str]:
+        async def run_chat() -> ChatResponse:
+            token = _streamed_chat_request.set(True)
+            try:
+                return await chat(raw_request, Response(), request_id=request_id)
+            finally:
+                _streamed_chat_request.reset(token)
+
+        task = asyncio.create_task(run_chat())
+        try:
+            while True:
+                try:
+                    result = await asyncio.wait_for(asyncio.shield(task), timeout=10.0)
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
+                    continue
+                except HTTPException as exc:
+                    yield "data: " + json.dumps(
+                        {"type": "error", "status": exc.status_code, "detail": exc.detail},
+                        ensure_ascii=False,
+                    ) + "\n\n"
+                    break
+                except Exception:
+                    _logger.exception("streamed chat request failed")
+                    yield 'data: {"type":"error","status":500,"detail":"回答生成失败，请稍后重试。"}\n\n'
+                    break
+                yield "data: " + json.dumps(
+                    {"type": "result", "response": result.model_dump(mode="json")},
+                    ensure_ascii=False,
+                ) + "\n\n"
+                break
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
