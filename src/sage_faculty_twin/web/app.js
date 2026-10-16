@@ -649,17 +649,17 @@ let apiOriginResolutionPromise = null;
 const VISITOR_PROFILE_CONFIGS = {
     general_visitor: {
         label: "一般访客",
-        defaultContext: "初次来访",
-        defaultQuestion: "张老师主要研究什么方向？",
-        drawerHint: "优先参考主页、研究和预约资料。",
+        defaultContext: "公开 Wiki 导读",
+        defaultQuestion: "Wiki 里有哪些公开资料？请推荐入门阅读顺序并附原文链接。",
+        drawerHint: "从公开 Wiki 了解研究方法、推理系统与论文写作。",
         introLines: [
-            "研究、资料、预约，都可以直接问。",
-            "预约请带 agenda 和当前问题。",
+            "从 Wiki 开始，了解研究方法、推理系统与论文写作。",
+            "可以问概念、比较方法，或索取原文链接。",
         ],
         quickActions: [
-            { label: "先了解研究方向", question: "张老师主要研究什么方向？", context: "初次来访" },
-            { label: "问预约准备", question: "如果想预约一次讨论，我需要先准备什么？", context: "初次来访" },
-            { label: "找公开资料", question: "有没有适合先看的公开资料？", context: "初次来访" },
+            { label: "Wiki 导览", question: "Wiki 里有哪些公开资料？请推荐入门阅读顺序并附原文链接。", context: "公开 Wiki 导读" },
+            { label: "研究入门", question: "请依据 Wiki 介绍科研入门的方法和阅读路线，并附原文链接。", context: "公开 Wiki 导读" },
+            { label: "论文写作", question: "请依据 Wiki 介绍论文写作课程的公开材料，并附原文链接。", context: "公开 Wiki 导读" },
         ],
     },
     hust_undergraduate: {
@@ -1319,30 +1319,6 @@ const LUCKY_QUESTION_TEMPLATES = [
 ];
 
 const LUCKY_QUESTION_BLUEPRINTS = {
-    general_visitor: {
-        context: "初次来访",
-        topics: [
-            "张老师是谁、经历如何以及现在主要研究什么",
-            "课题组主要做什么、几个研究板块如何衔接",
-            "课题组有哪些代表性系统、论文和开源项目",
-            "如果想加入课题组或合作，应该先了解什么",
-            "从课程或工程背景如何进入课题组的研究主线",
-            "访客最适合先看的公开资料和入门路径",
-        ],
-        lenses: [
-            "个人经历、研究主线和问题来源",
-            "课题组方向、代表工作和真实应用场景",
-            "学生/合作匹配、准备材料和沟通效率",
-            "入门成本、公开资料和下一步行动",
-        ],
-        outcomes: [
-            "一段适合第一次了解时的清晰介绍",
-            "三个由浅入深的追问",
-            "一份值得先阅读的公开资料清单",
-            "一个适合继续交流或合作的下一步",
-        ],
-        priorityTopicIndexes: [0, 1, 2, 3],
-    },
     hust_undergraduate: {
         context: "本科课程答疑",
         topics: [
@@ -1418,7 +1394,8 @@ function fillLuckyQuestionTemplate(template, values) {
 }
 
 function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
-    const blueprint = LUCKY_QUESTION_BLUEPRINTS[profile] || LUCKY_QUESTION_BLUEPRINTS.general_visitor;
+    const blueprint = LUCKY_QUESTION_BLUEPRINTS[profile];
+    if (!blueprint) return [];
     const candidates = [];
     for (const template of LUCKY_QUESTION_TEMPLATES) {
         for (const topic of blueprint.topics) {
@@ -1444,15 +1421,7 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 // 3 are randomly picked on each page load to give variety.
 const SEED_CHIP_POOL = {
     general_visitor: [
-        { label: "老师介绍", question: "张老师是谁，主要经历和研究主线是什么？", context: "初次来访" },
-        { label: "课题组介绍", question: "张老师课题组主要做什么，几个研究方向如何衔接？", context: "初次来访" },
-        { label: "代表性工作", question: "课题组有哪些代表性论文、系统或开源项目？", context: "初次来访" },
-        { label: "公开资料", question: "如果想先了解张老师和课题组，最适合看哪些公开资料？", context: "初次来访" },
-        { label: "加入合作", question: "如果想加入课题组或开展合作，应该提前准备什么？", context: "初次来访" },
-        { label: "联系方式", question: "如果我想联系张老师讨论合作，最好的方式是什么？", context: "初次来访" },
-        { label: "入门建议", question: "如果我对课题组的 LLM 推理研究感兴趣，建议从哪些关键词或系统开始？", context: "初次来访" },
-        { label: "招生信息", question: "张老师课题组目前接收什么样的学生或访问学者？", context: "初次来访" },
-        { label: "课程信息", question: "张老师目前开设哪些课程，适合什么背景的学生选修？", context: "初次来访" },
+        ...VISITOR_PROFILE_CONFIGS.general_visitor.quickActions,
     ],
     hust_undergraduate: [
         { label: "推理引擎 Tutorial", question: "大模型推理引擎 Tutorial 7 主要讲了什么，我应该先看哪部分？", context: "大模型推理引擎课程答疑" },
@@ -1493,19 +1462,41 @@ function uiIconSvg(name, className = "") {
     return `<svg class="${classes}" aria-hidden="true" focusable="false"><use href="#icon-${safeName}"></use></svg>`;
 }
 
-function renderSeedChips(profile) {
+let publicWikiQuestions = [];
+let publicWikiQuestionsRequest = null;
+async function loadPublicWikiQuestions() {
+    if (!publicWikiQuestionsRequest) {
+        publicWikiQuestionsRequest = apiRequest('/wiki/questions', { timeoutMs: 4000 })
+            .then((data) => { publicWikiQuestions = data.questions || []; return publicWikiQuestions; })
+            .catch(() => [])
+            .finally(() => { publicWikiQuestionsRequest = null; });
+    }
+    return publicWikiQuestionsRequest;
+}
+
+async function renderSeedChips(profile) {
     const container = document.getElementById("seed-chips-list");
     if (!container) return;
-    const pool = SEED_CHIP_POOL[profile] || SEED_CHIP_POOL.general_visitor;
+    const requestedProfile = profile;
+    if (profile === 'general_visitor') await loadPublicWikiQuestions();
+    if ((visitorProfileInput?.value || 'general_visitor') !== requestedProfile) return;
+    const pool = profile === 'general_visitor' && publicWikiQuestions.length
+        ? publicWikiQuestions : (SEED_CHIP_POOL[profile] || SEED_CHIP_POOL.general_visitor);
     // Shuffle and pick SEED_CHIP_COUNT items
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const picked = shuffled.slice(0, SEED_CHIP_COUNT);
-    container.innerHTML = picked.map((item) => `
-        <button type="button" class="seed-chip" data-seed-question="${item.question}" data-seed-context="${item.context}">
-            ${uiIconSvg("search", "ui-icon-sm")}
-            <span>${item.label}</span>
-        </button>
-    `).join("");
+    container.replaceChildren(...picked.map((item) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'seed-chip';
+        button.dataset.seedQuestion = item.question;
+        button.dataset.seedContext = item.context;
+        button.innerHTML = uiIconSvg('search', 'ui-icon-sm');
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        button.append(label);
+        return button;
+    }));
     // Wire click handlers
     container.querySelectorAll(".seed-chip").forEach((btn) => {
         btn.addEventListener("click", () => {
@@ -1538,10 +1529,10 @@ const ONBOARDING_RESEARCH_EXAMPLES = {
         "我有一个粗略科研想法，请先读取项目上下文，再生成 propose-only 的实验实现建议。",
     ],
     general_visitor: [
-        "我想了解的是：张老师目前主要在哪些方向做研究，有没有公开的代表性工作？",
-        "我想了解的是：如果我对 LLM 推理优化方向感兴趣，建议先从哪些关键词或系统开始了解？",
-        "我想了解的是：如果想预约一次讨论，第一次联系时最好附上哪些信息？",
-        "我想了解的是：这个课题组的研究路线和一般企业 R&D 有什么区别？",
+        "请依据 Wiki 推荐推理系统的入门阅读路线，并附原文链接。",
+        "请依据 Wiki 解释 KV cache 的作用与常见优化方法，并附原文链接。",
+        "请依据 Wiki 总结论文写作的七种视角，并附原文链接。",
+        "请依据 Wiki 介绍如何把粗略想法转化为可验证的研究问题。",
     ],
     hust_undergraduate: [
         "我目前在学大模型推理引擎课程，实验进度到了 Tutorial 5。请帮我梳理核心知识点和实验重点。",
@@ -1780,24 +1771,24 @@ const ONBOARDING_STEPS = {
     ],
     general_visitor: [
         {
-            copy: "先了解一下你最关心的：",
-            question: "我最初想了解的是______。请帮我快速梳理这个方向的核心概念和关键资源。",
+            copy: "从公开 Wiki 开始：",
+            question: "我想了解 Wiki 中的______。请依据原文解释核心概念，并附页面链接。",
             hints: [
-                "可以是研究方向、课程信息、合作机会等。",
+                "可以问推理系统、科研方法或论文写作等公开内容。",
                 "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
             ],
-            context: "初次来访",
+            context: "公开 Wiki 导读",
             canRandomFill: true,
         },
         {
             copy: "再深入一步：",
-            question: "如果想进一步了解______，最值得先看的资料或论文有哪些？请按优先级列出来。",
+            question: "请依据 Wiki，为______推荐由浅入深的阅读顺序，并说明每篇的重点和原文链接。",
             hints: [
                 "会得到一个按难度排序的阅读清单。",
                 "可以从感兴趣的具体方向入手，比如\u201c大模型推理优化\u201d或\u201c分布式系统\u201d。",
-                "也可以问问：这个领域最值得关注的开源项目和会议有哪些？",
+                "先了解 Wiki 已有的内容；未收录的内容请明确区分。",
             ],
-            context: "初次来访",
+            context: "公开 Wiki 导读",
             canRandomFill: true,
         },
     ],
@@ -2197,6 +2188,12 @@ function getLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 }
 
 function pickLuckyQuestion(profile = visitorProfileInput?.value) {
+    if (profile === 'general_visitor') {
+        const candidates = publicWikiQuestions.length ? publicWikiQuestions : SEED_CHIP_POOL.general_visitor;
+        const fresh = candidates.filter((item) => !luckyQuestionHistory.includes(item.question));
+        const pool = fresh.length ? fresh : candidates;
+        return pool[Math.floor(Math.random() * pool.length)] || null;
+    }
     const candidates = getLuckyQuestionCandidates(profile);
     if (candidates.length === 0) {
         return null;
@@ -2253,6 +2250,7 @@ async function handleLuckyQuestionClick() {
     luckyQuestionButton.innerHTML = '<span class="lucky-loading-spinner" aria-hidden="true"></span>';
     try {
         const profile = visitorProfileInput?.value || "general_visitor";
+        if (profile === 'general_visitor') await loadPublicWikiQuestions();
         const selected = pickLuckyQuestion(profile);
         if (!selected) {
             return;

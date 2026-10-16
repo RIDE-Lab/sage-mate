@@ -11530,6 +11530,23 @@ class DigitalTwinService:
             active_conversations=snapshot.active_conversations,
         )
 
+    def public_wiki_questions(self) -> list[dict[str, str]]:
+        """Suggest only real public Wiki pages, never private records or model guesses."""
+        pages = {}
+        for document in self._knowledge_retriever.public_documents():
+            source = document.metadata.get('wiki_page_source', document.source_name)
+            if not source or source in pages:
+                continue
+            title = document.title.removeprefix('Wiki | ').strip()
+            pages[source] = {
+                'label': title,
+                'question': f'请依据 Wiki《{title}》介绍核心内容、适用场景，并附原文链接。',
+                'context': '公开 Wiki 导读',
+                'source_name': source,
+                'url': document.metadata.get('wiki_url', ''),
+            }
+        return sorted(pages.values(), key=lambda item: item['source_name'])
+
     def generate_lucky_question(
         self,
         *,
@@ -11540,6 +11557,10 @@ class DigitalTwinService:
         """Ask the LLM to generate a contextual question for the
         'I'm feeling lucky' button.  Returns an empty dict on failure
         so the caller can fall back to the static question bank."""
+        if visitor_profile == 'general_visitor':
+            candidates = self.public_wiki_questions()
+            fresh = [item for item in candidates if item['question'] not in (recent_questions or [])]
+            return (fresh or candidates or [{}])[0]
         fn = getattr(self._llm_client, "generate_lucky_question_sync", None)
         if not callable(fn):
             return {}

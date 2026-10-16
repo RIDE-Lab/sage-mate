@@ -179,7 +179,7 @@ def test_service_returns_empty_dict_on_llm_failure() -> None:
     svc._llm_client = mock_llm
 
     result = svc.generate_lucky_question(
-        visitor_profile="general_visitor",
+        visitor_profile="lab_member",
         onboarding_step="\u4e03\u6b65\u63d0\u95ee\u6cd5 \u00b7 \u95ee\u9898\u5b9a\u4e49",
     )
     assert result == {}
@@ -196,7 +196,7 @@ def test_service_returns_empty_dict_when_no_llm_client_method() -> None:
     svc._llm_client = object()  # No generate_lucky_question_sync method
 
     result = svc.generate_lucky_question(
-        visitor_profile="general_visitor",
+        visitor_profile="lab_member",
         onboarding_step="test step",
     )
     assert result == {}

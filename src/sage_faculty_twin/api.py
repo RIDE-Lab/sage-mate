@@ -1772,6 +1772,13 @@ async def lucky_question(
     return result if isinstance(result, dict) else {}
 
 
+@llm_app.get('/wiki/questions')
+async def public_wiki_questions() -> dict[str, object]:
+    if not service.is_initialized():
+        return {'questions': []}
+    return {'questions': service.public_wiki_questions()}
+
+
 @llm_app.get("/availability", response_model=AvailabilitySchedule)
 async def get_availability(
     _: dict = Depends(require_admin_session),
