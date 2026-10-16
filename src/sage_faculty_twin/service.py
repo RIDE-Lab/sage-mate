@@ -1604,6 +1604,7 @@ class FacultyTwinWorkflowSupport:
         needs_retrieval = (
             context.route == "answer"
             and context.answer is None
+            and not self._is_self_contained_request(context)
             and self._planner_requests_any_step(
                 context, "retrieve_knowledge", "retrieve_hybrid_knowledge"
             )
@@ -1619,7 +1620,7 @@ class FacultyTwinWorkflowSupport:
                 ),
                 detail=(
                     "当前回答不需要额外知识检索。" if context.route != "answer" or context.answer is not None
-                    else "deterministic planner 已接受当前规划，且本轮执行不需要知识检索步骤。"
+                    else "当前意图或工作流规划不需要额外知识；未将无关召回作为回答依据。"
                 ),
                 status="skipped", duration_ms=self._elapsed_ms(started_at),
             )
@@ -1851,6 +1852,14 @@ class FacultyTwinWorkflowSupport:
 
     def retrieve_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
+        if self._is_self_contained_request(context):
+            self._append_trace(
+                context, key="memory_retrieve", title="对话记忆检索",
+                summary="当前请求自包含，跳过对话记忆检索。",
+                detail="回答只需当前消息，不检索历史或画像作为依据。",
+                status="skipped", duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
         if context.is_admin_request and context.workflow_action == "admin_add_knowledge":
             self._append_trace(
                 context,
@@ -1959,6 +1968,18 @@ class FacultyTwinWorkflowSupport:
             duration_ms=self._elapsed_ms(started_at),
         )
         return context
+
+    @staticmethod
+    def _is_self_contained_request(context: ChatWorkflowContext) -> bool:
+        intent = context.interaction_intent
+        return bool(
+            intent is not None and intent.self_contained
+            and intent.action == "answer" and intent.domain == "general"
+            and not intent.retrieval_scopes and not intent.needs_clarification
+            and not context.request.web_search
+            and not context.request.attachments
+            and not context.request.course_context
+        )
 
     def _planner_requests_any_step(self, context: ChatWorkflowContext, *step_ids: str) -> bool:
         decision = context.planner_decision
@@ -7202,13 +7223,9 @@ class FacultyTwinWorkflowSupport:
                 confidence=0.82,
             )
 
-        return InteractionIntent(
-            action="answer",
-            domain="general",
-            retrieval_scopes=[],
-            decision_mode="direct_answer",
-            confidence=0.76,
-        )
+        # Unknown general requests need the semantic classifier: an empty scope
+        # alone cannot distinguish a greeting from a short factual lookup.
+        return None
 
     def _apply_policy_guardrails(
         self,

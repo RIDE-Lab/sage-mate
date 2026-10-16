@@ -51,6 +51,7 @@ class OnlinePresenceHeartbeatResponse(BaseModel):
 
 
 class InteractionIntent(BaseModel):
+    self_contained: bool = False
     action: str = Field(
         default="answer",
         pattern="^(answer|book_meeting|ask_followup|review_queue|human_handoff|admin_add_knowledge)$",
