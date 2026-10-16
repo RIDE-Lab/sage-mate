@@ -7941,14 +7941,9 @@ class FacultyTwinWorkflowSupport:
     def _build_availability_basis_item(
         self, context: ChatWorkflowContext
     ) -> AnswerBasisItem | None:
-        retrieval_scopes = (
-            set(context.interaction_intent.retrieval_scopes)
-            if context.interaction_intent
-            else set()
-        )
         should_include_availability = (
             context.workflow_action in {"book_meeting", "collect_booking_details"}
-            or "meeting_policy" in retrieval_scopes
+            or self._looks_like_booking_information_request(context.request.question)
         )
         if not should_include_availability:
             return None

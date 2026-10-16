@@ -51,3 +51,15 @@ def test_classifier_preserves_explicit_decision_and_defaults_to_retrieval():
     client = object.__new__(VllmChatClient)
     assert client._coerce_interaction_intent(_InteractionIntentPayload(self_contained=True)).self_contained
     assert not client._coerce_interaction_intent(_InteractionIntentPayload()).self_contained
+
+
+def test_broad_retrieval_scope_is_not_proof_of_booking_evidence(tmp_path):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    context = context_for(InteractionIntent(retrieval_scopes=["meeting_policy"]))
+    context.request.question = "介绍 Wiki 内容更新的完整流程"
+    assert support._build_availability_basis_item(context) is None
+    context.workflow_action = "book_meeting"
+    assert support._build_availability_basis_item(context) is not None
+    context.workflow_action = "answer"
+    context.request.question = "如何预约老师？"
+    assert support._build_availability_basis_item(context) is not None
