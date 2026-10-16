@@ -1978,7 +1978,6 @@ class FacultyTwinWorkflowSupport:
             and not intent.retrieval_scopes and not intent.needs_clarification
             and not context.request.web_search
             and not context.request.attachments
-            and not context.request.course_context
         )
 
     def _planner_requests_any_step(self, context: ChatWorkflowContext, *step_ids: str) -> bool:

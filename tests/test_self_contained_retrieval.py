@@ -16,12 +16,13 @@ def context_for(intent, **request_fields):
     )
 
 
-def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path):
+@pytest.mark.parametrize("background", [None, "初次来访", "计算机课程"])
+def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, background):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     support = service._build_support()
     support._knowledge_retriever = Mock()
     support._conversation_store = Mock()
-    context = context_for(InteractionIntent(self_contained=True))
+    context = context_for(InteractionIntent(self_contained=True), course_context=background)
     support.retrieve_knowledge(context)
     support.retrieve_memory(context)
     support._knowledge_retriever.search.assert_not_called()
@@ -38,7 +39,6 @@ def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path):
     (InteractionIntent(self_contained=True, retrieval_scopes=["profile"]), {}),
     (InteractionIntent(self_contained=True, needs_clarification=True), {}),
     (InteractionIntent(self_contained=True), {"web_search": True}),
-    (InteractionIntent(self_contained=True), {"course_context": "课程"}),
 ])
 def test_unknown_or_grounded_requests_do_not_skip(tmp_path, intent, fields):
     support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
