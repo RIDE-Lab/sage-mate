@@ -29,3 +29,12 @@ def test_message_bubble_uses_theme_tokens_not_light_literal():
     assert "color: var(--ink);" in block
     assert "#f1f1ee" not in block
     assert 'html[data-theme="dark"] .message-section-chevron,' in css
+
+
+def test_error_messages_use_semantic_surface():
+    js = CSS.with_name("app.js").read_text()
+    assert 'container.style.background = "var(--error-surface)";' in js
+    assert 'var(--error)' not in js
+    css = CSS.read_text()
+    assert '--error:' not in css
+    assert 'background: var(--error-surface);' in css

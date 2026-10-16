@@ -7948,7 +7948,7 @@ function renderAssistantMessage(
         </div>
     `;
     if (isError) {
-        container.style.background = "var(--error)";
+        container.style.background = "var(--error-surface)";
     }
     if (exchangeId && !isError) {
         attachFeedbackHandlers(container, exchangeId);

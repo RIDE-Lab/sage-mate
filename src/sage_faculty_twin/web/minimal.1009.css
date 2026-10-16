@@ -19,8 +19,6 @@
     --warm-accent-soft: #f3f3f0;
     --assistant: #ffffff;
     --user: #f4f4f1;
-    --success: #f2f6f2;
-    --error: #faf3f2;
     --shadow: none;
     --shadow-strong: 0 12px 32px rgba(25, 25, 24, 0.08);
     --radius-xl: 12px;
@@ -422,6 +420,13 @@ html[data-theme] .message-user .message-bubble {
 .message-main-copy {
     color: var(--ink);
     line-height: 1.68;
+}
+
+.message-retry-button,
+.message-retry-button:hover {
+    color: var(--error-text);
+    background: var(--error-surface);
+    border-color: var(--error-border);
 }
 
 .message-section,
