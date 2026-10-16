@@ -73,7 +73,7 @@ def test_ingest_wiki_rebuilds_once_only_when_pages_change(tmp_path, monkeypatch,
         return capsys.readouterr().out
 
     assert "1 created, 0 updated, 0 deleted, 0 skipped" in run()
-    assert "https://ride-lab.github.io/sage-wiki/docs/tech-notes/kv-cache" in store.documents["wiki:tech-notes/kv-cache"].content
+    assert "https://lab.sage.org.ai/sage-wiki/docs/tech-notes/kv-cache" in store.documents["wiki:tech-notes/kv-cache"].content
     assert store.rebuilds == 1
     assert marker.read_text(encoding="utf-8") == "1\n"
 
@@ -109,6 +109,6 @@ def test_relative_wiki_links_become_public_urls(tmp_path) -> None:
 
     rendered = ingest_wiki._public_wiki_links(body, source, docs)
 
-    assert "https://ride-lab.github.io/sage-wiki/docs/tutorials/ascend-npu-setup/#software" in rendered
+    assert "https://lab.sage.org.ai/sage-wiki/docs/tutorials/ascend-npu-setup/#software" in rendered
     assert "[official](https://example.com/guide)" in rendered
     assert "../tutorials/ascend-npu-setup.md" not in rendered

@@ -5,7 +5,7 @@ set -euo pipefail
 
 SCRIPT_REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WIKI_DIR="${SAGE_WIKI_DIR:-/home/shuhao/sage-wiki}"
-WIKI_REPO_URL="${SAGE_WIKI_REPO_URL:-https://github.com/RIDE-Lab/sage-wiki.git}"
+WIKI_REPO_URL="${SAGE_WIKI_REPO_URL:-https://github.com/intellistream/sage-wiki.git}"
 WIKI_BRANCH="${SAGE_WIKI_BRANCH:-main}"
 
 load_dotenv() {

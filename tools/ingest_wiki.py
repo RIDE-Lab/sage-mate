@@ -20,7 +20,7 @@ from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
-_WIKI_BASE_URL = "https://ride-lab.github.io/sage-wiki"
+_WIKI_BASE_URL = "https://lab.sage.org.ai/sage-wiki"
 _MAX_CONTENT_LEN = 18000
 
 # Category → KB tags mapping
