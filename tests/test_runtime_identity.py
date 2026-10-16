@@ -55,6 +55,8 @@ def test_runtime_identity_query_variants(question: str) -> None:
         "按我的问题类型，您会建议我先理解哪一层？",
         "What model is best for a student project?",
         "How should I deploy a model on my own server?",
+        "按知识库的昇腾 NPU 安装教程，现在安装 vLLM Ascend 应照抄固定版本号吗？",
+        "现在如何安装 vLLM Ascend？请给出官方指南。",
     ),
 )
 def test_general_model_advice_does_not_route_to_runtime_identity(question: str) -> None:

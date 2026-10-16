@@ -39,10 +39,18 @@ _RUNTIME_QUERY_MARKERS = (
     "are ", "does ", "对吗", "分别", "为什么", "关系", "协作", "还是",
     "给出", "告诉我", " or ", "why", "how do", "come from",
 )
+_DOCUMENTATION_QUERY_MARKERS = (
+    "知识库", "教程", "指南", "文档", "安装", "配置步骤", "版本号",
+    "documentation", "tutorial", "installation", "install guide",
+)
 
 
 def is_runtime_identity_query(question: str) -> bool:
     """Classify operational self-knowledge without model- or person-specific rules."""
+    # Guidance about a documented procedure is not a request for this live
+    # service's identity, even when it says "现在" and names an accelerator.
+    if _contains_runtime_marker(question.lower(), _DOCUMENTATION_QUERY_MARKERS):
+        return False
     segments = (
         " ".join(segment.split())
         for segment in re.split(r"[\n。！？!?]+", question.lower())
