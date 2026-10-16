@@ -24,6 +24,22 @@ def test_reviewed_wiki_visibility_and_course_metadata(tmp_path, monkeypatch, aud
     assert dict(record.metadata)['course_id'] == 'paper-writing'
     assert dict(record.metadata)['ordinal_type'] == 'lecture'
     assert dict(record.metadata)['ordinal'] == '5'
+    assert {'teaching', 'lecture', 'course:paper-writing'} <= set(record.tags)
+
+
+def test_research_tutorial_retains_topic_without_visibility_escalation(tmp_path, monkeypatch):
+    docs = tmp_path / 'docs' / 'standards'
+    docs.mkdir(parents=True)
+    (docs / 'guide.md').write_text('---\ntitle: Research\ndomain: research\ntags: [audience:public]\n---\nResearch onboarding')
+    store = _Store()
+    monkeypatch.setattr(ingest_wiki, 'AppSettings', lambda: object())
+    monkeypatch.setattr(ingest_wiki, 'LocalKnowledgeStore', lambda _: store)
+    monkeypatch.setattr(sys, 'argv', ['ingest_wiki.py', '--wiki-dir', str(tmp_path)])
+    ingest_wiki.main()
+    tags = store.documents['wiki:standards/guide'].tags
+    assert 'research' in tags
+    assert 'audience:lab_member' in tags
+    assert 'audience:public' not in tags
 
 
 @dataclass(frozen=True)

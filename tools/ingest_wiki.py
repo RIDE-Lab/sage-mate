@@ -153,6 +153,19 @@ def main():
         # Determine category from path
         category = rel_path.parts[0] if len(rel_path.parts) > 1 else "general"
         tags = list(_CATEGORY_TAGS.get(category, ["wiki", "audience:public"]))
+        # A directory is a presentation category, not a document's topic.
+        # Preserve reviewed semantic metadata used by intent filtering. Never
+        # derive access-control tags from arbitrary frontmatter tag strings.
+        domain = frontmatter.get('domain', '')
+        if domain in {'research', 'teaching', 'meeting', 'general'}:
+            tags.append(domain)
+        material_type = frontmatter.get('material_type', '')
+        if material_type in {'lecture', 'guide', 'tutorial', 'lab', 'assignment'}:
+            tags.append(material_type)
+        course_id = frontmatter.get('course_id', '')
+        if re.fullmatch(r'[a-zA-Z0-9_-]+', course_id):
+            tags.append(f'course:{course_id}')
+        tags = list(dict.fromkeys(tags))
         # Only explicit, reviewed public pages override the conservative category.
         if frontmatter.get('audience') == 'public':
             tags = [tag for tag in tags if not tag.startswith('audience:')]
