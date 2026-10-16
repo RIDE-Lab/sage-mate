@@ -1,5 +1,5 @@
 [Unit]
-Description=Sync sage-wiki content into Sage Mate KB
+Description=Sync public Wiki into its independent retrieval index
 After=network-online.target
 Wants=network-online.target
 

@@ -1,5 +1,5 @@
 [Unit]
-Description=Timer for wiki KB sync (every 30 minutes)
+Description=Timer for independent public Wiki indexing (every 30 minutes)
 
 [Timer]
 OnBootSec=5min
