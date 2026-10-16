@@ -8,6 +8,16 @@ def test_matching_settings():
     assert differences(projection(settings), projection(settings)) == []
 
 
+def test_only_effective_embedding_endpoint_matters():
+    settings = SimpleNamespace(**{name:'same' for name in FIELDS})
+    settings.llm_base_url = 'unused-chat-endpoint'
+    before = projection(settings)
+    settings.llm_base_url = 'different-unused-chat-endpoint'
+    assert differences(before, projection(settings)) == []
+    settings.sagevdb_embedding_base_url = ''
+    assert projection(settings)['effective_embedding_endpoint'] == settings.llm_base_url
+
+
 @pytest.mark.parametrize('field', FIELDS)
 def test_each_config_field_is_guarded(field):
     current = dict.fromkeys(FIELDS, 'same')

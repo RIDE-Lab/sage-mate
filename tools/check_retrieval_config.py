@@ -12,7 +12,7 @@ import sys
 FIELDS = (
     'knowledge_backend', 'knowledge_sagevdb_backend', 'sagevdb_backend',
     'sagevdb_anns_algorithm', 'sagevdb_dimension', 'sagevdb_embedding_backend',
-    'sagevdb_embedding_model', 'sagevdb_embedding_base_url', 'llm_base_url',
+    'sagevdb_embedding_model', 'sagevdb_embedding_base_url', 'effective_embedding_endpoint',
     'sagevdb_embedding_query_instruction', 'sagevdb_embedding_batch_size',
     'knowledge_base_dir', 'knowledge_sagevdb_persistence_dir',
     'neuromem_index_type', 'neuromem_embedding_model', 'neuromem_embedding_dim',
@@ -20,7 +20,11 @@ FIELDS = (
 
 
 def projection(settings):
-    return {name: str(getattr(settings, name)) for name in FIELDS}
+    return {
+        name: str((settings.sagevdb_embedding_base_url or settings.llm_base_url)
+                  if name == 'effective_embedding_endpoint' else getattr(settings, name))
+        for name in FIELDS
+    }
 
 
 def differences(current, expected):
