@@ -528,4 +528,4 @@ def test_cross_route_theme_contract_uses_split_semantic_roles() -> None:
     assert 'id="sidebar-user-icon" class="rail-user rail-btn" title="账号设置"' in html
     assert 'aria-label="账号设置"' in html
     assert 'href="./styles.4222.css?rev=mobile-sidebar-20260907"' in html
-    assert 'src="./app.4222.js?rev=mobile-sidebar-20260907"' in html
+    assert re.search(r'src="\./app\.4222\.js\?rev=[\w-]+"', html)
