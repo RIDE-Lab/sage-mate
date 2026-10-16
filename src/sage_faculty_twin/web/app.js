@@ -8630,13 +8630,7 @@ function cleanAnswerBasisDetail(detail, title) {
     if (!raw || raw === titleText) {
         return "";
     }
-    // Truncate long content but preserve markdown structure (don't collapse whitespace)
-    if (raw.length > 600) {
-        // Cut at a line boundary near the limit
-        const cut = raw.slice(0, 600);
-        const lastNewline = cut.lastIndexOf("\n");
-        return (lastNewline > 400 ? cut.slice(0, lastNewline) : cut) + "\n\n…";
-    }
+    // Keep full Markdown; character cuts can split links, tables and fences.
     return raw;
 }
 
@@ -10815,9 +10809,9 @@ function formatMessageContent(rawText) {
     // Italic (*text*)
     formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-    // Links [text](url) — reject javascript: URIs for safety
+    // Links: permit web/mail/relative destinations, not executable schemes.
     formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
-        if (/^javascript:/i.test(url.trim())) return `[${text}](${url})`;
+        if (!/^(?:https?:\/\/|mailto:|#|\.{0,2}\/)/i.test(url.trim())) return `[${text}](${url})`;
         return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
     });
 

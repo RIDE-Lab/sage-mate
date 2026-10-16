@@ -7840,7 +7840,7 @@ class FacultyTwinWorkflowSupport:
             source_label=self._clip_basis_text(
                 self._format_basis_source_label(hit.source_name), 256
             ),
-            detail=self._clip_basis_text(self._format_basis_detail(hit.excerpt), 1000),
+            detail=self._format_basis_detail(hit.excerpt),
         )
 
     def _build_added_knowledge_basis_item(self, record: KnowledgeDocumentRecord) -> AnswerBasisItem:
@@ -7877,8 +7877,8 @@ class FacultyTwinWorkflowSupport:
         return normalized
 
     def _format_basis_detail(self, detail: str | None) -> str:
-        normalized = re.sub(r"\s+", " ", str(detail or "")).strip()
-        return normalized
+        # Markdown block boundaries and indentation are source structure.
+        return str(detail or "").strip()
 
     def _format_memory_basis_detail(self, detail: str | None) -> str:
         normalized = str(detail or "").strip()

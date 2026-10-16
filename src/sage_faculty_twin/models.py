@@ -90,7 +90,7 @@ class AnswerBasisItem(BaseModel):
     basis_label: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=256)
     source_label: str = Field(min_length=1, max_length=256)
-    detail: str = Field(min_length=1, max_length=1000)
+    detail: str = Field(min_length=1)
 
 
 class FollowUpAction(BaseModel):
