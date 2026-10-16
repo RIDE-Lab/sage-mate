@@ -10,6 +10,7 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 from .config import AppSettings
+from .knowledge_authority import OWNER_PROFILE_SOURCE, OWNER_PROFILE_TITLE
 from .knowledge_base import LocalKnowledgeStore
 from .knowledge_identity import build_search_aliases, canonicalize_knowledge_title
 from .models import KnowledgeDocumentCreate, KnowledgeDocumentRecord
@@ -131,17 +132,22 @@ def _build_homepage_profile_payloads(path: Path) -> list[KnowledgeDocumentCreate
     if not path.exists():
         return []
 
-    title, sections = _split_markdown_by_heading(path.read_text(encoding="utf-8"), heading_level=2)
+    _, sections = _split_markdown_by_heading(path.read_text(encoding="utf-8"), heading_level=2)
     payloads: list[KnowledgeDocumentCreate] = []
-    intro_title = f"主页资料｜{title or '个人简介'}"
     for index, (section_title, body) in enumerate(sections):
-        normalized_title = intro_title if index == 0 else f"主页资料｜{section_title}"
+        # A homepage redesign may remove or change its Markdown heading. Keep
+        # the authoritative profile source/title stable across such edits.
+        normalized_title = OWNER_PROFILE_TITLE if index == 0 else f"主页资料｜{section_title}"
+        source_stub = (
+            OWNER_PROFILE_SOURCE if index == 0
+            else f"homepage:contents/home.md#{section_title or 'intro'}"
+        )
         payloads.extend(
             _make_payloads(
                 title=normalized_title,
                 content=body,
                 tags=["homepage", "profile"],
-                source_stub=f"homepage:contents/home.md#{section_title or 'intro'}",
+                source_stub=source_stub,
             )
         )
     return payloads

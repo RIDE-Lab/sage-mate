@@ -28,6 +28,14 @@ from sage_faculty_twin.models import KnowledgeDocumentCreate
 PRIVATE_ROOT = Path("/home/shuhao/private-materials")
 MAX_CONTENT_CHARS = 18000
 
+# Reviewed public material now has a maintained Wiki source. Do not reintroduce
+# older private-file copies into the searchable KB after a cleanup.
+WIKI_REPLACED_SOURCES = frozenset({
+    "private-materials:paper-revision-lessons",
+    "private-materials:cccf-survey-revision-lessons",
+    "private-materials:curated-state-management-research-line",
+})
+
 SENSITIVE_PATH_PARTS = {
     ".git",
     ".vscode",
@@ -227,6 +235,9 @@ def build_payloads() -> tuple[list[KnowledgeDocumentCreate], list[str]]:
     payloads: list[KnowledgeDocumentCreate] = []
     skipped: list[str] = []
     for source in SOURCES:
+        if source.source_name in WIKI_REPLACED_SOURCES:
+            skipped.append(f"superseded by Wiki: {source.source_name}")
+            continue
         content, reason = _read_source(source)
         if reason is not None:
             skipped.append(reason)
@@ -239,7 +250,10 @@ def build_payloads() -> tuple[list[KnowledgeDocumentCreate], list[str]]:
                 source_name=source.source_name,
             )
         )
-    payloads.extend(CURATED_PAYLOADS)
+    payloads.extend(
+        payload for payload in CURATED_PAYLOADS
+        if payload.source_name not in WIKI_REPLACED_SOURCES
+    )
     return payloads, skipped
 
 

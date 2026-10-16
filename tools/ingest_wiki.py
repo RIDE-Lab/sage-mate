@@ -20,7 +20,7 @@ from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
-_WIKI_BASE_URL = "https://lab.sage.org.ai/sage-wiki"
+_WIKI_BASE_URL = "https://ride-lab.github.io/sage-wiki"
 _MAX_CONTENT_LEN = 18000
 
 # Category → KB tags mapping
@@ -91,6 +91,7 @@ def _wiki_url(rel_path: Path) -> str:
 def main():
     parser = argparse.ArgumentParser(description="Ingest sage-wiki into KB")
     parser.add_argument("--wiki-dir", default="/home/shuhao/sage-wiki", help="Path to sage-wiki clone")
+    parser.add_argument("--env-file", type=Path, help="App settings environment file")
     parser.add_argument(
         "--changed-marker",
         type=Path,
@@ -104,7 +105,7 @@ def main():
         print(f"ERROR: wiki docs directory not found: {docs_dir}")
         sys.exit(1)
 
-    settings = AppSettings()
+    settings = AppSettings(_env_file=args.env_file) if args.env_file else AppSettings()
     store = LocalKnowledgeStore(settings)
 
     md_files = sorted(docs_dir.rglob("*.md")) + sorted(docs_dir.rglob("*.mdx"))
@@ -113,6 +114,7 @@ def main():
     print(f"Found {len(md_files)} wiki pages in {docs_dir}")
 
     created = updated = skipped = 0
+    desired_sources: set[str] = set()
     existing_by_source = {
         document.source_name: document for document in store.list_documents()
         if document.source_name
@@ -136,6 +138,7 @@ def main():
         # Build metadata
         title = frontmatter.get("title", md_file.stem.replace("-", " ").title())
         source_name = _wiki_source_name(rel_path)
+        desired_sources.add(source_name)
         wiki_url = _wiki_url(rel_path)
 
         metadata: dict[str, str] = {
@@ -175,12 +178,22 @@ def main():
         else:
             skipped += 1
 
-    if created or updated:
+    stale_ids = [
+        document.document_id
+        for document in store.list_documents()
+        if (document.source_name or "").startswith("wiki:")
+        and document.source_name not in desired_sources
+    ]
+    deleted = store.delete_documents(stale_ids, rebuild_indexes=False) if stale_ids else 0
+    if deleted:
+        print(f"  REMOVED: {deleted} Wiki records without source pages")
+
+    if created or updated or deleted:
         store.rebuild_indexes()
         if args.changed_marker is not None:
-            args.changed_marker.write_text(f"{created + updated}\n", encoding="utf-8")
+            args.changed_marker.write_text(f"{created + updated + deleted}\n", encoding="utf-8")
 
-    print(f"\nDone: {created} created, {updated} updated, {skipped} skipped")
+    print(f"\nDone: {created} created, {updated} updated, {deleted} deleted, {skipped} skipped")
     print(f"Link graph: {len(store._link_graph)} nodes, {sum(len(v) for v in store._link_graph.values())} edges")
 
 

@@ -512,3 +512,31 @@ def test_import_homepage_materials_removes_stale_homepage_documents(tmp_path: Pa
 
     assert report.skipped_count == 0
     assert all(document.source_name != stale_record.source_name for document in store.list_documents())
+
+
+def test_homepage_profile_keeps_authoritative_identity_without_heading(tmp_path: Path) -> None:
+    homepage_dir = tmp_path / "homepage"
+    contents_dir = homepage_dir / "contents"
+    contents_dir.mkdir(parents=True)
+    home = contents_dir / "home.md"
+    home.write_text("# 张书豪\n\n旧版研究简介。\n", encoding="utf-8")
+
+    settings = AppSettings(knowledge_base_dir=tmp_path / "knowledge", neuromem_index_type="bm25")
+    store = LocalKnowledgeStore(settings)
+    import_homepage_materials(store, homepage_dir)
+    original = next(
+        document for document in store.list_documents()
+        if document.source_name == "homepage:contents/home.md#张书豪"
+    )
+
+    home.write_text("新版研究简介，没有 Markdown 标题。\n", encoding="utf-8")
+    report = import_homepage_materials(store, homepage_dir)
+    updated = next(
+        document for document in store.list_documents()
+        if document.source_name == "homepage:contents/home.md#张书豪"
+    )
+    assert report.updated_count >= 1
+    assert updated.document_id == original.document_id
+    assert updated.title == "主页资料｜张书豪"
+    assert "新版研究简介" in updated.content
+    assert all(document.source_name != "homepage:contents/home.md#文档" for document in store.list_documents())
