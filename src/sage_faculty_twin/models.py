@@ -451,6 +451,8 @@ class KnowledgeSearchHit(BaseModel):
     document_id: str
     title: str
     excerpt: str
+    # Internal authorized evidence, not the UI preview or an API response field.
+    source_content: str | None = Field(default=None, exclude=True)
     score: float
     tags: list[str] = Field(default_factory=list)
     source_name: str | None = None

@@ -4,7 +4,8 @@ When the assembled chat prompt (system + user) exceeds
 ``DIGITAL_TWIN_PROMPT_SOFT_CAP`` chars (default 24000), the prompt builder
 truncates inputs in this order until back under the cap:
   (a) drop oldest memory hits beyond the top 3,
-  (b) cap each knowledge hit excerpt at 1200 chars,
+  Knowledge sources are resolved in full and never shortened or dropped;
+  requests whose evidence cannot fit fail explicitly instead.
   (c) cap each attachment ``text_content`` at 4000 chars.
 
 A ``prompt_truncated`` boolean is set on the ``ChatWorkflowContext`` and
@@ -16,6 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import pytest
 
 from sage_faculty_twin.chat_contracts import ChatIntake, InteractionDecision
 from sage_faculty_twin.config import AppSettings
@@ -25,10 +27,10 @@ from sage_faculty_twin.models import (
     ChatRequest,
     InteractionIntent,
     KnowledgeSearchHit,
+    KnowledgeDocumentCreate,
 )
 from sage_faculty_twin.service import (
     _ATTACHMENT_BODY_CAP,
-    _KNOWLEDGE_HIT_BODY_CAP,
     _PROMPT_MEMORY_HIT_KEEP,
     _PROMPT_SOFT_CAP,
     ChatWorkflowContext,
@@ -193,8 +195,8 @@ def test_prompt_drops_oldest_memory_hits_first(tmp_path: Path) -> None:
     assert "memory" in prompt_step.detail
 
 
-def test_prompt_caps_oversized_knowledge_excerpts(tmp_path: Path) -> None:
-    """A handful of huge knowledge excerpts trigger the per-excerpt cap."""
+def test_prompt_rejects_oversized_evidence_without_truncating(tmp_path: Path) -> None:
+    """Do not silently replace source bodies with clipped previews."""
 
     settings = AppSettings(knowledge_base_dir=tmp_path)
     service = DigitalTwinService(settings)
@@ -212,6 +214,12 @@ def test_prompt_caps_oversized_knowledge_excerpts(tmp_path: Path) -> None:
         )
         for i in range(5)
     ]
+    records = [service._knowledge_store.add_document(KnowledgeDocumentCreate(
+        title=hit.title, content=fat_excerpt, tags=['audience:public'],
+        source_name=hit.source_name,
+    )) for hit in knowledge_hits]
+    knowledge_hits = [hit.model_copy(update={'document_id':record.document_id})
+                      for hit, record in zip(knowledge_hits, records)]
     request = ChatRequest(
         student_name="Alice",
         student_email="alice@example.com",
@@ -221,18 +229,7 @@ def test_prompt_caps_oversized_knowledge_excerpts(tmp_path: Path) -> None:
     )
     context = _make_context(request, settings=settings, knowledge_hits=knowledge_hits)
 
-    support.build_prompt(context)
-
-    assert context.prompt_truncated is True
-    assert context.user_prompt is not None
-    total = len(context.system_prompt or "") + len(context.user_prompt)
-    assert total <= _PROMPT_SOFT_CAP
-
-    # No single original 6k Z-run survives; the cap is well below 6000.
-    assert "Z" * (_KNOWLEDGE_HIT_BODY_CAP + 100) not in context.user_prompt
-    assert len(context.knowledge_hits) == len(knowledge_hits)
-    assert all(len(hit.excerpt) <= _KNOWLEDGE_HIT_BODY_CAP + 1 for hit in context.knowledge_hits)
-    assert all("truncated" in hit.excerpt or hit.excerpt.endswith("…") for hit in context.knowledge_hits)
-
-    prompt_step = next(step for step in context.workflow_trace if step.key == "prompt_build")
-    assert "knowledge" in prompt_step.detail
+    with pytest.raises(RuntimeError, match='Evidence was not truncated'):
+        support.build_prompt(context)
+    assert all(service._knowledge_store.get_document(r.document_id).content == fat_excerpt
+               for r in records)

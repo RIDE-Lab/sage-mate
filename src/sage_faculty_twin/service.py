@@ -929,7 +929,7 @@ _POST_ANSWER_TRACE_KEYS: tuple[str, ...] = (
 # When ``len(system_prompt) + len(user_prompt)`` exceeds this threshold the
 # prompt builder truncates inputs in this order:
 #   (a) drop oldest memory hits beyond the top 3,
-#   (b) cap each knowledge hit excerpt at ``_KNOWLEDGE_HIT_BODY_CAP`` chars,
+#   Retrieved source evidence is never character-truncated or silently dropped.
 #   (c) cap each attachment ``text_content`` at ``_ATTACHMENT_BODY_CAP`` chars,
 #   (d) drop the rolling session digest (compressed older turns).
 # Override via ``DIGITAL_TWIN_PROMPT_SOFT_CAP``. ~24000 chars roughly maps to
@@ -937,7 +937,6 @@ _POST_ANSWER_TRACE_KEYS: tuple[str, ...] = (
 # context window but small enough to keep decode latency bounded.
 _PROMPT_SOFT_CAP = 24000
 _PROMPT_MEMORY_HIT_KEEP: int = 3
-_KNOWLEDGE_HIT_BODY_CAP: int = 1200
 _ATTACHMENT_BODY_CAP: int = 4000
 _MIN_COMPACT_REPAIR_BUDGET_SECONDS: float = 12.0
 
@@ -2051,15 +2050,15 @@ class FacultyTwinWorkflowSupport:
         # Chat Latency Optimizations Task 3 + V4.1 context compression:
         # assemble the prompt with the full inputs first, then progressively
         # truncate when the combined system + user prompt exceeds the soft
-        # cap. Order matters: memory hits beyond the top 3 are dropped first
-        # (cheapest signal loss), then knowledge excerpts, then attachment
-        # bodies, and finally the rolling session digest.
+        # cap. Memory, attachment and session policies are independent of
+        # source evidence: selected knowledge bodies are never clipped.
         memory_hits = list(context.memory_hits)
         knowledge_hits = self._select_prompt_knowledge_hits(
             context.request.question,
             list(context.knowledge_hits),
             context.interaction_intent,
         )
+        knowledge_hits = self._resolve_knowledge_evidence(context.request, knowledge_hits)
         attachments = list(getattr(context.request, "attachments", None) or [])
         truncation_actions: list[str] = []
 
@@ -2095,25 +2094,6 @@ class FacultyTwinWorkflowSupport:
             memory_hits = memory_hits[:_PROMPT_MEMORY_HIT_KEEP]
             truncation_actions.append(f"memory({original_count}→{_PROMPT_MEMORY_HIT_KEEP})")
             user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
-
-        # (b) Cap each knowledge hit excerpt at the configured length.
-        if _over_cap():
-            capped_count = 0
-            new_knowledge: list[KnowledgeSearchHit] = []
-            for hit in knowledge_hits:
-                if len(hit.excerpt) > _KNOWLEDGE_HIT_BODY_CAP:
-                    new_knowledge.append(
-                        hit.model_copy(
-                            update={"excerpt": hit.excerpt[:_KNOWLEDGE_HIT_BODY_CAP] + "…"}
-                        )
-                    )
-                    capped_count += 1
-                else:
-                    new_knowledge.append(hit)
-            if capped_count:
-                knowledge_hits = new_knowledge
-                truncation_actions.append(f"knowledge≤{_KNOWLEDGE_HIT_BODY_CAP}({capped_count})")
-                user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
 
         # (c) Cap each attachment text body at the configured length.
         if _over_cap():
@@ -2185,47 +2165,6 @@ class FacultyTwinWorkflowSupport:
             )
             user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
 
-        if _over_cap() and knowledge_hits:
-            maximum = max(len(item.excerpt) for item in knowledge_hits)
-            low, high = 1, maximum
-            best = [
-                item.model_copy(update={"excerpt": self._truncate_prompt_text(item.excerpt, 1)})
-                for item in knowledge_hits
-            ]
-            while low <= high:
-                body_limit = (low + high) // 2
-                candidate = [
-                    item.model_copy(
-                        update={
-                            "excerpt": self._truncate_prompt_text(item.excerpt, body_limit)
-                        }
-                    )
-                    for item in knowledge_hits
-                ]
-                candidate_prompt = _build(
-                    memory_hits, candidate, context.web_search_hits, attachments
-                )
-                if len(context.system_prompt or "") + len(candidate_prompt) <= cap:
-                    best = candidate
-                    low = body_limit + 1
-                else:
-                    high = body_limit - 1
-            knowledge_hits = best
-            truncation_actions.append(
-                f"knowledge_fitted({max(len(item.excerpt) for item in knowledge_hits)})"
-            )
-            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
-
-        # Explicitly supplied attachments take precedence over opportunistic
-        # retrieval when the combined prompt is still too large.
-        dropped_knowledge = 0
-        while _over_cap() and knowledge_hits:
-            knowledge_hits.pop()
-            dropped_knowledge += 1
-            user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
-        if dropped_knowledge:
-            truncation_actions.append(f"knowledge_dropped({dropped_knowledge})")
-
         if _over_cap() and memory_hits:
             dropped_memory = len(memory_hits)
             memory_hits = []
@@ -2258,7 +2197,8 @@ class FacultyTwinWorkflowSupport:
 
         if _over_cap():
             raise RuntimeError(
-                f"prompt exceeds hard cap after bounded truncation: "
+                f"Complete source evidence does not fit the configured prompt limit; "
+                f"narrow the requested sources or use a larger context. Evidence was not truncated: "
                 f"{len(context.system_prompt or '') + len(user_prompt)}>{cap}"
             )
 
@@ -5502,6 +5442,7 @@ class FacultyTwinWorkflowSupport:
         prompt_hits = self._select_prompt_knowledge_hits(
             request.question, knowledge_hits, interaction_intent
         )
+        prompt_hits = self._resolve_knowledge_evidence(request, prompt_hits)
         team_knowledge_boundary = ""
         if any(
             str(hit.metadata.get("visibility") or "").strip().lower() == "team"
@@ -6074,6 +6015,32 @@ class FacultyTwinWorkflowSupport:
             return UserSessionResponse(is_authenticated=False, mode="guest")
         return UserSessionResponse(is_authenticated=True, mode="user", account=account)
 
+    def _resolve_knowledge_evidence(
+        self, request: ChatRequest, hits: list[KnowledgeSearchHit],
+    ) -> list[KnowledgeSearchHit]:
+        """Resolve full stored source records with current ACLs, not UI snippets.
+
+        Missing/revoked sources are omitted; stale cached previews must never
+        authorize reading a document or masquerade as its complete content.
+        """
+        resolved = []
+        for hit in hits:
+            document = self._knowledge_store.get_visible_document(
+                hit.document_id, visitor_profile=getattr(request, 'visitor_profile', None),
+                admin_role=self._resolve_admin_role(),
+            )
+            if document is None or document.source_name != hit.source_name:
+                continue
+            resolved.append(hit.model_copy(update={
+                'source_content': document.content,
+                'excerpt': self._knowledge_store._build_excerpt(
+                    document.content, self._knowledge_store._tokenize(request.question)
+                ),
+                'title': document.title, 'tags': document.tags,
+                'metadata': document.metadata,
+            }))
+        return resolved
+
     def _format_knowledge_context(self, knowledge_hits: list[KnowledgeSearchHit]) -> str:
         if not knowledge_hits:
             return ""
@@ -6082,7 +6049,7 @@ class FacultyTwinWorkflowSupport:
         for index, hit in enumerate(knowledge_hits, start=1):
             source_suffix = f" | source: {hit.source_name}" if hit.source_name else ""
             sections.append(
-                f"{index}. {hit.title}{source_suffix}\nExcerpt: {hit.excerpt}\nTags: {', '.join(hit.tags) if hit.tags else 'none'}"
+                f"{index}. {hit.title}{source_suffix}\nSource content (complete stored record): {hit.source_content}\nTags: {', '.join(hit.tags) if hit.tags else 'none'}"
             )
         return "\n".join(sections) + "\n"
 
@@ -6143,7 +6110,7 @@ class FacultyTwinWorkflowSupport:
         scope = self._materializable_context_scope(request, knowledge_hits)
         sections = [
             f"Reusable retrieved materials (materialization scope: {scope}):",
-            "These materials are stable KB excerpts selected for the current access scope. "
+            "These materials are complete stored source records selected for the current access scope. "
             "Use them only when they directly answer the current question.",
         ]
         for index, hit in enumerate(
@@ -6152,7 +6119,7 @@ class FacultyTwinWorkflowSupport:
         ):
             source_suffix = f" | source: {hit.source_name}" if hit.source_name else ""
             sections.append(
-                f"{index}. {hit.title}{source_suffix}\nExcerpt: {hit.excerpt}\nTags: {', '.join(hit.tags) if hit.tags else 'none'}"
+                f"{index}. {hit.title}{source_suffix}\nSource content (complete stored record): {hit.source_content}\nTags: {', '.join(hit.tags) if hit.tags else 'none'}"
             )
         return "\n".join(sections) + "\n"
 

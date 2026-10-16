@@ -19,6 +19,17 @@ from sage_faculty_twin.models import (
 from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSupport
 
 
+def _prompt_with_stored_evidence(service, *, knowledge_hits, **kwargs):
+    """Prompt fixtures must have resolvable source records, not invented IDs."""
+    for hit in knowledge_hits:
+        service._knowledge_store._documents[hit.document_id] = KnowledgeDocumentRecord(
+            document_id=hit.document_id, title=hit.title, content=hit.excerpt,
+            source_name=hit.source_name, tags=hit.tags, metadata=hit.metadata,
+            created_at=datetime.now(UTC),
+        )
+    return service._build_student_prompt(knowledge_hits=knowledge_hits, **kwargs)
+
+
 def test_index_completeness_reports_local_and_neuromem_counts(tmp_path: Path) -> None:
     store = LocalKnowledgeStore(
         AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local")
@@ -1151,7 +1162,7 @@ def test_service_prompt_keeps_private_materials_out_of_materialized_prefix(
     settings = AppSettings(knowledge_base_dir=tmp_path)
     service = DigitalTwinService(settings)
 
-    prompt = service._build_student_prompt(
+    prompt = _prompt_with_stored_evidence(service,
         request=type(
             "Request",
             (),
@@ -1176,13 +1187,13 @@ def test_service_prompt_keeps_private_materials_out_of_materialized_prefix(
     )
 
     assert "Reusable retrieved materials" not in prompt
-    assert "Relevant owner materials:" in prompt
-    assert "内部账号记录" in prompt
+    assert "Relevant owner materials:" not in prompt
+    assert "内部账号记录" not in prompt
 
 
 def test_service_prompt_enforces_team_knowledge_answer_boundary(tmp_path: Path) -> None:
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
-    prompt = service._build_student_prompt(
+    prompt = _prompt_with_stored_evidence(service,
         request=type(
             "Request",
             (),
@@ -1353,7 +1364,7 @@ def test_token_expense_question_is_not_treated_as_credential_exfiltration() -> N
 def test_service_materialized_context_uses_stable_hit_order(tmp_path: Path) -> None:
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
 
-    prompt = service._build_student_prompt(
+    prompt = _prompt_with_stored_evidence(service,
         request=type(
             "Request",
             (),
@@ -1395,7 +1406,7 @@ def test_service_prompt_filters_teaching_materials_for_research_queries(
     settings = AppSettings(knowledge_base_dir=tmp_path)
     service = DigitalTwinService(settings)
 
-    prompt = service._build_student_prompt(
+    prompt = _prompt_with_stored_evidence(service,
         request=type(
             "Request",
             (),
@@ -1664,7 +1675,7 @@ def test_mixed_joining_question_repeats_owner_facts_next_to_question(tmp_path: P
         "张老师您好，请介绍一下您目前主要研究什么，并说明学生如果想加入课题组"
         "应该提前准备什么？"
     )
-    prompt = service._build_student_prompt(
+    prompt = _prompt_with_stored_evidence(service,
         request=type(
             "Request",
             (),

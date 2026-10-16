@@ -92,7 +92,7 @@ class EvidenceBundle:
                 kind=EvidenceKind.KNOWLEDGE,
                 evidence_id=hit.document_id,
                 title=hit.title,
-                excerpt=hit.excerpt,
+                excerpt=hit.source_content if hit.source_content is not None else hit.excerpt,
                 score=hit.score,
             )
             for hit in knowledge_hits

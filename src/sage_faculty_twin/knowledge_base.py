@@ -460,6 +460,18 @@ class LocalKnowledgeStore:
     def get_document(self, document_id: str) -> KnowledgeDocumentRecord | None:
         return self._documents.get(document_id)
 
+    def get_visible_document(
+        self, document_id: str, *, visitor_profile: str | None = None,
+        admin_role: str | None = None,
+    ) -> KnowledgeDocumentRecord | None:
+        """Recheck access when resolving a search preview to source evidence."""
+        document = self.get_document(document_id)
+        if document is None or not _document_is_visible_to_requester(
+            document, visitor_profile, admin_role
+        ):
+            return None
+        return document
+
     def delete_documents(
         self,
         document_ids: list[str],
