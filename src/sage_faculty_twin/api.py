@@ -128,6 +128,7 @@ from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
 from .service import (
     DigitalTwinService,
+    PromptCapacityError,
     build_stack_versions_payload,
     build_hardware_payload,
 )
@@ -2162,6 +2163,10 @@ async def chat(
                 detail="后端在本次请求总预算内未完成响应，请稍后重试。",
                 headers={"X-Sage-Trace-ID": timing.trace_id},
             ) from exc
+        except PromptCapacityError as exc:
+            _record_error(exc, status="rejected")
+            raise HTTPException(status_code=413, detail="所选完整材料超出当前可安全使用的上下文容量；未截断原文。请分篇提问或缩小材料范围。",
+                headers={"X-Sage-Trace-ID": timing.trace_id}) from exc
         except Exception as exc:
             _record_error(exc)
             raise
@@ -2228,6 +2233,12 @@ async def chat(
             detail=message,
             headers={"X-Sage-Trace-ID": timing.trace_id},
         ) from exc
+    except PromptCapacityError as exc:
+        _record_error(exc, status="rejected")
+        message = "所选完整材料超出当前可安全使用的上下文容量；未截断原文。请分篇提问或缩小材料范围。"
+        workflow_event_broker.publish_error(request_id, message)
+        raise HTTPException(status_code=413, detail=message,
+            headers={"X-Sage-Trace-ID": timing.trace_id}) from exc
     except Exception as exc:
         _record_error(exc)
         workflow_event_broker.publish_error(request_id, str(exc))

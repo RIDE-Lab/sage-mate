@@ -1,8 +1,10 @@
 """Read-only retrieval across public Wiki and an independently managed private KB."""
 from __future__ import annotations
+import re
 
 from .config import AppSettings
 from .source_ownership import SOURCE_OWNERSHIP
+from .models import KnowledgeSearchHit
 
 
 def wiki_index_settings(settings: AppSettings) -> AppSettings:
@@ -42,6 +44,17 @@ class KnowledgeSources:
         })
 
     def search(self, query, top_k=None, *, visitor_profile=None, admin_role=None):
+        # An explicitly named public document is a source request, not an
+        # invitation to pad top-k with unrelated semantic neighbours. Include
+        # every stored chunk of each exact title, retaining its public ACL.
+        titles = set(re.findall(r'《([^》]+)》', query))
+        named = [d for d in self.public_documents()
+                 if d.title.removeprefix('Wiki | ') in titles]
+        if named:
+            named.sort(key=lambda d: (d.metadata.get('wiki_page_source', d.title), int(d.metadata.get('wiki_chunk', '1'))))
+            return [KnowledgeSearchHit(document_id=d.document_id, title=d.title,
+                source_name=d.source_name, excerpt=d.content, score=1.0,
+                tags=d.tags, metadata=d.metadata) for d in named]
         limit = top_k or self.top_k
         lanes = []
         if self.wiki is not None:

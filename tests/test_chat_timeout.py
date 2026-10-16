@@ -24,6 +24,20 @@ from sage_faculty_twin.models import ChatResponse
 client = TestClient(app)
 
 
+@pytest.mark.parametrize('suffix', ['', '?request_id=capacity-regression'])
+def test_prompt_capacity_failure_is_actionable_not_500(monkeypatch, isolated_chat_service, suffix):
+    async def fail(*args, **kwargs):
+        raise api_module.PromptCapacityError('Evidence was not truncated')
+    monkeypatch.setattr(service, 'answer', fail)
+    client.cookies.clear()
+    response = client.post('/chat' + suffix, json={
+        'student_name': 'Capacity test', 'question': '请解释完整材料',
+    })
+    assert response.status_code == 413
+    assert '未截断原文' in response.json()['detail']
+    assert response.headers.get('x-sage-trace-id')
+
+
 @pytest.fixture
 def isolated_chat_service(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercise the HTTP boundary without loading optional embedding weights."""

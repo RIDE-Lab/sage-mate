@@ -124,7 +124,7 @@ class AppSettings(BaseSettings):
         default=24000,
         ge=1,
         le=1000000,
-        description="Maximum assembled chat prompt size in characters before deterministic truncation.",
+        description="Character target for compacting memory and attachments, not a hard model context limit. Complete source evidence is never truncated to this target.",
     )
     chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
     long_chat_request_timeout_seconds: float = Field(default=240.0, ge=80.0, le=600.0)

@@ -34,6 +34,18 @@ def test_guest_only_wiki_member_both_and_full_evidence(tmp_path):
     assert len(private.list_documents()) == len(wiki.list_documents()) == 1
 
 
+def test_explicit_wiki_title_keeps_all_chunks_without_unrelated_padding(tmp_path):
+    _, _, wiki, sources = stores(tmp_path)
+    for i in range(1, 4):
+        wiki.add_document(KnowledgeDocumentCreate(title='Wiki | 完整资料',
+            content=f'完整资料 part {i} TAIL', source_name=f'wiki:guide:{i}',
+            tags=['audience:public'], metadata={'wiki_chunk': str(i)}))
+    hits = sources.search('请依据 Wiki《完整资料》介绍内容', top_k=1)
+    assert len(hits) == 3
+    assert all(h.title == 'Wiki | 完整资料' for h in hits)
+    assert all(sources.get_visible_document(h.document_id).content.endswith('TAIL') for h in hits)
+
+
 @pytest.mark.parametrize('method', ['add_document', 'upsert_document', 'update_document'])
 def test_write_namespaces_are_enforced(tmp_path, method):
     _, private, wiki, _ = stores(tmp_path)

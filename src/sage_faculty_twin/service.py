@@ -933,10 +933,22 @@ _POST_ANSWER_TRACE_KEYS: tuple[str, ...] = (
 #   Retrieved source evidence is never character-truncated or silently dropped.
 #   (c) cap each attachment ``text_content`` at ``_ATTACHMENT_BODY_CAP`` chars,
 #   (d) drop the rolling session digest (compressed older turns).
-# Override via ``DIGITAL_TWIN_PROMPT_SOFT_CAP``. ~24000 chars roughly maps to
-# 6k tokens for typical Chinese/English mixed content, well below the model
-# context window but small enough to keep decode latency bounded.
+# Override via ``DIGITAL_TWIN_PROMPT_SOFT_CAP``. This is a character target
+# for auxiliary context compaction, not an estimate of model token capacity.
 _PROMPT_SOFT_CAP = 24000
+
+
+class PromptCapacityError(RuntimeError):
+    """Complete evidence cannot safely fit; never silently clip the source."""
+
+
+def _fits_served_context(system_prompt, user_prompt, model_max_len, output_reserve):
+    # UTF-8 bytes are a conservative upper bound for byte-level BPE tokens,
+    # not a chars/4 estimate (especially unsafe for Chinese). Reserve space
+    # for chat framing as well as the largest configured generation budget.
+    return bool(model_max_len > 0 and
+        len((system_prompt + user_prompt).encode('utf-8')) + output_reserve + 4096
+        <= model_max_len)
 _PROMPT_MEMORY_HIT_KEEP: int = 3
 _ATTACHMENT_BODY_CAP: int = 4000
 _MIN_COMPACT_REPAIR_BUDGET_SECONDS: float = 12.0
@@ -2198,11 +2210,22 @@ class FacultyTwinWorkflowSupport:
             )
             user_prompt = _build(memory_hits, knowledge_hits, context.web_search_hits, attachments)
 
-        if _over_cap():
-            raise RuntimeError(
-                f"Complete source evidence does not fit the configured prompt limit; "
+        # The character soft cap controls memory/attachment compaction, not
+        # admissibility of complete source evidence. Gate on advertised model
+        # capacity only; when the gateway omits metadata, the serving engine's
+        # tokenizer/context validation remains authoritative.
+        model_max_len = int(getattr(self._llm_client, 'model_max_len', 0) or 0)
+        if _over_cap() and model_max_len and not _fits_served_context(
+            context.system_prompt or '', user_prompt,
+            model_max_len,
+            max(self._settings.llm_policy_output_max_tokens_cap,
+                self._settings.llm_deep_answer_max_tokens,
+                self._settings.llm_fast_answer_max_tokens),
+        ):
+            raise PromptCapacityError(
+                f"Complete source evidence exceeds the conservative served-context bound; "
                 f"narrow the requested sources or use a larger context. Evidence was not truncated: "
-                f"{len(context.system_prompt or '') + len(user_prompt)}>{cap}"
+                f"model_context={model_max_len}, prompt_characters={len(context.system_prompt or '') + len(user_prompt)}"
             )
 
         # Preserve exactly the evidence that reached the model. Returned IDs

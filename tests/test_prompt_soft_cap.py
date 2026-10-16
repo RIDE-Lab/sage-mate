@@ -30,12 +30,20 @@ from sage_faculty_twin.models import (
     KnowledgeDocumentCreate,
 )
 from sage_faculty_twin.service import (
+    _fits_served_context,
     _ATTACHMENT_BODY_CAP,
     _PROMPT_MEMORY_HIT_KEEP,
     _PROMPT_SOFT_CAP,
     ChatWorkflowContext,
     DigitalTwinService,
 )
+
+
+def test_full_evidence_can_exceed_old_char_cap_with_verified_capacity():
+    assert _fits_served_context('system', '资料' * 12000, 131072, 32768)
+    assert not _fits_served_context('system', '资料' * 12000, 32768, 32768)
+    assert not _fits_served_context('system', '资料' * 12000, 0, 32768)
+    assert not _fits_served_context('system', '资料' * 24000, 131072, 32768)
 
 
 def _make_context(
@@ -230,7 +238,14 @@ def test_prompt_rejects_oversized_evidence_without_truncating(tmp_path: Path) ->
     )
     context = _make_context(request, settings=settings, knowledge_hits=knowledge_hits)
 
+    service._llm_client._model_max_len = 32768
     with pytest.raises(RuntimeError, match='Evidence was not truncated'):
         support.build_prompt(context)
     assert all(service._knowledge_store.get_document(r.document_id).content == fat_excerpt
                for r in records)
+    # A gateway without capacity metadata must not turn an arbitrary character
+    # target into a hard model limit. Preserve evidence for engine validation.
+    service._llm_client._model_max_len = 0
+    support.build_prompt(context)
+    assert len(context.system_prompt + context.user_prompt) > settings.prompt_soft_cap
+    assert all(hit.source_content == fat_excerpt for hit in context.knowledge_hits)
