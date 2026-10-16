@@ -88,6 +88,28 @@ def _wiki_url(rel_path: Path) -> str:
     return f"{_WIKI_BASE_URL}/docs/{'/'.join(parts)}"
 
 
+def _public_wiki_links(body: str, current_file: Path, wiki_docs_dir: Path) -> str:
+    """Make links in retrieved Wiki text usable outside the Wiki site."""
+    def replace(match: re.Match[str]) -> str:
+        href = match.group(2)
+        path_text, marker, fragment = href.partition("#")
+        if path_text.startswith(("https://", "http://", "/")):
+            return match.group(0)
+        target = (current_file.parent / path_text).resolve()
+        try:
+            relative = target.relative_to(wiki_docs_dir.resolve())
+        except ValueError:
+            return match.group(0)
+        if relative.suffix not in {".md", ".mdx"} or not target.is_file():
+            return match.group(0)
+        url = _wiki_url(relative) + "/"
+        if marker:
+            url += f"#{fragment}"
+        return f"{match.group(1)}{url}{match.group(3)}"
+
+    return re.sub(r"(\[[^\]]*\]\()([^\s)]+)(\))", replace, body)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Ingest sage-wiki into KB")
     parser.add_argument("--wiki-dir", default="/home/shuhao/sage-wiki", help="Path to sage-wiki clone")
@@ -153,7 +175,7 @@ def main():
             metadata["wiki_date"] = frontmatter["date"]
 
         # Build content with URL header for citation
-        content = f"[Wiki: {title}]({wiki_url})\n\n{body}"
+        content = f"[Wiki: {title}]({wiki_url}/)\n\n{_public_wiki_links(body, md_file, docs_dir)}"
         if len(content) > _MAX_CONTENT_LEN:
             content = content[:_MAX_CONTENT_LEN]
 

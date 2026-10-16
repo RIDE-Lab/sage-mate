@@ -77,6 +77,7 @@ def test_ingest_wiki_rebuilds_once_only_when_pages_change(tmp_path, monkeypatch,
     assert store.rebuilds == 1
     assert marker.read_text(encoding="utf-8") == "1\n"
 
+
     marker.unlink()
     assert "0 created, 0 updated, 0 deleted, 1 skipped" in run()
     assert store.rebuilds == 1
@@ -93,3 +94,21 @@ def test_ingest_wiki_rebuilds_once_only_when_pages_change(tmp_path, monkeypatch,
     assert store.rebuilds == 3
     assert not store.documents
     assert marker.read_text(encoding="utf-8") == "1\n"
+
+
+def test_relative_wiki_links_become_public_urls(tmp_path) -> None:
+    docs = tmp_path / "docs"
+    tutorials = docs / "tutorials"
+    resources = docs / "resources"
+    tutorials.mkdir(parents=True)
+    resources.mkdir()
+    target = tutorials / "ascend-npu-setup.md"
+    target.write_text("# Setup", encoding="utf-8")
+    source = resources / "reading.md"
+    body = "See [setup](../tutorials/ascend-npu-setup.md#software) and [official](https://example.com/guide)."
+
+    rendered = ingest_wiki._public_wiki_links(body, source, docs)
+
+    assert "https://ride-lab.github.io/sage-wiki/docs/tutorials/ascend-npu-setup/#software" in rendered
+    assert "[official](https://example.com/guide)" in rendered
+    assert "../tutorials/ascend-npu-setup.md" not in rendered

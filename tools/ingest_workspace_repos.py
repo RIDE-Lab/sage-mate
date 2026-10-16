@@ -1,5 +1,4 @@
-"""One-time ingestion of workspace repo READMEs + curated FAQ into the
-sage-mate knowledge base.
+"""One-time ingestion of selected current workspace documents into the KB.
 
 Usage:
     cd /home/shuhao/sage-mate
@@ -8,7 +7,6 @@ Usage:
 """
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
@@ -24,14 +22,12 @@ _REPO_SOURCES = [
     {"path": "/home/shuhao/SAGE/README.md", "title": "Lab System | SAGE README", "tags": ["research", "publication", "system", "sage"], "source_name": "workspace/SAGE"},
     {"path": "/home/shuhao/neuromem/README.md", "title": "Lab System | Neuromem README", "tags": ["research", "publication", "system", "neuromem", "memory"], "source_name": "workspace/neuromem"},
     {"path": "/home/shuhao/sageVDB/README.md", "title": "Lab System | SageVDB README", "tags": ["research", "system", "vector-db", "sagevdb"], "source_name": "workspace/sageVDB"},
-    {"path": str(Path(__file__).resolve().parent.parent / "deps" / "vllm-hust" / "README.md"), "title": "Lab System | vLLM-HUST README", "tags": ["research", "system", "vllm", "inference-engine"], "source_name": "deps/vllm-hust"},
     {"path": "/home/shuhao/vamos/README.md", "title": "Current Research | VAMOS README", "tags": ["research", "agenda", "current-focus", "vamos"], "source_name": "workspace/vamos"},
     {"path": "/home/shuhao/vamos/roadmap.md", "title": "Current Research | VAMOS Roadmap", "tags": ["research", "agenda", "current-focus", "vamos", "roadmap"], "source_name": "workspace/vamos/roadmap"},
     {"path": "/home/shuhao/vamos/docs/proposal/2026-ccf-ant-proposal.md", "title": "Current Research | 2026 CCF-Ant Proposal (VAMOS)", "tags": ["research", "agenda", "current-focus", "vamos", "proposal"], "source_name": "workspace/vamos/proposal"},
     {"path": "/home/shuhao/sage-tutorials/QUICK_START.md", "title": "Teaching | Sage-Tutorials Quick Start", "tags": ["teaching", "tutorial", "sage-tutorials"], "source_name": "workspace/sage-tutorials"},
-    # Homepage pages have a dedicated changed-content importer. Private-material
-    # belongs to the curated, audience-reviewed importer and never to this broad
-    # workspace README job.
+    # Homepage pages have a dedicated changed-content importer. The obsolete
+    # local vLLM-HUST checkout and seed FAQ have no maintained source here.
 ]
 
 
@@ -53,13 +49,6 @@ def main():
             print(f"  SKIP (empty): {src['path']}")
             continue
         payloads.append(KnowledgeDocumentCreate(title=src["title"], content=content, tags=src["tags"], source_name=src["source_name"]))
-
-    faq_path = Path(__file__).resolve().parent.parent / "data" / "_seed_faq.json"
-    if faq_path.exists():
-        for item in json.loads(faq_path.read_text(encoding="utf-8")):
-            payloads.append(KnowledgeDocumentCreate(title=item["title"], content=item["content"], tags=item.get("tags", []), source_name=item.get("source_name", "curated_faq")))
-    else:
-        print(f"  WARN: FAQ file not found at {faq_path}")
 
     print(f"Prepared {len(payloads)} documents for ingestion.")
     created = updated = skipped = 0
