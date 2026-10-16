@@ -1,7 +1,7 @@
 import pytest
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatRequest, KnowledgeDocumentCreate, KnowledgeSearchHit
-from sage_faculty_twin.service import DigitalTwinService
+from sage_faculty_twin.service import DigitalTwinService, ChatWorkflowContext
 from sage_faculty_twin.chat_contracts import EvidenceBundle
 
 
@@ -66,3 +66,20 @@ def test_updated_source_refreshes_preview_and_full_evidence(tmp_path):
     resolved = service._build_support()._resolve_knowledge_evidence(request, [hit])[0]
     assert 'STALE_REMOVED_FACT' not in resolved.excerpt
     assert resolved.source_content == record.content
+
+
+def test_repair_prompt_keeps_same_full_evidence(tmp_path, monkeypatch):
+    service, record, hit, request = fixture(tmp_path)
+    support = service._build_support()
+    context = ChatWorkflowContext(
+        request=request, conversation_id='full-evidence-repair',
+        owner_name='test', used_model='test',
+        knowledge_hits=support._resolve_knowledge_evidence(request, [hit]),
+    )
+    def capture(**kwargs):
+        assert record.content in kwargs['user_prompt']
+        assert 'TAIL_FACT' in kwargs['user_prompt']
+        raise RuntimeError('captured repair input')
+    monkeypatch.setattr(support, '_call_compact_retry_sync', capture)
+    with pytest.raises(RuntimeError, match='captured repair input'):
+        support._retry_answer_with_compact_prompt(context)

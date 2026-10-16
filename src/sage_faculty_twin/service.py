@@ -2861,7 +2861,10 @@ class FacultyTwinWorkflowSupport:
         context.answer = _strip_repeated_role_prefixes(context.answer)
         validation_failures: list[str] = []
         if not repaired:
-            source_excerpts = [hit.excerpt for hit in context.knowledge_hits] + [
+            source_excerpts = [
+                hit.source_content if hit.source_content is not None else hit.excerpt
+                for hit in context.knowledge_hits
+            ] + [
                 hit.snippet or "" for hit in context.web_search_hits
             ]
             validation_checks = (
@@ -3552,7 +3555,7 @@ class FacultyTwinWorkflowSupport:
         # Repair wording, not grounding: the retry must see the same selected
         # sources as the original call and the visible Support cards.
         evidence_lines = [
-            f"[{index}] {hit.title}: {hit.excerpt[:900]}"
+            f"[{index}] {hit.title}: {hit.source_content if hit.source_content is not None else hit.excerpt}"
             for index, hit in enumerate(context.knowledge_hits, 1)
         ] + [f"{hit.title} ({hit.url}): {hit.snippet}" for hit in context.web_search_hits]
         if evidence_lines:
@@ -3660,7 +3663,8 @@ class FacultyTwinWorkflowSupport:
             validation_checks = (
                 ("degenerate", self._is_degenerate_answer(answer)),
                 ("unsupported_quote", has_unsupported_source_quote(answer, [
-                    hit.excerpt for hit in context.knowledge_hits
+                    hit.source_content if hit.source_content is not None else hit.excerpt
+                    for hit in context.knowledge_hits
                 ] + [hit.snippet or "" for hit in context.web_search_hits])),
                 ("language_mismatch", _answer_language_mismatches_question(
                     context.request.question, answer,
