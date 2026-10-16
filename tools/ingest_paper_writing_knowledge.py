@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
+from sage_faculty_twin.source_ownership import SOURCE_OWNERSHIP
 
 _MAX_CONTENT_LEN = 18000
 
@@ -234,6 +235,10 @@ def main():
 
     created = updated = skipped = 0
     for doc_spec in _DOCUMENTS:
+        if doc_spec['source_name'] in SOURCE_OWNERSHIP:
+            print(f"  SKIP (maintained by Wiki): {SOURCE_OWNERSHIP[doc_spec['source_name']]}")
+            skipped += 1
+            continue
         if "content_source" in doc_spec:
             content = _read_file(doc_spec["content_source"])
             if not content.strip():

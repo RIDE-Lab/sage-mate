@@ -14,6 +14,7 @@ from uuid import uuid4
 import httpx
 
 from .config import AppSettings
+from .source_ownership import SOURCE_OWNERSHIP
 from .models import (
     KnowledgeDocumentCreate,
     KnowledgeDocumentRecord,
@@ -340,6 +341,8 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
+        if payload.source_name in SOURCE_OWNERSHIP:
+            raise ValueError("Source is maintained by Wiki; sync Wiki and use upsert_document")
         record = KnowledgeDocumentRecord(
             document_id=str(uuid4()),
             title=payload.title,
@@ -368,6 +371,13 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> tuple[KnowledgeDocumentRecord, bool]:
+        canonical_source = SOURCE_OWNERSHIP.get(payload.source_name)
+        if canonical_source:
+            canonical = self._find_document_by_source_name(canonical_source)
+            if canonical is None:
+                raise ValueError(f"Canonical source {canonical_source} missing; sync Wiki first")
+            # Do not overwrite Wiki text, visibility or metadata with old imports.
+            return canonical, False
         existing = self._find_document_by_source_name(payload.source_name)
         if existing is None:
             return self.add_document(payload, rebuild_indexes=rebuild_indexes), True
@@ -413,6 +423,8 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
+        if payload.source_name in SOURCE_OWNERSHIP:
+            raise ValueError("Source is maintained by Wiki; update its canonical page instead")
         existing = self._documents.get(document_id)
         if existing is None:
             raise KeyError(document_id)

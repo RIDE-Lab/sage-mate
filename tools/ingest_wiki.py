@@ -153,6 +153,10 @@ def main():
         # Determine category from path
         category = rel_path.parts[0] if len(rel_path.parts) > 1 else "general"
         tags = list(_CATEGORY_TAGS.get(category, ["wiki", "audience:public"]))
+        # Only explicit, reviewed public pages override the conservative category.
+        if frontmatter.get('audience') == 'public':
+            tags = [tag for tag in tags if not tag.startswith('audience:')]
+            tags.append('audience:public')
 
         # Extract and resolve wiki links
         wiki_links = _extract_wiki_links(body, md_file, docs_dir)
@@ -173,6 +177,9 @@ def main():
             metadata["wiki_authors"] = frontmatter["authors"]
         if frontmatter.get("date"):
             metadata["wiki_date"] = frontmatter["date"]
+        for key in ('domain', 'course_id', 'material_type'):
+            if frontmatter.get(key):
+                metadata[key] = frontmatter[key]
 
         # Build content with URL header for citation
         content = f"[Wiki: {title}]({wiki_url}/)\n\n{_public_wiki_links(body, md_file, docs_dir)}"
