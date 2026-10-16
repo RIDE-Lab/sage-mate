@@ -9,7 +9,7 @@
     --surface-soft: #f7f7f5;
     --surface-muted: #efefec;
     --ink: #191918;
-    --muted: #73736f;
+    --muted: #62625e;
     --line: #e7e7e3;
     --line-strong: #d6d6d1;
     --accent: #191918;
@@ -406,11 +406,13 @@ select {
     font-size: 0.64rem;
 }
 
-.message-user .message-bubble {
+.message-user .message-bubble,
+html[data-theme] .message-user .message-bubble {
     padding: 9px 12px;
     border: 0;
     border-radius: 12px 12px 3px 12px;
-    background: #f1f1ee;
+    background: var(--user);
+    color: var(--ink);
 }
 
 .message-assistant .message-bubble {
@@ -418,7 +420,7 @@ select {
 }
 
 .message-main-copy {
-    color: #252523;
+    color: var(--ink);
     line-height: 1.68;
 }
 
@@ -779,6 +781,7 @@ html[data-theme="dark"] .composer-tools-summary,
 html[data-theme="dark"] .composer-tools-active-label,
 html[data-theme="dark"] .message-workflow-summary-toggle,
 html[data-theme="dark"] .message-section-toggle,
+html[data-theme="dark"] .message-section-chevron,
 html[data-theme="dark"] .onboarding-question-hint,
 html[data-theme="dark"] .onboarding-badge,
 html[data-theme="dark"] .workflow-plan-badge,
