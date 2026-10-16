@@ -7840,7 +7840,7 @@ class FacultyTwinWorkflowSupport:
             source_label=self._clip_basis_text(
                 self._format_basis_source_label(hit.source_name), 256
             ),
-            detail=self._format_basis_detail(hit.excerpt),
+            detail=self._format_basis_detail(hit.source_content or hit.excerpt),
         )
 
     def _build_added_knowledge_basis_item(self, record: KnowledgeDocumentRecord) -> AnswerBasisItem:

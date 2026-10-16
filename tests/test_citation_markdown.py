@@ -13,7 +13,7 @@ def test_citation_preserves_complete_markdown(tmp_path):
         + '\n[原文](https://example.org/wiki)'
     )
     hit = KnowledgeSearchHit(document_id='wiki::test', title='Wiki test',
-        source_name='test', excerpt=markdown, score=1.0,
+        source_name='test', excerpt='collapsed retrieval preview', source_content=markdown, score=1.0,
         metadata={'retrieval_source': 'wiki'})
     basis = support._build_knowledge_basis_item(hit)
     assert basis.detail == markdown
