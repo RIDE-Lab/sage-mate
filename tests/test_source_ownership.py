@@ -7,16 +7,18 @@ from sage_faculty_twin.source_ownership import SOURCE_OWNERSHIP
 
 def fake_store(documents):
     store = LocalKnowledgeStore.__new__(LocalKnowledgeStore)
+    store._settings = SimpleNamespace(knowledge_namespace='private')
     store._documents = {str(i):doc for i,doc in enumerate(documents)}
     return store
 
 
 @pytest.mark.parametrize('source,target', SOURCE_OWNERSHIP.items())
-def test_old_import_reuses_canonical_without_mutation(source,target):
+def test_old_import_rejected_without_mutation(source,target):
     canonical = SimpleNamespace(source_name=target, content='Current Wiki',created_at=0,document_id='canonical')
     store = fake_store([canonical])
     payload = KnowledgeDocumentCreate(title='Old',content='Old private copy',source_name=source)
-    assert store.upsert_document(payload) == (canonical,False)
+    with pytest.raises(ValueError, match='independent Wiki index'):
+        store.upsert_document(payload)
     assert canonical.content == 'Current Wiki'
     assert len(store._documents) == 1
 

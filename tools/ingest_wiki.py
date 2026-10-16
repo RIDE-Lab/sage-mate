@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from sage_faculty_twin.config import AppSettings
+from sage_faculty_twin.knowledge_sources import wiki_index_settings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
@@ -110,6 +111,17 @@ def _public_wiki_links(body: str, current_file: Path, wiki_docs_dir: Path) -> st
     return re.sub(r"(\[[^\]]*\]\()([^\s)]+)(\))", replace, body)
 
 
+def _content_chunks(body: str, limit: int):
+    """Partition without dropping or summarizing any characters."""
+    while len(body) > limit:
+        boundary = body.rfind('\n\n', 0, limit)
+        end = boundary + 2 if boundary > limit // 2 else limit
+        yield body[:end]
+        body = body[end:]
+    if body:
+        yield body
+
+
 def main():
     parser = argparse.ArgumentParser(description="Ingest sage-wiki into KB")
     parser.add_argument("--wiki-dir", default="/home/shuhao/sage-wiki", help="Path to sage-wiki clone")
@@ -128,6 +140,7 @@ def main():
         sys.exit(1)
 
     settings = AppSettings(_env_file=args.env_file) if args.env_file else AppSettings()
+    settings = wiki_index_settings(settings)
     store = LocalKnowledgeStore(settings)
 
     md_files = sorted(docs_dir.rglob("*.md")) + sorted(docs_dir.rglob("*.mdx"))
@@ -152,7 +165,8 @@ def main():
 
         # Determine category from path
         category = rel_path.parts[0] if len(rel_path.parts) > 1 else "general"
-        tags = list(_CATEGORY_TAGS.get(category, ["wiki", "audience:public"]))
+        tags = [tag for tag in _CATEGORY_TAGS.get(category, ['wiki']) if not tag.startswith('audience:')]
+        tags.append('audience:public')
         # A directory is a presentation category, not a document's topic.
         # Preserve reviewed semantic metadata used by intent filtering. Never
         # derive access-control tags from arbitrary frontmatter tag strings.
@@ -166,10 +180,6 @@ def main():
         if re.fullmatch(r'[a-zA-Z0-9_-]+', course_id):
             tags.append(f'course:{course_id}')
         tags = list(dict.fromkeys(tags))
-        # Only explicit, reviewed public pages override the conservative category.
-        if frontmatter.get('audience') == 'public':
-            tags = [tag for tag in tags if not tag.startswith('audience:')]
-            tags.append('audience:public')
 
         # Extract and resolve wiki links
         wiki_links = _extract_wiki_links(body, md_file, docs_dir)
@@ -195,30 +205,31 @@ def main():
                 metadata[key] = frontmatter[key]
 
         # Build content with URL header for citation
-        content = f"[Wiki: {title}]({wiki_url}/)\n\n{_public_wiki_links(body, md_file, docs_dir)}"
-        if len(content) > _MAX_CONTENT_LEN:
-            content = content[:_MAX_CONTENT_LEN]
-
-        payload = KnowledgeDocumentCreate(
-            title=f"Wiki | {title}",
-            content=content,
-            tags=tags,
-            source_name=source_name,
-            metadata=metadata,
-        )
-
-        # Upsert: create or update
-        previous = existing_by_source.get(source_name)
-        record, is_new = store.upsert_document(payload, rebuild_indexes=False)
-        existing_by_source[source_name] = record
-        if is_new:
-            created += 1
-            print(f"  CREATED: {source_name} ({len(wiki_links)} links)")
-        elif record != previous:
-            updated += 1
-            print(f"  UPDATED: {source_name} ({len(wiki_links)} links)")
-        else:
-            skipped += 1
+        header = f"[Wiki: {title}]({wiki_url}/)\n\n"
+        body = _public_wiki_links(body, md_file, docs_dir)
+        chunks = list(_content_chunks(body, _MAX_CONTENT_LEN-len(header))) or ['']
+        for ordinal, chunk in enumerate(chunks, 1):
+            chunk_source = source_name if ordinal == 1 else f'{source_name}#chunk-{ordinal}'
+            desired_sources.add(chunk_source)
+            chunk_metadata = dict(metadata)
+            if len(chunks) > 1:
+                chunk_metadata.update(wiki_page_source=source_name,
+                    wiki_chunk=str(ordinal), wiki_chunks=str(len(chunks)))
+            payload = KnowledgeDocumentCreate(
+                title=f"Wiki | {title}", content=header+chunk, tags=tags,
+                source_name=chunk_source, metadata=chunk_metadata,
+            )
+            previous = existing_by_source.get(chunk_source)
+            record, is_new = store.upsert_document(payload, rebuild_indexes=False)
+            existing_by_source[chunk_source] = record
+            if is_new:
+                created += 1
+                print(f"  CREATED: {chunk_source} ({len(wiki_links)} links)")
+            elif record != previous:
+                updated += 1
+                print(f"  UPDATED: {chunk_source} ({len(wiki_links)} links)")
+            else:
+                skipped += 1
 
     stale_ids = [
         document.document_id

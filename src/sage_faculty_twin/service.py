@@ -80,6 +80,7 @@ from .code_agent_backends import (
 )
 from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
+from .knowledge_sources import KnowledgeSources, wiki_index_settings
 from .escalation_store import EscalationQueueStore
 from .evidence_policy import (
     comparison_subjects,
@@ -1121,10 +1122,12 @@ class FacultyTwinWorkflowSupport:
         shadow_planner_status: str = "shadow_disabled",
         shadow_planner_message: str | None = None,
         planner_comparison: WorkflowPlanComparison | None = None,
+        knowledge_retriever: KnowledgeSources | None = None,
     ) -> None:
         self._settings = settings
         self._booking_workflows = booking_workflows
         self._knowledge_store = knowledge_store
+        self._knowledge_retriever = knowledge_retriever or KnowledgeSources(knowledge_store)
         self._conversation_store = conversation_store
         self._analytics_store = analytics_store
         self._artifact_memory_draft_store = artifact_memory_draft_store
@@ -1619,7 +1622,7 @@ class FacultyTwinWorkflowSupport:
             retrieval_query = self._build_knowledge_query(
                 context.request, interaction_intent, context.recent_session_context
             )
-            raw_hits = self._knowledge_store.search(
+            raw_hits = self._knowledge_retriever.search(
                 retrieval_query,
                 visitor_profile=context.request.visitor_profile,
                 admin_role=self._resolve_admin_role(),
@@ -1627,7 +1630,7 @@ class FacultyTwinWorkflowSupport:
             method_hits = []
             for method_query in self._owner_method_retrieval_queries(context.request):
                 method_hits.extend(
-                    self._knowledge_store.search(
+                    self._knowledge_retriever.search(
                         method_query,
                         top_k=2,
                         visitor_profile=context.request.visitor_profile,
@@ -1644,7 +1647,7 @@ class FacultyTwinWorkflowSupport:
             subject_hits = []
             subjects = comparison_subjects(context.request.question)
             for subject in subjects:
-                subject_hits.extend(self._knowledge_store.search(
+                subject_hits.extend(self._knowledge_retriever.search(
                     subject,
                     top_k=6,
                     visitor_profile=context.request.visitor_profile,
@@ -5302,7 +5305,7 @@ class FacultyTwinWorkflowSupport:
                 student_email=booking.student_email,
                 limit=10,
             )
-            related_hits = self._knowledge_store.search(booking.topic, top_k=2)
+            related_hits = self._knowledge_retriever.search(booking.topic, top_k=2)
             drafts = self._action_planner.build_booking_follow_up_email_drafts(
                 booking=booking,
                 student_profiles=profiles,
@@ -6029,7 +6032,7 @@ class FacultyTwinWorkflowSupport:
         """
         resolved = []
         for hit in hits:
-            document = self._knowledge_store.get_visible_document(
+            document = self._knowledge_retriever.get_visible_document(
                 hit.document_id, visitor_profile=getattr(request, 'visitor_profile', None),
                 admin_role=self._resolve_admin_role(),
             )
@@ -6196,7 +6199,7 @@ class FacultyTwinWorkflowSupport:
         if not question or (not is_owner_identity_query(normalized) and not self._IDENTITY_QUESTION_PATTERN.search(question)):
             return []
         hits: list[KnowledgeSearchHit] = []
-        for record in self._knowledge_store.list_documents():
+        for record in self._knowledge_retriever.public_documents():
             if record.title in self._IDENTITY_FLOOR_TITLES:
                 excerpt = record.content[:600]
                 hits.append(
@@ -6231,7 +6234,7 @@ class FacultyTwinWorkflowSupport:
             "系统资料｜代表性系统积累",
         )
         records_by_title = {
-            record.title: record for record in self._knowledge_store.list_documents()
+            record.title: record for record in self._knowledge_retriever.public_documents()
         }
         hits: list[KnowledgeSearchHit] = []
         for title in preferred_titles:
@@ -7936,6 +7939,11 @@ class FacultyTwinWorkflowSupport:
         )
 
     def _classify_knowledge_basis_label(self, hit: KnowledgeSearchHit) -> str:
+        origin = hit.metadata.get('retrieval_source')
+        if origin == 'wiki':
+            return '公开 Wiki'
+        if origin == 'private':
+            return '私有知识库'
         hit_tags = {tag.lower() for tag in hit.tags}
         source_name = (hit.source_name or "").lower()
         if self._is_teaching_hit(hit):
@@ -9013,6 +9021,13 @@ class DigitalTwinService:
             versioned_receipt_provider=self._deployment_receipt_store.runtime_mapping,
         )
         self._knowledge_store = LocalKnowledgeStore(settings)
+        self._wiki_store = (
+            LocalKnowledgeStore(wiki_index_settings(settings))
+            if settings.wiki_index_dir is not None else None
+        )
+        self._knowledge_retriever = KnowledgeSources(
+            self._knowledge_store, self._wiki_store, top_k=settings.retrieval_top_k,
+        )
         self._conversation_store = NeuroMemConversationStore(settings)
         self._analytics_store = ConversationAnalyticsStore(settings, self._conversation_store)
         self._artifact_memory_draft_store = ArtifactMemoryDraftStore(settings)
@@ -9042,7 +9057,7 @@ class DigitalTwinService:
         # Agent skill system (V4.0)
 
         self._skill_tool_registry = SkillToolRegistry(
-            knowledge_store=self._knowledge_store,
+            knowledge_store=self._knowledge_retriever,
             memory_store=self._conversation_store,
         )
         self._skill_router = SkillRouter(
@@ -9516,7 +9531,7 @@ class DigitalTwinService:
         if not self._is_light_request(request):
             return None
         question = re.sub(r"[\s，。！？、,.!?;；:：()（）]+", "", request.question).lower()
-        hits = self._knowledge_store.search(
+        hits = self._knowledge_retriever.search(
             request.question,
             top_k=12,
             visitor_profile=request.visitor_profile,
@@ -9553,7 +9568,7 @@ class DigitalTwinService:
                     decision_mode="local_evidence_fast_path",
                 )
         if request.visitor_profile != "lab_member":
-            member_hits = self._knowledge_store.search(
+            member_hits = self._knowledge_retriever.search(
                 request.question,
                 top_k=12,
                 visitor_profile="lab_member",
@@ -9803,7 +9818,7 @@ class DigitalTwinService:
         query = support._build_knowledge_query(
             effective_request, intent, recent_session_context=recent_context
         )
-        raw_hits = self._knowledge_store.search(
+        raw_hits = self._knowledge_retriever.search(
             query,
             visitor_profile=request.visitor_profile,
             admin_role=support._resolve_admin_role(),
@@ -10318,7 +10333,7 @@ class DigitalTwinService:
             )
 
         try:
-            raw_hits = self._knowledge_store.search(
+            raw_hits = self._knowledge_retriever.search(
                 problem,
                 visitor_profile=request.visitor_profile,
                 admin_role=None,
@@ -11578,6 +11593,8 @@ class DigitalTwinService:
             "knowledge_runtime_backend": self._knowledge_store.runtime_backend_name(),
             "knowledge_embedding_backend": self._knowledge_store.embedding_backend_name(),
             "knowledge_documents": str(self._knowledge_store.count_documents()),
+            "wiki_documents": str(self._wiki_store.count_documents() if self._wiki_store else 0),
+            "wiki_index_complete": str(self._wiki_store.index_is_complete() if self._wiki_store else False).lower(),
             "knowledge_index_entries": str(
                 self._knowledge_store.indexed_document_count()
             ),
@@ -11791,6 +11808,7 @@ class DigitalTwinService:
             shadow_planner_status=shadow_planner_status,
             shadow_planner_message=shadow_planner_message,
             planner_comparison=planner_comparison,
+            knowledge_retriever=self._knowledge_retriever,
         )
 
     def _record_planner_metrics(

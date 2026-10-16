@@ -9,7 +9,30 @@ from tools import ingest_wiki
 import pytest
 
 
-@pytest.mark.parametrize('audience,expected', [('', 'audience:lab_member'), ('public', 'audience:public'), ('invalid', 'audience:lab_member')])
+@pytest.fixture(autouse=True)
+def settings_projection(monkeypatch):
+    # These parser tests use a fake store; real directory isolation is tested separately.
+    monkeypatch.setattr(ingest_wiki, 'wiki_index_settings', lambda settings: settings)
+
+
+def test_long_wiki_page_is_losslessly_partitioned(tmp_path, monkeypatch):
+    docs = tmp_path/'docs'
+    docs.mkdir()
+    body = ('Full paragraph with evidence.\n\n' * 2500) + 'FINAL_TAIL_FACT'
+    (docs/'long.md').write_text(body)
+    store = _Store()
+    monkeypatch.setattr(ingest_wiki, 'AppSettings', lambda: object())
+    monkeypatch.setattr(ingest_wiki, 'LocalKnowledgeStore', lambda _: store)
+    monkeypatch.setattr(sys, 'argv', ['ingest_wiki.py','--wiki-dir',str(tmp_path)])
+    ingest_wiki.main()
+    chunks = sorted(store.documents.values(), key=lambda d:int(dict(d.metadata)['wiki_chunk']))
+    assert len(chunks)>1
+    assert ''.join(d.content.split('\n\n',1)[1] for d in chunks)==body
+    assert chunks[-1].content.endswith('FINAL_TAIL_FACT')
+    assert all(len(d.content)<=ingest_wiki._MAX_CONTENT_LEN for d in chunks)
+
+
+@pytest.mark.parametrize('audience,expected', [('', 'audience:public'), ('public', 'audience:public'), ('invalid', 'audience:public')])
 def test_reviewed_wiki_visibility_and_course_metadata(tmp_path, monkeypatch, audience, expected):
     docs = tmp_path / 'docs' / 'standards'
     docs.mkdir(parents=True)
@@ -38,8 +61,8 @@ def test_research_tutorial_retains_topic_without_visibility_escalation(tmp_path,
     ingest_wiki.main()
     tags = store.documents['wiki:standards/guide'].tags
     assert 'research' in tags
-    assert 'audience:lab_member' in tags
-    assert 'audience:public' not in tags
+    assert 'audience:lab_member' not in tags
+    assert 'audience:public' in tags
 
 
 @dataclass(frozen=True)

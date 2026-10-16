@@ -7,14 +7,19 @@ from sage_faculty_twin.chat_contracts import EvidenceBundle
 
 def fixture(tmp_path, *, materialize=True, audience='public'):
     service = DigitalTwinService(AppSettings(
-        knowledge_base_dir=tmp_path, dynamic_context_materialization_enabled=materialize,
+        _env_file=None, knowledge_backend='local',
+        conversation_memory_index_type='segment',
+        knowledge_base_dir=tmp_path / 'private', wiki_index_dir=tmp_path / 'wiki',
+        dynamic_context_materialization_enabled=materialize,
     ))
     content = '# Seven perspectives\n' + 'intro details ' * 120 + '\n6. 编辑视角\n7. 作者自己视角\nTAIL_FACT'
-    record = service._knowledge_store.add_document(KnowledgeDocumentCreate(
+    store = service._wiki_store if audience == 'public' else service._knowledge_store
+    origin = 'wiki' if audience == 'public' else 'private'
+    record = store.add_document(KnowledgeDocumentCreate(
         title='Seven perspectives', content=content,
-        tags=[f'audience:{audience}'], source_name='wiki:test-seven',
+        tags=[f'audience:{audience}'], source_name=f'{origin}:test-seven',
     ))
-    hit = KnowledgeSearchHit(document_id=record.document_id, title=record.title,
+    hit = KnowledgeSearchHit(document_id=f'{origin}::{record.document_id}', title=record.title,
         source_name=record.source_name, excerpt=content[:500], score=1, tags=record.tags)
     request = ChatRequest(student_name='test', question='List seven perspectives', visitor_profile='general_visitor')
     return service, record, hit, request
@@ -38,9 +43,9 @@ def test_both_prompt_paths_receive_tail_not_preview(tmp_path, materialize):
 def test_stale_preview_cannot_disclose_full_source(tmp_path, case):
     service, record, hit, request = fixture(tmp_path)
     if case == 'deleted':
-        service._knowledge_store.delete_documents([record.document_id])
+        service._wiki_store.delete_documents([record.document_id])
     elif case == 'revoked':
-        service._knowledge_store.update_document(record.document_id, KnowledgeDocumentCreate(
+        service._wiki_store.update_document(record.document_id, KnowledgeDocumentCreate(
             title=record.title, content=record.content, source_name=record.source_name,
             tags=['audience:admin']))
     else:

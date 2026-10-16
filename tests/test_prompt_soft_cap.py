@@ -218,13 +218,14 @@ def test_prompt_rejects_oversized_evidence_without_truncating(tmp_path: Path) ->
         title=hit.title, content=fat_excerpt, tags=['audience:public'],
         source_name=hit.source_name,
     )) for hit in knowledge_hits]
-    knowledge_hits = [hit.model_copy(update={'document_id':record.document_id})
+    knowledge_hits = [hit.model_copy(update={'document_id':'private::'+record.document_id})
                       for hit, record in zip(knowledge_hits, records)]
     request = ChatRequest(
         student_name="Alice",
         student_email="alice@example.com",
         course_context="科研指导",
         conversation_id="conv-prompt-cap-know",
+        visitor_profile='lab_member',
         question="请基于知识库回答。",
     )
     context = _make_context(request, settings=settings, knowledge_hits=knowledge_hits)

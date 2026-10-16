@@ -341,8 +341,7 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
-        if payload.source_name in SOURCE_OWNERSHIP:
-            raise ValueError("Source is maintained by Wiki; sync Wiki and use upsert_document")
+        self._check_source_namespace(payload.source_name)
         record = KnowledgeDocumentRecord(
             document_id=str(uuid4()),
             title=payload.title,
@@ -371,13 +370,7 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> tuple[KnowledgeDocumentRecord, bool]:
-        canonical_source = SOURCE_OWNERSHIP.get(payload.source_name)
-        if canonical_source:
-            canonical = self._find_document_by_source_name(canonical_source)
-            if canonical is None:
-                raise ValueError(f"Canonical source {canonical_source} missing; sync Wiki first")
-            # Do not overwrite Wiki text, visibility or metadata with old imports.
-            return canonical, False
+        self._check_source_namespace(payload.source_name)
         existing = self._find_document_by_source_name(payload.source_name)
         if existing is None:
             return self.add_document(payload, rebuild_indexes=rebuild_indexes), True
@@ -423,8 +416,7 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
-        if payload.source_name in SOURCE_OWNERSHIP:
-            raise ValueError("Source is maintained by Wiki; update its canonical page instead")
+        self._check_source_namespace(payload.source_name)
         existing = self._documents.get(document_id)
         if existing is None:
             raise KeyError(document_id)
@@ -456,6 +448,14 @@ class LocalKnowledgeStore:
 
     def list_documents(self) -> list[KnowledgeDocumentRecord]:
         return sorted(self._documents.values(), key=lambda item: item.created_at)
+
+    def _check_source_namespace(self, source_name: str | None) -> None:
+        namespace = self._settings.knowledge_namespace
+        is_wiki = str(source_name or '').startswith('wiki:')
+        if namespace == 'wiki' and not is_wiki:
+            raise ValueError('The public Wiki index accepts Wiki sources only')
+        if namespace == 'private' and (is_wiki or source_name in SOURCE_OWNERSHIP):
+            raise ValueError('Wiki-owned sources belong in the independent Wiki index, not the private KB')
 
     def get_document(self, document_id: str) -> KnowledgeDocumentRecord | None:
         return self._documents.get(document_id)

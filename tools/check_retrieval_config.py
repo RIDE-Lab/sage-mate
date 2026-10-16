@@ -15,6 +15,7 @@ FIELDS = (
     'sagevdb_embedding_model', 'sagevdb_embedding_base_url', 'effective_embedding_endpoint',
     'sagevdb_embedding_query_instruction', 'sagevdb_embedding_batch_size',
     'knowledge_base_dir', 'knowledge_sagevdb_persistence_dir',
+    'wiki_index_dir', 'knowledge_namespace',
     'neuromem_index_type', 'neuromem_embedding_model', 'neuromem_embedding_dim',
 )
 

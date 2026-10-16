@@ -21,13 +21,21 @@ from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSup
 
 def _prompt_with_stored_evidence(service, *, knowledge_hits, **kwargs):
     """Prompt fixtures must have resolvable source records, not invented IDs."""
+    member = getattr(kwargs['request'], 'visitor_profile', None) == 'lab_member'
+    if not member:
+        service._knowledge_retriever.wiki = LocalKnowledgeStore(service._settings.model_copy(update={
+            'knowledge_base_dir': service._settings.knowledge_base_dir/'test-public-index',
+            'knowledge_backend': 'local', 'knowledge_namespace': 'wiki'}))
+    store = service._knowledge_store if member else service._knowledge_retriever.wiki
+    origin = 'private' if member else 'wiki'
     for hit in knowledge_hits:
-        service._knowledge_store._documents[hit.document_id] = KnowledgeDocumentRecord(
+        store._documents[hit.document_id] = KnowledgeDocumentRecord(
             document_id=hit.document_id, title=hit.title, content=hit.excerpt,
             source_name=hit.source_name, tags=hit.tags, metadata=hit.metadata,
             created_at=datetime.now(UTC),
         )
-    return service._build_student_prompt(knowledge_hits=knowledge_hits, **kwargs)
+    labeled = [service._knowledge_retriever._label(hit, origin) for hit in knowledge_hits]
+    return service._build_student_prompt(knowledge_hits=labeled, **kwargs)
 
 
 def test_index_completeness_reports_local_and_neuromem_counts(tmp_path: Path) -> None:
@@ -1031,13 +1039,6 @@ def test_infer_default_audience_restricts_sensitive_sources(
                 ["research", "agenda"],
                 "workspace/vamos",
             ),
-            # Legacy Wiki records had no audience tags; their category still
-            # determines whether a guest may retrieve them.
-            (
-                "旧版 KV 技术笔记",
-                [],
-                "wiki:tech-notes/kv",
-            ),
             # Public content should remain unrestricted
             (
                 "公开论文｜MorphStream",
@@ -1076,7 +1077,6 @@ def test_infer_default_audience_restricts_sensitive_sources(
             "VAMOS Proposal",
             "VAMOS Roadmap",
             "VAMOS README",
-            "旧版 KV 技术笔记",
             "公开论文｜MorphStream",
             "公开资料｜实验室简介",
         }
@@ -1094,7 +1094,7 @@ def test_service_prompt_includes_retrieved_owner_materials(tmp_path: Path) -> No
         )
     )
 
-    hits = service.search_knowledge("What should I prepare before a meeting?").hits
+    hits = service._knowledge_retriever.search("What should I prepare before a meeting?", visitor_profile='lab_member')
     prompt = service._build_student_prompt(
         request=type(
             "Request",
@@ -1103,6 +1103,7 @@ def test_service_prompt_includes_retrieved_owner_materials(tmp_path: Path) -> No
                 "student_name": "Alice",
                 "course_context": None,
                 "question": "What should I prepare before a meeting?",
+                "visitor_profile": "lab_member",
             },
         )(),
         knowledge_hits=hits,
@@ -1261,7 +1262,7 @@ def test_structured_team_policy_fast_response_is_member_only_and_cited(
     assert member is not None
     assert member.answer == "特别贡献奖、一等奖、二等奖、三等奖。"
     assert member.used_model == "sage-policy-fast-path"
-    assert member.knowledge_hits == [hit]
+    assert member.knowledge_hits == [service._knowledge_retriever._label(hit, 'private')]
     assert member.answer_basis[0].source_label == hit.source_name
     assert guest is not None
     assert guest.used_model == "sage-policy-access-boundary"
@@ -1340,7 +1341,9 @@ def test_structured_knowledge_fast_response_supports_strict_string_metadata(
     assert "不能向公开访客提供或推断" in guest.answer
     assert guest.knowledge_hits == []
 
-    monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [public_hit])
+    wiki = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path/'wiki', knowledge_backend='local', knowledge_namespace='wiki'))
+    service._knowledge_retriever.wiki = wiki
+    monkeypatch.setattr(wiki, "search", lambda *args, **kwargs: [public_hit])
     public = service.try_fast_answer(
         ChatRequest(
             student_name="Guest",

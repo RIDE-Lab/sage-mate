@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.models import KnowledgeDocumentCreate
+from sage_faculty_twin.source_ownership import SOURCE_OWNERSHIP
 
 PRIVATE_ROOT = Path("/home/shuhao/private-materials")
 MAX_CONTENT_CHARS = 18000
@@ -34,7 +35,7 @@ WIKI_REPLACED_SOURCES = frozenset({
     "private-materials:paper-revision-lessons",
     "private-materials:cccf-survey-revision-lessons",
     "private-materials:curated-state-management-research-line",
-})
+}) | frozenset(SOURCE_OWNERSHIP)
 
 SENSITIVE_PATH_PARTS = {
     ".git",

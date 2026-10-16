@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Keep the canonical Wiki repository synchronized with Twin's live KB.
+# Synchronize the canonical public Wiki into its independent retrieval index.
 
 set -euo pipefail
 
@@ -35,7 +35,7 @@ fail() {
     exit 1
 }
 
-log "=== Wiki KB Sync Start ==="
+log "=== Public Wiki Index Sync Start ==="
 log "Wiki dir: $WIKI_DIR"
 
 if [[ ! -e "$WIKI_DIR" ]]; then
@@ -124,4 +124,4 @@ else
     log "Wiki documents unchanged; no Twin restart needed"
 fi
 
-log "=== Wiki KB Sync Complete ==="
+log "=== Public Wiki Index Sync Complete ==="

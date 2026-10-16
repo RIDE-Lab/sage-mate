@@ -252,6 +252,8 @@ class AppSettings(BaseSettings):
     smtp_use_ssl: bool = Field(default=False)
     smtp_timeout_seconds: int = Field(default=15, ge=1, le=120)
     knowledge_base_dir: Path = Field(default=Path("data/knowledge_base"))
+    wiki_index_dir: Path | None = Field(default=None)
+    knowledge_namespace: str = Field(default="private", pattern="^(private|wiki)$")
     knowledge_backend: str = Field(default="neuromem")
     # Neuromem search index choice. "auto" prefers faiss (dense retrieval via
     # sentence-transformers) and falls back to bm25 when unavailable.
