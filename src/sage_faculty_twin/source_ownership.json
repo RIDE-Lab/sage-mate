@@ -2,5 +2,13 @@
   "paper-writing:revision-lessons-chinese-survey": "wiki:standards/chinese-survey-writing-guide",
   "private-materials:cccf-survey-revision-lessons": "wiki:standards/chinese-survey-writing-guide",
   "paper-writing:revision-lessons-english": "wiki:standards/paper-revision-checklist",
-  "private-materials:paper-revision-lessons": "wiki:standards/paper-revision-checklist"
+  "private-materials:paper-revision-lessons": "wiki:standards/paper-revision-checklist",
+  "graduate-paper-writing-course:lecture-5": "wiki:tutorials/paper-writing-lecture-5",
+  "graduate-paper-writing-course:lecture-6": "wiki:tutorials/paper-writing-lecture-6",
+  "graduate-paper-writing-course:lecture-7": "wiki:tutorials/paper-writing-lecture-7",
+  "graduate-paper-writing-course:lecture-8": "wiki:tutorials/paper-writing-lecture-8",
+  "onboarding-handbook": "wiki:tutorials/research-onboarding",
+  "curated_faq": "wiki:tutorials/twin-usage",
+  "private-materials:repo-maintenance-branch-hygiene-2026-06-23": "wiki:standards/git-branch-hygiene",
+  "private-materials:curated-domestic-inference-serving-framework": "wiki:tech-notes/domestic-inference-open-problems"
 }

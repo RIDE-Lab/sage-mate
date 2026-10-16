@@ -177,7 +177,7 @@ def main():
             metadata["wiki_authors"] = frontmatter["authors"]
         if frontmatter.get("date"):
             metadata["wiki_date"] = frontmatter["date"]
-        for key in ('domain', 'course_id', 'material_type'):
+        for key in ('domain', 'course_id', 'material_type', 'ordinal_type', 'ordinal'):
             if frontmatter.get(key):
                 metadata[key] = frontmatter[key]
 

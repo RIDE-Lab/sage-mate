@@ -13,7 +13,7 @@ import pytest
 def test_reviewed_wiki_visibility_and_course_metadata(tmp_path, monkeypatch, audience, expected):
     docs = tmp_path / 'docs' / 'standards'
     docs.mkdir(parents=True)
-    (docs / 'guide.md').write_text(f'---\ntitle: Guide\naudience: {audience}\ndomain: teaching\ncourse_id: paper-writing\nmaterial_type: guide\n---\nPublic guide')
+    (docs / 'guide.md').write_text(f'---\ntitle: Guide\naudience: {audience}\ndomain: teaching\ncourse_id: paper-writing\nmaterial_type: lecture\nordinal_type: lecture\nordinal: 5\n---\nPublic guide')
     store = _Store()
     monkeypatch.setattr(ingest_wiki, 'AppSettings', lambda: object())
     monkeypatch.setattr(ingest_wiki, 'LocalKnowledgeStore', lambda _: store)
@@ -22,6 +22,8 @@ def test_reviewed_wiki_visibility_and_course_metadata(tmp_path, monkeypatch, aud
     record = store.documents['wiki:standards/guide']
     assert [tag for tag in record.tags if tag.startswith('audience:')] == [expected]
     assert dict(record.metadata)['course_id'] == 'paper-writing'
+    assert dict(record.metadata)['ordinal_type'] == 'lecture'
+    assert dict(record.metadata)['ordinal'] == '5'
 
 
 @dataclass(frozen=True)

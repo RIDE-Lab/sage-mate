@@ -33,4 +33,9 @@ def test_missing_canonical_never_recreates_legacy(method):
 
 def test_unique_material_not_retired():
     assert 'private-materials:how-to-think-about-research-topic' not in SOURCE_OWNERSHIP
-    assert 'graduate-paper-writing-course:lecture-5' not in SOURCE_OWNERSHIP
+    assert 'workspace/neuromem' not in SOURCE_OWNERSHIP
+
+
+@pytest.mark.parametrize('ordinal', range(5, 9))
+def test_public_course_is_wiki_owned(ordinal):
+    assert SOURCE_OWNERSHIP[f'graduate-paper-writing-course:lecture-{ordinal}'] == f'wiki:tutorials/paper-writing-lecture-{ordinal}'
