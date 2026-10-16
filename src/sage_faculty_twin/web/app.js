@@ -2989,7 +2989,8 @@ chatForm.addEventListener("submit", async (event) => {
                     data.booking_result || null,
                     false,
                     data.exchange_id || null,
-                    data.workflow_trace || []
+                    data.workflow_trace || [],
+                    data.external_evidence_required !== false
                 );
                 noteConversationAnswerPreview(data.answer);
                 updateTokenUsageBadge(data.token_usage || null);
@@ -7834,7 +7835,8 @@ function renderAssistantMessage(
     bookingResult = null,
     isError = false,
     exchangeId = null,
-    workflowTrace = []
+    workflowTrace = [],
+    externalEvidenceRequired = true
 ) {
     stopAnswerProcessingTicker(container);
     const startedAt = Number(container?.dataset?.startedAt);
@@ -7881,7 +7883,7 @@ function renderAssistantMessage(
                     </div>
                 `,
             })
-            : isError ? "" : buildCollapsibleSupportSectionHtml({
+            : isError || !externalEvidenceRequired ? "" : buildCollapsibleSupportSectionHtml({
                 kicker: "Support",
                 title: "本次未引用可核验材料",
                 copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
@@ -9723,7 +9725,8 @@ function handleWorkflowStreamEvent(payload) {
                 response.booking_result || null,
                 false,
                 response.exchange_id || null,
-                response.workflow_trace || []
+                response.workflow_trace || [],
+                response.external_evidence_required !== false
             );
             // Some SSE deployments publish answer_done before post-answer
             // evidence is attached. Do not prevent the canonical /chat

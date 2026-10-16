@@ -4608,6 +4608,7 @@ class FacultyTwinWorkflowSupport:
             knowledge_hits=context.knowledge_hits,
             web_search_hits=context.web_search_hits,
             answer_basis=self._build_answer_basis(context),
+            external_evidence_required=not self._is_self_contained_request(context),
             follow_up_actions=context.follow_up_actions,
             conversation_id=context.conversation_id,
             workflow_action=context.workflow_action,

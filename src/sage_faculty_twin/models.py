@@ -231,6 +231,7 @@ class ChatRequestTiming(BaseModel):
 
 
 class ChatResponse(BaseModel):
+    external_evidence_required: bool = True
     answer: str
     owner_name: str
     used_model: str

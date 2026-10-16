@@ -29,6 +29,14 @@ def test_answer_basis_is_collapsed_by_default() -> None:
     assert "defaultExpanded = false" in app_js
 
 
+def test_self_contained_answer_does_not_show_missing_evidence_warning() -> None:
+    app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'externalEvidenceRequired = true' in app_js
+    assert ': isError || !externalEvidenceRequired ? ""' in app_js
+    assert 'data.external_evidence_required !== false' in app_js
+    assert 'response.external_evidence_required !== false' in app_js
+
+
 def test_chat_messages_share_centered_composer_column() -> None:
     theme = (WEB_DIR / "minimal.1009.css").read_text(encoding="utf-8")
     stream = theme.split(".chat-stream {", 1)[1].split("}", 1)[0]

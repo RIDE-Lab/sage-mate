@@ -31,6 +31,8 @@ def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, backgroun
     assert not context.memory_hits
     assert not support._build_answer_basis(context)
     assert all(step.status == "skipped" for step in context.workflow_trace)
+    context.answer = "收到"
+    assert support.render_chat_response(context).external_evidence_required is False
 
 
 @pytest.mark.parametrize("intent,fields", [
