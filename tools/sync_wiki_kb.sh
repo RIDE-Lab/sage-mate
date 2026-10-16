@@ -80,6 +80,14 @@ if [[ -z "$PYTHON_BIN" ]]; then
 fi
 [[ -n "$PYTHON_BIN" && -x "$PYTHON_BIN" ]] || fail "No usable Python interpreter configured"
 
+# A shared source tree is not enough: the timer must use the same retrieval
+# environment as the app. Refuse drift before opening or mutating the index.
+(
+    cd "$ACTIVE_REPO_ROOT"
+    PYTHONPATH="$ACTIVE_REPO_ROOT/src${PYTHONPATH:+:$PYTHONPATH}" \
+        "$PYTHON_BIN" tools/check_retrieval_config.py
+) 2>&1 | tee -a "$LOG_FILE" || fail "Retrieval configuration preflight failed"
+
 changed_marker="$(mktemp "$LOG_DIR/.wiki-changed.XXXXXX")"
 trap 'rm -f -- "$changed_marker"' EXIT
 log "Ingesting with active release: $ACTIVE_REPO_ROOT"
