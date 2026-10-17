@@ -10759,10 +10759,12 @@ document.getElementById("context-compress-btn")?.addEventListener("click", async
         });
 
         if (result.ok) {
-            const turns = result.turns_compressed || 0;
+            const turns = result.turns_incorporated || result.turns_compressed || 0;
             const chars = result.digest_chars || 0;
             if (turns > 0) {
-                label.textContent = `已压缩 ${turns} 轮 (${chars} 字)`;
+                label.textContent = result.mode === "lossless"
+                    ? `已无损保留 ${turns} 轮（未压缩）`
+                    : `已压缩 ${turns} 轮 (${chars} 字)`;
                 btn.classList.add("compress-success");
             } else {
                 label.textContent = result.message || "无需压缩";

@@ -1,260 +1,167 @@
-"""Tests for the rolling conversation digest (context compression) mechanism.
-
-Covers:
-- ConversationDigestRecord serialization round-trip.
-- ConversationDigestStore get/update/persistence/load-all behavior.
-- Digest trigger logic (threshold-based summarization).
-- Digest integration into the prompt truncation chain.
-"""
-
-from __future__ import annotations
-
+"""Exercise real publication and service paths, not copied arithmetic."""
 import json
-from datetime import UTC, datetime
-from pathlib import Path
+from datetime import UTC, datetime, timedelta
+from threading import RLock
+from types import SimpleNamespace
+
+import pytest
 
 from sage_faculty_twin.memory_store import (
-    ConversationDigestRecord,
-    ConversationDigestStore,
+    ConversationDigestRecord, ConversationDigestStore, ConversationMemoryRecord,
+    NeuroMemConversationStore,
 )
+from sage_faculty_twin.service import FacultyTwinWorkflowSupport
 
 
-# ---------------------------------------------------------------------------
-# ConversationDigestRecord
-# ---------------------------------------------------------------------------
+def record(index, *, conversation="conversation", answer=None):
+    return ConversationMemoryRecord(
+        memory_id=f"turn-{index}", conversation_id=conversation,
+        student_name="Test", student_email=None, course_context=None,
+        question=f"question-{index}", answer=answer or f"answer-{index}",
+        workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+        booking_summary=None, created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(seconds=index),
+    )
 
 
-class TestConversationDigestRecord:
-    def test_round_trip(self) -> None:
-        record = ConversationDigestRecord(
-            conversation_id="conv-abc-123",
-            digest_text="讨论了课程作业和科研方向。",
-            turns_summarized=6,
-            updated_at=datetime(2026, 6, 20, 10, 0, 0, tzinfo=UTC),
-        )
-        payload = record.to_dict()
-        restored = ConversationDigestRecord.from_dict(payload)
-        assert restored.conversation_id == record.conversation_id
-        assert restored.digest_text == record.digest_text
-        assert restored.turns_summarized == 6
-        assert restored.updated_at == record.updated_at
-
-    def test_from_dict_missing_turns_field(self) -> None:
-        payload = {
-            "conversation_id": "x",
-            "digest_text": "hello",
-            "updated_at": "2026-06-20T00:00:00+00:00",
-        }
-        record = ConversationDigestRecord.from_dict(payload)
-        assert record.turns_summarized == 0
+@pytest.fixture
+def support(tmp_path):
+    obj = FacultyTwinWorkflowSupport.__new__(FacultyTwinWorkflowSupport)
+    obj._settings = SimpleNamespace(context_digest_enabled=True, context_digest_turn_threshold=4,
+                                    context_digest_max_chars=200, context_digest_llm_enabled=False)
+    obj._digest_store = ConversationDigestStore(tmp_path / "digests")
+    memory = NeuroMemConversationStore.__new__(NeuroMemConversationStore)
+    memory._records = {}
+    memory._memory_write_lock = RLock()
+    obj._conversation_store = memory
+    yield obj
+    obj._digest_store.close()
 
 
-# ---------------------------------------------------------------------------
-# ConversationDigestStore
-# ---------------------------------------------------------------------------
+def add(support, *records):
+    support._conversation_store._records.update({item.memory_id: item for item in records})
 
 
-class TestConversationDigestStore:
-    def test_get_returns_none_for_unknown(self, tmp_path: Path) -> None:
-        store = ConversationDigestStore(tmp_path / "digests")
-        assert store.get_digest("nonexistent") is None
-
-    def test_update_and_get(self, tmp_path: Path) -> None:
-        store = ConversationDigestStore(tmp_path / "digests")
-        record = store.update_digest("conv-1", "讨论AI应用。", 4)
-        assert record.conversation_id == "conv-1"
-        assert record.digest_text == "讨论AI应用。"
-        assert record.turns_summarized == 4
-
-        fetched = store.get_digest("conv-1")
-        assert fetched is not None
-        assert fetched.digest_text == "讨论AI应用。"
-        assert fetched.turns_summarized == 4
-
-    def test_persists_to_disk(self, tmp_path: Path) -> None:
-        digest_dir = tmp_path / "digests"
-        store1 = ConversationDigestStore(digest_dir)
-        store1.update_digest("conv-2", "第一轮总结。", 3)
-
-        # Create a new store from the same dir — should load from disk.
-        store2 = ConversationDigestStore(digest_dir)
-        fetched = store2.get_digest("conv-2")
-        assert fetched is not None
-        assert fetched.digest_text == "第一轮总结。"
-        assert fetched.turns_summarized == 3
-
-    def test_update_overwrites(self, tmp_path: Path) -> None:
-        store = ConversationDigestStore(tmp_path / "digests")
-        store.update_digest("conv-3", "v1", 2)
-        store.update_digest("conv-3", "v2 updated", 6)
-
-        fetched = store.get_digest("conv-3")
-        assert fetched is not None
-        assert fetched.digest_text == "v2 updated"
-        assert fetched.turns_summarized == 6
-
-    def test_count(self, tmp_path: Path) -> None:
-        store = ConversationDigestStore(tmp_path / "digests")
-        assert store.count() == 0
-        store.update_digest("a", "text a", 1)
-        store.update_digest("b", "text b", 2)
-        assert store.count() == 2
-
-    def test_load_all_skips_corrupt_files(self, tmp_path: Path) -> None:
-        digest_dir = tmp_path / "digests"
-        digest_dir.mkdir(parents=True)
-        # Write a corrupt JSON file.
-        (digest_dir / "bad.json").write_text("{not valid json", encoding="utf-8")
-        # Write a valid file.
-        valid = ConversationDigestRecord(
-            conversation_id="good",
-            digest_text="ok",
-            turns_summarized=1,
-            updated_at=datetime.now(UTC),
-        )
-        (digest_dir / "good.json").write_text(
-            json.dumps(valid.to_dict(), ensure_ascii=False), encoding="utf-8"
-        )
-
-        store = ConversationDigestStore(digest_dir)
-        assert store.count() == 1
-        assert store.get_digest("good") is not None
-
-    def test_digest_path_sanitizes_id(self, tmp_path: Path) -> None:
-        store = ConversationDigestStore(tmp_path / "digests")
-        # IDs with special chars should be sanitized.
-        store.update_digest("conv/with:special chars", "text", 1)
-        fetched = store.get_digest("conv/with:special chars")
-        assert fetched is not None
-        # Verify the file was created with a safe name.
-        files = list((tmp_path / "digests").glob("*.json"))
-        assert len(files) == 1
-        assert "/" not in files[0].stem
-        assert ":" not in files[0].stem
+def test_record_round_trip():
+    original = ConversationDigestRecord("one", "text", 3, datetime.now(UTC), revision=2)
+    assert ConversationDigestRecord.from_dict(original.to_dict()) == original
 
 
-# ---------------------------------------------------------------------------
-# Digest trigger logic (unit-level, no LLM dependency)
-# ---------------------------------------------------------------------------
+def test_real_automatic_path_continues_after_64_and_preserves_earliest_answer(support):
+    for index in range(100):
+        add(support, record(index))
+        support._update_conversation_digest(SimpleNamespace(conversation_id="conversation"))
+        saved = support._digest_store.get_digest("conversation")
+        expected = ((index + 1) // 4) * 4
+        assert (saved.turns_summarized if saved else 0) == expected
+    saved = support._digest_store.get_digest("conversation")
+    payloads = [json.loads(line) for line in saved.digest_text.splitlines()]
+    assert [item["memory_id"] for item in payloads] == [f"turn-{i}" for i in range(100)]
+    assert payloads[0]["answer"] == "answer-0"
+    assert saved.revision == 25
 
 
-class TestDigestTriggerLogic:
-    """Verify the threshold-based trigger in _update_conversation_digest."""
-
-    def test_no_trigger_below_threshold(self, tmp_path: Path) -> None:
-        """Digest should not fire when fewer turns than threshold exist."""
-        from sage_faculty_twin.config import AppSettings
-
-        settings = AppSettings(
-            context_digest_enabled=True,
-            context_digest_turn_threshold=4,
-            context_digest_dir=tmp_path / "digests",
-            conversation_memory_dir=tmp_path / "mem",
-        )
-        ConversationDigestStore(settings.context_digest_dir)
-        # Simulate: only 2 turns in the conversation.
-        # The trigger check compares len(all_records) - turns_already_digested < threshold.
-        # With 2 turns and threshold 4, it should NOT trigger.
-        all_record_count = 2
-        turns_already_digested = 0
-        new_turns = all_record_count - turns_already_digested
-        assert new_turns < settings.context_digest_turn_threshold
-
-    def test_trigger_at_threshold(self, tmp_path: Path) -> None:
-        """Digest should fire when exactly threshold turns exist."""
-        from sage_faculty_twin.config import AppSettings
-
-        settings = AppSettings(
-            context_digest_enabled=True,
-            context_digest_turn_threshold=4,
-            context_digest_dir=tmp_path / "digests",
-            conversation_memory_dir=tmp_path / "mem",
-        )
-        all_record_count = 4
-        turns_already_digested = 0
-        new_turns = all_record_count - turns_already_digested
-        assert new_turns >= settings.context_digest_turn_threshold
-
-    def test_no_trigger_when_disabled(self, tmp_path: Path) -> None:
-        """Digest should not fire when context_digest_enabled is False."""
-        from sage_faculty_twin.config import AppSettings
-
-        settings = AppSettings(
-            context_digest_enabled=False,
-            context_digest_dir=tmp_path / "digests",
-            conversation_memory_dir=tmp_path / "mem",
-        )
-        assert not settings.context_digest_enabled
-
-    def test_incremental_trigger(self, tmp_path: Path) -> None:
-        """After digesting 4 turns, next 4 should trigger again."""
-        from sage_faculty_twin.config import AppSettings
-
-        settings = AppSettings(
-            context_digest_enabled=True,
-            context_digest_turn_threshold=4,
-            context_digest_dir=tmp_path / "digests",
-            conversation_memory_dir=tmp_path / "mem",
-        )
-        # Simulate: 8 total turns, 4 already digested.
-        all_record_count = 8
-        turns_already_digested = 4
-        new_turns = all_record_count - turns_already_digested
-        assert new_turns >= settings.context_digest_turn_threshold
+def test_initial_backlog_manual_and_repeat_do_not_omit_or_duplicate(support):
+    add(support, *(record(i) for i in range(100)))
+    result = support.compress_conversation_context("conversation")
+    assert result["ok"] and result["total_turns"] == result["turns_incorporated"] == 100
+    assert result["turns_compressed"] == 0
+    assert result["mode"] == "lossless"
+    assert support.compress_conversation_context("conversation")["turns_compressed"] == 0
+    assert support._digest_store.get_digest("conversation").revision == 1
 
 
-# ---------------------------------------------------------------------------
-# Digest text truncation in prompt builder
-# ---------------------------------------------------------------------------
+def test_no_truncation_or_markdown_flattening(support):
+    answer = "# Heading\n\n- parent\n  - child\n" * 300
+    add(support, record(0, answer=answer))
+    support.compress_conversation_context("conversation")
+    add(support, record(1, answer="new decision"))
+    support.compress_conversation_context("conversation")
+    saved = support._digest_store.get_digest("conversation")
+    payloads = [json.loads(line) for line in saved.digest_text.splitlines()]
+    assert payloads[0]["answer"] == answer
+    assert payloads[1]["answer"] == "new decision"
+    assert len(saved.digest_text) > support._settings.context_digest_max_chars
 
 
-class TestDigestPromptTruncation:
-    """Verify the digest-stripping step in the build_prompt truncation chain."""
+def test_legacy_count_cannot_claim_coverage_or_poison_rebuild(support, tmp_path):
+    path = tmp_path / "digests" / "conversation.json"
+    legacy = '{"conversation_id":"conversation","turns_summarized":999,"digest_text":"lossy"}'
+    path.write_text(legacy)
+    support._digest_store.close()
+    support._digest_store = ConversationDigestStore(path.parent)
+    assert support._digest_store.get_digest("conversation") is None
+    add(support, record(1))
+    support.compress_conversation_context("conversation")
+    assert path.read_text() == legacy
+    assert support._digest_store.get_digest("conversation").turns_summarized == 1
 
-    def test_strip_digest_from_session_context(self) -> None:
-        """Step (d) should remove the digest block from recent_session_context."""
-        session_context = (
-            "Session digest (earlier turns, 8 turns compressed):\n"
-            "用户讨论了课程作业安排和科研方向选择。\n"
-            "Immediate session context (same conversation):\n"
-            "1. User: 下周实验安排\n"
-            "Assistant: 下周二和周四有实验课。"
-        )
-        assert "Session digest" in session_context
 
-        # Simulate the stripping logic from build_prompt step (d).
-        stripped_lines: list[str] = []
-        skip_digest = False
-        for line in session_context.split("\n"):
-            if line.startswith("Session digest"):
-                skip_digest = True
-                continue
-            if skip_digest and line.startswith("Immediate session context"):
-                skip_digest = False
-            if not skip_digest:
-                stripped_lines.append(line)
-        result = "\n".join(stripped_lines)
+def test_reopen_and_late_source_are_identity_based(support, tmp_path):
+    add(support, record(2))
+    support.compress_conversation_context("conversation")
+    support._digest_store.close()
+    support._digest_store = ConversationDigestStore(tmp_path / "digests")
+    add(support, record(1))
+    assert support.compress_conversation_context("conversation")["turns_incorporated"] == 1
+    assert support._digest_store.get_digest("conversation").turns_summarized == 2
 
-        assert "Session digest" not in result
-        assert "Immediate session context" in result
-        assert "下周实验安排" in result
 
-    def test_no_strip_when_no_digest(self) -> None:
-        """Step (d) should leave context unchanged when there is no digest."""
-        session_context = (
-            "Immediate session context (same conversation):\n"
-            "1. User: 你好\n"
-            "Assistant: 你好！有什么可以帮助你的？"
-        )
-        assert "Session digest" not in session_context
-        # The condition `"Session digest" in context` is False, so no stripping.
+def test_stale_generation_does_not_overwrite(support):
+    add(support, record(1))
+    def competing_writer(**kwargs):
+        store = support._digest_store
+        plan = store.prepare("conversation", [record(1)])
+        store.commit("conversation", plan, "winner")
+        return "stale result"
+    support._summarize_digest_turns = competing_writer
+    result = support.compress_conversation_context("conversation")
+    assert not result["ok"] and "retry" in result["error"]
+    assert support._digest_store.get_digest("conversation").digest_text == "winner"
 
-    def test_digest_included_in_format_recent_session_context(self, tmp_path: Path) -> None:
-        """_format_recent_session_context should prepend digest when available."""
-        store = ConversationDigestStore(tmp_path / "digests")
-        store.update_digest("test-conv", "之前讨论了系统架构设计。", 5)
 
-        record = store.get_digest("test-conv")
-        assert record is not None
-        assert "系统架构" in record.digest_text
-        assert record.turns_summarized == 5
+def test_full_llm_input_previous_output_and_no_posthoc_clipping(support):
+    support._settings.context_digest_llm_enabled = True
+    answer = "full evidence " * 500
+    add(support, record(1, answer=answer))
+    prompts = []
+    def generate(system, user, **kwargs):
+        prompts.append((user, kwargs))
+        return "complete summary " * 100
+    support._llm_client = SimpleNamespace(answer_question_sync=generate)
+    support.compress_conversation_context("conversation")
+    add(support, record(2))
+    support.compress_conversation_context("conversation")
+    assert answer in prompts[0][0]
+    assert ("complete summary " * 100).strip() in prompts[1][0]
+    assert prompts[0][1]["max_tokens"] is None
+    assert support._digest_store.get_digest("conversation").digest_text == ("complete summary " * 100).strip()
+
+
+def test_model_failure_does_not_advance_coverage(support):
+    support._settings.context_digest_llm_enabled = True
+    add(support, record(1))
+    def fail(*args, **kwargs):
+        raise RuntimeError("synthetic failure")
+    support._llm_client = SimpleNamespace(answer_question_sync=fail)
+    assert not support.compress_conversation_context("conversation")["ok"]
+    assert support._digest_store.get_digest("conversation") is None
+
+
+def test_snapshot_detached_chronological_and_conversation_scoped(support):
+    add(support, record(2), record(0), record(1, conversation="other"))
+    snapshot = support._conversation_store.list_conversation_records("conversation")
+    assert [item.memory_id for item in snapshot] == ["turn-0", "turn-2"]
+    snapshot[0].answer = "mutation"
+    assert support._conversation_store._records["turn-0"].answer == "answer-0"
+    with pytest.raises(ValueError, match="conversation_mismatch"):
+        support._digest_store.prepare("conversation", [record(3, conversation="other")])
+
+
+def test_disabled_or_empty_conversation_does_not_write(support):
+    add(support, record(1))
+    support._settings.context_digest_enabled = False
+    support._update_conversation_digest(SimpleNamespace(conversation_id="conversation"))
+    assert not support.compress_conversation_context("conversation")["ok"]
+    assert support._digest_store.get_digest("conversation") is None
+    support._settings.context_digest_enabled = True
+    assert not support.compress_conversation_context("")["ok"]

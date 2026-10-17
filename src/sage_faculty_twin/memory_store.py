@@ -21,6 +21,8 @@ from sage.neuromem import (
     ServiceStats,
     TelemetryEvent,
 )
+from sage.neuromem.memory_collection.durable_digest import DurableDigest, DigestPlan
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
 from .config import AppSettings
 from .models import BookingResponse, ChatAttachment, ChatRequest, WebSearchHit
@@ -224,25 +226,21 @@ class MemorySearchPlan:
 
 @dataclass(slots=True)
 class ConversationDigestRecord:
-    """Rolling digest of a conversation's older turns.
-
-    The digest accumulates compressed summaries of earlier exchanges so
-    that the prompt builder can inject long-range context without the
-    token cost of verbatim history.  Each update merges new turns into
-    the existing digest text via an LLM summarization call.
-    """
+    """Read view of a digest with identity-based source coverage."""
 
     conversation_id: str
     digest_text: str
     turns_summarized: int
-    updated_at: datetime
+    updated_at: datetime | None = None
+    revision: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
             "conversation_id": self.conversation_id,
             "digest_text": self.digest_text,
             "turns_summarized": self.turns_summarized,
-            "updated_at": self.updated_at.isoformat(),
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "revision": self.revision,
         }
 
     @classmethod
@@ -251,73 +249,57 @@ class ConversationDigestRecord:
             conversation_id=str(payload["conversation_id"]),
             digest_text=str(payload["digest_text"]),
             turns_summarized=int(payload.get("turns_summarized", 0)),
-            updated_at=datetime.fromisoformat(str(payload["updated_at"])),
+            updated_at=(datetime.fromisoformat(str(payload["updated_at"]))
+                        if payload.get("updated_at") else None),
+            revision=int(payload.get("revision", 0)),
         )
 
 
 class ConversationDigestStore:
-    """Persistent store for per-conversation rolling digests.
+    """Application adapter over NeuroMem's atomic provenance-aware digest.
 
-    Each digest is a single JSON file under ``<digest_dir>/`` keyed by
-    conversation ID.  The store provides simple get/update semantics and
-    delegates the actual summarization text to an external caller (the
-    service layer calls the LLM client and passes the result here).
+    Legacy count-only digests cannot prove which turns they covered. Keep
+    their files as recovery evidence, but rebuild from canonical exchanges;
+    never infer provenance from a count or continue serving the lossy text.
     """
 
     def __init__(self, digest_dir: Path) -> None:
-        self._digest_dir = digest_dir
-        self._digest_dir.mkdir(parents=True, exist_ok=True)
-        self._cache: dict[str, ConversationDigestRecord] = {}
-        self._load_all()
+        digest_dir.mkdir(parents=True, exist_ok=True)
+        self._state = StatefulProcessRuntime(
+            backend="sqlite", sqlite_path=str(digest_dir / "digests.sqlite3")
+        )
+        self._finalizer = weakref.finalize(self, self._state.close)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    def _memory(self, conversation_id: str) -> DurableDigest:
+        return DurableDigest(self._state, namespace="twin-conversation", name=conversation_id)
 
     def get_digest(self, conversation_id: str) -> ConversationDigestRecord | None:
-        return self._cache.get(conversation_id)
-
-    def update_digest(
-        self,
-        conversation_id: str,
-        digest_text: str,
-        turns_summarized: int,
-    ) -> ConversationDigestRecord:
-        record = ConversationDigestRecord(
+        state = self._memory(conversation_id).load()
+        if not state["revision"]:
+            return None
+        return ConversationDigestRecord(
             conversation_id=conversation_id,
-            digest_text=digest_text,
-            turns_summarized=turns_summarized,
-            updated_at=datetime.now(UTC),
+            digest_text=state["text"], turns_summarized=len(state["sources"]),
+            revision=state["revision"],
         )
-        self._cache[conversation_id] = record
-        self._persist(record)
-        return record
 
-    def count(self) -> int:
-        return len(self._cache)
+    def prepare(self, conversation_id: str, records: list[ConversationMemoryRecord]) -> DigestPlan:
+        if any(record.conversation_id != conversation_id for record in records):
+            raise ValueError("digest_conversation_mismatch")
+        return self._memory(conversation_id).prepare([
+            {"id": record.memory_id, "payload": record.to_dict()} for record in records
+        ])
 
-    # ------------------------------------------------------------------
-    # Persistence helpers
-    # ------------------------------------------------------------------
+    def commit(self, conversation_id: str, plan: DigestPlan, text: str) -> dict[str, Any]:
+        # A deterministic operation identity allows retrying the exact plan/output
+        # after an uncertain acknowledgement, without resetting newer revisions.
+        identity = json.dumps([plan.base_fingerprint, plan.sources_json, text],
+                              ensure_ascii=False, separators=(",", ":"))
+        operation_id = hashlib.sha256(identity.encode()).hexdigest()
+        return self._memory(conversation_id).commit_once(operation_id, plan, text)
 
-    def _digest_path(self, conversation_id: str) -> Path:
-        safe_id = re.sub(r"[^\w\-]", "_", conversation_id)
-        return self._digest_dir / f"{safe_id}.json"
-
-    def _persist(self, record: ConversationDigestRecord) -> None:
-        path = self._digest_path(record.conversation_id)
-        path.write_text(json.dumps(record.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _load_all(self) -> None:
-        if not self._digest_dir.exists():
-            return
-        for path in self._digest_dir.glob("*.json"):
-            try:
-                payload = json.loads(path.read_text(encoding="utf-8"))
-                record = ConversationDigestRecord.from_dict(payload)
-                self._cache[record.conversation_id] = record
-            except (json.JSONDecodeError, KeyError, ValueError):
-                continue
+    def close(self) -> None:
+        self._finalizer()
 
 
 class NeuroMemConversationStore:
@@ -797,6 +779,14 @@ class NeuroMemConversationStore:
         if since is not None:
             records = [record for record in records if record.created_at >= since]
         return records
+
+    def list_conversation_records(self, conversation_id: str) -> list[ConversationMemoryRecord]:
+        """Detached complete chronological snapshot for provenance-aware derivation."""
+        with self._memory_write_lock:
+            records = [record for record in self._records.values()
+                       if record.conversation_id == conversation_id]
+            return [ConversationMemoryRecord.from_dict(record.to_dict())
+                    for record in sorted(records, key=lambda item: (item.created_at, item.memory_id))]
 
     def list_recent_conversation_records(
         self,

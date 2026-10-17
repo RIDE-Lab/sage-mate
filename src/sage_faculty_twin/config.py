@@ -405,8 +405,8 @@ class AppSettings(BaseSettings):
         default=False,
         description=(
             "Use an extra LLM call to summarize rolling conversation digests. "
-            "The deterministic bounded digest is the default so manual compression "
-            "never waits behind the interactive NPU queue."
+            "When disabled, retain full source text without another model call; "
+            "this is lossless accumulation, not semantic compression."
         ),
     )
     context_digest_turn_threshold: int = Field(

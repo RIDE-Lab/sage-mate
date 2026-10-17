@@ -2614,43 +2614,40 @@ class FacultyTwinWorkflowSupport:
         if not conversation_id:
             return
 
-        threshold = self._settings.context_digest_turn_threshold
-        max_chars = self._settings.context_digest_max_chars
-
-        # Determine how many unsummarized turns exist.
-        all_records = self._conversation_store.list_recent_conversation_records(
-            conversation_id, limit=64,
+        self._refresh_conversation_digest(
+            conversation_id, threshold=self._settings.context_digest_turn_threshold
         )
-        existing_digest = self._digest_store.get_digest(conversation_id)
-        turns_already_digested = existing_digest.turns_summarized if existing_digest else 0
-        new_turns = len(all_records) - turns_already_digested
 
-        if new_turns < threshold:
-            return  # Not enough new turns to justify a summarization call.
-
-        # Select the turns to compress: those between the old frontier and now.
-        # Records are returned newest-first; take the slice that is new.
-        turns_to_summarize = list(reversed(all_records[:len(all_records) - turns_already_digested]))
-        # Cap at a reasonable number to avoid oversized prompts on first digest.
-        if len(turns_to_summarize) > 16:
-            turns_to_summarize = turns_to_summarize[-16:]
-
-        new_digest_text = self._summarize_digest_turns(
-            existing_digest_text=existing_digest.digest_text if existing_digest else "",
-            new_turns=turns_to_summarize,
-            max_chars=max_chars,
+    def _refresh_conversation_digest(self, conversation_id: str, *, threshold: int) -> dict[str, object]:
+        records = self._conversation_store.list_conversation_records(conversation_id)
+        plan = self._digest_store.prepare(conversation_id, records)
+        pending = plan.sources
+        if len(pending) < threshold:
+            existing = self._digest_store.get_digest(conversation_id)
+            return {"ok": True, "turns_compressed": 0,
+                    "total_turns": existing.turns_summarized if existing else 0,
+                    "digest_chars": len(existing.digest_text) if existing else 0,
+                    "message": "no eligible update"}
+        text = self._summarize_digest_turns(
+            existing_digest_text=plan.previous,
+            new_turns=[ConversationMemoryRecord.from_dict(source["payload"]) for source in pending],
+            max_chars=self._settings.context_digest_max_chars,
         )
-        if not new_digest_text:
-            return  # Summarization failed; leave digest unchanged.
-
-        total_turns = turns_already_digested + len(turns_to_summarize)
-        self._digest_store.update_digest(
-            conversation_id, new_digest_text, total_turns,
-        )
-        _logger.info(
-            "Updated conversation digest for %s: %d turns compressed, %d chars",
-            conversation_id[:8], total_turns, len(new_digest_text),
-        )
+        if not text:
+            return {"ok": False, "error": "summarization failed"}
+        try:
+            receipt = self._digest_store.commit(conversation_id, plan, text)
+        except ValueError as exc:
+            if str(exc) != "stale_digest_plan":
+                raise
+            # Another writer won; never overwrite its newer base. The next
+            # threshold check/manual request re-reads and regenerates.
+            return {"ok": False, "error": "digest changed during generation; retry required"}
+        semantic = self._settings.context_digest_llm_enabled
+        return {"ok": True, "turns_compressed": len(pending) if semantic else 0,
+                "turns_incorporated": len(pending),
+                "total_turns": receipt["total_sources"], "digest_chars": len(text),
+                "mode": "summary" if semantic else "lossless"}
 
     def _summarize_digest_turns(
         self,
@@ -2661,11 +2658,11 @@ class FacultyTwinWorkflowSupport:
     ) -> str:
         """Ask the LLM to compress conversation turns into a rolling digest.
 
-        Falls back to a simple concatenation strategy when the LLM call
-        fails, so that digest updates never block the chat workflow.
+        Model failure leaves coverage unchanged. With generation disabled,
+        retain previous context and full sources without claiming compression.
         """
         new_turns_text = "\n".join(
-            f"- User: {r.question[:300]}\n  Assistant: {r.answer[:300]}"
+            json.dumps(r.to_dict(), ensure_ascii=False)
             for r in new_turns
         )
 
@@ -2673,14 +2670,14 @@ class FacultyTwinWorkflowSupport:
             user_prompt = (
                 f"已有摘要：\n{existing_digest_text}\n\n"
                 f"新增对话轮次：\n{new_turns_text}\n\n"
-                f"请将以上摘要和新对话合并为一段简洁的滚动摘要，不超过 {max_chars} 字符。"
+                f"请将以上摘要和新对话合并为滚动摘要，目标约 {max_chars} 字符；信息完整优先，可超出。"
                 "保留关键话题、结论和待办事项，去除余和重复内容。"
                 "直接输出摘要文本，不要加任何前缀或标记。"
             )
         else:
             user_prompt = (
                 f"对话轮次：\n{new_turns_text}\n\n"
-                f"请将以上对话压缩为一段简洁的滚动摘要，不超过 {max_chars} 字符。"
+                f"请将以上对话整理为滚动摘要，目标约 {max_chars} 字符；信息完整优先，可超出。"
                 "保留关键话题、结论和待办事项。"
                 "直接输出摘要文本，不要加任何前缀或标记。"
             )
@@ -2691,46 +2688,37 @@ class FacultyTwinWorkflowSupport:
             "important context. Output plain text only, no headers or markers."
         )
 
-        # Manual and automatic compression must not add another interactive
-        # generation to the single NPU slot. Operators can opt into the LLM
-        # summarizer for offline experiments; production defaults to the
-        # bounded deterministic digest below.
+        # Until generation is explicitly enabled, preserve evidence without
+        # submitting an additional inference request to shared serving.
         if not getattr(self._settings, "context_digest_llm_enabled", False):
-            return self._build_deterministic_digest(new_turns, max_chars)
+            return self._retain_digest_sources(new_turns, existing_digest_text)
 
         try:
             result = self._llm_client.answer_question_sync(
                 system_prompt,
                 user_prompt,
                 temperature=0.1,
-                max_tokens=256,
+                max_tokens=None,
                 enable_thinking=False,
             )
             result = result.strip()
-            if len(result) > max_chars:
-                result = result[:max_chars].rsplit("\n", 1)[0] + "…"
             return result
         except Exception as exc:
             _logger.warning("Digest summarization failed: %s", exc)
-            # Fallback: simple concatenation truncated to max_chars.
-            return self._build_deterministic_digest(new_turns, max_chars)
+            # Do not mark an incomplete derivation as covered. Durable workers
+            # may retry; the existing digest stays authoritative meanwhile.
+            return ""
 
     @staticmethod
-    def _build_deterministic_digest(
-        new_turns: list[ConversationMemoryRecord], max_chars: int
+    def _retain_digest_sources(
+        new_turns: list[ConversationMemoryRecord], previous: str
     ) -> str:
-        """Build a bounded digest without another model round-trip."""
+        """Lossless accumulation, explicitly not semantic compression."""
         if not new_turns:
             return ""
-        lines = [f"最近 {len(new_turns)} 轮对话摘要："]
-        for index, record in enumerate(new_turns[-8:], start=1):
-            question = re.sub(r"\s+", " ", record.question).strip()[:180]
-            answer = re.sub(r"\s+", " ", record.answer).strip()[:260]
-            if question:
-                lines.append(f"{index}. 用户：{question}")
-            if answer:
-                lines.append(f"   结论：{answer}")
-        return "\n".join(lines)[:max_chars]
+        lines = [previous] if previous else []
+        lines.extend(json.dumps(record.to_dict(), ensure_ascii=False) for record in new_turns)
+        return "\n".join(lines)
 
     def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
         """Manually trigger context compression for a conversation.
@@ -2744,47 +2732,7 @@ class FacultyTwinWorkflowSupport:
         if not conversation_id:
             return {"ok": False, "error": "missing conversation_id"}
 
-        max_chars = self._settings.context_digest_max_chars
-        all_records = self._conversation_store.list_recent_conversation_records(
-            conversation_id, limit=64,
-        )
-        existing_digest = self._digest_store.get_digest(conversation_id)
-        turns_already_digested = existing_digest.turns_summarized if existing_digest else 0
-        new_turns = len(all_records) - turns_already_digested
-
-        if new_turns <= 0:
-            return {
-                "ok": True,
-                "turns_compressed": 0,
-                "total_turns": turns_already_digested,
-                "digest_chars": len(existing_digest.digest_text) if existing_digest else 0,
-                "message": "no new turns to compress",
-            }
-
-        turns_to_summarize = list(reversed(all_records[:len(all_records) - turns_already_digested]))
-        if len(turns_to_summarize) > 32:
-            turns_to_summarize = turns_to_summarize[-32:]
-
-        new_digest_text = self._summarize_digest_turns(
-            existing_digest_text=existing_digest.digest_text if existing_digest else "",
-            new_turns=turns_to_summarize,
-            max_chars=max_chars,
-        )
-        if not new_digest_text:
-            return {"ok": False, "error": "summarization failed"}
-
-        total_turns = turns_already_digested + len(turns_to_summarize)
-        self._digest_store.update_digest(conversation_id, new_digest_text, total_turns)
-        _logger.info(
-            "Manual context compression for %s: %d turns compressed, %d chars",
-            conversation_id[:8], len(turns_to_summarize), len(new_digest_text),
-        )
-        return {
-            "ok": True,
-            "turns_compressed": len(turns_to_summarize),
-            "total_turns": total_turns,
-            "digest_chars": len(new_digest_text),
-        }
+        return self._refresh_conversation_digest(conversation_id, threshold=1)
 
     def answer_with_llm(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
@@ -5695,7 +5643,7 @@ class FacultyTwinWorkflowSupport:
 
         sections: list[str] = []
         if digest_text:
-            sections.append(f"Session digest (earlier turns, {digest_record.turns_summarized} turns compressed):\n{digest_text}")
+            sections.append(f"Session digest (earlier turns, {digest_record.turns_summarized} sources incorporated):\n{digest_text}")
         if recent_records:
             sections.append("Immediate session context (same conversation):")
             for index, record in enumerate(reversed(recent_records), start=1):
@@ -11654,6 +11602,8 @@ class DigitalTwinService:
             await asyncio.to_thread(self._chat_finalizer)
         if self._retrieval_finalizer is not None:
             await asyncio.to_thread(self._retrieval_finalizer)
+        if getattr(self, "_digest_store", None) is not None:
+            await asyncio.to_thread(self._digest_store.close)
         await self._llm_client.aclose()
 
     def start_background_work(self):
