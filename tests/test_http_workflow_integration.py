@@ -126,6 +126,19 @@ def test_terminal_failure_is_replayed_without_retrying_or_leaking(tmp_path, monk
         from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
         guest = instance._guest_identity_store.authenticate(client.cookies.get(GUEST_COOKIE_NAME))
         key = api._owned_chat_request_key(f"guest:{guest.subject_id}", "terminal")
+        async def wait_closed():
+            async with asyncio.timeout(3):
+                while not api.http_workflow.events.read(key)["closed"]:
+                    await asyncio.sleep(0.01)
+        client.portal.call(wait_closed)
+        import json
+        stream = client.get("/chat/workflow-events?request_id=terminal")
+        assert stream.status_code == 200
+        events = [json.loads(line[6:]) for line in stream.text.splitlines() if line.startswith("data: ")]
+        assert len(events) == 1
+        assert events[0]["type"] == "error" and events[0]["code"] == code
+        assert events[0]["status"] == status
+        assert "sensitive upstream" not in stream.text
         record = api.http_workflow.journal.read(key)
         task = record["tasks"]["answer"]
         assert task["status"] == "failed" and task["failure_code"] == code

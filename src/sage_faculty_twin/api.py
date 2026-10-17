@@ -130,7 +130,7 @@ from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
 from .chat_identity import ChatIdentity
 from .http_authority import HttpAuthorityResolver
-from .http_workflow import HttpIngress, HttpWorkflow, HttpWorkRejected
+from .http_workflow import HttpIngress, HttpWorkflow, HttpWorkRejected, public_http_failure
 from sage.runtime.async_work_service import WorkStartTimeoutError
 from .guest_identity import GUEST_COOKIE_NAME
 from .service import (
@@ -1998,12 +1998,7 @@ async def chat(
         raise _http_error(403, "当前身份或权限已失效，请重新验证。") from exc
     except HttpWorkRejected as exc:
         _record_error(exc, status="rejected")
-        status, detail = {
-            "prompt_capacity": (413, "完整材料超出模型上下文容量；未截断原文，请调整问题或材料后重试。"),
-            "request_cancelled": (499, "任务已取消，未继续生成回答。"),
-            "authority_denied": (403, "当前身份或权限已失效，请重新验证。"),
-            "invalid_request": (400, "请求内容无效，请检查后重试。"),
-        }.get(exc.code, (503, "本轮回答未能完整生成或通过校验，请稍后重试。"))
+        status, detail = public_http_failure(exc.code)
         raise _http_error(status, detail) from exc
     except ValueError as exc:
         _record_error(exc, status="rejected")
