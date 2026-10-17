@@ -811,11 +811,16 @@ class NeuroMemConversationStore:
 
     def get_owned_record(self, memory_id: str, *, owner_id: str | None) -> ConversationMemoryRecord | None:
         """Read canonical ownership, including commits not yet in a local cache."""
+        record = self.get_canonical_record(memory_id)
+        return record if record is not None and record.owner_id == owner_id else None
+
+    def get_canonical_record(self, memory_id: str) -> ConversationMemoryRecord | None:
+        """Internal lookup; public callers must separately authorize ownership."""
         with self._memory_write_lock:
             records = (self._decode_conversation_records(self._durable_memory.read_records().values())
                        if self._durable_memory is not None else self._records.values())
             for record in records:
-                if record.memory_id == memory_id and record.owner_id == owner_id:
+                if record.memory_id == memory_id:
                     return ConversationMemoryRecord.from_dict(record.to_dict())
         return None
 

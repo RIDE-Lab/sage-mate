@@ -120,10 +120,17 @@ Feedback resolves the trusted HTTP owner and checks the canonical source record
 before any analytics or knowledge writeback. Missing, foreign and unassigned
 records return the same 404 to scoped callers. The checked record is passed into
 knowledge writeback rather than re-read from a stale cache. Canonical lookup
-supports commits made by another store instance. Feedback storage itself still
-uses the prior synchronous JSON implementation and a cached existence check;
-its atomic migration, stale-cache availability and recovery semantics are not
-yet qualified. Do not interpret the authorization fix as crash-safe feedback.
+supports commits made by another store instance. Feedback now borrows the same
+SAGE state runtime and uses an atomic update, preserving the original creation
+time inside the transaction. Reads use detached canonical state, not a local
+cache. Legacy JSON is imported with content-hash receipts and archived only after
+commit; replay cannot overwrite subsequent edits, and changed legacy inputs fail
+explicitly. New feedback never writes JSON. Tests cover rollback, lost commit
+acknowledgement, independent SQLite connections, concurrent writers and interrupted
+archival. The collection is still a full snapshot: bounded retention/indexed
+enumeration remains a scalability gate. Positive-feedback knowledge writeback is
+still a separate synchronous effect, not a durable replay-safe intent; feedback
+and knowledge are **not** an atomic unit yet. No online migration is implied.
 
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover

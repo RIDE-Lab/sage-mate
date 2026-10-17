@@ -185,9 +185,9 @@ def test_analytics_store_submit_feedback_survives_runtime_dir_wipe(
         issue_summary=None,
     )
 
-    written = feedback_dir / f"{record.memory_id}.json"
-    assert feedback_dir.exists()
-    assert written.is_file()
+    assert not feedback_dir.exists()  # Legacy JSON is no longer a write destination.
+    reopened = ConversationAnalyticsStore(settings, conversation_store)
+    assert reopened.get_feedback(record.memory_id) == feedback
     assert feedback.exchange_id == record.memory_id
     assert analytics_store.count_feedback() == 1
 

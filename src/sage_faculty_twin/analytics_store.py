@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import re
 from collections import Counter
@@ -105,8 +106,17 @@ class ConversationAnalyticsStore:
         self._base_dir = settings.conversation_memory_dir
         self._feedback_dir = self._base_dir / "feedback"
         self._feedback_dir.mkdir(parents=True, exist_ok=True)
-        self._feedback: dict[str, ConversationFeedbackRecord] = {}
+        self._state = conversation_store.state_store
+        self._slot = ("twin-feedback-v1", "feedback", "records")
         self._load_feedback_from_disk()
+
+    @staticmethod
+    def _collection(value):
+        if value is None:
+            return {"version": 1, "records": {}, "imports": {}}
+        if value.get("version") != 1:
+            raise ValueError("unsupported_feedback_state")
+        return value
 
     def submit_feedback(
         self,
@@ -117,34 +127,37 @@ class ConversationAnalyticsStore:
         needs_human_followup: bool,
         issue_summary: str | None,
     ) -> ConversationFeedbackRecord:
-        if self._conversation_store.get_record(exchange_id) is None:
+        if self._conversation_store.get_canonical_record(exchange_id) is None:
             raise KeyError(exchange_id)
 
         now = datetime.now(UTC)
-        existing = self._feedback.get(exchange_id)
         feedback = ConversationFeedbackRecord(
             exchange_id=exchange_id,
             rating=rating,
             resolved=(rating == "up") if resolved is None else resolved,
             needs_human_followup=needs_human_followup,
             issue_summary=(issue_summary.strip() if issue_summary else None),
-            created_at=existing.created_at if existing is not None else now,
+            created_at=now,
             updated_at=now,
         )
-        self._feedback[exchange_id] = feedback
-        # Defensive: re-create the directory in case it was wiped at runtime.
-        self._feedback_dir.mkdir(parents=True, exist_ok=True)
-        (self._feedback_dir / f"{exchange_id}.json").write_text(
-            json.dumps(feedback.to_dict(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        return feedback
+        def apply(value):
+            state = self._collection(value)
+            payload = feedback.to_dict()
+            existing = state["records"].get(exchange_id)
+            if existing is not None:
+                payload["created_at"] = existing["created_at"]
+            state["records"][exchange_id] = payload
+            return state
+
+        state = self._state.update(self._slot, apply)
+        return ConversationFeedbackRecord.from_dict(state["records"][exchange_id])
 
     def get_feedback(self, exchange_id: str) -> ConversationFeedbackRecord | None:
-        return self._feedback.get(exchange_id)
+        payload = self._collection(self._state.peek(self._slot))["records"].get(exchange_id)
+        return ConversationFeedbackRecord.from_dict(payload) if payload is not None else None
 
     def count_feedback(self) -> int:
-        return len(self._feedback)
+        return len(self._collection(self._state.peek(self._slot))["records"])
 
     def build_weekly_report(
         self, *, days: int = 7, cluster_limit: int = 6, unresolved_limit: int = 10
@@ -260,20 +273,54 @@ class ConversationAnalyticsStore:
         }
 
     def _load_feedback_from_disk(self) -> None:
-        for path in sorted(self._feedback_dir.glob("*.json")):
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            record = ConversationFeedbackRecord.from_dict(payload)
-            self._feedback[record.exchange_id] = record
+        sources = [(path, path.read_text(encoding="utf-8"))
+                   for path in sorted(self._feedback_dir.glob("*.json"))]
+        if not sources:
+            return
+        records = [(path, raw, ConversationFeedbackRecord.from_dict(json.loads(raw)).to_dict())
+                   for path, raw in sources]
+
+        def migrate(value):
+            state = self._collection(value)
+            for path, raw, payload in records:
+                fingerprint = hashlib.sha256(raw.encode()).hexdigest()
+                imported = state["imports"].get(path.name)
+                if imported is not None:
+                    if imported != fingerprint:
+                        raise ValueError("feedback_legacy_source_changed")
+                    continue
+                if payload["exchange_id"] in state["records"]:
+                    raise ValueError("feedback_legacy_identity_conflict")
+                state["records"][payload["exchange_id"]] = payload
+                state["imports"][path.name] = fingerprint
+            return state
+
+        self._state.update(self._slot, migrate)
+        archive = self._feedback_dir / "legacy-imported"
+        archive.mkdir(exist_ok=True)
+        for path, raw, _ in records:
+            target = archive / path.name
+            if target.exists() and target.read_text(encoding="utf-8") != raw:
+                raise ValueError("feedback_legacy_archive_conflict")
+            try:
+                if path.read_text(encoding="utf-8") != raw:
+                    raise ValueError("feedback_legacy_source_changed")
+                path.replace(target)
+            except FileNotFoundError:
+                if not target.exists() or target.read_text(encoding="utf-8") != raw:
+                    raise
 
     def _build_samples(self, window_start: datetime) -> list[ExchangeAnalyticsSample]:
         samples: list[ExchangeAnalyticsSample] = []
+        feedback = self._collection(self._state.peek(self._slot))["records"]
         for record in self._conversation_store.list_records(since=window_start):
             if self._should_exclude_from_question_report(record):
                 continue
             samples.append(
                 ExchangeAnalyticsSample(
                     record=record,
-                    feedback=self._feedback.get(record.memory_id),
+                    feedback=(ConversationFeedbackRecord.from_dict(feedback[record.memory_id])
+                              if record.memory_id in feedback else None),
                     token_set=frozenset(self._question_tokens(record.question)),
                 )
             )
