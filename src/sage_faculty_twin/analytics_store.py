@@ -186,6 +186,11 @@ class ConversationAnalyticsStore:
             raise RuntimeError("feedback_admission_not_committed")
         return ConversationFeedbackRecord.from_dict(receipt["feedback"])
 
+    @property
+    def state_store(self):
+        """Canonical store identity for atomic work admission."""
+        return self._state
+
     def get_feedback(self, exchange_id: str) -> ConversationFeedbackRecord | None:
         payload = self._collection(self._state.peek(self._slot))["records"].get(exchange_id)
         return ConversationFeedbackRecord.from_dict(payload) if payload is not None else None
