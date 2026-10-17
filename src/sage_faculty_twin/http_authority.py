@@ -1,11 +1,18 @@
 """Internal HTTP work authority references; never accepted as login credentials."""
 
+import hashlib
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from .auth import resolve_work_session_reference
+from .auth import (
+    ADMIN_COOKIE_NAME,
+    USER_COOKIE_NAME,
+    capture_work_session_reference,
+    resolve_work_session_reference,
+)
 from .chat_identity import ChatIdentity
+from .guest_identity import GUEST_COOKIE_NAME
 
 
 class HttpAuthority(BaseModel):
@@ -27,6 +34,15 @@ class HttpAuthority(BaseModel):
             valid = self.session is None and self.digest is not None and self.token_id is None
         if not valid:
             raise ValueError("invalid_http_authority_reference")
+        for proof, kind in ((self.session, "user"), (self.admin_session, "admin")):
+            if proof is None:
+                continue
+            fields = {"sub", "iat", "exp", "nonce", "email" if kind == "user" else "role"}
+            if (set(proof) != {"version", "kind", "claims", "proof"}
+                    or proof["version"] != 1 or proof["kind"] != kind
+                    or not isinstance(proof["claims"], dict) or set(proof["claims"]) - fields
+                    or not isinstance(proof["proof"], str)):
+                raise ValueError("invalid_http_session_reference")
         return self
 
 
@@ -35,6 +51,38 @@ class HttpAuthorityResolver:
 
     def __init__(self, *, settings, users, tokens, guests):
         self.settings, self.users, self.tokens, self.guests = settings, users, tokens, guests
+
+    def capture(self, raw_request, identity: ChatIdentity, request):
+        """Only the HTTP adapter calls this, after normal authentication/binding.
+
+        Credentials come from headers/cookies, never from the JSON body. Guest
+        issuance can precede sending the new cookie, so use request.state then.
+        Re-resolve the generated reference to detect identity/credential drift.
+        """
+        admin = capture_work_session_reference(raw_request.cookies.get(ADMIN_COOKIE_NAME),
+                                              self.settings, kind="admin")
+        if identity.kind == "account":
+            session = capture_work_session_reference(raw_request.cookies.get(USER_COOKIE_NAME),
+                                                    self.settings, kind="user")
+            if session is None:
+                raise PermissionError("http_user_credential_missing")
+            authority = HttpAuthority(kind="account", session=session, admin_session=admin)
+        elif identity.kind == "api_token":
+            scheme, _, token = raw_request.headers.get("authorization", "").partition(" ")
+            if scheme.lower() != "bearer" or not token.strip():
+                raise PermissionError("http_api_credential_missing")
+            authority = HttpAuthority(kind="api_token", token_id=identity.subject_id,
+                digest=hashlib.sha256(token.strip().encode()).hexdigest(), admin_session=admin)
+        else:
+            token = getattr(raw_request.state, "new_guest_credential", None) or raw_request.cookies.get(GUEST_COOKIE_NAME)
+            if not token:
+                raise PermissionError("http_guest_credential_missing")
+            authority = HttpAuthority(kind="guest", digest=hashlib.sha256(token.encode()).hexdigest(),
+                                      admin_session=admin)
+        resolved, _ = self.resolve(authority, request)
+        if resolved != identity:
+            raise PermissionError("http_captured_identity_conflict")
+        return authority
 
     def resolve(self, authority: HttpAuthority, request):
         if authority.kind == "account":
