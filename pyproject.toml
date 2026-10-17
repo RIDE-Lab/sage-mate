@@ -43,12 +43,12 @@ sage-stack = [
 neuromem = [
 ]
 vdb = [
-  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@9d933f78c35e7caf2f754ab8c869559730b1190e",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",
 ]
 vdb-anns = [
-  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@9d933f78c35e7caf2f754ab8c869559730b1190e",
   "isage-anns>=0.2.0",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",

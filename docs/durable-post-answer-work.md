@@ -1,5 +1,21 @@
 # Durable post-answer work
 
+## SageVDB dependency qualification
+
+Both VDB extras pin `9d933f78c35e7caf2f754ab8c869559730b1190e`, which
+provides `VersionedDocumentCatalog`, revision-fenced index generations and
+`rebuild_from_catalog`. An exact Git archive was built offline on A100 after
+Git transport/DNS prevented network builds; no shared Git/network configuration
+was changed. The CPython 3.11 Linux x86-64 wheel SHA-256 is
+`f63a99a06f09bb90ec977d4c7ab1315f400133d4bfc1545bd6317cb1536299d9`.
+Installed module hashes match the source commit, exports resolve from the scratch
+venv's site-packages, and all 48 catalog/native-persistence/recovery tests passed
+without source overlays. That venv exposes system packages, so this is not a
+clean-room dependency-resolution test. The version number remains 0.2.0.12;
+commit and wheel hash, not the version string alone, identify this qualification.
+This dependency update does not yet migrate Twin's canonical knowledge JSON,
+activate the durable indexing workflow, or change the production environment.
+
 Twin composes SAGE `WorkJournal`/`WorkService` with a restricted application
 handler. Inline and background HTTP delivery use the same journal and worker;
 there is no separate best-effort post-answer executor.
