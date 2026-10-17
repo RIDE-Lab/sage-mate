@@ -45,6 +45,7 @@ def test_feedback_http_status_is_owned_historical_and_read_only(tmp_path, monkey
             assert pending.status_code == 200
             assert pending.json()["status"] == "pending"
             assert pending.json()["feedback"]["knowledge_write_backs"] == []
+            assert client.get("/chat/feedback", params=params).json() == pending.json()
             assert runtime._service._thread is None
             assert service.list_knowledge() == []
             wrong_exchange = client.get(url, params={"exchange_id": other.memory_id})
@@ -53,6 +54,7 @@ def test_feedback_http_status_is_owned_historical_and_read_only(tmp_path, monkey
             foreign = client.get(url, params=params)
             assert wrong_exchange.status_code == missing.status_code == foreign.status_code == 404
             assert wrong_exchange.json() == missing.json() == foreign.json()
+            assert client.get("/chat/feedback", params=params).status_code == 404
             identity[0] = ChatIdentity("account", "owner", "public")
 
         runtime.start()
@@ -66,11 +68,13 @@ def test_feedback_http_status_is_owned_historical_and_read_only(tmp_path, monkey
         assert later.status_code == 200
         assert later.json()["operation_id"] != operation
         assert service._analytics_store.get_feedback(record.memory_id).rating == "down"
+        assert client.get("/chat/feedback", params=params).json()["operation_id"] == later.json()["operation_id"]
         assert client.get(url, params=params).json() == completed
         replay = client.post("/chat/feedback", json=original_request)
         assert replay.status_code == 200
         assert replay.json() == completed["feedback"]
         assert service._analytics_store.get_feedback(record.memory_id).rating == "down"
+        assert client.get("/chat/feedback", params=params).json()["feedback"]["rating"] == "down"
         conflict = client.post("/chat/feedback", json={**original_request, "rating": "down"})
         assert conflict.status_code == 409
         assert client.get(url, params=params).json() == completed

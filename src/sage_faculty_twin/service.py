@@ -10727,6 +10727,10 @@ class DigitalTwinService:
         record = self._conversation_store.get_owned_record(exchange_id, owner_id=owner_id)
         if record is None:
             raise HTTPException(status_code=404, detail="找不到对应的反馈记录。")
+        if operation_id is None:
+            operation_id = self._analytics_store.get_current_operation_id(exchange_id)
+        if operation_id is None:
+            raise HTTPException(status_code=404, detail="找不到对应的反馈记录。")
         result = self._get_feedback_runtime().status(operation_id, exchange_id=exchange_id)
         if result is None:
             raise HTTPException(status_code=404, detail="找不到对应的反馈记录。")

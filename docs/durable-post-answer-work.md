@@ -302,6 +302,11 @@ requires `exchange_id` and the original trusted owner identity. It returns
 `pending` or `completed` with the immutable operation feedback and acknowledged
 per-source results. It neither starts work nor reveals task payloads/errors.
 Unknown operations, wrong exchanges and foreign owners all receive the same404.
+GET `/chat/feedback?exchange_id=...` restores the current operation with the same
+owner check. It matches the current canonical feedback snapshot to its receipt,
+not receipt insertion order or wall-clock sorting; an old replay cannot become
+current merely by being queried/replayed. Receipt lookup still scans the existing
+snapshot collection, so indexed retention/capacity remains to be qualified.
 The operation ID is not an authorization capability.
 
 POST accepts an optional `request_id` (8–128 URL-safe ASCII letters/digits,
@@ -314,8 +319,10 @@ concurrent clicks, recognizes saved/pending503 responses, and polls the owned GE
 without re-posting the feedback. Polling is bounded to30 reads with2-second gaps;
 a later click resumes querying. Removing the message stops polling without
 cancelling server work. Logout clears local attempts and ignores their late
-successes. Page-reload recovery remains an open gate; these in-memory keys are not
-persisted in browser storage. Node tests execute the actual application function;
+successes. On message attachment after reload, the browser queries the current
+owned operation and resumes status delivery without a POST. It neither persists
+feedback bodies nor maintains another canonical state in browser storage.
+Node tests execute the actual application functions;
 rendered browser and live-service acceptance remain separate.
 After a lost destination acknowledgement, an upsert may repeat without replacing
 curator edits. `created` describes the acknowledged attempt, not exactly-once

@@ -200,6 +200,19 @@ class ConversationAnalyticsStore:
         receipt = self._collection(self._state.peek(self._slot)).get("receipts", {}).get(operation_id)
         return ConversationFeedbackRecord.from_dict(receipt["feedback"]) if receipt is not None else None
 
+    def get_current_operation_id(self, exchange_id: str) -> str | None:
+        """Find the receipt for the current rating from one canonical snapshot.
+
+        Receipt insertion order and wall-clock sorting are not commit order.
+        Replaying an old receipt must not make it current again.
+        """
+        state = self._collection(self._state.peek(self._slot))
+        current = state["records"].get(exchange_id)
+        if current is None:
+            return None
+        return next((operation for operation, receipt in state.get("receipts", {}).items()
+                     if receipt["feedback"] == current), None)
+
     def count_feedback(self) -> int:
         return len(self._collection(self._state.peek(self._slot))["records"])
 

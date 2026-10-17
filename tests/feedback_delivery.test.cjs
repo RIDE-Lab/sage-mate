@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(process.argv[2] || path.join(__dirname, '../src/sage_faculty_twin/web/app.js'), 'utf8');
-const start = source.indexOf('async function submitFeedbackExchange(');
+const start = source.indexOf('async function restoreFeedbackExchange(');
 const end = source.indexOf('\nfunction renderWorkflowTrace(', start);
 assert.ok(start >= 0 && end > start);
 const code = source.slice(start, end);
@@ -21,7 +21,8 @@ function pending() {
   return Object.assign(new Error('pending'), {status: 503, responseBody: JSON.stringify({
     detail: {code: 'feedback_knowledge_pending', feedback_saved: true, operation_id: 'op'}})});
 }
-const result = {exchange_id: 'exchange', knowledge_write_backs: [{document_id: 'doc'}]};
+const result = {exchange_id: 'exchange', rating: 'up', resolved: true, issue_summary: null,
+  needs_human_followup: false, knowledge_write_backs: [{document_id: 'doc'}]};
 (async () => {
   const calls = [];
   let fail = true;
@@ -88,5 +89,20 @@ const result = {exchange_id: 'exchange', knowledge_write_backs: [{document_id: '
   logout.sandbox.feedbackAttempts.clear();
   finish(result); await inFlight;
   assert.equal(logout.sandbox.submittedFeedbackExchangeIds.size, 0);
+  const restoredUrls = [];
+  const restored = setup(async (url, options) => {
+    assert.equal(options, undefined); // Reload never resubmits feedback.
+    restoredUrls.push(url);
+    return {operation_id: 'saved-op', status: 'completed', feedback: result};
+  });
+  await restored.sandbox.restoreFeedbackExchange('exchange', restored.ui);
+  assert.deepEqual(restoredUrls, ['/chat/feedback?exchange_id=exchange', '/chat/feedback/saved-op?exchange_id=exchange']);
+  assert.equal(restored.ui.upButton.disabled, true);
+  assert.ok(restored.ui.status.textContent.includes('已恢复'));
+
+  const absent = setup(async () => { throw Object.assign(new Error('not found'), {status: 404}); });
+  await absent.sandbox.restoreFeedbackExchange('exchange', absent.ui);
+  assert.equal(absent.sandbox.feedbackAttempts.size, 0);
+  assert.equal(absent.ui.upButton.disabled, false);
   console.log('Feedback delivery: stable retry, polling, duplicate suppression, detach and bounded resume passed');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -8803,9 +8803,42 @@ function attachFeedbackHandlers(container, exchangeId) {
             }
         );
     });
+    void restoreFeedbackExchange(exchangeId, { container, status, form, upButton, downButton });
+}
+
+async function restoreFeedbackExchange(exchangeId, ui) {
+    if (feedbackAttempts.has(exchangeId) || submittedFeedbackExchangeIds.has(exchangeId)) return;
+    const restoring = { running: true };
+    feedbackAttempts.set(exchangeId, restoring);
+    ui.upButton.disabled = true;
+    ui.downButton.disabled = true;
+    try {
+        const progress = await apiRequest(`/chat/feedback?exchange_id=${encodeURIComponent(exchangeId)}`);
+        if (!ui.container.isConnected || feedbackAttempts.get(exchangeId) !== restoring) return;
+        if (progress.feedback?.exchange_id !== exchangeId || typeof progress.operation_id !== "string") {
+            throw new Error("反馈恢复结果标识不一致。");
+        }
+        const saved = progress.feedback;
+        const payload = { rating: saved.rating, resolved: saved.resolved,
+            issue_summary: saved.issue_summary ?? null, needs_human_followup: saved.needs_human_followup };
+        feedbackAttempts.set(exchangeId, { fingerprint: JSON.stringify(payload),
+            requestId: crypto.randomUUID(), operationId: progress.operation_id, running: false });
+        await submitFeedbackExchange(exchangeId, payload, { ...ui, submittedMessage: "已恢复保存的反馈。" });
+    } catch (error) {
+        if (feedbackAttempts.get(exchangeId) === restoring && error.status !== 404) {
+            ui.status.textContent = "暂时无法恢复反馈状态，请稍后重试。";
+        }
+    } finally {
+        if (feedbackAttempts.get(exchangeId) === restoring) feedbackAttempts.delete(exchangeId);
+        const disabled = submittedFeedbackExchangeIds.has(exchangeId) || Boolean(feedbackAttempts.get(exchangeId)?.running);
+        ui.upButton.disabled = disabled;
+        ui.downButton.disabled = disabled;
+    }
 }
 
 async function submitFeedbackExchange(exchangeId, payload, ui) {
+    payload = { rating: payload.rating, resolved: payload.resolved ?? (payload.rating === "up"),
+        issue_summary: payload.issue_summary ?? null, needs_human_followup: payload.needs_human_followup ?? false };
     const fingerprint = JSON.stringify(payload);
     let attempt = feedbackAttempts.get(exchangeId);
     if (attempt?.running) return;
