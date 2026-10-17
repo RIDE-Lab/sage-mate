@@ -6509,54 +6509,74 @@ async function apiRequest(path, options = {}) {
     const { timeoutMs = 15000, abortController = null, ...fetchOptions } = options;
     const controller = abortController || new AbortController();
     const timeoutId = globalThis.setTimeout(() => controller.abort("timeout"), timeoutMs);
-    const apiOrigin = await resolveApiOrigin();
-    const requestUrl = buildApiUrl(path, apiOrigin);
-    const requestHeaders = new Headers(fetchOptions.headers || {});
-    if (!(fetchOptions.body instanceof FormData) && !requestHeaders.has("Content-Type")) {
-        requestHeaders.set("Content-Type", "application/json");
-    }
-
-    let response;
-    try {
-        response = await fetch(requestUrl, {
-            headers: requestHeaders,
-            credentials: "include",
-            ...fetchOptions,
-            signal: controller.signal,
-        });
-    } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
-            const cancelled = controller.signal.reason === "user-cancelled";
-            const abortError = new Error(
-                cancelled ? "已停止生成。" : "请求超时，请稍后重试。",
-                { cause: error }
-            );
-            abortError.cancelled = cancelled;
-            throw abortError;
+    let onAbort;
+    const aborted = new Promise((_, reject) => {
+        onAbort = () => {
+            const error = new Error(controller.signal.reason === "user-cancelled"
+                ? "已停止生成。" : "请求超时，请稍后重试。");
+            error.cancelled = controller.signal.reason === "user-cancelled";
+            reject(error);
+        };
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        if (controller.signal.aborted) onAbort();
+    });
+    const readResponse = async () => {
+        const apiOrigin = await resolveApiOrigin();
+        controller.signal.throwIfAborted();
+        const requestUrl = buildApiUrl(path, apiOrigin);
+        const requestHeaders = new Headers(fetchOptions.headers || {});
+        if (!(fetchOptions.body instanceof FormData) && !requestHeaders.has("Content-Type")) {
+            requestHeaders.set("Content-Type", "application/json");
         }
-        throw new Error("网络连接失败，请检查网络后重试。如果问题持续，请确认后端服务已启动。", { cause: error });
+
+        let response;
+        try {
+            response = await fetch(requestUrl, {
+                headers: requestHeaders,
+                credentials: "include",
+                ...fetchOptions,
+                signal: controller.signal,
+            });
+        } catch (error) {
+            if (error instanceof DOMException && error.name === "AbortError") {
+                const cancelled = controller.signal.reason === "user-cancelled";
+                const abortError = new Error(
+                    cancelled ? "已停止生成。" : "请求超时，请稍后重试。",
+                    { cause: error }
+                );
+                abortError.cancelled = cancelled;
+                throw abortError;
+            }
+            throw new Error("网络连接失败，请检查网络后重试。如果问题持续，请确认后端服务已启动。", { cause: error });
+        }
+
+        if (!response.ok) {
+            const text = await response.text();
+            const friendly = friendlyHttpErrorMessage(response.status, text);
+            const error = new Error(friendly);
+            error.status = response.status;
+            error.responseBody = text;
+            const retryAfter = Number(response.headers.get("Retry-After"));
+            if (Number.isFinite(retryAfter) && retryAfter > 0) {
+                error.retryAfterSeconds = retryAfter;
+            }
+            const queuePosition = Number(response.headers.get("X-Queue-Position"));
+            if (Number.isFinite(queuePosition) && queuePosition >= 0) {
+                error.queuePosition = queuePosition;
+            }
+            throw error;
+        }
+
+        return await response.json();
+    };
+    try {
+        // Headers alone are not completion: bound origin discovery, HTTP error
+        // bodies and JSON decoding too, including a stalled body after 200 OK.
+        return await Promise.race([aborted, readResponse()]);
     } finally {
         globalThis.clearTimeout(timeoutId);
+        controller.signal.removeEventListener("abort", onAbort);
     }
-
-    if (!response.ok) {
-        const text = await response.text();
-        const friendly = friendlyHttpErrorMessage(response.status, text);
-        const error = new Error(friendly);
-        error.status = response.status;
-        error.responseBody = text;
-        const retryAfter = Number(response.headers.get("Retry-After"));
-        if (Number.isFinite(retryAfter) && retryAfter > 0) {
-            error.retryAfterSeconds = retryAfter;
-        }
-        const queuePosition = Number(response.headers.get("X-Queue-Position"));
-        if (Number.isFinite(queuePosition) && queuePosition >= 0) {
-            error.queuePosition = queuePosition;
-        }
-        throw error;
-    }
-
-    return response.json();
 }
 
 async function apiStreamRequest(path, options = {}) {
