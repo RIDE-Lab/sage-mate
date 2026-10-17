@@ -130,7 +130,7 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
         request,
         admin_session_token=None,
         trace_callback=None,
-        on_post_answer_complete=None,
+        delivery=None,
         answer_chunk_callback=None,
     ):
         step = WorkflowTraceStep(
@@ -143,14 +143,15 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
         trace_callback(step)
         answer_chunk_callback("流式")
         answer_chunk_callback("回答")
-        on_post_answer_complete()
-        return DeliveredChatResponse(
+        response = DeliveredChatResponse(
             answer="流式回答",
             owner_name="Twin",
             used_model="test-model",
             conversation_id=request.conversation_id,
             workflow_trace=[step],
         )
+        api_module.workflow_event_broker.finish_immediate(delivery.stream_id, response)
+        return response
 
     monkeypatch.setattr(
         api_module,

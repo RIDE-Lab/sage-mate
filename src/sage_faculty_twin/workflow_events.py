@@ -43,8 +43,40 @@ class WorkflowEventBroker:
             "type": "answer_done", "response": response.model_dump(mode="json")})
 
     def publish_error(self, request_id, message):
-        self._journal().append(request_id, event_id="terminal", terminal=True,
-                               payload={"type": "error", "message": message})
+        journal = self._journal()
+        prepared = journal.prepare_append(request_id, event_id="terminal", terminal=True,
+                                           payload={"type": "error", "message": message})
+
+        def apply(old):
+            # Transport failure cannot revoke an admitted durable turn. This
+            # check shares the append transaction, including racing admissions.
+            if old and any(event["id"] == "answer_done" for event in old["events"]):
+                return old
+            return prepared.transform(old)
+
+        self._state_provider().update(prepared.slot, apply)
+
+    def finish_immediate(self, request_id, response):
+        """Finish a validated early return, or leave an admitted turn to its worker."""
+        if not isinstance(response, DeliveredChatResponse):
+            raise TypeError("answer_done requires a DeliveredChatResponse")
+        journal = self._journal()
+        answer = journal.prepare_append(request_id, event_id="answer_done", payload={
+            "type": "answer_done", "response": response.model_dump(mode="json")})
+        terminal = journal.prepare_append(request_id, event_id="terminal", terminal=True,
+                                          payload={"type": "complete"})
+
+        def apply(old):
+            existing = next((event for event in (old or {}).get("events", [])
+                             if event["id"] == "answer_done"), None)
+            if existing is not None:
+                saved = existing["payload"]["response"]
+                if saved["answer"] != response.answer or saved.get("exchange_id") != response.exchange_id:
+                    raise ValueError("delivery_answer_identity_conflict")
+                return old
+            return terminal.transform(answer.transform(old))
+
+        self._state_provider().update(answer.slot, apply)
 
     def publish_complete(self, request_id):
         self._journal().append(request_id, event_id="terminal", terminal=True,

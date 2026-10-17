@@ -44,6 +44,8 @@ from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .conversation_trace_store import ConversationTraceStore
 from .workflow_events import WorkflowEventBroker
+from .post_answer_contract import DeliveryIntent
+from .chat_delivery import ChatDeliveryGate
 from .request_context import (
     RequestCancellationController,
     RequestCancelledError,
@@ -453,37 +455,6 @@ class ActiveChatRequestRegistry:
 active_chat_request_registry = ActiveChatRequestRegistry()
 
 
-
-
-class _AnswerDoneCompleteGate:
-    """Ensure the SSE final answer is published before the stream closes."""
-
-    def __init__(self, publish_complete: Callable[[], None]) -> None:
-        self._publish_complete = publish_complete
-        self._lock = threading.Lock()
-        self._answer_done = False
-        self._post_answer_complete = False
-        self._complete_published = False
-
-    def mark_post_answer_complete(self) -> None:
-        should_publish = False
-        with self._lock:
-            self._post_answer_complete = True
-            if self._answer_done and not self._complete_published:
-                self._complete_published = True
-                should_publish = True
-        if should_publish:
-            self._publish_complete()
-
-    def mark_answer_done(self) -> None:
-        should_publish = False
-        with self._lock:
-            self._answer_done = True
-            if self._post_answer_complete and not self._complete_published:
-                self._complete_published = True
-                should_publish = True
-        if should_publish:
-            self._publish_complete()
 
 
 workflow_event_broker = WorkflowEventBroker(
@@ -2017,6 +1988,9 @@ async def chat(
     # make an obvious credential-exfiltration refusal return 429.
     boundary_response = service._check_sensitive_boundary_request(payload)
     if boundary_response is not None:
+        boundary_response = ChatDeliveryGate().deliver(response=boundary_response, original_question=payload.question)
+        if request_id is not None:
+            workflow_event_broker.finish_immediate(_owned_chat_request_key(payload.owner_id, request_id), boundary_response)
         return _record_success(boundary_response, route="boundary")
 
     global _chat_waiting_requests
@@ -2106,31 +2080,14 @@ async def chat(
             # before the response leaves the endpoint.
             _chat_admission.release()
 
-    # When ``request_id`` is supplied the chat workflow streams trace events
-    # over the workflow-events SSE channel. With
-    # ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND`` enabled the service returns the
-    # rendered ``ChatResponse`` after required memory/task persistence. SAGE
-    # executes profile/artifact writes, follow-up planning and scoring; the
-    # asyncio task only observes committed results. We defer
-    # ``publish_complete`` until that result is observed so the SSE
-    # consumer still sees the post-answer trace steps before the stream
-    # closes.
+    # Durable admission and SAGE completion own answer/terminal publication.
+    # The HTTP trace records this request's outcome, not worker completion.
     event_key = _owned_chat_request_key(payload.owner_id, request_id)
-
-    def _publish_complete_and_finish_trace() -> None:
-        trace_store.append_event(trace_id, "complete", {})
-        trace_store.finish(trace_id, status="completed")
-        workflow_event_broker.publish_complete(event_key)
-
-    answer_complete_gate = _AnswerDoneCompleteGate(_publish_complete_and_finish_trace)
 
     def _publish_trace_step(step: object) -> None:
         step_payload = getattr(step, "model_dump")(mode="json")
         trace_store.append_event(trace_id, "trace-step", step_payload)
         workflow_event_broker.publish_step(event_key, step)
-
-    def _on_post_answer_complete() -> None:
-        answer_complete_gate.mark_post_answer_complete()
 
     # The upstream may stream internally, but only a validated delivered
     # answer may cross the public SSE boundary.
@@ -2152,7 +2109,7 @@ async def chat(
                 payload=payload,
                 admin_session_token=admin_session_token,
                 trace_callback=_publish_trace_step,
-                on_post_answer_complete=_on_post_answer_complete,
+                delivery=DeliveryIntent(owner_id=payload.owner_id, request_id=request_id),
                 answer_chunk_callback=answer_chunk_callback,
             )
             timing.record("sage_workflow", stage_started)
@@ -2182,13 +2139,8 @@ async def chat(
     response_payload = timing.attach(response, route="sage_workflow").model_dump(mode="json")
     trace_store.set_response(trace_id, response_payload)
     trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
-    if STREAM_CHAT_ANSWER:
-        # Surface the final structured ChatResponse to the SSE channel so
-        # the streaming UI can swap the progressively-painted text for the
-        # rendered fields (answer_basis, follow_up_actions, etc.) without
-        # re-fetching anything.
-        workflow_event_broker.publish_answer_done(event_key, response)
-    answer_complete_gate.mark_answer_done()
+    trace_store.append_event(trace_id, "complete", {})
+    trace_store.finish(trace_id, status="completed")
 
     return timing.attach(response, route="sage_workflow")
 

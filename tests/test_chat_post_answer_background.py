@@ -258,7 +258,6 @@ def test_fact_question_uses_unified_execution_and_commit(tmp_path, monkeypatch):
 def test_required_memory_failure_prevents_success_and_background_work(tmp_path, monkeypatch, background):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     service._llm_client = _FastLLMClient()
-    completed = []
     traces = []
     runtime = service._get_post_answer_runtime()
 
@@ -273,7 +272,6 @@ def test_required_memory_failure_prevents_success_and_background_work(tmp_path, 
                 ChatRequest(student_name="Alice", question="给我一些下一步建议。",
                             conversation_id="commit-failure"),
                 trace_callback=traces.append if background else None,
-                on_post_answer_complete=lambda: completed.append(True),
             )
         await asyncio.sleep(0)
         await service.aclose()
@@ -282,7 +280,6 @@ def test_required_memory_failure_prevents_success_and_background_work(tmp_path, 
     assert runtime._service._thread is None
     assert service._conversation_store.list_records() == []
     assert not any(step.key == "memory_persist" and step.status == "completed" for step in traces)
-    assert completed == []
 
 
 @pytest.mark.parametrize("background", [True, False])
@@ -293,7 +290,7 @@ def test_answer_atomic_failure_and_restart_recovery(tmp_path, monkeypatch, backg
     service._llm_client = _FastLLMClient()
     memory = service._conversation_store
     runtime = service._get_post_answer_runtime()
-    captured, traces, completed = [], [], []
+    captured, traces = [], []
     original_capture = service._capture_post_answer_task
 
     def capture(*args):
@@ -325,11 +322,9 @@ def test_answer_atomic_failure_and_restart_recovery(tmp_path, monkeypatch, backg
             with pytest.raises(OSError, match="injected"):
                 await service.answer(ChatRequest(
                     student_name="Alice", question="给我一些下一步建议。",
-                    conversation_id="atomic-service"), trace_callback=traces.append,
-                    on_post_answer_complete=lambda: completed.append(True))
+                    conversation_id="atomic-service"), trace_callback=traces.append)
         assert len(captured) == 1
         task = captured[0]
-        assert completed == []
         assert not any(step.key == "memory_persist" and step.status == "completed" for step in traces)
         assert memory.list_records() == []  # No acknowledgement, no local publication.
         assert runtime._service._thread is None
@@ -432,7 +427,6 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     original_run_post_answer = service._conversation_store.consolidate_profiles
     started_event = threading.Event()
     finished_event = threading.Event()
-    committed_event = threading.Event()
 
     def gated_run(record):
         started_event.set()
@@ -457,7 +451,6 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
                 question="给我一些下一步建议。",
             ),
             trace_callback=lambda step: captured_steps.append(step.key),
-            on_post_answer_complete=committed_event.set,
         )
         # Give the asyncio.create_task a chance to start the background
         # post-answer thread before we assert on it.
@@ -483,12 +476,8 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
         # can also confirm the trace_callback eventually surfaced the
         # post-answer steps.
         persist_gate.set()
-        for _ in range(50):
-            if committed_event.is_set():
-                break
-            await asyncio.sleep(0.05)
+        await asyncio.wait_for(asyncio.gather(*service._post_answer_observers), timeout=5)
         assert finished_event.is_set()
-        assert committed_event.is_set()
         # Give the background callback a final tick to flush trace events.
         await asyncio.sleep(0.05)
         return response
@@ -526,7 +515,7 @@ def test_artifact_intent_is_durable_before_background_destination_finishes(tmp_p
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
         conversation_memory_dir=tmp_path / "memory", artifact_memory_draft_dir=tmp_path / "drafts"))
     service._llm_client = _FastLLMClient()
-    gate, started, completed = threading.Event(), threading.Event(), threading.Event()
+    gate, started = threading.Event(), threading.Event()
     original = service._artifact_memory_draft_store.create_draft
     traces = []
 
@@ -546,16 +535,15 @@ def test_artifact_intent_is_durable_before_background_destination_finishes(tmp_p
                 question="把我上传的 proposal draft 记录成后续跟进材料，后面继续讨论实验计划。",
                 attachments=[{"file_name": "proposal-draft.md", "media_type": "text/markdown",
                               "text_content": "# Full evidence\n\n- experiment plan"}],
-            ), trace_callback=lambda step: traces.append(step), on_post_answer_complete=completed.set), timeout=3)
+            ), trace_callback=lambda step: traces.append(step)), timeout=3)
             assert await asyncio.to_thread(started.wait, 2)
             state = service._get_post_answer_runtime().journal.read(response.exchange_id)
             assert state["tasks"]["post_answer"]["payload"]["artifact_draft"]["artifact_names"] == ["proposal-draft.md"]
             assert state["tasks"]["post_answer"]["status"] != "done"
             assert service._artifact_memory_draft_store.count_drafts() == 0
             assert not any(step.key == "artifact_memory_writeback" for step in traces)
-            assert not completed.is_set()
             gate.set()
-            assert await asyncio.to_thread(completed.wait, 5)
+            await asyncio.wait_for(asyncio.gather(*service._post_answer_observers), timeout=5)
             assert service._artifact_memory_draft_store.count_drafts() == 1
             artifact_traces = [step for step in traces if step.key == "artifact_memory_writeback"]
             assert len(artifact_traces) == 1 and artifact_traces[0].status == "completed"
@@ -577,7 +565,7 @@ def test_digest_is_durable_before_background_generation_finishes(tmp_path):
         conversation_id="digest-background", answer="earlier decision", workflow_action="answer",
         interaction_domain=None, knowledge_hit_count=0, booking_result=None)
     service._conversation_store.persist_exchange(first)
-    gate, started, completed = threading.Event(), threading.Event(), threading.Event()
+    gate, started = threading.Event(), threading.Event()
     original = service._refresh_saved_digest
     traces = []
     def gated(conversation_id, intent, *, owner_id):
@@ -591,8 +579,7 @@ def test_digest_is_durable_before_background_generation_finishes(tmp_path):
         try:
             response = await asyncio.wait_for(service.answer(ChatRequest(
                 student_name="Alice", conversation_id="digest-background",
-                question="给我一些下一步建议。"), trace_callback=traces.append,
-                on_post_answer_complete=completed.set), timeout=3)
+                question="给我一些下一步建议。"), trace_callback=traces.append), timeout=3)
             assert await asyncio.to_thread(started.wait, 2)
             state = service._get_post_answer_runtime().journal.read(response.exchange_id)
             saved = state["tasks"]["post_answer"]
@@ -600,12 +587,11 @@ def test_digest_is_durable_before_background_generation_finishes(tmp_path):
             assert saved["status"] != "done"
             assert service._digest_store.get_digest("digest-background") is None
             assert not any(step.key == "context_digest" for step in traces)
-            assert not completed.is_set()
             # A config edit after admission must not change the saved policy.
             service._settings.context_digest_llm_enabled = True
             service._settings.context_digest_max_chars = 200
             gate.set()
-            assert await asyncio.to_thread(completed.wait, 5)
+            await asyncio.wait_for(asyncio.gather(*service._post_answer_observers), timeout=5)
             assert service._digest_store.get_digest("digest-background").turns_summarized == 2
             digest_traces = [step for step in traces if step.key == "context_digest"]
             assert len(digest_traces) == 1 and digest_traces[0].status == "completed"

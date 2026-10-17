@@ -124,7 +124,8 @@ from .knowledge_authority import (
 )
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
-from .post_answer_contract import ArtifactDraftIntent, DigestIntent, DigestWorkTask, PostAnswerTask
+from .post_answer_contract import ArtifactDraftIntent, DeliveryIntent, DigestIntent, DigestWorkTask, PostAnswerTask
+from .workflow_events import WorkflowEventBroker
 from .post_answer_runtime import PostAnswerRuntime
 from .feedback_knowledge_runtime import FeedbackKnowledgeRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
@@ -9004,17 +9005,23 @@ class DigitalTwinService:
         request: ChatRequest,
         admin_session_token: str | None = None,
         trace_callback: WorkflowTraceCallback | None = None,
-        on_post_answer_complete: Callable[[], None] | None = None,
+        delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
     ) -> DeliveredChatResponse:
+        if delivery is not None and delivery.owner_id != request.owner_id:
+            raise ValueError("delivery_owner_conflict")
         response = await self._answer_request(
             request,
             admin_session_token=admin_session_token,
             trace_callback=trace_callback,
-            on_post_answer_complete=on_post_answer_complete,
+            delivery=delivery,
             answer_chunk_callback=answer_chunk_callback,
         )
-        return self._deliver_chat_response(request, response)
+        delivered = self._deliver_chat_response(request, response)
+        if delivery is not None:
+            await asyncio.to_thread(WorkflowEventBroker(lambda: self._conversation_store.state_store).finish_immediate,
+                                    delivery.stream_id, delivered)
+        return delivered
 
     def _deliver_chat_response(
         self,
@@ -9061,7 +9068,7 @@ class DigitalTwinService:
         *,
         admin_session_token: str | None,
         trace_callback: WorkflowTraceCallback | None,
-        on_post_answer_complete: Callable[[], None] | None = None,
+        delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
     ) -> ChatResponse:
         admin_session_payload = decode_admin_session_token(admin_session_token, self._settings)
@@ -9263,11 +9270,13 @@ class DigitalTwinService:
             context.workflow_trace.append(memory_commit_trace)
         response = self._prepare_commit_response(response, context)
         task = self._capture_post_answer_task(context, response, support)
+        if delivery is not None:
+            task = task.model_copy(update={"delivery": delivery})
         runtime = self._get_post_answer_runtime()
         context.persisted_memory_record = await asyncio.to_thread(
             runtime.submit_turn, task, self._conversation_store
         )
-        if memory_commit_trace is not None and trace_callback is not None:
+        if memory_commit_trace is not None and trace_callback is not None and delivery is None:
             trace_callback(memory_commit_trace.model_copy(deep=True))
 
         async def observe_result():
@@ -9277,14 +9286,12 @@ class DigitalTwinService:
             final = ChatResponse.model_validate(result["response"])
             self._project_post_answer_score(task, result)
             final.workflow_trace = _canonicalize_workflow_trace(final.workflow_trace)
-            if trace_callback is not None:
+            if trace_callback is not None and delivery is None:
                 for step in final.workflow_trace:
                     if (step.key in {"memory_profile_consolidate", "follow_up_plan", "memory_usefulness_score"}
                             or (step.key == "artifact_memory_writeback" and task.artifact_draft is not None)
                             or (step.key == "context_digest" and task.digest is not None)):
                         trace_callback(step)
-            if on_post_answer_complete is not None:
-                on_post_answer_complete()
             return final
 
         if should_background:
