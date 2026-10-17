@@ -24,7 +24,9 @@ def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, backgroun
     support._conversation_store = Mock()
     context = context_for(InteractionIntent(self_contained=True), course_context=background)
     support.retrieve_knowledge(context)
-    support.retrieve_memory(context)
+    memory_result = support.retrieve_memory(support.prepare_memory_retrieval(context))
+    assert memory_result.status == "skipped"
+    assert memory_result.hits == ()
     support._knowledge_retriever.search.assert_not_called()
     support._conversation_store.search.assert_not_called()
     assert not context.knowledge_hits
@@ -33,6 +35,40 @@ def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, backgroun
     assert all(step.status == "skipped" for step in context.workflow_trace)
     context.answer = "收到"
     assert support.render_chat_response(context).external_evidence_required is False
+
+
+def test_memory_branch_returns_owned_result_without_mutating_context(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    support = service._build_support()
+    support._conversation_store = Mock()
+    hits = [Mock(memory_type="short_term")]
+    support._conversation_store.search.return_value = hits
+    support._conversation_store.search_artifacts.return_value = []
+    support._planner_requests_any_step = lambda *args: True
+    support._trace_callback = Mock()
+    context = context_for(InteractionIntent(retrieval_scopes=["profile"]))
+    inputs = support.prepare_memory_retrieval(context)
+    original_question = context.request.question
+    context.request.question = "changed after planning"
+    result = support.retrieve_memory(inputs)
+    assert support._conversation_store.search.call_args.args[0].question == original_question
+    assert result.hits == tuple(hits)
+    assert result.status == "completed"
+    assert context.memory_hits == []
+    assert context.workflow_trace == []
+    support._trace_callback.assert_not_called()
+    assert len(hits) == 1
+
+
+def test_memory_stage_applies_result_and_trace_once(tmp_path):
+    from sage_faculty_twin.service import MemoryRetrievalStage
+
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    support._trace_callback = Mock()
+    context = context_for(InteractionIntent(self_contained=True))
+    assert MemoryRetrievalStage(support).execute(context) is context
+    assert [step.key for step in context.workflow_trace] == ["memory_retrieve"]
+    support._trace_callback.assert_called_once()
 
 
 @pytest.mark.parametrize("intent,fields", [

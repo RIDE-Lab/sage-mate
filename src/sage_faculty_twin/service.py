@@ -1077,6 +1077,29 @@ class ChatWorkflowContext:
 WorkflowTraceCallback = Callable[[WorkflowTraceStep], None]
 
 
+@dataclass(frozen=True, slots=True)
+class MemoryRetrievalInput:
+    request_json: str
+    conversation_id: str
+    include_short_term: bool = False
+    include_long_term: bool = False
+    include_artifact: bool = False
+    exclude_profile_echo: bool = False
+    skip_summary: str = ""
+    skip_detail: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryRetrievalResult:
+    """Owned branch output; applying it is the orchestrator's responsibility."""
+
+    hits: tuple[ConversationMemoryHit, ...]
+    summary: str
+    detail: str
+    status: str
+    duration_ms: int
+
+
 @dataclass
 class AdminSessionTokenInput:
     session_token: str | None = None
@@ -1850,107 +1873,103 @@ class FacultyTwinWorkflowSupport:
             for hit in raw_hits
         ]
 
-    def retrieve_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
-        started_at = perf_counter()
+    def prepare_memory_retrieval(self, context: ChatWorkflowContext) -> MemoryRetrievalInput:
+        request_json = context.request.model_dump_json()
+
+        def skipped(summary: str, detail: str) -> MemoryRetrievalInput:
+            return MemoryRetrievalInput(
+                request_json, context.conversation_id,
+                skip_summary=summary, skip_detail=detail,
+            )
+
         if self._is_self_contained_request(context):
-            self._append_trace(
-                context, key="memory_retrieve", title="对话记忆检索",
-                summary="当前请求自包含，跳过对话记忆检索。",
-                detail="回答只需当前消息，不检索历史或画像作为依据。",
-                status="skipped", duration_ms=self._elapsed_ms(started_at),
+            return skipped(
+                "当前请求自包含，跳过对话记忆检索。",
+                "回答只需当前消息，不检索历史或画像作为依据。",
             )
-            return context
         if context.is_admin_request and context.workflow_action == "admin_add_knowledge":
-            self._append_trace(
-                context,
-                key="memory_retrieve",
-                title="对话记忆检索",
-                summary="管理员知识入库不检索学生记忆。",
-                detail="当前对话用于管理员知识维护，不读取学生画像或历史问答记忆。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
+            return skipped(
+                "管理员知识入库不检索学生记忆。",
+                "当前对话用于管理员知识维护，不读取学生画像或历史问答记忆。",
             )
-            return context
 
         if self._is_benchmark_request(context.request):
-            self._append_trace(
-                context,
-                key="memory_retrieve",
-                title="对话记忆检索",
-                summary="benchmark 评测请求跳过对话记忆检索。",
-                detail="为避免评测样例之间的上下文污染，CharacterEval/LaMP 请求不读取短期或长期对话记忆。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
+            return skipped(
+                "benchmark 评测请求跳过对话记忆检索。",
+                "为避免评测样例之间的上下文污染，CharacterEval/LaMP 请求不读取短期或长期对话记忆。",
             )
-            return context
 
         if context.route != "answer" or context.answer is not None:
-            self._append_trace(
-                context,
-                key="memory_retrieve",
-                title="对话记忆检索",
-                summary="未执行对话记忆检索。",
-                detail="当前回答不需要额外对话记忆检索。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
+            return skipped(
+                "未执行对话记忆检索。",
+                "当前回答不需要额外对话记忆检索。",
             )
-            return context
 
         include_short_term = self._planner_requests_any_step(context, "retrieve_recent_memory")
         include_long_term = self._planner_requests_any_step(context, "retrieve_profile_memory")
         include_artifact = self._planner_requests_any_step(context, "retrieve_artifact_memory")
         if not include_short_term and not include_long_term and not include_artifact:
-            self._append_trace(
-                context,
-                key="memory_retrieve",
-                title="对话记忆检索",
-                summary="当前工作流规划跳过对话记忆检索。",
-                detail="deterministic planner 已接受当前规划，且本轮执行不需要 recent/profile/artifact memory retrieval。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
+            return skipped(
+                "当前工作流规划跳过对话记忆检索。",
+                "deterministic planner 已接受当前规划，且本轮执行不需要 recent/profile/artifact memory retrieval。",
             )
-            return context
 
-        context.memory_hits = self._conversation_store.search(
-            context.request,
+        return MemoryRetrievalInput(
+            request_json=request_json,
             conversation_id=context.conversation_id,
             include_short_term=include_short_term,
             include_long_term=include_long_term,
+            include_artifact=include_artifact,
+            exclude_profile_echo=bool(
+                context.recent_session_context.strip()
+                and self._looks_like_contextual_follow_up(
+                    context.request.question, context.recent_session_context,
+                )
+            ),
         )
-        if (
-            context.recent_session_context.strip()
-            and self._looks_like_contextual_follow_up(
-                context.request.question,
-                context.recent_session_context,
+
+    def retrieve_memory(self, inputs: MemoryRetrievalInput) -> MemoryRetrievalResult:
+        started_at = perf_counter()
+        if inputs.skip_summary:
+            return MemoryRetrievalResult(
+                (), inputs.skip_summary, inputs.skip_detail, "skipped",
+                self._elapsed_ms(started_at),
             )
-        ):
+        # The branch owns this request object; it cannot observe later changes
+        # to the planner or another branch's context.
+        request = ChatRequest.model_validate_json(inputs.request_json)
+        memory_hits = list(self._conversation_store.search(
+            request,
+            conversation_id=inputs.conversation_id,
+            include_short_term=inputs.include_short_term,
+            include_long_term=inputs.include_long_term,
+        ))
+        if inputs.exclude_profile_echo:
             # The immediate conversation is the authoritative source for a
             # follow-up. Avoid echoing a freshly consolidated profile derived
             # from the same turns back into the prompt.
-            context.memory_hits = [
-                hit for hit in context.memory_hits if hit.memory_type != "long_term"
+            memory_hits = [
+                hit for hit in memory_hits if hit.memory_type != "long_term"
             ]
         historical_artifact_hits = (
             self._conversation_store.search_artifacts(
-                context.request,
-                conversation_id=context.conversation_id,
+                request,
+                conversation_id=inputs.conversation_id,
             )
-            if include_artifact
+            if inputs.include_artifact
             else []
         )
         current_attachment_hits = (
-            self._build_attachment_artifact_hits(context.request) if include_artifact else []
+            self._build_attachment_artifact_hits(request) if inputs.include_artifact else []
         )
         if historical_artifact_hits:
-            context.memory_hits.extend(historical_artifact_hits)
+            memory_hits.extend(historical_artifact_hits)
         if current_attachment_hits:
-            context.memory_hits.extend(current_attachment_hits)
-        hit_count = len(context.memory_hits)
+            memory_hits.extend(current_attachment_hits)
+        hit_count = len(memory_hits)
         artifact_hit_count = len(historical_artifact_hits) + len(current_attachment_hits)
-        self._append_trace(
-            context,
-            key="memory_retrieve",
-            title="对话记忆检索",
+        return MemoryRetrievalResult(
+            hits=tuple(memory_hits),
             summary=(
                 f"命中 {hit_count} 条记忆/材料上下文。"
                 if hit_count
@@ -1966,8 +1985,8 @@ class FacultyTwinWorkflowSupport:
                 )
             ),
             duration_ms=self._elapsed_ms(started_at),
+            status="completed",
         )
-        return context
 
     @staticmethod
     def _is_self_contained_request(context: ChatWorkflowContext) -> bool:
@@ -8754,7 +8773,14 @@ class MemoryRetrievalStage(MapFunction):
         self._support = support
 
     def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.retrieve_memory(data)
+        result = self._support.retrieve_memory(self._support.prepare_memory_retrieval(data))
+        data.memory_hits = list(result.hits)
+        self._support._append_trace(
+            data, key="memory_retrieve", title="对话记忆检索",
+            summary=result.summary, detail=result.detail,
+            status=result.status, duration_ms=result.duration_ms,
+        )
+        return data
 
 
 class PromptBuildStage(MapFunction):
