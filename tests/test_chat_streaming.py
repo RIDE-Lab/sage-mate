@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import threading
 from collections import OrderedDict
 from typing import Iterable, Iterator
@@ -40,6 +39,7 @@ from sage_faculty_twin.chat_delivery import ChatDeliveryGate
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.llm_client import VllmChatClient
 from sage_faculty_twin.models import ChatResponse
+from test_workflow_sse_keepalive import make_broker, decode
 
 
 @pytest.fixture
@@ -57,23 +57,18 @@ def test_publish_delivered_answer_then_done_emits_in_order(
     a single ``answer_done`` carrying the rendered ChatResponse dict."""
 
     request_id = "req-stream-order"
-    broker = api_module.WorkflowEventBroker()
+    broker = make_broker()
 
     async def driver() -> list[dict]:
         agen = broker.stream(request_id).__aiter__()
 
         async def fetch_one() -> dict:
             chunk = await asyncio.wait_for(agen.__anext__(), timeout=2.0)
-            assert chunk.startswith("data: ")
-            return json.loads(chunk[len("data: ") :].rstrip("\n"))
+            assert chunk.startswith("id: ")
+            return decode(chunk)
 
-        # Register the stream with the broker before publishing.
+        # Publication no longer depends on subscriber registration.
         first = asyncio.create_task(fetch_one())
-        for _ in range(5):
-            await asyncio.sleep(0)
-            with broker._lock:  # type: ignore[attr-defined]
-                if request_id in broker._streams:  # type: ignore[attr-defined]
-                    break
 
         delivered = ChatDeliveryGate().deliver(
             response=ChatResponse(
@@ -89,7 +84,7 @@ def test_publish_delivered_answer_then_done_emits_in_order(
         events: list[dict] = [await first]
         try:
             async for chunk in agen:
-                events.append(json.loads(chunk[len("data: ") :].rstrip("\n")))
+                events.append(decode(chunk))
         except StopAsyncIteration:
             pass
         return events
@@ -103,7 +98,7 @@ def test_publish_delivered_answer_then_done_emits_in_order(
 
 
 def test_broker_rejects_unvalidated_chat_response() -> None:
-    broker = api_module.WorkflowEventBroker()
+    broker = make_broker()
     response = ChatResponse(answer="raw", owner_name="Twin", used_model="test-model")
 
     with pytest.raises(TypeError, match="DeliveredChatResponse"):

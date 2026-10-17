@@ -11,10 +11,25 @@ are delivered on event/cancel responses. Tests cover same-ID cross-owner
 registration, subscription/disconnect and explicit cancellation, alongside timeout
 publication and existing guest/streaming contracts.
 
-This secures the current in-process channel, not durable delivery: its queues,
-subscription replacement and controller ownership still need SAGE-owned replay
-and lifecycle qualification. It does not provide cross-process cancellation or
-event replay after restart, and does not imply production deployment.
+Twin now pins SAGE `c20fb632abf5c43965d3bfe86eca00eb6e9c02ab` and replaces
+the old in-process event queues with `EventJournal` and `EventSubscription`.
+The thin Twin adapter owns payload schemas/SSE framing, borrowing the canonical
+conversation state; it does not implement another queue or polling runtime.
+Events published before subscription survive, independent subscribers do not
+replace each other, and reopened SQLite adapters replay committed events.
+SSE events carry sequence IDs; `Last-Event-ID` resumes after the last delivery.
+Malformed cursors fail400 and ahead-of-tail cursors fail409 before streaming.
+Disconnect no longer cancels production; the explicit owned cancel endpoint does.
+Failed answer-event publication is no longer swallowed before terminal success.
+
+The qualified wheel SHA-256 is
+`16da883d5f1e187fd7992b600976b2ffbf261de7668a24865ec88e7f7f731fb4`.
+State retains full event payloads, with no implicit TTL/truncation. Capacity and
+retention still need qualification. Canonical answer/event atomic admission and
+recovery of production intent are not yet connected, so a crash between answer
+commit and event publication remains an explicit open gate. Controller ownership
+is still process-local; cross-process cancellation is not claimed. No production
+deployment is implied by component or adapter tests.
 
 ## SageVDB dependency qualification
 

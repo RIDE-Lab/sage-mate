@@ -43,7 +43,7 @@ from .auth import (
 from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .conversation_trace_store import ConversationTraceStore
-from .chat_delivery import DeliveredChatResponse
+from .workflow_events import WorkflowEventBroker
 from .request_context import (
     RequestCancellationController,
     RequestCancelledError,
@@ -453,94 +453,6 @@ class ActiveChatRequestRegistry:
 active_chat_request_registry = ActiveChatRequestRegistry()
 
 
-class WorkflowEventBroker:
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._streams: dict[
-            str,
-            tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, object] | None]],
-        ] = {}
-
-    async def stream(
-        self,
-        request_id: str,
-        *,
-        on_disconnect: Callable[[], None] | None = None,
-    ) -> AsyncIterator[str]:
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[dict[str, object] | None] = asyncio.Queue()
-        with self._lock:
-            self._streams[request_id] = (loop, queue)
-
-        closed_by_server = False
-        try:
-            while True:
-                # Chat Latency Optimizations Task 4: emit a keepalive event
-                # whenever no trace step has arrived within the heartbeat
-                # window so Cloudflare/edge proxies don't drop the SSE
-                # connection while the LLM stage is decoding. The keepalive
-                # is a typed JSON event the frontend can ignore explicitly
-                # rather than an SSE comment, keeping it observable in dev
-                # tools.
-                try:
-                    payload = await asyncio.wait_for(
-                        queue.get(), timeout=CHAT_SSE_KEEPALIVE_SECONDS
-                    )
-                except asyncio.TimeoutError:
-                    yield (
-                        "data: " + json.dumps({"type": "keepalive"}, ensure_ascii=False) + "\n\n"
-                    )
-                    continue
-                if payload is None:
-                    closed_by_server = True
-                    break
-                yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
-        finally:
-            with self._lock:
-                current = self._streams.get(request_id)
-                if current is not None and current[1] is queue:
-                    self._streams.pop(request_id, None)
-            if not closed_by_server and on_disconnect is not None:
-                on_disconnect()
-
-    def publish_step(self, request_id: str, step: object) -> None:
-        payload = {
-            "type": "trace-step",
-            "step": getattr(step, "model_dump")(mode="json"),
-        }
-        self._publish(request_id, payload)
-
-    def publish_answer_done(
-        self,
-        request_id: str,
-        response: DeliveredChatResponse,
-    ) -> None:
-        if not isinstance(response, DeliveredChatResponse):
-            raise TypeError("answer_done requires a DeliveredChatResponse")
-        self._publish(
-            request_id,
-            {"type": "answer_done", "response": response.model_dump(mode="json")},
-        )
-
-    def publish_error(self, request_id: str, message: str) -> None:
-        self._publish(request_id, {"type": "error", "message": message})
-        self.close(request_id)
-
-    def publish_complete(self, request_id: str) -> None:
-        self._publish(request_id, {"type": "complete"})
-        self.close(request_id)
-
-    def close(self, request_id: str) -> None:
-        self._publish(request_id, None)
-
-    def _publish(self, request_id: str, payload: dict[str, object] | None) -> None:
-        with self._lock:
-            stream = self._streams.get(request_id)
-        if stream is None:
-            return
-
-        loop, queue = stream
-        loop.call_soon_threadsafe(queue.put_nowait, payload)
 
 
 class _AnswerDoneCompleteGate:
@@ -574,7 +486,10 @@ class _AnswerDoneCompleteGate:
             self._publish_complete()
 
 
-workflow_event_broker = WorkflowEventBroker()
+workflow_event_broker = WorkflowEventBroker(
+    lambda: service._conversation_store.state_store,
+    heartbeat_provider=lambda: CHAT_SSE_KEEPALIVE_SECONDS,
+)
 
 
 def _raise_chat_validation_error(exc: ValidationError) -> None:
@@ -1854,11 +1769,18 @@ async def chat_workflow_events(
 ) -> StreamingResponse:
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
     key = _owned_chat_request_key(identity.owner_id, request_id)
+    raw_cursor = raw_request.headers.get("last-event-id", "0")
+    if not raw_cursor.isascii() or not raw_cursor.isdigit() or len(raw_cursor) > 20:
+        raise HTTPException(status_code=400, detail="无效的事件游标。")
+    after = int(raw_cursor)
+    try:
+        await asyncio.to_thread(workflow_event_broker.validate_cursor, key, after)
+    except ValueError as exc:
+        if str(exc) != "event_cursor_ahead":
+            raise
+        raise HTTPException(status_code=409, detail="事件游标超出当前记录，请重新同步。") from exc
     response = StreamingResponse(
-        workflow_event_broker.stream(
-            key,
-            on_disconnect=lambda: active_chat_request_registry.cancel(key),
-        ),
+        workflow_event_broker.stream(key, after=after),
         media_type="text/event-stream",
         headers={
             **NO_STORE_HEADERS,
@@ -2265,10 +2187,7 @@ async def chat(
         # the streaming UI can swap the progressively-painted text for the
         # rendered fields (answer_basis, follow_up_actions, etc.) without
         # re-fetching anything.
-        try:
-            workflow_event_broker.publish_answer_done(event_key, response)
-        except Exception:  # pragma: no cover - defensive
-            pass
+        workflow_event_broker.publish_answer_done(event_key, response)
     answer_complete_gate.mark_answer_done()
 
     return timing.attach(response, route="sage_workflow")

@@ -97,6 +97,8 @@ def test_prompt_capacity_failure_is_actionable_not_500(monkeypatch, isolated_cha
 @pytest.fixture
 def isolated_chat_service(monkeypatch: pytest.MonkeyPatch, guest_identity_store) -> None:
     """Exercise the HTTP boundary without loading optional embedding weights."""
+    monkeypatch.setattr(api_module, "workflow_event_broker", api_module.WorkflowEventBroker(
+        lambda: guest_identity_store._state))
     monkeypatch.setattr(service, "_instance", SimpleNamespace(
         _guest_identity_store=guest_identity_store,
         _check_sensitive_boundary_request=lambda *_args: None,
