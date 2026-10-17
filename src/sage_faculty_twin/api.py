@@ -45,13 +45,10 @@ from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .conversation_trace_store import ConversationTraceStore
 from .workflow_events import WorkflowEventBroker
-from .post_answer_contract import DeliveryIntent
 from .slack_workflow import SlackAnswerRecovery, SlackIngress, SlackReply, SlackWorkflow
-from .chat_delivery import ChatDeliveryGate
 from .request_context import (
     RequestCancellationController,
     RequestCancelledError,
-    RequestRuntimeDiagnostics,
     request_cancellation_scope,
 )
 from .request_timing import RequestTimingLedger
@@ -132,6 +129,9 @@ from .models import (
 from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
 from .chat_identity import ChatIdentity
+from .http_authority import HttpAuthorityResolver
+from .http_workflow import HttpIngress, HttpWorkflow, HttpWorkRejected
+from sage.runtime.async_work_service import WorkStartTimeoutError
 from .guest_identity import GUEST_COOKIE_NAME
 from .service import (
     DigitalTwinService,
@@ -146,7 +146,6 @@ from .slack_channel_context import (
     asks_about_prior_context,
     fetch_slack_channel_context,
 )
-from .trace_context import bind_trace_event_sink
 
 
 _logger = logging.getLogger(__name__)
@@ -167,8 +166,8 @@ def configure_local_cors(target_app: FastAPI) -> None:
 
 @asynccontextmanager
 async def _app_lifespan(_app: FastAPI):
-    await startup_event()
     try:
+        await startup_event()
         yield
     finally:
         await shutdown_event()
@@ -239,100 +238,8 @@ CHAT_LONG_REQUEST_TIMEOUT_SECONDS = settings.long_chat_request_timeout_seconds
 _streamed_chat_request: ContextVar[bool] = ContextVar("streamed_chat_request", default=False)
 CHAT_MAX_INFLIGHT_REQUESTS = settings.chat_max_inflight_requests
 CHAT_ADMISSION_TIMEOUT_SECONDS = settings.chat_admission_timeout_seconds
-_chat_admission = asyncio.Semaphore(CHAT_MAX_INFLIGHT_REQUESTS)
-_chat_waiting_requests = 0
 
 
-async def _run_chat_with_cancellation(
-    raw_request: Request,
-    *,
-    timeout_seconds: float,
-    deadline_at: float | None = None,
-    runtime_diagnostics: RequestRuntimeDiagnostics | None = None,
-    active_request_id: str | None = None,
-    **answer_kwargs,
-) -> ChatResponse:
-    """Run one chat request while propagating disconnect/timeout to workers.
-
-    The model call itself is synchronous in a worker thread, so cancelling the
-    asyncio wrapper alone would leave that thread free to perform validation
-    retries after the HTTP request has gone away.  The context-scoped event is
-    checked before every retry and post-answer branch.
-    """
-    cancellation = RequestCancellationController(diagnostics=runtime_diagnostics)
-    request_payload = answer_kwargs.pop("payload")
-    if active_request_id:
-        active_request_id = _owned_chat_request_key(request_payload.owner_id, active_request_id)
-    if active_request_id:
-        active_chat_request_registry.register(active_request_id, cancellation)
-
-    async def _run_answer():
-        with request_cancellation_scope(cancellation, deadline_at=deadline_at):
-            return await service.answer(request_payload, **answer_kwargs)
-
-    answer_task = asyncio.create_task(_run_answer())
-    watch_disconnect = not raw_request.headers.get("content-type", "").lower().startswith(
-        "multipart/"
-    )
-
-    stop_disconnect_watch = asyncio.Event()
-
-    async def _watch_disconnect():
-        while not stop_disconnect_watch.is_set():
-            try:
-                disconnected = await asyncio.wait_for(raw_request.is_disconnected(), timeout=0.5)
-            except asyncio.TimeoutError:
-                disconnected = False
-            # On Python 3.11 wait_for can consume cancellation when its inner
-            # poll completes concurrently. Cancellation alone is therefore
-            # not a stop signal: otherwise finally waits until the browser
-            # disconnects even though the answer is already ready.
-            if disconnected or stop_disconnect_watch.is_set():
-                return
-            await asyncio.sleep(0.25)
-
-    watcher_task = asyncio.create_task(_watch_disconnect()) if watch_disconnect else None
-    try:
-        if watcher_task is None:
-            return await asyncio.wait_for(answer_task, timeout=timeout_seconds)
-        done, _ = await asyncio.wait(
-            {answer_task, watcher_task},
-            timeout=timeout_seconds,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        if answer_task in done:
-            try:
-                return answer_task.result()
-            except RequestCancelledError as exc:
-                raise asyncio.TimeoutError from exc
-        cancellation.cancel()
-        answer_task.cancel()
-        await asyncio.gather(answer_task, return_exceptions=True)
-        if watcher_task in done:
-            raise HTTPException(status_code=499, detail="客户端已断开，已停止后续模型重试。")
-        raise asyncio.TimeoutError
-    except asyncio.TimeoutError:
-        cancellation.cancel()
-        answer_task.cancel()
-        await asyncio.gather(answer_task, return_exceptions=True)
-        raise
-    except asyncio.CancelledError:
-        cancellation.cancel()
-        answer_task.cancel()
-        await asyncio.gather(answer_task, return_exceptions=True)
-        raise
-    finally:
-        stop_disconnect_watch.set()
-        cancellation.cancel()
-        if not answer_task.done():
-            answer_task.cancel()
-        if watcher_task is not None and not watcher_task.done():
-            watcher_task.cancel()
-        await asyncio.gather(answer_task, return_exceptions=True)
-        if watcher_task is not None:
-            await asyncio.gather(watcher_task, return_exceptions=True)
-        if active_request_id:
-            active_chat_request_registry.unregister(active_request_id, cancellation)
 # Chat Latency Optimizations Task 4: SSE keepalive cadence on the
 # ``/chat/workflow-events`` stream. While ``/chat`` is in-flight the LLM
 # stage may not emit a trace step for tens of seconds; without a heartbeat
@@ -466,6 +373,72 @@ workflow_event_broker = WorkflowEventBroker(
     heartbeat_provider=lambda: CHAT_SSE_KEEPALIVE_SECONDS,
 )
 slack_workflow = None
+http_workflow = None
+
+
+def _create_http_workflow(instance):
+    from sage.runtime.event_journal import EventJournal
+
+    state = instance._conversation_store.state_store
+    resolver = HttpAuthorityResolver(settings=instance._settings, users=instance._user_store,
+        tokens=lab_member_api_token_store, guests=instance._guest_identity_store)
+    events = EventJournal(state, namespace="twin-workflow-events-v1")
+    broker = WorkflowEventBroker(lambda: state)
+
+    async def authorize(ingress):
+        await asyncio.to_thread(resolver.resolve, ingress.authority, ingress.request)
+        return True
+
+    async def recover(ingress):
+        cursor = 0
+        while True:
+            page = await asyncio.to_thread(events.read, ingress.delivery.stream_id, after=cursor, limit=100)
+            for event in page["events"]:
+                if event["id"] == "answer_done":
+                    return ChatResponse.model_validate(event["payload"]["response"])
+            if page["caught_up"]:
+                return None
+            cursor = page["cursor"]
+
+    async def answer(ingress):
+        budget = (CHAT_LONG_REQUEST_TIMEOUT_SECONDS if ingress.request.deep_thinking
+                  and ingress.request.deep_thinking_explicit else CHAT_REQUEST_TIMEOUT_SECONDS)
+        controller = RequestCancellationController()
+        key = ingress.delivery.stream_id
+        active_chat_request_registry.register(key, controller)
+        try:
+            with request_cancellation_scope(controller, deadline_at=time.monotonic() + budget):
+                # Native SAGE worker capacity owns queueing. This budget starts
+                # after the first claim; observer admission waits are separate.
+                async with asyncio.timeout(budget):
+                    await authorize(ingress)
+                    return await instance.answer(
+                        ingress.request, delivery=ingress.delivery,
+                        admin_session_reference=ingress.authority.admin_session,
+                        trace_callback=lambda step: broker.publish_step(key, step),
+                        answer_chunk_callback=_untraced_answer_chunk_callback(),
+                    )
+        except PromptCapacityError as exc:
+            controller.cancel()
+            raise HttpWorkRejected("prompt_capacity") from exc
+        except RequestCancelledError as exc:
+            controller.cancel()
+            raise HttpWorkRejected("request_cancelled") from exc
+        except HTTPException as exc:
+            controller.cancel()
+            # Service-level rejections have already exhausted their own
+            # validation/retry policy. Persist only the safe classification.
+            code = {403: "authority_denied", 413: "prompt_capacity", 503: "answer_unavailable"}.get(
+                exc.status_code, "invalid_request")
+            raise HttpWorkRejected(code) from exc
+        except BaseException:
+            controller.cancel()
+            raise
+        finally:
+            active_chat_request_registry.unregister(key, controller)
+
+    return HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer,
+                        max_workers=CHAT_MAX_INFLIGHT_REQUESTS)
 
 
 def _raise_chat_validation_error(exc: ValidationError) -> None:
@@ -1895,7 +1868,7 @@ async def slack_events(
 
 
 async def startup_event() -> None:
-    global slack_workflow
+    global slack_workflow, http_workflow
     if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
         identity = await asyncio.to_thread(_post_slack_api, "auth.test", {})
         if identity.get("team_id") != SLACK_TWIN_TEAM_ID:
@@ -1903,6 +1876,8 @@ async def startup_event() -> None:
     instance = await asyncio.to_thread(service.ensure_initialized)
     await asyncio.to_thread(slack_link_store.migrate_to, instance._conversation_store.state_store)
     await asyncio.to_thread(instance.start_background_work)
+    http_workflow = _create_http_workflow(instance)
+    await http_workflow.start()
     if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
         slack_workflow = _create_slack_workflow(instance._conversation_store.state_store)
         await slack_workflow.start()
@@ -1919,7 +1894,10 @@ async def startup_event() -> None:
 
 
 async def shutdown_event() -> None:
-    global slack_workflow
+    global slack_workflow, http_workflow
+    if http_workflow is not None:
+        await http_workflow.aclose()
+        http_workflow = None
     if slack_workflow is not None:
         await slack_workflow.aclose()
         slack_workflow = None
@@ -1962,7 +1940,6 @@ async def chat(
     raw_request.state.chat_identity = identity
     _deliver_guest_cookie(raw_request, http_response)
     timing.record("request_parse", stage_started)
-    admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     trace_id = secrets.token_hex(16)
     http_response.headers["X-Trace-Id"] = trace_id
     http_response.headers["X-Sage-Trace-ID"] = timing.trace_id
@@ -1980,6 +1957,8 @@ async def chat(
     def _record_success(response: ChatResponse, *, route: str) -> ChatResponse:
         delivered = timing.attach(response, route=route)
         trace_store.set_response(trace_id, delivered.model_dump(mode="json"))
+        for step in delivered.workflow_trace:
+            trace_store.append_event(trace_id, "trace-step", {"step": step.model_dump(mode="json")})
         trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
         trace_store.append_event(trace_id, "complete", {})
         trace_store.finish(trace_id, status="completed")
@@ -1990,166 +1969,56 @@ async def chat(
         trace_store.append_event(trace_id, "error", error_payload)
         trace_store.finish(trace_id, status=status, error=error_payload)
 
-    # Safety-boundary replies do not need the model or NPU.  Resolve them
-    # before the single-model admission gate so a slow deep/web request cannot
-    # make an obvious credential-exfiltration refusal return 429.
-    boundary_response = service._check_sensitive_boundary_request(payload)
-    if boundary_response is not None:
-        boundary_response = ChatDeliveryGate().deliver(response=boundary_response, original_question=payload.question)
-        if request_id is not None:
-            workflow_event_broker.finish_immediate(_owned_chat_request_key(payload.owner_id, request_id), boundary_response)
-        return _record_success(boundary_response, route="boundary")
+    def _http_error(status, detail):
+        # FastAPI replaces the injected Response when handling an exception.
+        # Preserve the newly issued guest identity so retry keeps its owner.
+        headers = {"Cache-Control": "no-store", "X-Sage-Trace-ID": timing.trace_id}
+        if status in {429, 503}:
+            headers["Retry-After"] = "2"
+        if "set-cookie" in http_response.headers:
+            headers["Set-Cookie"] = http_response.headers["set-cookie"]
+        return HTTPException(status_code=status, detail=detail, headers=headers)
 
-    global _chat_waiting_requests
-    if timing.remaining_seconds() <= 0:
-        exc = HTTPException(
-            status_code=504,
-            detail="后端在本次请求总预算内未完成响应，请稍后重试。",
-            headers={"X-Sage-Trace-ID": timing.trace_id},
-        )
-        _record_error(exc, status="timeout")
-        raise exc
-    queue_position = _chat_waiting_requests + (1 if _chat_admission.locked() else 0)
-    _chat_waiting_requests += 1
-    stage_started = time.perf_counter()
+    if http_workflow is None:
+        raise _http_error(503, "HTTP workflow is not ready.")
+    resolver = HttpAuthorityResolver(settings=service._settings, users=service._user_store,
+        tokens=lab_member_api_token_store, guests=service._guest_identity_store)
     try:
-        await asyncio.wait_for(
-            _chat_admission.acquire(),
-            timeout=min(CHAT_ADMISSION_TIMEOUT_SECONDS, timing.remaining_seconds()),
-        )
-    except asyncio.TimeoutError as exc:
-        timing.record("admission_wait", stage_started)
-        _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
-        estimated_wait = max(2, min(15, int(round(CHAT_ADMISSION_TIMEOUT_SECONDS * max(1, queue_position)))))
-        admission_error = HTTPException(
-            status_code=429,
-            detail=(
-                f"当前请求正在排队，前方约 {queue_position} 个请求，"
-                f"预计 {estimated_wait} 秒后重试。"
-            ),
-            headers={
-                "Retry-After": str(estimated_wait),
-                "X-Queue-Position": str(queue_position),
-                "X-Queue-Estimated-Wait": str(estimated_wait),
-                "X-Sage-Trace-ID": timing.trace_id,
-            },
-        )
-        _record_error(admission_error, status="rejected")
-        raise admission_error from exc
-    timing.record("admission_wait", stage_started)
-    _chat_waiting_requests = max(0, _chat_waiting_requests - 1)
-
-    if request_id is None:
-        # API clients do not always open the workflow-events SSE channel.
-        # Still attach a no-op trace callback so the same production path
-        # can run post-answer persistence in the background. This keeps
-        # memory/profile bookkeeping out of the HTTP critical path without
-        # changing the public response schema.
-        try:
-            with bind_trace_event_sink(
-                lambda event_type, event_payload: trace_store.append_event(
-                    trace_id, event_type, event_payload
-                )
-            ):
-                stage_started = time.perf_counter()
-                response = await _run_chat_with_cancellation(
-                    raw_request,
-                    timeout_seconds=timing.remaining_seconds(),
-                    deadline_at=timing.deadline_at,
-                    runtime_diagnostics=timing.runtime_diagnostics,
-                    active_request_id=timing.trace_id,
-                    payload=payload,
-                    admin_session_token=admin_session_token,
-                    trace_callback=lambda step: trace_store.append_event(
-                        trace_id, "trace-step", step.model_dump(mode="json")
-                    ),
-                    answer_chunk_callback=_untraced_answer_chunk_callback(),
-                )
-                timing.record("sage_workflow", stage_started)
-            return _record_success(response, route="sage_workflow")
-        except asyncio.TimeoutError as exc:
-            timing.record("sage_workflow", stage_started)
-            _record_error(exc, status="timeout")
-            raise HTTPException(
-                status_code=504,
-                detail="后端在本次请求总预算内未完成响应，请稍后重试。",
-                headers={"X-Sage-Trace-ID": timing.trace_id},
-            ) from exc
-        except PromptCapacityError as exc:
-            _record_error(exc, status="rejected")
-            raise HTTPException(status_code=413, detail="所选完整材料超出当前可安全使用的上下文容量；未截断原文。请分篇提问或缩小材料范围。",
-                headers={"X-Sage-Trace-ID": timing.trace_id}) from exc
-        except Exception as exc:
-            _record_error(exc)
-            raise
-        finally:
-            # A return still executes this finally; the slot is released
-            # before the response leaves the endpoint.
-            _chat_admission.release()
-
-    # Durable admission and SAGE completion own answer/terminal publication.
-    # The HTTP trace records this request's outcome, not worker completion.
-    event_key = _owned_chat_request_key(payload.owner_id, request_id)
-
-    def _publish_trace_step(step: object) -> None:
-        step_payload = getattr(step, "model_dump")(mode="json")
-        trace_store.append_event(trace_id, "trace-step", step_payload)
-        workflow_event_broker.publish_step(event_key, step)
-
-    # The upstream may stream internally, but only a validated delivered
-    # answer may cross the public SSE boundary.
-    answer_chunk_callback = _untraced_answer_chunk_callback()
-
-    try:
-        with bind_trace_event_sink(
-            lambda event_type, event_payload: trace_store.append_event(
-                trace_id, event_type, event_payload
-            )
-        ):
-            stage_started = time.perf_counter()
-            response = await _run_chat_with_cancellation(
-                raw_request,
-                timeout_seconds=timing.remaining_seconds(),
-                deadline_at=timing.deadline_at,
-                runtime_diagnostics=timing.runtime_diagnostics,
-                active_request_id=timing.trace_id,
-                payload=payload,
-                admin_session_token=admin_session_token,
-                trace_callback=_publish_trace_step,
-                delivery=DeliveryIntent(owner_id=payload.owner_id, request_id=request_id),
-                answer_chunk_callback=answer_chunk_callback,
-            )
-            timing.record("sage_workflow", stage_started)
-    except asyncio.TimeoutError as exc:
+        authority = await asyncio.to_thread(resolver.capture, raw_request, identity, payload)
+        ingress = HttpIngress(request_id=request_id or timing.trace_id, request=payload, authority=authority)
+        stage_started = time.perf_counter()
+        await http_workflow.admit(ingress)
+        response = await http_workflow.wait(ingress, timeout=max(0, timing.remaining_seconds()),
+                                            start_timeout=CHAT_ADMISSION_TIMEOUT_SECONDS)
         timing.record("sage_workflow", stage_started)
-        _record_error(exc, status="timeout")
-        message = "后端在本次请求总预算内未完成响应，请稍后重试。"
-        workflow_event_broker.publish_error(event_key, message)
-        raise HTTPException(
-            status_code=504,
-            detail=message,
-            headers={"X-Sage-Trace-ID": timing.trace_id},
-        ) from exc
-    except PromptCapacityError as exc:
+        return _record_success(response, route="sage_workflow")
+    except PermissionError as exc:
         _record_error(exc, status="rejected")
-        message = "所选完整材料超出当前可安全使用的上下文容量；未截断原文。请分篇提问或缩小材料范围。"
-        workflow_event_broker.publish_error(event_key, message)
-        raise HTTPException(status_code=413, detail=message,
-            headers={"X-Sage-Trace-ID": timing.trace_id}) from exc
+        raise _http_error(403, "当前身份或权限已失效，请重新验证。") from exc
+    except HttpWorkRejected as exc:
+        _record_error(exc, status="rejected")
+        status, detail = {
+            "prompt_capacity": (413, "完整材料超出模型上下文容量；未截断原文，请调整问题或材料后重试。"),
+            "request_cancelled": (499, "任务已取消，未继续生成回答。"),
+            "authority_denied": (403, "当前身份或权限已失效，请重新验证。"),
+            "invalid_request": (400, "请求内容无效，请检查后重试。"),
+        }.get(exc.code, (503, "本轮回答未能完整生成或通过校验，请稍后重试。"))
+        raise _http_error(status, detail) from exc
+    except ValueError as exc:
+        _record_error(exc, status="rejected")
+        if str(exc) in {"journal_commit_conflict", "http_work_input_conflict"}:
+            raise _http_error(409, "该请求 ID 已绑定不同输入，请使用新的请求 ID。") from exc
+        raise
+    except WorkStartTimeoutError as exc:
+        _record_error(exc, status="queued")
+        raise _http_error(429, "请求正在排队；请使用相同请求 ID 重试查询，不会重复执行。") from exc
+    except TimeoutError as exc:
+        _record_error(exc, status="timeout")
+        # Observer timeout never closes/cancels the durable producer or event stream.
+        raise _http_error(504, "本次等待未完成响应，任务仍在处理；请使用相同请求 ID 重试查询。") from exc
     except Exception as exc:
         _record_error(exc)
-        workflow_event_broker.publish_error(event_key, str(exc))
         raise
-    finally:
-        _chat_admission.release()
-
-    response_payload = timing.attach(response, route="sage_workflow").model_dump(mode="json")
-    trace_store.set_response(trace_id, response_payload)
-    trace_store.append_event(trace_id, "answer_done", {"response_stored": True})
-    trace_store.append_event(trace_id, "complete", {})
-    trace_store.finish(trace_id, status="completed")
-
-    return timing.attach(response, route="sage_workflow")
 
 
 @llm_app.post("/chat/stream")

@@ -25,6 +25,17 @@ from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
 client = TestClient(app)
 
 
+@pytest.fixture(autouse=True)
+def native_http_lifecycle(monkeypatch, isolated_availability_store):
+    from test_http_workflow_integration import http_client
+
+    # The store fixture owns/restores the shared service; this fixture only
+    # owns its HTTP workers, which must drain before stores are restored.
+    with http_client(service, monkeypatch, close_service=False) as active_client:
+        monkeypatch.setitem(globals(), "client", active_client)
+        yield
+
+
 def _feedback_guest_owner():
     token, session = service._guest_identity_store.issue()
     client.cookies.set(GUEST_COOKIE_NAME, token)
@@ -450,6 +461,8 @@ def test_chat_accepts_multipart_uploads(monkeypatch) -> None:
     async def fake_answer(
         request,
         admin_session_token=None,
+        admin_session_reference=None,
+        delivery=None,
         trace_callback=None,
         answer_chunk_callback=None,
     ):
@@ -504,6 +517,8 @@ def test_chat_uses_authenticated_visitor_profile_over_client_payload(monkeypatch
     async def fake_answer(
         request,
         admin_session_token=None,
+        admin_session_reference=None,
+        delivery=None,
         trace_callback=None,
         answer_chunk_callback=None,
     ):
@@ -554,6 +569,8 @@ def test_chat_downgrades_unauthenticated_lab_member_claim(monkeypatch) -> None:
     async def fake_answer(
         request,
         admin_session_token=None,
+        admin_session_reference=None,
+        delivery=None,
         trace_callback=None,
         answer_chunk_callback=None,
     ):

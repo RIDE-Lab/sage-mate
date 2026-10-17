@@ -79,6 +79,14 @@ def harness(monkeypatch, tmp_path):
         h.lifecycle.append("service-close")
     instance = SimpleNamespace(_conversation_store=SimpleNamespace(state_store=state),
                                start_background_work=lambda: h.lifecycle.append("service-start"))
+    # HTTP and Slack share startup. Keep a real idle native HTTP workflow so
+    # this Slack-only fixture exercises both workers' lifecycle without models.
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.guest_identity import GuestIdentityStore
+    from sage_faculty_twin.user_store import UserAccountStore
+    instance._settings = AppSettings(runtime_dir=tmp_path)
+    instance._user_store = UserAccountStore(instance._settings)
+    instance._guest_identity_store = GuestIdentityStore(state, ttl_seconds=300)
     h.service = SimpleNamespace(answer=answer, ensure_initialized=lambda: instance,
         is_initialized=lambda: True, aclose=close, get_slack_link_account=lambda uid: h.accounts.get(uid))
     monkeypatch.setattr(api_module, "service", h.service)

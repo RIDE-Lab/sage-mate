@@ -2952,7 +2952,7 @@ chatForm.addEventListener("submit", async (event) => {
     setChatSubmitLoading(true);
     sageCompanionController?.setRequestActive(true);
     sageCompanionController?.setState("thinking", "收到问题啦，我正在认真想一想。");
-    let workflowRequestIdActive = workflowRequestId;
+    const workflowRequestIdActive = workflowRequestId;
     await openWorkflowTraceStream(workflowRequestIdActive);
 
     let attempt = 0;
@@ -3021,16 +3021,14 @@ chatForm.addEventListener("submit", async (event) => {
                 );
                 break;
             }
-            // Only an explicit admission rejection proves it is safe to
-            // submit again. Lost HTTP acknowledgements may hide a committed turn.
+            // 429 can mean durably queued work, not rejection. Retrying must
+            // keep the same owner/request ID and never create another turn.
             const isTransientNetworkError = error?.status === undefined;
             const canRetry =
                 attempt < maxAttempts &&
                 error?.status === 429 &&
                 submittedFiles.length === 0;
             if (canRetry) {
-                stopWorkflowTraceStream();
-                workflowRequestIdActive = createConversationId();
                 const retrySeconds = Math.max(2, Math.ceil(error?.retryAfterSeconds || 2));
                 const queueHint = Number.isFinite(error?.queuePosition) && error.queuePosition > 0
                     ? `前方约 ${error.queuePosition} 个请求，`
@@ -3044,13 +3042,17 @@ chatForm.addEventListener("submit", async (event) => {
                 );
                 sageCompanionController?.setState("thinking", retryLabel);
                 await new Promise((resolve) => globalThis.setTimeout(resolve, retrySeconds * 1000));
-                await openWorkflowTraceStream(workflowRequestIdActive);
+                if (!activeWorkflowStream) {
+                    await openWorkflowTraceStream(workflowRequestIdActive);
+                }
                 continue;
             }
-            if ((error?.status === 504 || isTransientNetworkError) && activeWorkflowStream) {
+            if ((error?.status === 429 || error?.status === 504 || isTransientNetworkError) && activeWorkflowStream) {
                 if (!streamingDeliveredResponse) {
                     renderPendingAssistantMessage(pendingMessage,
-                        "请求连接中断，正在恢复原请求的回答；不会自动重复提交。", [],
+                        error?.status === 429
+                            ? "请求仍在排队，将继续接收原请求的回答；不会重复提交。"
+                            : "请求连接中断，正在恢复原请求的回答；不会自动重复提交。", [],
                         { deepThinking: explicitDeepMode });
                 }
                 break;

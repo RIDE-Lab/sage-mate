@@ -50,6 +50,7 @@ from .auth import (
     decode_user_session_token,
     normalize_admin_session_payload,
     resolve_admin_session_identity,
+    resolve_work_session_reference,
     validate_admin_credentials,
 )
 from .calendar_bridge import CalendarBridgeClient
@@ -9008,6 +9009,7 @@ class DigitalTwinService:
         trace_callback: WorkflowTraceCallback | None = None,
         delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
+        admin_session_reference: dict | None = None,
     ) -> DeliveredChatResponse:
         if delivery is not None and delivery.owner_id != request.owner_id:
             raise ValueError("delivery_owner_conflict")
@@ -9017,6 +9019,7 @@ class DigitalTwinService:
             trace_callback=trace_callback,
             delivery=delivery,
             answer_chunk_callback=answer_chunk_callback,
+            admin_session_reference=admin_session_reference,
         )
         delivered = self._deliver_chat_response(request, response)
         if delivery is not None:
@@ -9071,8 +9074,17 @@ class DigitalTwinService:
         trace_callback: WorkflowTraceCallback | None,
         delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
+        admin_session_reference: dict | None = None,
     ) -> ChatResponse:
-        admin_session_payload = decode_admin_session_token(admin_session_token, self._settings)
+        if admin_session_reference is not None:
+            if admin_session_token is not None:
+                raise ValueError("ambiguous_admin_authority")
+            admin_session_payload = resolve_work_session_reference(
+                admin_session_reference, self._settings, kind="admin")
+            if admin_session_payload is None:
+                raise PermissionError("expired_or_invalid_admin_work_authority")
+        else:
+            admin_session_payload = decode_admin_session_token(admin_session_token, self._settings)
 
         # Pre-LLM invitation code detection: intercept invitation codes before
         # routing to the LLM pipeline so that the onboarding flow is triggered

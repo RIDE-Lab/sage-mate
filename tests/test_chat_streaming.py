@@ -27,7 +27,6 @@ transport and broker primitives:
 from __future__ import annotations
 
 import asyncio
-import inspect
 import threading
 from collections import OrderedDict
 from typing import Iterable, Iterator
@@ -105,11 +104,42 @@ def test_broker_rejects_unvalidated_chat_response() -> None:
         broker.publish_answer_done("req-unvalidated", response)  # type: ignore[arg-type]
 
 
-def test_public_chat_route_does_not_publish_unvalidated_answer_chunks() -> None:
-    source = inspect.getsource(api_module.chat)
+def test_public_chat_route_does_not_publish_unvalidated_answer_chunks(tmp_path, monkeypatch) -> None:
+    import json
+    from sage_faculty_twin.service import DigitalTwinService
+    from test_chat_post_answer_background import _FastLLMClient
+    from test_http_workflow_integration import http_client
 
-    assert "answer_chunk_callback = _untraced_answer_chunk_callback()" in source
-    assert "workflow_event_broker.publish_answer_chunk(request_id, delta)" not in source
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+    instance._llm_client = _FastLLMClient()
+    monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", True)
+    original = instance.answer
+    observed = []
+
+    async def answer(*args, **kwargs):
+        callback = kwargs["answer_chunk_callback"]
+        assert callback is not None
+        callback("UNVALIDATED_PRIVATE_DRAFT")
+        observed.append(True)
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(instance, "answer", answer)
+    with http_client(instance, monkeypatch) as client:
+        response = client.post("/chat/stream?request_id=stream-gate",
+            json={"student_name": "Guest", "question": "给我一些下一步建议。"})
+        assert response.status_code == 200
+        events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+        assert len(events) == 1 and events[0]["type"] == "result"
+        delivered = events[0]["response"]
+        assert delivered["answer"] and delivered["exchange_id"]
+        instance._get_post_answer_runtime().wait(delivered["exchange_id"], timeout=5)
+        replay = client.get("/chat/workflow-events?request_id=stream-gate")
+        assert replay.status_code == 200
+        assert '"type": "answer_done"' in replay.text
+        assert '"type": "complete"' in replay.text
+        assert "UNVALIDATED_PRIVATE_DRAFT" not in response.text + replay.text
+        assert "answer_delta" not in response.text + replay.text
+        assert observed == [True]
 
 
 def test_untraced_chat_respects_non_streaming_setting(

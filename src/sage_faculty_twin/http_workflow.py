@@ -12,10 +12,19 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sage.runtime.async_work_service import AsyncWorkService
 from sage.runtime.work_dispatcher import WorkFailure
 from sage.runtime.work_journal import WorkJournal
+from sage.runtime.work_service import WorkFailedError
 
 from .models import ChatRequest, ChatResponse
 from .http_authority import HttpAuthority
 from .post_answer_contract import DeliveryIntent
+
+
+class HttpWorkRejected(RuntimeError):
+    """Public failure classification; never persist exception text or secrets."""
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
 
 
 class HttpIngress(BaseModel):
@@ -62,7 +71,11 @@ class HttpWorkflow:
                "failure_policy": self._failure, **options})
 
     def _failure(self, lease, error):
-        if isinstance(error, (PermissionError, ValueError)):
+        if isinstance(error, HttpWorkRejected):
+            return WorkFailure(error.code)
+        if isinstance(error, PermissionError):
+            return WorkFailure("authority_denied")
+        if isinstance(error, ValueError):
             return WorkFailure("invalid_request")
         if lease.attempt >= self._max_attempts:
             return WorkFailure("retry_exhausted")
@@ -98,13 +111,18 @@ class HttpWorkflow:
             result={"owner_id": ingress.request.owner_id},
             tasks={"answer": ingress.model_dump(mode="json")})
 
-    async def wait(self, ingress, *, timeout):
+    async def wait(self, ingress, *, timeout, start_timeout=None):
         ingress = HttpIngress.model_validate_json(ingress.model_dump_json())
         await self._check(ingress)
         record = await asyncio.to_thread(self.journal.read, ingress.delivery.stream_id)
         if record is None or record["tasks"]["answer"]["payload"] != ingress.model_dump(mode="json"):
             raise ValueError("http_work_input_conflict")
-        record = await self._work.wait(ingress.delivery.stream_id, timeout=timeout)
+        try:
+            record = await self._work.wait(ingress.delivery.stream_id, timeout=timeout, start_timeout=start_timeout)
+        except WorkFailedError as exc:
+            await self._check(ingress)
+            record = await asyncio.to_thread(self.journal.read, ingress.delivery.stream_id)
+            raise HttpWorkRejected(record["tasks"]["answer"].get("failure_code", "unknown_failure")) from exc
         await self._check(ingress)
         return ChatResponse.model_validate(record["tasks"]["answer"]["result"])
 

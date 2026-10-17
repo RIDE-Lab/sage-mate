@@ -93,21 +93,30 @@ def test_history_owner_comes_from_authenticated_account(monkeypatch, route, meth
 
 @pytest.mark.parametrize("transport", ["json", "multipart"])
 @pytest.mark.parametrize("claimed_email,expected", [(None, 200), ("victim@example.com", 403)])
-def test_http_binds_before_workflow_and_rejects_impersonation(monkeypatch, transport, claimed_email, expected):
+def test_http_binds_before_workflow_and_rejects_impersonation(tmp_path, monkeypatch, transport, claimed_email, expected):
+    from test_http_workflow_integration import http_client
+    from sage_faculty_twin.auth import build_user_session_token
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.service import DigitalTwinService
+
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture",
+        lab_member_invitation_code="isolated-invite"))
+    account = instance._user_store.register_user(name="Account Name", email="owner@example.com",
+        password="Isolated-test-password-123", visitor_profile="lab_member", invitation_code="isolated-invite")
+    cookie = build_user_session_token(user_id=account.user_id, email=account.email, settings=instance._settings)
     seen = []
-    monkeypatch.setattr(api.service, "get_user_session", lambda _: account_session())
     async def answer(payload, **kwargs):
         seen.append(payload)
         return ChatResponse(answer="ok", owner_name="Owner", used_model="test")
-    monkeypatch.setattr(api.service, "answer", answer)
+    monkeypatch.setattr(instance, "answer", answer)
     payload = {"student_name": "Forged", "question": "hello", "visitor_profile": "general_visitor"}
     if claimed_email:
         payload["student_email"] = claimed_email
-    client = TestClient(api.app)
-    client.cookies.set(USER_COOKIE_NAME, "test-session")
     kwargs = ({"json": payload} if transport == "json" else
               {"data": payload, "files": {"files": ("note.txt", b"safe attachment", "text/plain")}})
-    response = client.post("/chat", **kwargs)
+    with http_client(instance, monkeypatch) as client:
+        client.cookies.set(USER_COOKIE_NAME, cookie)
+        response = client.post("/chat", **kwargs)
     assert response.status_code == expected
     if expected == 403:
         assert seen == []

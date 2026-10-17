@@ -1,16 +1,14 @@
-"""Regression tests for the /chat request budget guard.
+"""HTTP observer budgets and native durable worker admission contracts.
 
-Cloudflare's free/Pro tier enforces an ~100s edge timeout. The backend wraps
-``service.answer`` in :func:`asyncio.wait_for` with a slightly smaller budget
-(`CHAT_REQUEST_TIMEOUT_SECONDS`) so we can return a structured 504 *before*
-the proxy gives up. These tests pin that contract.
+An observer timeout reports 504 without cancelling durable work; native
+first-claim backpressure reports 429 and keeps the same request identity.
+Producer deadlines and explicit cancellation remain separate boundaries.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
-from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -24,60 +22,6 @@ from sage_faculty_twin.models import ChatResponse
 client = TestClient(app)
 
 
-def test_completed_answer_does_not_wait_for_disconnect_when_poll_swallows_cancel(monkeypatch):
-    """Python 3.11 wait_for can consume cancellation at poll completion.
-
-    A finished answer must stop the watcher cooperatively, not wait until the
-    browser eventually disconnects. Keep a release path so the old code fails
-    an assertion instead of hanging the test runner.
-    """
-    async def run():
-        polling = asyncio.Event()
-        release = asyncio.Event()
-        original_wait_for = asyncio.wait_for
-
-        async def wait_for_with_completion_race(coro, timeout):
-            if getattr(coro, "__name__", "") != "is_disconnected":
-                return await original_wait_for(coro, timeout)
-            result = await coro
-            try:
-                await release.wait()
-            except asyncio.CancelledError:
-                # Python 3.11 wait_for returns fut.result() when cancellation
-                # arrives after its inner future has completed. Force this
-                # scheduling window instead of relying on a probabilistic race.
-                return result
-            return True
-
-        monkeypatch.setattr(asyncio, "wait_for", wait_for_with_completion_race)
-
-        class Request:
-            headers = {"content-type": "application/json"}
-
-            async def is_disconnected(self):
-                polling.set()
-                # Finish in the same loop turn as service.answer. This makes
-                # wait_for's inner task complete as its outer watcher is
-                # cancelled, the cancellation/completion race in production.
-                return release.is_set()
-
-        async def answer(*args, **kwargs):
-            await polling.wait()
-            return ChatResponse(answer="ready", owner_name="Twin", used_model="test")
-
-        monkeypatch.setattr(service, "answer", answer)
-        task = asyncio.create_task(api_module._run_chat_with_cancellation(
-            Request(), timeout_seconds=1, payload=object(),
-        ))
-        try:
-            done, _ = await asyncio.wait({task}, timeout=0.15)
-            assert task in done, "finished response blocked on cancelled disconnect watcher"
-            assert task.result().answer == "ready"
-        finally:
-            release.set()
-            await asyncio.wait_for(task, timeout=2)
-
-    asyncio.run(run())
 
 
 @pytest.mark.parametrize('suffix', ['', '?request_id=capacity-regression'])
@@ -94,17 +38,19 @@ def test_prompt_capacity_failure_is_actionable_not_500(monkeypatch, isolated_cha
     assert response.headers.get('x-sage-trace-id')
 
 
-@pytest.fixture
-def isolated_chat_service(monkeypatch: pytest.MonkeyPatch, guest_identity_store) -> None:
-    """Exercise the HTTP boundary without loading optional embedding weights."""
-    monkeypatch.setattr(api_module, "workflow_event_broker", api_module.WorkflowEventBroker(
-        lambda: guest_identity_store._state))
-    monkeypatch.setattr(service, "_instance", SimpleNamespace(
-        _guest_identity_store=guest_identity_store,
-        _check_sensitive_boundary_request=lambda *_args: None,
-        try_fast_answer=lambda *_args: None,
-        answer=lambda *_args, **_kwargs: None,
-    ))
+@pytest.fixture(autouse=True)
+def isolated_chat_service(tmp_path, monkeypatch: pytest.MonkeyPatch):
+    """Real authority/state and native lifecycle; only model behavior is mocked."""
+    from test_http_workflow_integration import http_client
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.service import DigitalTwinService
+
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+    monkeypatch.setattr(api_module, "CHAT_MAX_INFLIGHT_REQUESTS", 1)
+    monkeypatch.setattr(service, "_instance", instance)
+    with http_client(service, monkeypatch, request_budget=None) as active_client:
+        monkeypatch.setitem(globals(), "client", active_client)
+        yield
 
 
 @pytest.fixture
@@ -219,7 +165,8 @@ def test_streamed_chat_does_not_report_failed_answer_as_result(
         line.removeprefix("data: ") for line in response.text.splitlines()
         if line.startswith("data: ")
     ))
-    assert event == {"type": "error", "status": 503, "detail": "生成未完成"}
+    assert event == {"type": "error", "status": 503,
+                     "detail": "本轮回答未能完整生成或通过校验，请稍后重试。"}
 
 
 def test_chat_does_not_report_failed_answer_as_http_200(
@@ -246,12 +193,10 @@ def test_chat_does_not_report_failed_answer_as_http_200(
     assert "answer" not in response.json()
 
 
-def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
+def test_observer_timeout_does_not_close_durable_workflow_stream(
     short_chat_budget: float, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the caller supplies ``request_id``, a timeout must surface on the
-    workflow-events SSE stream so the UI can render the 504 inline instead of
-    leaving the rail spinning forever."""
+    """HTTP 504 ends this observer, not the persistent producer's event stream."""
 
     async def slow_answer(*_args, **_kwargs):
         await asyncio.sleep(5.0)
@@ -267,9 +212,6 @@ def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
         real_publish_error(request_id, message)
 
     monkeypatch.setattr(api_module.workflow_event_broker, "publish_error", spy_publish_error)
-    from sage_faculty_twin.chat_identity import ChatIdentity
-    monkeypatch.setattr(api_module, "_resolve_chat_identity", lambda *args:
-                        ChatIdentity("anonymous", "timeout-owner", None))
 
     client.cookies.clear()
 
@@ -285,8 +227,12 @@ def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
     )
 
     assert response.status_code == 504
-    expected_key = api_module._owned_chat_request_key("guest:timeout-owner", "test-rid-timeout")
-    assert any(rid == expected_key and "未完成响应" in msg for rid, msg in published_errors), published_errors
+    from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
+    guest = service._guest_identity_store.authenticate(client.cookies.get(GUEST_COOKIE_NAME))
+    expected_key = api_module._owned_chat_request_key(f"guest:{guest.subject_id}", "test-rid-timeout")
+    assert published_errors == []
+    assert api_module.http_workflow.journal.read(expected_key) is not None
+    assert not api_module.workflow_event_broker._journal().read(expected_key)["closed"]
 
 
 def test_chat_returns_retryable_429_when_admission_is_full(
@@ -299,40 +245,54 @@ def test_chat_returns_retryable_429_when_admission_is_full(
     admission response lets the UI retry without holding a worker for 80s.
     """
 
-    monkeypatch.setattr(api_module, "CHAT_ADMISSION_TIMEOUT_SECONDS", 0.01)
-    monkeypatch.setattr(api_module, "_chat_admission", asyncio.Semaphore(0))
+    monkeypatch.setattr(api_module, "CHAT_ADMISSION_TIMEOUT_SECONDS", 1)
     client.cookies.clear()
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
 
-    response = client.post(
-        "/chat",
-        json={
-            "student_name": "Alice",
-            "student_email": "alice@example.com",
-            "course_context": None,
-            "conversation_id": "conv-admission-full",
-            "question": "请稍后回答。",
-        },
-    )
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    credential, guest = service._guest_identity_store.issue()
+    client.cookies.set(GUEST_COOKIE_NAME, credential)
 
-    assert response.status_code == 429
-    assert response.headers.get("retry-after") == "2"
-    assert "正在排队" in response.json().get("detail", "")
-    assert response.headers.get("x-queue-position") == "1"
-    assert response.headers.get("x-sage-trace-id")
+    async def answer(payload, **kwargs):
+        calls.append(payload.question)
+        if payload.question == "occupy":
+            entered.set()
+            assert await asyncio.to_thread(release.wait, 5)
+        return ChatResponse(answer="complete", owner_name="Twin", used_model="fixture")
+
+    monkeypatch.setattr(service, "answer", answer)
+    payload = {"student_name": "Guest", "question": "queued"}
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(client.post, "/chat?request_id=occupy",
+                            json={"student_name": "Guest", "question": "occupy"})
+        try:
+            assert entered.wait(3)
+            monkeypatch.setattr(api_module, "CHAT_ADMISSION_TIMEOUT_SECONDS", 0.01)
+            response = client.post("/chat?request_id=queued", json=payload)
+            assert response.status_code == 429, response.text
+            assert response.headers.get("retry-after") == "2"
+            assert "正在排队" in response.json().get("detail", "")
+            assert response.headers.get("x-sage-trace-id") == "queued"
+            # Do not invent a queue position: only native pending state is known.
+            assert "x-queue-position" not in response.headers
+            key = api_module._owned_chat_request_key(f"guest:{guest.subject_id}", "queued")
+            task = api_module.http_workflow.journal.read(key)["tasks"]["answer"]
+            assert task["status"] == "pending" and task["attempt"] == 0
+        finally:
+            release.set()
+        assert first.result(timeout=5).status_code == 200
+        monkeypatch.setattr(api_module, "CHAT_ADMISSION_TIMEOUT_SECONDS", 1)
+        assert client.post("/chat?request_id=queued", json=payload).status_code == 200
+        assert calls == ["occupy", "queued"]
 
 
 def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing(tmp_path, monkeypatch) -> None:
-    from sage_faculty_twin.config import AppSettings
-    from sage_faculty_twin.service import DigitalTwinService
-
-    # The module-global API service predates per-test path fixtures. Never run
-    # this real-write test against its shared/default runtime directory.
-    isolated = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
-        conversation_memory_dir=tmp_path / "memory"))
-    monkeypatch.setattr(api_module, "service", isolated)
+    # The autouse fixture owns the isolated real service and its worker loop.
     client.cookies.clear()
-    try:
-        response = client.post(
+    response = client.post(
             "/chat",
             json={
                 "student_name": "Alice",
@@ -340,8 +300,6 @@ def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing(tmp_
                 "question": "你好",
             },
         )
-    finally:
-        asyncio.run(isolated.aclose())
 
     assert response.status_code == 200
     timing = response.json()["request_timing"]

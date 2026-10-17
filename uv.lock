@@ -971,7 +971,7 @@ wheels = [
 [[package]]
 name = "isage"
 version = "0.3.2.4"
-source = { git = "https://github.com/RIDE-Lab/SAGE.git?rev=b5aec660a5eb84b6168f02716162951b89a7b256#b5aec660a5eb84b6168f02716162951b89a7b256" }
+source = { git = "https://github.com/RIDE-Lab/SAGE.git?rev=91949bf7c03c88fe90eea7e98383a28b33075e92#91949bf7c03c88fe90eea7e98383a28b33075e92" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "pyyaml" },
@@ -2641,7 +2641,7 @@ requires-dist = [
     { name = "cloudpickle", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0,<1.0.0" },
-    { name = "isage", git = "https://github.com/RIDE-Lab/SAGE.git?rev=b5aec660a5eb84b6168f02716162951b89a7b256" },
+    { name = "isage", git = "https://github.com/RIDE-Lab/SAGE.git?rev=91949bf7c03c88fe90eea7e98383a28b33075e92" },
     { name = "isage-anns", specifier = ">=0.2.0" },
     { name = "isage-anns", marker = "extra == 'vdb-anns'", specifier = ">=0.2.0" },
     { name = "isage-neuromem", git = "https://github.com/RIDE-Lab/neuromem.git?rev=aef26791ecf8a30bc641ee586cb404bd637bb329" },

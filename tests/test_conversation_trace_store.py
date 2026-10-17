@@ -2,14 +2,22 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from types import SimpleNamespace
-
-from fastapi.testclient import TestClient
+import pytest
 
 from sage_faculty_twin import api as api_module
 from sage_faculty_twin.chat_delivery import DeliveredChatResponse
 from sage_faculty_twin.conversation_trace_store import ConversationTraceStore
 from sage_faculty_twin.models import WorkflowTraceStep
+
+
+@pytest.fixture
+def trace_client(tmp_path, monkeypatch):
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.service import DigitalTwinService
+    from test_http_workflow_integration import http_client
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+    with http_client(instance, monkeypatch) as client:
+        yield client
 
 
 def test_trace_store_persists_full_request_response_and_events(tmp_path: Path) -> None:
@@ -64,7 +72,7 @@ def test_completed_trace_is_replicated_and_startup_backfills(tmp_path: Path) -> 
 
 
 def test_plain_chat_returns_trace_header_and_persists_trace(
-    monkeypatch, tmp_path: Path, guest_identity_store
+    monkeypatch, tmp_path: Path, trace_client
 ) -> None:
     db_path = tmp_path / "traces.sqlite3"
     store = ConversationTraceStore(db_path)
@@ -87,17 +95,8 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
             workflow_trace=[step],
         )
 
-    monkeypatch.setattr(
-        api_module,
-        "service",
-        SimpleNamespace(
-            _guest_identity_store=guest_identity_store,
-            answer=fake_answer,
-            try_fast_answer=lambda _request: None,
-            _check_sensitive_boundary_request=lambda _request: None,
-        ),
-    )
-    response = TestClient(api_module.app).post(
+    monkeypatch.setattr(api_module.service, "answer", fake_answer)
+    response = trace_client.post(
         "/chat",
         json={
             "student_name": "Alice",
@@ -118,17 +117,17 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
 
 
 def test_sse_chat_persists_validated_answer_and_background_steps(
-    monkeypatch, tmp_path: Path, guest_identity_store
+    monkeypatch, tmp_path: Path, trace_client
 ) -> None:
     db_path = tmp_path / "traces.sqlite3"
     store = ConversationTraceStore(db_path)
     monkeypatch.setattr(api_module, "get_conversation_trace_store", lambda: store)
     monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", True)
-    monkeypatch.setattr(api_module.workflow_event_broker, "_state_provider", lambda: guest_identity_store._state)
 
     async def fake_answer(
         request,
         admin_session_token=None,
+        admin_session_reference=None,
         trace_callback=None,
         delivery=None,
         answer_chunk_callback=None,
@@ -153,17 +152,8 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
         api_module.workflow_event_broker.finish_immediate(delivery.stream_id, response)
         return response
 
-    monkeypatch.setattr(
-        api_module,
-        "service",
-        SimpleNamespace(
-            answer=fake_answer,
-            _guest_identity_store=guest_identity_store,
-            try_fast_answer=lambda _request: None,
-            _check_sensitive_boundary_request=lambda _request: None,
-        ),
-    )
-    response = TestClient(api_module.app).post(
+    monkeypatch.setattr(api_module.service, "answer", fake_answer)
+    response = trace_client.post(
         "/chat?request_id=req-sse",
         json={
             "student_name": "Alice",

@@ -53,49 +53,60 @@ def test_guest_cookie_precedes_delivery_and_preserves_owner(tmp_path, monkeypatc
         context_digest_enabled=True, context_digest_llm_enabled=False))
     service._llm_client = _FastLLMClient()
     monkeypatch.setattr(api, "service", service)
-    first, second = TestClient(api.app, base_url="https://testserver"), TestClient(api.app, base_url="https://testserver")
     payload = {"student_name": "Same", "student_email": "victim@example.com", "owner_id": "account:forged",
                "conversation_id": "shared-client-id", "question": "first private question"}
-    try:
-        path = "/chat" if transport == "json" else "/chat/stream"
-        response = first.post(path, json=payload)
-        assert response.status_code == 200
-        assert "httponly" in response.headers["set-cookie"].lower()
-        assert "secure" in response.headers["set-cookie"].lower()
-        assert response.headers["cache-control"] == "no-store"
-        if transport == "stream":
-            events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
-            body = next(event["response"] for event in events if event["type"] == "result")
-        else:
-            body = response.json()
-        owner = service._conversation_store.get_record(body["exchange_id"]).owner_id
-        assert owner.startswith("guest:") and owner != payload["owner_id"]
-        assert first.cookies.get(GUEST_COOKIE_NAME)
-        again = first.post("/chat", json={**payload, "question": "second private question"})
-        assert again.status_code == 200
-        assert service._conversation_store.get_record(again.json()["exchange_id"]).owner_id == owner
-        outsider = second.post("/chat", json={**payload, "question": "outsider private question", "owner_id": owner})
-        assert outsider.status_code == 200
-        other_owner = service._conversation_store.get_record(outsider.json()["exchange_id"]).owner_id
-        assert other_owner != owner
-        feedback = {"exchange_id": body["exchange_id"], "rating": "down", "resolved": False}
-        before = service._analytics_store.count_feedback()
-        forbidden = second.post("/chat/feedback", json={**feedback, "owner_id": owner})
-        missing = second.post("/chat/feedback", json={**feedback, "exchange_id": "unknown"})
-        assert forbidden.status_code == missing.status_code == 404
-        assert forbidden.json() == missing.json()
-        assert service._analytics_store.count_feedback() == before
-        accepted = first.post("/chat/feedback", json=feedback)
-        assert accepted.status_code == 200
-        assert service._analytics_store.count_feedback() == before + 1
-        compressed = first.post("/context/compress", json={"conversation_id": "shared-client-id"})
-        assert compressed.status_code == 200
-        digest = service._digest_store.get_digest("shared-client-id", owner_id=owner)
-        assert digest.turns_summarized == 2
-        assert "outsider private question" not in digest.digest_text
-        assert service._conversation_store.list_conversation_records("shared-client-id") == []
-    finally:
-        asyncio.run(service.aclose())
+
+    async def scenario():
+        import httpx
+        flow = api._create_http_workflow(service)
+        monkeypatch.setattr(api, "http_workflow", flow)
+        await flow.start()
+        try:
+            asgi_transport = httpx.ASGITransport(app=api.app)
+            async with httpx.AsyncClient(transport=asgi_transport, base_url="https://testserver") as first, \
+                    httpx.AsyncClient(transport=asgi_transport, base_url="https://testserver") as second:
+                path = "/chat" if transport == "json" else "/chat/stream"
+                response = await first.post(path, json=payload)
+                assert response.status_code == 200
+                assert "httponly" in response.headers["set-cookie"].lower()
+                assert "secure" in response.headers["set-cookie"].lower()
+                assert response.headers["cache-control"] == "no-store"
+                if transport == "stream":
+                    events = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+                    body = next(event["response"] for event in events if event["type"] == "result")
+                else:
+                    body = response.json()
+                owner = service._conversation_store.get_record(body["exchange_id"]).owner_id
+                assert owner.startswith("guest:") and owner != payload["owner_id"]
+                assert first.cookies.get(GUEST_COOKIE_NAME)
+                again = await first.post("/chat", json={**payload, "question": "second private question"})
+                assert again.status_code == 200
+                assert service._conversation_store.get_record(again.json()["exchange_id"]).owner_id == owner
+                outsider = await second.post("/chat", json={**payload, "question": "outsider private question", "owner_id": owner})
+                assert outsider.status_code == 200
+                other_owner = service._conversation_store.get_record(outsider.json()["exchange_id"]).owner_id
+                assert other_owner != owner
+                feedback = {"exchange_id": body["exchange_id"], "rating": "down", "resolved": False}
+                before = service._analytics_store.count_feedback()
+                forbidden = await second.post("/chat/feedback", json={**feedback, "owner_id": owner})
+                missing = await second.post("/chat/feedback", json={**feedback, "exchange_id": "unknown"})
+                assert forbidden.status_code == missing.status_code == 404
+                assert forbidden.json() == missing.json()
+                assert service._analytics_store.count_feedback() == before
+                accepted = await first.post("/chat/feedback", json=feedback)
+                assert accepted.status_code == 200
+                assert service._analytics_store.count_feedback() == before + 1
+                compressed = await first.post("/context/compress", json={"conversation_id": "shared-client-id"})
+                assert compressed.status_code == 200
+                digest = service._digest_store.get_digest("shared-client-id", owner_id=owner)
+                assert digest.turns_summarized == 2
+                assert "outsider private question" not in digest.digest_text
+                assert service._conversation_store.list_conversation_records("shared-client-id") == []
+        finally:
+            await flow.aclose()
+            await service.aclose()
+
+    asyncio.run(scenario())
 
 
 def test_guest_bootstrap_reuses_persisted_identity(tmp_path, monkeypatch):
