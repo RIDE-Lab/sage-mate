@@ -1074,6 +1074,52 @@ WorkflowTraceCallback = Callable[[WorkflowTraceStep], None]
 
 
 @dataclass(frozen=True, slots=True)
+class KnowledgeRetrievalInput:
+    request_json: str
+    intent_json: str | None
+    route: str
+    answer: str | None
+    workflow_action: str
+    pending_clarification_message: str | None
+    recent_session_context: str
+    needs_retrieval: bool
+    admin_role: str | None
+    used_model: str
+
+
+@dataclass
+class _KnowledgeBranchState:
+    request: ChatRequest
+    interaction_intent: InteractionIntent | None
+    route: str
+    answer: str | None
+    workflow_action: str
+    pending_clarification_message: str | None
+    recent_session_context: str
+    needs_retrieval: bool
+    admin_role: str | None
+    used_model: str
+    runtime_identity: RuntimeIdentity | None = None
+    knowledge_hits: list[KnowledgeSearchHit] = field(default_factory=list)
+    web_search_hits: list[WebSearchHit] = field(default_factory=list)
+    workflow_trace: list[WorkflowTraceStep] = field(default_factory=list)
+
+
+@dataclass(frozen=True, slots=True)
+class KnowledgeRetrievalResult:
+    knowledge_hits: tuple[KnowledgeSearchHit, ...]
+    web_search_hits: tuple[WebSearchHit, ...]
+    trace: tuple[WorkflowTraceStep, ...]
+    runtime_identity: RuntimeIdentity | None
+    intent_json: str | None
+    route: str
+    answer: str | None
+    workflow_action: str
+    pending_clarification_message: str | None
+    used_model: str
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryRetrievalInput:
     request_json: str
     conversation_id: str
@@ -1596,7 +1642,64 @@ class FacultyTwinWorkflowSupport:
             return context
         return context
 
-    def retrieve_knowledge(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+    def prepare_knowledge_retrieval(self, context: ChatWorkflowContext) -> KnowledgeRetrievalInput:
+        return KnowledgeRetrievalInput(
+            request_json=context.request.model_dump_json(),
+            intent_json=context.interaction_intent.model_dump_json() if context.interaction_intent else None,
+            route=context.route, answer=context.answer,
+            workflow_action=context.workflow_action,
+            pending_clarification_message=context.pending_clarification_message,
+            recent_session_context=context.recent_session_context,
+            needs_retrieval=(
+                context.route == "answer" and context.answer is None
+                and not self._is_self_contained_request(context)
+                and self._planner_requests_any_step(context, "retrieve_knowledge", "retrieve_hybrid_knowledge")
+            ),
+            admin_role=self._resolve_admin_role(), used_model=context.used_model,
+        )
+
+    def retrieve_knowledge(self, inputs: KnowledgeRetrievalInput) -> KnowledgeRetrievalResult:
+        state = _KnowledgeBranchState(
+            request=ChatRequest.model_validate_json(inputs.request_json),
+            interaction_intent=InteractionIntent.model_validate_json(inputs.intent_json) if inputs.intent_json else None,
+            route=inputs.route, answer=inputs.answer, workflow_action=inputs.workflow_action,
+            pending_clarification_message=inputs.pending_clarification_message,
+            recent_session_context=inputs.recent_session_context,
+            needs_retrieval=inputs.needs_retrieval, admin_role=inputs.admin_role,
+            used_model=inputs.used_model,
+        )
+        self._read_knowledge_branch(state)
+        return KnowledgeRetrievalResult(
+            knowledge_hits=tuple(state.knowledge_hits), web_search_hits=tuple(state.web_search_hits),
+            trace=tuple(state.workflow_trace), runtime_identity=state.runtime_identity,
+            intent_json=state.interaction_intent.model_dump_json() if state.interaction_intent else None,
+            route=state.route, answer=state.answer, workflow_action=state.workflow_action,
+            pending_clarification_message=state.pending_clarification_message,
+            used_model=state.used_model,
+        )
+
+    def apply_knowledge_result(self, context: ChatWorkflowContext, result: KnowledgeRetrievalResult) -> ChatWorkflowContext:
+        context.knowledge_hits = list(result.knowledge_hits)
+        context.web_search_hits = list(result.web_search_hits)
+        context.runtime_identity = result.runtime_identity
+        context.interaction_intent = InteractionIntent.model_validate_json(result.intent_json) if result.intent_json else None
+        context.route, context.answer = result.route, result.answer
+        context.workflow_action = result.workflow_action
+        context.pending_clarification_message = result.pending_clarification_message
+        context.used_model = result.used_model
+        for step in result.trace:
+            context.workflow_trace.append(step.model_copy(deep=True))
+            if self._trace_callback is not None:
+                self._trace_callback(step.model_copy(deep=True))
+        return context
+
+    @staticmethod
+    def _append_knowledge_trace(context: _KnowledgeBranchState, **fields: Any) -> None:
+        context.workflow_trace.append(WorkflowTraceStep(
+            **fields, parallel_group=_PARALLEL_TRACE_GROUPS.get(fields["key"]),
+        ))
+
+    def _read_knowledge_branch(self, context: _KnowledgeBranchState) -> _KnowledgeBranchState:
         started_at = perf_counter()
         # The write stage owns this action. A direct retrieval call must never
         # ingest a document, even when supplied an administrator context.
@@ -1615,7 +1718,7 @@ class FacultyTwinWorkflowSupport:
                 context.used_model = identity.served_model
             else:
                 context.used_model = "runtime-identity-provider"
-            self._append_trace(
+            self._append_knowledge_trace(
                 context,
                 key="knowledge_retrieve",
                 title="读取运行时身份",
@@ -1629,18 +1732,11 @@ class FacultyTwinWorkflowSupport:
             return context
 
         # --- Determine whether knowledge retrieval should run ---
-        needs_retrieval = (
-            context.route == "answer"
-            and context.answer is None
-            and not self._is_self_contained_request(context)
-            and self._planner_requests_any_step(
-                context, "retrieve_knowledge", "retrieve_hybrid_knowledge"
-            )
-        )
+        needs_retrieval = context.needs_retrieval
         explicit_web = bool(getattr(context.request, "web_search", False))
 
         if not needs_retrieval and not explicit_web:
-            self._append_trace(
+            self._append_knowledge_trace(
                 context, key="knowledge_retrieve", title="知识检索",
                 summary=(
                     "未执行知识检索。" if context.route != "answer" or context.answer is not None
@@ -1666,7 +1762,7 @@ class FacultyTwinWorkflowSupport:
             raw_hits = self._knowledge_retriever.search(
                 retrieval_query,
                 visitor_profile=context.request.visitor_profile,
-                admin_role=self._resolve_admin_role(),
+                admin_role=context.admin_role,
             )
             method_hits = []
             for method_query in self._owner_method_retrieval_queries(context.request):
@@ -1675,7 +1771,7 @@ class FacultyTwinWorkflowSupport:
                         method_query,
                         top_k=2,
                         visitor_profile=context.request.visitor_profile,
-                        admin_role=self._resolve_admin_role(),
+                        admin_role=context.admin_role,
                     )
                 )
             if method_hits:
@@ -1692,7 +1788,7 @@ class FacultyTwinWorkflowSupport:
                     subject,
                     top_k=6,
                     visitor_profile=context.request.visitor_profile,
-                    admin_role=self._resolve_admin_role(),
+                    admin_role=context.admin_role,
                 ))
             if subject_hits:
                 raw_hits = list({hit.document_id: hit for hit in subject_hits + raw_hits}.values())
@@ -1799,7 +1895,7 @@ class FacultyTwinWorkflowSupport:
                 trace_summary = "没有命中直接相关资料。"
                 trace_detail = "未检索到相关材料，将基于角色设定直接回答。"
 
-        self._append_trace(
+        self._append_knowledge_trace(
             context, key="knowledge_retrieve", title="知识检索",
             summary=trace_summary, detail=trace_detail, status=trace_status,
             duration_ms=self._elapsed_ms(started_at),
@@ -8778,7 +8874,8 @@ class KnowledgeRetrievalStage(MapFunction):
         self._support = support
 
     def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.retrieve_knowledge(data)
+        inputs = self._support.prepare_knowledge_retrieval(data)
+        return self._support.apply_knowledge_result(data, self._support.retrieve_knowledge(inputs))
 
 
 class MemoryRetrievalStage(MapFunction):

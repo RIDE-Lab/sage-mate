@@ -23,7 +23,7 @@ def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, backgroun
     support._knowledge_retriever = Mock()
     support._conversation_store = Mock()
     context = context_for(InteractionIntent(self_contained=True), course_context=background)
-    support.retrieve_knowledge(context)
+    support.apply_knowledge_result(context, support.retrieve_knowledge(support.prepare_knowledge_retrieval(context)))
     memory_result = support.retrieve_memory(support.prepare_memory_retrieval(context))
     assert memory_result.status == "skipped"
     assert memory_result.hits == ()
@@ -77,7 +77,7 @@ def test_read_only_knowledge_branch_never_executes_admin_write(tmp_path):
     context = context_for(InteractionIntent(action="admin_add_knowledge"))
     context.is_admin_request = True
     context.workflow_action = "admin_add_knowledge"
-    support.retrieve_knowledge(context)
+    support.apply_knowledge_result(context, support.retrieve_knowledge(support.prepare_knowledge_retrieval(context)))
     support._knowledge_store.add_document.assert_not_called()
     assert context.added_knowledge_record is None
 
@@ -91,6 +91,22 @@ def test_knowledge_write_stage_requires_authenticated_admin(tmp_path):
     context.workflow_action = "admin_add_knowledge"
     assert KnowledgeWriteStage(support).execute(context) is context
     support._knowledge_store.add_document.assert_not_called()
+
+
+def test_knowledge_branch_owns_input_and_defers_context_and_callbacks(tmp_path):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    support._trace_callback = Mock()
+    context = context_for(InteractionIntent(self_contained=True))
+    inputs = support.prepare_knowledge_retrieval(context)
+    context.request.question = "changed after planning"
+    result = support.retrieve_knowledge(inputs)
+    assert result.trace[0].status == "skipped"
+    assert context.workflow_trace == []
+    assert context.knowledge_hits == []
+    support._trace_callback.assert_not_called()
+    support.apply_knowledge_result(context, result)
+    assert len(context.workflow_trace) == 1
+    support._trace_callback.assert_called_once()
 
 
 @pytest.mark.parametrize("intent,fields", [

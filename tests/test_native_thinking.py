@@ -354,6 +354,7 @@ def test_comparison_supplement_preserves_visitor_permissions():
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(_env_file=None, web_search_enabled=False)
     service._knowledge_store = Store()
+    service._knowledge_retriever = service._knowledge_store
     service._trace_callback = None
     service._resolve_admin_role = lambda: None
     context = ChatWorkflowContext(
@@ -367,7 +368,12 @@ def test_comparison_supplement_preserves_visitor_permissions():
         used_model="model",
         interaction_intent=InteractionIntent(action="answer", domain="research"),
     )
-    service.retrieve_knowledge(context)
+    inputs = service.prepare_knowledge_retrieval(context)
+    # In-flight branches keep the authorization snapshot even if the caller's
+    # mutable request/support changes after planning.
+    context.request.visitor_profile = "lab_member"
+    service._resolve_admin_role = lambda: "admin"
+    service.apply_knowledge_result(context, service.retrieve_knowledge(inputs))
     assert len(service._knowledge_store.calls) == 3
     assert all(
         call["visitor_profile"] == "general_visitor" and call["admin_role"] is None
