@@ -870,7 +870,7 @@ _CHAT_PIPELINE_STAGE_COUNT = 14
 # Pipeline plan) parallelises some stages and therefore needs an explicit
 # post-processing pass to keep `[step.key for step in workflow_trace]`
 # byte-identical with the linear baseline. `artifact_memory_writeback` is
-# emitted by `MemoryPersistStage` only when attachments are present, so it
+# emitted by the memory preparation/worker path only when relevant, so it
 # is sorted between `memory_persist` and `memory_profile_consolidate` when
 # it does appear. Repeated keys keep their relative order (stable sort).
 _CANONICAL_TRACE_ORDER: tuple[str, ...] = (
@@ -2485,7 +2485,8 @@ class FacultyTwinWorkflowSupport:
             tail = max(1, remaining - head)
             return text[:head] + marker + text[-tail:]
 
-    def persist_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+    def prepare_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+        """Prepare identity and effect intents without publishing a committed turn."""
         started_at = perf_counter()
         if context.is_admin_request and context.workflow_action == "admin_add_knowledge":
             self._append_trace(
@@ -2549,18 +2550,7 @@ class FacultyTwinWorkflowSupport:
             booking_result=context.booking_result,
             web_search_hits=context.web_search_hits,
         )
-        context.persisted_memory_record = self._conversation_store.persist_exchange(
-            context.prepared_memory_record
-        )
         self._prepare_artifact_memory_draft(context, started_at=started_at)
-        self._append_trace(
-            context,
-            key="memory_persist",
-            title="写入对话记忆",
-            summary="已写入本轮对话记忆。",
-            detail="用户问题和当前回复已写入 NeuroMem 对话记忆库。",
-            duration_ms=self._elapsed_ms(started_at),
-        )
         return context
 
     def _prepare_artifact_memory_draft(
@@ -8646,13 +8636,13 @@ class LlmAnswerStage(MapFunction):
         return self._support.answer_with_llm(data)
 
 
-class MemoryPersistStage(MapFunction):
+class MemoryPrepareStage(MapFunction):
     def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
         super().__init__()
         self._support = support
 
     def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.persist_memory(data)
+        return self._support.prepare_memory(data)
 
 
 class ChatResponseRenderStage(MapFunction):
@@ -9248,16 +9238,26 @@ class DigitalTwinService:
 
         should_background = self._settings.post_answer_background and trace_callback is not None
 
-        # Both delivery modes share the same required memory-write gate.
-        # Persistence failure must propagate, never masquerade as a committed turn.
-        await asyncio.to_thread(MemoryPersistStage(support).execute, context)
-        response = self._patch_response_with_post_answer(response, context)
+        # Preparation is private: it does not write memory or emit a successful
+        # commit trace. The final response and task are part of the same commit.
+        await asyncio.to_thread(MemoryPrepareStage(support).execute, context)
+        memory_commit_trace = None
+        if context.prepared_memory_record is not None:
+            memory_commit_trace = WorkflowTraceStep(
+                key="memory_persist", title="写入对话记忆", summary="已原子提交本轮记忆与后台任务。",
+                detail="用户问题、当前回复及后台任务意图已一起持久化。",
+                # A pre-commit snapshot cannot know the transaction duration.
+                duration_ms=None,
+            )
+            context.workflow_trace.append(memory_commit_trace)
+        response = self._prepare_commit_response(response, context)
         task = self._capture_post_answer_task(context, response, support)
         runtime = self._get_post_answer_runtime()
-        # Both delivery modes commit the same result/task and use the same
-        # SAGE worker. Asyncio only observes committed results, never executes
-        # post-answer stages or owns their recovery.
-        await asyncio.to_thread(runtime.submit, task)
+        context.persisted_memory_record = await asyncio.to_thread(
+            runtime.submit_turn, task, self._conversation_store
+        )
+        if memory_commit_trace is not None and trace_callback is not None:
+            trace_callback(memory_commit_trace.model_copy(deep=True))
 
         async def observe_result():
             result = await asyncio.to_thread(
@@ -11628,6 +11628,12 @@ class DigitalTwinService:
     def _get_post_answer_runtime(self):
         with self._post_answer_runtime_lock:
             if self._post_answer_runtime is None:
+                legacy_path = self._settings.conversation_memory_dir / "post_answer_work.sqlite3"
+                if legacy_path.exists():
+                    # Never silently abandon tasks from an earlier separate
+                    # journal. Such installations require a deliberate offline
+                    # migration before startup.
+                    raise RuntimeError("legacy_work_journal_requires_offline_migration")
                 # The runtime finalizer must not retain its service through a
                 # bound-method callback and prevent the owner from being collected.
                 owner_ref = weakref.ref(self)
@@ -11637,7 +11643,7 @@ class DigitalTwinService:
                         raise RuntimeError("digest_owner_unavailable")
                     return owner._refresh_saved_digest(conversation_id, intent)
                 self._post_answer_runtime = PostAnswerRuntime(
-                    self._settings.conversation_memory_dir / "post_answer_work.sqlite3",
+                    state=self._conversation_store.state_store,
                     consolidate_profiles=self._conversation_store.consolidate_profiles,
                     score=_score_saved_post_answer,
                     create_artifact_draft=self._artifact_memory_draft_store.create_draft,
@@ -11909,22 +11915,22 @@ class DigitalTwinService:
         )
 
     def _capture_post_answer_task(self, context, response, support):
-        skip_profile = (context.persisted_memory_record is None
+        skip_profile = (context.prepared_memory_record is None
                         or support._is_remembered_value_command(context.request.question)
                         or support._detect_recent_session_meta_query(context.request.question) == "remembered_value")
         profiles = self._conversation_store.list_profiles_for_student(
             student_name=context.request.student_name, student_email=context.request.student_email, limit=10
         )
         if not skip_profile:
-            profiles += self._conversation_store._derive_profiles(context.persisted_memory_record)
+            profiles += self._conversation_store._derive_profiles(context.prepared_memory_record)
         entries = self._conversation_store._versioned_profile_entries(profiles)
         profiles = [ProfileMemoryRecord.from_dict(entry["payload"]) for entry in entries]
         return PostAnswerTask.capture(
             request_id=response.exchange_id or str(uuid4()), request=context.request, response=response,
-            record=context.persisted_memory_record, interaction_intent=context.interaction_intent,
+            record=context.prepared_memory_record, interaction_intent=context.interaction_intent,
             artifact_draft=context.artifact_draft_intent,
             digest=(self._digest_intent() if self._settings.context_digest_enabled
-                    and context.persisted_memory_record is not None else None),
+                    and context.prepared_memory_record is not None else None),
             memory_hits=context.memory_hits, recent_session_context=context.recent_session_context,
             profile_snapshot=profiles, availability=self._meeting_service.get_availability_schedule(),
             evaluate_memory=(support._planner_requests_any_step(context, "score_memory_usefulness")
@@ -11936,26 +11942,23 @@ class DigitalTwinService:
         )
 
     @staticmethod
-    def _patch_response_with_post_answer(
+    def _prepare_commit_response(
         response: ChatResponse, context: ChatWorkflowContext
     ) -> ChatResponse:
-        """Re-build a ChatResponse so post-answer mutations are visible.
+        """Build the private committed-response snapshot, never deliver it yet.
 
-        The critical-path DAG renders ``response`` *before* the post-answer
-        stages mutate ``context``. When post-answer ran inline (test path or
-        ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND=false``), this helper folds the
-        new context fields back into the response so legacy callers continue
-        to see the canonical trace, the assigned ``exchange_id``,
-        and the ``follow_up_actions`` list.
+        The flags become true only with the same transaction that saves this
+        response, its source record and the task. No pre-commit callback receives
+        this snapshot, and an admission failure must propagate to the caller.
         """
         canonical_trace = _canonicalize_workflow_trace(context.workflow_trace)
         updates: dict[str, Any] = {
             "workflow_trace": canonical_trace,
             "follow_up_actions": context.follow_up_actions,
-            "memory_write_back": context.persisted_memory_record is not None,
+            "memory_write_back": context.prepared_memory_record is not None,
         }
-        if context.persisted_memory_record is not None:
-            updates["exchange_id"] = context.persisted_memory_record.memory_id
+        if context.prepared_memory_record is not None:
+            updates["exchange_id"] = context.prepared_memory_record.memory_id
         return response.model_copy(update=updates)
 
     def _run_stage_chain(

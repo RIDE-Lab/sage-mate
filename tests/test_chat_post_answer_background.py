@@ -19,6 +19,7 @@ import pytest
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
+from sage_faculty_twin.memory_store import ConversationMemoryRecord
 from sage_faculty_twin.models import ChatRequest, InteractionIntent
 from sage_faculty_twin.service import (
     _CANONICAL_TRACE_ORDER,
@@ -59,12 +60,14 @@ def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):
     import gc
     import weakref
     from types import SimpleNamespace
+    from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
+    state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
     service = DigitalTwinService.__new__(DigitalTwinService)
     service._post_answer_runtime_lock = threading.RLock()
     service._post_answer_runtime = None
     service._settings = SimpleNamespace(conversation_memory_dir=tmp_path)
-    service._conversation_store = SimpleNamespace(consolidate_profiles=lambda record: 0)
+    service._conversation_store = SimpleNamespace(consolidate_profiles=lambda record: 0, state_store=state)
     service._artifact_memory_draft_store = SimpleNamespace(create_draft=lambda **kwargs: None)
     runtime = service._get_post_answer_runtime()
     owner = weakref.ref(service)
@@ -72,6 +75,8 @@ def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):
     gc.collect()
     assert owner() is None
     assert runtime._service._closed
+    assert state.peek(("test", "owner", "alive")) is None
+    state.close()
 
 
 class _FastLLMClient:
@@ -145,28 +150,158 @@ def test_required_memory_failure_prevents_success_and_background_work(tmp_path, 
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     service._llm_client = _FastLLMClient()
     completed = []
-    post_answer = []
+    traces = []
+    runtime = service._get_post_answer_runtime()
 
     def fail(*args, **kwargs):
         raise OSError("injected memory persistence failure")
 
     monkeypatch.setattr(service._conversation_store, "persist_exchange", fail)
-    monkeypatch.setattr(service, "_get_post_answer_runtime",
-                        lambda *args, **kwargs: post_answer.append(True))
 
     async def run():
         with pytest.raises(OSError, match="injected memory persistence failure"):
             await service.answer(
                 ChatRequest(student_name="Alice", question="给我一些下一步建议。",
                             conversation_id="commit-failure"),
-                trace_callback=(lambda step: None) if background else None,
+                trace_callback=traces.append if background else None,
                 on_post_answer_complete=lambda: completed.append(True),
             )
         await asyncio.sleep(0)
+        await service.aclose()
 
     asyncio.run(run())
-    assert post_answer == []
+    assert runtime._service._thread is None
+    assert service._conversation_store.list_records() == []
+    assert not any(step.key == "memory_persist" and step.status == "completed" for step in traces)
     assert completed == []
+
+
+@pytest.mark.parametrize("background", [True, False])
+@pytest.mark.parametrize("lost_ack", [True, False])
+def test_answer_atomic_failure_and_restart_recovery(tmp_path, monkeypatch, background, lost_ack):
+    settings = AppSettings(knowledge_base_dir=tmp_path, post_answer_background=background)
+    service = DigitalTwinService(settings)
+    service._llm_client = _FastLLMClient()
+    memory = service._conversation_store
+    runtime = service._get_post_answer_runtime()
+    captured, traces, completed = [], [], []
+    original_capture = service._capture_post_answer_task
+
+    def capture(*args):
+        task = original_capture(*args)
+        captured.append(task)
+        return task
+
+    monkeypatch.setattr(service, "_capture_post_answer_task", capture)
+    original_put = memory.state_store._backend._put_uncommitted
+    original_update = memory.state_store.update_many
+
+    def fail_write(slot, entry):
+        original_put(slot, entry)
+        if slot[0] == "sage-work-journal-v1":
+            raise OSError("injected journal SQL failure")
+
+    def lose_ack(slots, transform, **kwargs):
+        result = original_update(slots, transform, **kwargs)
+        if any(slot[0] == "sage-work-journal-v1" for slot in slots):
+            raise ConnectionError("injected commit acknowledgement loss")
+        return result
+
+    async def driver():
+        with monkeypatch.context() as patch:
+            if lost_ack:
+                patch.setattr(memory.state_store, "update_many", lose_ack)
+            else:
+                patch.setattr(memory.state_store._backend, "_put_uncommitted", fail_write)
+            with pytest.raises(OSError, match="injected"):
+                await service.answer(ChatRequest(
+                    student_name="Alice", question="给我一些下一步建议。",
+                    conversation_id="atomic-service"), trace_callback=traces.append,
+                    on_post_answer_complete=lambda: completed.append(True))
+        assert len(captured) == 1
+        task = captured[0]
+        assert completed == []
+        assert not any(step.key == "memory_persist" and step.status == "completed" for step in traces)
+        assert memory.list_records() == []  # No acknowledgement, no local publication.
+        assert runtime._service._thread is None
+        saved = runtime.journal.read(task.request_id)
+        sources = memory.list_conversation_records("atomic-service")
+        if lost_ack:
+            assert saved["result"] == task.response.model_dump(mode="json")
+            assert [record.to_dict() for record in sources] == [task.record.to_dict()]
+        else:
+            assert saved is None
+            assert sources == []
+        await service.aclose()
+
+        recovered = DigitalTwinService(settings)
+        def no_chat_replay(*args, **kwargs):
+            raise AssertionError("recovery replayed upstream chat")
+        monkeypatch.setattr(recovered, "_get_chat_runtime", no_chat_replay)
+        worker = recovered._get_post_answer_runtime()
+        worker.start()
+        try:
+            if lost_ack:
+                result = await asyncio.to_thread(worker.wait, task.request_id, timeout=5)
+                assert result["response"]["answer"] == task.response.answer
+                assert result["response"]["exchange_id"] == task.request_id
+                assert worker.journal.read(task.request_id)["tasks"]["post_answer"]["status"] == "done"
+                assert len(recovered._conversation_store.list_conversation_records("atomic-service")) == 1
+            else:
+                assert worker.journal.read(task.request_id) is None
+                assert recovered._conversation_store.list_conversation_records("atomic-service") == []
+        finally:
+            await recovered.aclose()
+
+    asyncio.run(driver())
+
+
+@pytest.mark.parametrize("background", [True, False])
+def test_memory_success_trace_observes_atomic_committed_snapshot(tmp_path, background):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+                                            post_answer_background=background))
+    service._llm_client = _FastLLMClient()
+    committed = []
+
+    def trace(step):
+        if step.key != "memory_persist" or step.status != "completed":
+            return
+        records = service._conversation_store.list_conversation_records("atomic-success")
+        assert len(records) == 1
+        record = records[0]
+        saved = service._get_post_answer_runtime().journal.read(record.memory_id)
+        assert saved["result"]["exchange_id"] == record.memory_id
+        assert saved["result"]["answer"] == record.answer
+        assert saved["result"]["memory_write_back"] is True
+        snapshot = ConversationMemoryRecord.from_dict(saved["tasks"]["post_answer"]["payload"]["record"])
+        assert snapshot.to_dict() == record.to_dict()
+        assert step.duration_ms is None  # Immutable pre-commit snapshot cannot know it.
+        committed.append(record.memory_id)
+
+    async def driver():
+        try:
+            response = await service.answer(ChatRequest(student_name="Alice",
+                question="给我一些下一步建议。", conversation_id="atomic-success"), trace_callback=trace)
+            assert committed == [response.exchange_id]
+            assert response.memory_write_back
+        finally:
+            await service.aclose()
+
+    asyncio.run(driver())
+
+
+def test_unexpected_legacy_journal_is_preserved_and_blocks_admission(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    legacy = service._settings.conversation_memory_dir / "post_answer_work.sqlite3"
+    legacy.write_bytes(b"legacy journal must not be silently abandoned")
+    try:
+        with pytest.raises(RuntimeError, match="legacy_work_journal_requires_offline_migration"):
+            service._get_post_answer_runtime()
+        assert service._post_answer_runtime is None
+        assert legacy.read_bytes() == b"legacy journal must not be silently abandoned"
+        assert service._conversation_store.list_records() == []
+    finally:
+        asyncio.run(service.aclose())
 
 
 def test_chat_returns_before_post_answer_completes_when_background_enabled(

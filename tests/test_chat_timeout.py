@@ -316,16 +316,27 @@ def test_chat_returns_retryable_429_when_admission_is_full(
     assert response.headers.get("x-sage-trace-id")
 
 
-def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing() -> None:
+def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing(tmp_path, monkeypatch) -> None:
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.service import DigitalTwinService
+
+    # The module-global API service predates per-test path fixtures. Never run
+    # this real-write test against its shared/default runtime directory.
+    isolated = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+        conversation_memory_dir=tmp_path / "memory"))
+    monkeypatch.setattr(api_module, "service", isolated)
     client.cookies.clear()
-    response = client.post(
-        "/chat",
-        json={
-            "student_name": "Alice",
-            "conversation_id": "conv-fast-timing",
-            "question": "你好",
-        },
-    )
+    try:
+        response = client.post(
+            "/chat",
+            json={
+                "student_name": "Alice",
+                "conversation_id": "conv-fast-timing",
+                "question": "你好",
+            },
+        )
+    finally:
+        asyncio.run(isolated.aclose())
 
     assert response.status_code == 200
     timing = response.json()["request_timing"]

@@ -6,12 +6,14 @@ there is no separate best-effort post-answer executor.
 
 ## Commit and recovery
 
-1. The validated answer's conversation-memory record is committed before delivery.
+1. Twin prepares the validated answer's conversation-memory record without writes.
 2. Twin captures a versioned `PostAnswerTask`, excluding transient Slack channel
    context, runtime ports and credentials. It includes the full allowed evidence,
    profile/calendar snapshots and evaluation time.
-3. SAGE atomically commits the answer and post-answer task intent to
-   `conversation_memory_dir/post_answer_work.sqlite3`.
+3. SAGE atomically commits canonical NeuroMem memory, the answer and post-answer
+   task intent in `conversation_memory_dir/neural_state.sqlite3`. The memory
+   success trace is published only after acknowledgement. Its duration is unknown
+   (`null`), since the immutable response is prepared before the transaction.
 4. SAGE owns bounded dispatch, leases, retries and result publication. The handler
    writes versioned NeuroMem profiles and replay-safe artifact drafts, then
    computes follow-up suggestions/scoring and refreshes a provenance-aware digest
@@ -31,7 +33,9 @@ claim that the task succeeded.
 
 Tests cover saved-task recovery without upstream chat replay, retry after profile
 commit, preserved answer/model identity, captured score skip decisions, real trace
-durations, immediate follow-up memory visibility and shared delivery semantics.
+durations for measured stages, immediate follow-up memory visibility and shared
+delivery semantics. Service-level failure injection covers journal SQL rollback,
+lost commit acknowledgement and restart recovery without upstream chat replay.
 
 This component is not yet a complete recoverable HTTP delivery protocol. A client
 cannot yet resume the saved result after process restart through a new authorized
@@ -39,11 +43,11 @@ endpoint. Recovered scoring results remain in the journal; the existing in-proce
 operational telemetry projection is not a durable aggregate. Its event-id
 deduplication applies only within the retained telemetry window.
 
-The conversation-memory commit and answer/task journal commit are separate
-transactions. A crash between them can leave a stored exchange without a task;
-no successful response is returned before the second commit. Cross-store atomic
-turn recovery and journal retention/admission policies remain separate acceptance
-items. No production cutover is implied by repository tests or a merge to main.
+Memory and answer/task intent share one transaction. A lost acknowledgement may
+leave a committed turn even though the caller receives an error; workers recover
+that saved intent, but client retry identity/resumption is not yet implemented.
+Journal retention/admission policies remain separate acceptance items. No
+production cutover is implied by repository tests or a merge to main.
 
 ## Same-store commit integration
 
@@ -62,11 +66,12 @@ whose acknowledgement was lost before local publication. Replay still validates
 the journal intent and does not repeat training. Non-durable collection modes
 reject combined admission rather than falling back to separate writes.
 
-The HTTP workflow does **not yet call this combined boundary**. Its existing
-post-answer journal is in a separate file. Service cutover must reconcile task
-capture, journal ownership/migration, artifact drafts and digest updates before
-claiming whole-turn atomicity. The combined boundary tests use the same SAGE
-state runtime for memory and journal; they do not establish cross-file atomicity.
+The HTTP answer workflow calls this combined boundary in both delivery modes.
+An unexpected legacy `post_answer_work.sqlite3` blocks runtime creation with
+`legacy_work_journal_requires_offline_migration`; it is never ignored, deleted or
+automatically replayed alongside the new store. Offline migration is required
+for such installations. The inspected deployment has no file at its configured
+legacy path. Atomicity is same-store, not cross-file or external-effect atomicity.
 
 New canonical attachment records preserve full accepted input text, including
 Markdown whitespace. The stored field is still named `text_excerpt` for the
@@ -95,7 +100,7 @@ state database and legacy archive before production rollout.
 This destination stores the draft collection and receipts in one atomic record;
 large-queue latency/retention is not yet qualified.
 
-`persist_memory` now captures a typed artifact intent rather than creating a
+`prepare_memory` captures a typed artifact intent rather than creating a
 draft. The post-answer task stores this intent; the SAGE worker derives its
 identity from the committed source record and invokes the replay-safe destination.
 A task without a source record cannot contain an artifact intent. There is no
@@ -124,5 +129,5 @@ Configured generation mode is captured before commit; later setting changes do
 not rewrite admitted work. Legacy tasks without digest intent do not acquire
 new side effects merely because the worker was upgraded.
 
-The whole-turn atomic switch, capacity-aware semantic generation, authenticated
-delivery recovery and production deployment remain separate acceptance gates.
+Capacity-aware semantic generation, authenticated delivery recovery and
+production deployment remain separate acceptance gates.

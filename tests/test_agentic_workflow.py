@@ -309,7 +309,8 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
         "response_render",
     ]
     assert response.workflow_trace[1].status == "completed"
-    assert all(step.duration_ms is not None for step in response.workflow_trace)
+    assert all((step.duration_ms is None) == (step.key == "memory_persist")
+               for step in response.workflow_trace)
     assert (
         response.workflow_trace[1].summary == "已生成 deterministic 规划：prepare_booking_request。"
     )
@@ -713,7 +714,8 @@ def test_chat_uses_llm_intent_to_avoid_false_booking_positive(tmp_path: Path) ->
     _trace_step(response, "knowledge_retrieve")
     assert interaction_step.status == "completed"
     assert booking_prepare_step.status == "skipped"
-    assert all(step.duration_ms is not None for step in response.workflow_trace)
+    assert all((step.duration_ms is None) == (step.key == "memory_persist")
+               for step in response.workflow_trace)
     assert interaction_step.summary == "已识别当前交互意图：answer/advising，仅提供建议。"
     assert booking_prepare_step.summary == "未进入预约流程。"
 
