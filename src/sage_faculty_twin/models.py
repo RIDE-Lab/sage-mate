@@ -214,6 +214,20 @@ class TokenUsage(BaseModel):
     max_context_length: int = 0
 
 
+class ChatGenerationDiagnostics(BaseModel):
+    """Producer measurements captured with the canonical answer, not a waiter."""
+
+    llm_call_count: int = Field(default=0, ge=0)
+    llm_retry_count: int = Field(default=0, ge=0)
+    llm_ttft_ms: float | None = Field(default=None, ge=0)
+    llm_total_duration_ms: float = Field(default=0, ge=0)
+    llm_cache_hits: int = Field(default=0, ge=0)
+    llm_cache_misses: int = Field(default=0, ge=0)
+    prompt_tokens: int = Field(default=0, ge=0)
+    completion_tokens: int = Field(default=0, ge=0)
+    total_tokens: int = Field(default=0, ge=0)
+
+
 class ChatRequestTiming(BaseModel):
     """Request-boundary timings used to reconcile UI latency with workflow work."""
 
@@ -232,6 +246,7 @@ class ChatRequestTiming(BaseModel):
     llm_total_duration_ms: float = Field(default=0, ge=0)
     llm_cache_hits: int = Field(default=0, ge=0)
     llm_cache_misses: int = Field(default=0, ge=0)
+    llm_metrics_recorded: bool = False
 
 
 class ChatResponse(BaseModel):
@@ -260,6 +275,7 @@ class ChatResponse(BaseModel):
     retrieved_items: list[MemoryAuditItem] = Field(default_factory=list)
     token_usage: TokenUsage | None = None
     request_timing: ChatRequestTiming | None = None
+    generation_diagnostics: ChatGenerationDiagnostics | None = None
 
 
 class ConversationHistoryItemResponse(BaseModel):

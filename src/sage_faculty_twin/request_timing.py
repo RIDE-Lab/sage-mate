@@ -39,7 +39,8 @@ class RequestTimingLedger:
             step.duration_ms or 0 for step in response.workflow_trace
         )
         accounted_ms = min(total_ms, sum(self.stage_durations_ms.values()))
-        runtime = self.runtime_diagnostics.snapshot()
+        runtime = (response.generation_diagnostics.model_dump()
+                   if response.generation_diagnostics is not None else self.runtime_diagnostics.snapshot())
         return ChatRequestTiming(
             trace_id=self.trace_id,
             route=route,
@@ -50,6 +51,7 @@ class RequestTimingLedger:
             workflow_trace_reported_ms=trace_ms,
             accounted_duration_ms=round(accounted_ms, 3),
             unattributed_duration_ms=round(max(0.0, total_ms - accounted_ms), 3),
+            llm_metrics_recorded=response.generation_diagnostics is not None,
             **runtime,
         )
 

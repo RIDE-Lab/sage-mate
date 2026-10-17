@@ -156,6 +156,7 @@ from .models import (
     ChatFeedbackResponse,
     ChatRequest,
     ChatResponse,
+    ChatGenerationDiagnostics,
     CodeAssistRequest,
     CodeAssistResponse,
     CodeCommandRequest,
@@ -9024,11 +9025,20 @@ class DigitalTwinService:
             admin_session_reference=admin_session_reference,
             admission_guard=admission_guard,
         )
+        response = self._capture_generation_diagnostics(response)
         delivered = self._deliver_chat_response(request, response)
         if delivery is not None:
             await asyncio.to_thread(WorkflowEventBroker(lambda: self._conversation_store.state_store).finish_immediate,
                                     delivery.stream_id, delivered, guard=admission_guard)
         return delivered
+
+    @staticmethod
+    def _capture_generation_diagnostics(response):
+        diagnostics = request_runtime_diagnostics()
+        if response.generation_diagnostics is None and diagnostics is not None:
+            return response.model_copy(update={"generation_diagnostics":
+                ChatGenerationDiagnostics.model_validate(diagnostics.snapshot())})
+        return response
 
     def _deliver_chat_response(
         self,
@@ -9286,6 +9296,7 @@ class DigitalTwinService:
             )
             context.workflow_trace.append(memory_commit_trace)
         response = self._prepare_commit_response(response, context)
+        response = self._capture_generation_diagnostics(response)
         task = self._capture_post_answer_task(context, response, support)
         if delivery is not None:
             task = task.model_copy(update={"delivery": delivery})
