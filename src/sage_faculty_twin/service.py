@@ -5003,19 +5003,18 @@ class FacultyTwinWorkflowSupport:
             return []
 
         answer_text = str(record.answer or "")
-        if not any(self._answer_references_web_hit(answer_text, hit) for hit in record.web_search_hits):
-            return []
-
         results: list[KnowledgeWriteBackResult] = []
         seen_source_names: set[str] = set()
-        for index, hit in enumerate(record.web_search_hits[:2], start=1):
+        for index, hit in enumerate(record.web_search_hits, start=1):
+            if not self._answer_references_web_hit(answer_text, hit):
+                continue
             payload = self._build_feedback_web_knowledge_payload(record, hit, index=index)
             if payload is None:
                 continue
             if payload.source_name in seen_source_names:
                 continue
             seen_source_names.add(payload.source_name)
-            stored, created = self._knowledge_store.upsert_document(payload)
+            stored, created = self._knowledge_store.upsert_document(payload, preserve_existing=True)
             results.append(
                 KnowledgeWriteBackResult(
                     document_id=stored.document_id,
@@ -8105,32 +8104,32 @@ class FacultyTwinWorkflowSupport:
 
         domain = record.interaction_domain or "general"
         canonical_url = self._canonical_feedback_source_url(source_url)
-        collected_at = datetime.now(UTC).isoformat()
+        collected_at = record.created_at.isoformat()
         content = "\n".join(
             part
             for part in (
-                f"问题：{record.question}",
-                f"回答：{record.answer}",
                 f"联网资料标题：{title}",
                 f"联网摘要：{snippet}" if snippet else "",
                 f"来源链接：{canonical_url}",
-                f"采集时间：{collected_at}",
-                "备注：该资料来自用户正向反馈的联网回答回写，可作为后续回答的补充依据；默认视为待审核网页资料，使用前仍应校验时效性。",
+                "备注：这是待审核的搜索结果摘要，不是完整网页，也不是已经核实的知识。",
             )
             if part
         )
-        url_digest = hashlib.sha1(canonical_url.encode("utf-8")).hexdigest()[:16]
-        source_name = f"feedback-web:{domain}:{url_digest}"
+        snapshot_digest = hashlib.sha256(json.dumps(
+            {"url": canonical_url, "title": title, "snippet": snippet},
+            sort_keys=True, ensure_ascii=False,
+        ).encode()).hexdigest()
+        source_name = f"feedback-web:snapshot-v1:{snapshot_digest}"
         tags = ["feedback-web", "web-search", domain, "review:pending", "freshness:web"]
         return KnowledgeDocumentCreate(
             title=f"联网补充：{title}"[:256],
-            content=content[:20000],
+            content=content,
             tags=tags,
             source_name=source_name[:256],
             metadata={
-                "exchange_id": record.memory_id,
-                "source_url": canonical_url[:256],
-                "interaction_domain": domain,
+                "source_url": canonical_url,
+                "source_snapshot_sha256": snapshot_digest,
+                "evidence_kind": "search_result_snippet",
                 "collected_at": collected_at,
                 "review_status": "pending",
                 "source_rank": str(index),
@@ -8146,40 +8145,11 @@ class FacultyTwinWorkflowSupport:
         return normalized[:1000]
 
     def _answer_references_web_hit(self, answer_text: str, hit: WebSearchHit) -> bool:
-        normalized_answer = str(answer_text or "").lower()
-        if not normalized_answer:
-            return False
-
-        if str(hit.url or "").lower() in normalized_answer:
-            return True
-
-        title_tokens = {
-            token.lower()
-            for token in re.findall(r"[A-Za-z0-9_]+", str(hit.title or ""))
-            if len(token) >= 3
-        }
-        snippet_tokens = {
-            token.lower()
-            for token in re.findall(r"[A-Za-z0-9_]+", str(hit.snippet or ""))
-            if len(token) >= 5
-        }
-        answer_tokens = {
-            token.lower()
-            for token in re.findall(r"[A-Za-z0-9_]+", normalized_answer)
-            if len(token) >= 3
-        }
-
-        if title_tokens & answer_tokens:
-            return True
-        if len(snippet_tokens & answer_tokens) >= 2:
-            return True
-
-        cjk_terms = {
-            term
-            for term in re.findall(r"[\u4e00-\u9fff]{2,}", f"{hit.title} {hit.snippet}")
-            if len(term) >= 2
-        }
-        return any(term in answer_text for term in cjk_terms)
+        # Token/title overlap is not evidence that this specific source was cited.
+        target = self._canonical_feedback_source_url(hit.url)
+        urls = re.findall(r"https?://[^\s<>\[\]（）)，。；]+", str(answer_text or ""))
+        return any(self._canonical_feedback_source_url(url.rstrip(").,;，。；")) == target
+                   for url in urls)
 
     def _build_admin_knowledge_success_message(self, record: KnowledgeDocumentRecord) -> str:
         tags_text = "、".join(record.tags) if record.tags else "未设置"

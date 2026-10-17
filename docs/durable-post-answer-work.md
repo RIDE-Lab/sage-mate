@@ -132,6 +132,20 @@ enumeration remains a scalability gate. Positive-feedback knowledge writeback is
 still a separate synchronous effect, not a durable replay-safe intent; feedback
 and knowledge are **not** an atomic unit yet. No online migration is implied.
 
+Feedback knowledge candidates now require an explicit per-source URL in the saved
+answer; title/token overlap and an unrelated hit do not authorize another source.
+All cited hits are considered, not only the first two. Candidates contain the
+complete stored search-result title, snippet and URL, never the private question,
+answer or owner/exchange identifier. They are explicitly labelled as snippets,
+not full-page evidence. A hash of URL/title/snippet identifies each immutable
+candidate version; repeat feedback preserves curator edits and review decisions,
+and changed source material creates another review candidate. The display title
+may be shortened to the UI limit, but the full title remains in evidence content.
+Existing legacy candidates are not rewritten or deleted automatically; they need
+an audited privacy/migration review. This policy is not a claim of cross-process
+atomicity for the existing knowledge JSON store. Canonical SAGE knowledge state,
+replay-safe projections and atomic feedback/task admission remain required.
+
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover
 that saved intent, but client retry identity/resumption is not yet implemented.

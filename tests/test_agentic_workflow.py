@@ -2266,7 +2266,7 @@ def test_positive_feedback_writes_web_sources_back_to_knowledge_base(
     service = DigitalTwinService(settings)
     service._llm_client = RecordingLLMClient(
         booking_intent=False,
-        answer="我建议先看 vLLM 文档，再对照 SGLang 的调度与缓存机制。",
+        answer="我建议先看 [vLLM 文档](https://docs.vllm.ai/)，再对照 SGLang 的调度与缓存机制。",
     )
 
     monkeypatch.setattr(
@@ -2312,7 +2312,8 @@ def test_positive_feedback_writes_web_sources_back_to_knowledge_base(
     assert "review:pending" in documents[0].tags
     assert documents[0].metadata["review_status"] == "pending"
     assert "https://docs.vllm.ai" in documents[0].content
-    assert "如果我想系统了解大模型推理系统" in documents[0].content
+    assert "如果我想系统了解大模型推理系统" not in documents[0].content
+    assert "回答：" not in documents[0].content
 
     second_response = asyncio.run(
         service.answer(

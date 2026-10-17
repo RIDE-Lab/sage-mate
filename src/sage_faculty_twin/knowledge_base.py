@@ -369,11 +369,17 @@ class LocalKnowledgeStore:
         payload: KnowledgeDocumentCreate,
         *,
         rebuild_indexes: bool = True,
+        preserve_existing: bool = False,
     ) -> tuple[KnowledgeDocumentRecord, bool]:
         self._check_source_namespace(payload.source_name)
         existing = self._find_document_by_source_name(payload.source_name)
         if existing is None:
             return self.add_document(payload, rebuild_indexes=rebuild_indexes), True
+
+        if preserve_existing:
+            # Feedback snapshots must not reset a curator's review or edits.
+            # This is domain policy, not a cross-process transaction guarantee.
+            return existing, False
 
         normalized_metadata = _normalize_knowledge_metadata(payload)
         if (
