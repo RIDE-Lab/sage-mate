@@ -88,6 +88,27 @@ def test_normalize_slack_twin_question():
     assert api_module._normalize_slack_twin_question("研究路线是什么？") == "研究路线是什么？"
 
 
+def test_slack_memory_identity_is_workspace_user_and_channel_scoped():
+    owner = api_module._slack_conversation_owner("T1", "U1", "D1")
+    assert owner.startswith("slack:")
+    assert owner == api_module._slack_conversation_owner("T1", "U1", "D1")
+    assert len({owner, api_module._slack_conversation_owner("T2", "U1", "D1"),
+                api_module._slack_conversation_owner("T1", "U2", "D1"),
+                api_module._slack_conversation_owner("T1", "U1", "C1")}) == 4
+
+
+def test_signed_slack_request_without_workspace_is_rejected(monkeypatch):
+    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
+    body = _body(team_id="")
+    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, "secret"))
+    assert response.status_code == 400
+    event = json.loads(_event_body())
+    del event["team_id"]
+    body = json.dumps(event).encode()
+    response = client.post("/slack/events", data=body, headers=_signed_json_headers(body, "secret"))
+    assert response.status_code == 400
+
+
 def _session(visitor_profile: str) -> UserSessionResponse:
     return UserSessionResponse(
         is_authenticated=True,
@@ -215,7 +236,7 @@ def test_slack_twin_bound_non_lab_user_cannot_ask(monkeypatch, tmp_path):
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
     monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
-    body = _body(user_id="UOTHER", text="研究路线是什么？")
+    body = _body(user_id="UOTHER", text="研究路线是什么？", owner_id="account:spoofed")
 
     response = client.post(
         "/slack/commands/twin",
@@ -241,6 +262,7 @@ def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
 
     async def fake_answer(request):
         seen.append((request.visitor_profile, request.student_email))
+        assert request.owner_id == api_module._slack_conversation_owner("T123", "UOTHER", "D123")
         return ChatResponse(answer="绑定回答。", owner_name="张书豪", used_model="fake-model")
 
     def fake_post(response_url: str, text: str, *, response_type: str = "ephemeral") -> None:
@@ -251,7 +273,7 @@ def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
     monkeypatch.setattr(api_module, "slack_link_store", store)
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
     monkeypatch.setattr(api_module, "_post_slack_response", fake_post)
-    body = _body(user_id="UOTHER", text="研究路线是什么？")
+    body = _body(user_id="UOTHER", text="研究路线是什么？", owner_id="account:spoofed")
 
     response = client.post(
         "/slack/commands/twin",
@@ -490,6 +512,7 @@ def test_slack_events_bound_lab_member_can_ask(monkeypatch, tmp_path):
 
     async def fake_answer(request):
         seen.append((request.visitor_profile, request.student_email, request.course_context))
+        assert request.owner_id == api_module._slack_conversation_owner("T123", "UOTHER", "D123")
         return ChatResponse(answer="DM 回答。", owner_name="张书豪", used_model="fake-model")
 
     def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:

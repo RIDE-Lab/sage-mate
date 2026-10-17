@@ -4,6 +4,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -866,6 +867,7 @@ async def _answer_slack_twin_question(
     *,
     question: str,
     user_id: str,
+    owner_id: str,
     user_name: str | None,
     user_email: str | None = None,
     visitor_profile: str = "lab_member",
@@ -902,6 +904,7 @@ async def _answer_slack_twin_question(
             return
 
         chat_request = ChatRequest(
+            owner_id=owner_id,
             student_name=user_name or user_id,
             student_email=user_email,
             question=question,
@@ -938,6 +941,7 @@ async def _answer_slack_twin_command(
     response_url: str,
     question: str,
     user_id: str,
+    owner_id: str,
     user_name: str | None,
     user_email: str | None = None,
     visitor_profile: str = "lab_member",
@@ -950,6 +954,7 @@ async def _answer_slack_twin_command(
     await _answer_slack_twin_question(
         question=question,
         user_id=user_id,
+        owner_id=owner_id,
         user_name=user_name,
         user_email=user_email,
         visitor_profile=visitor_profile,
@@ -965,6 +970,7 @@ async def _answer_slack_twin_dm(
     channel_id: str,
     question: str,
     user_id: str,
+    owner_id: str,
     user_name: str | None,
     user_email: str | None = None,
     visitor_profile: str = "lab_member",
@@ -977,6 +983,7 @@ async def _answer_slack_twin_dm(
     await _answer_slack_twin_question(
         question=question,
         user_id=user_id,
+        owner_id=owner_id,
         user_name=user_name,
         user_email=user_email,
         visitor_profile=visitor_profile,
@@ -1775,6 +1782,19 @@ async def cancel_chat_request(
     return {"request_id": request_id, "cancelled": cancelled}
 
 
+def _slack_conversation_owner(team_id: str, user_id: str, channel_id: str) -> str:
+    """Use signed transport IDs, not names/emails, for channel-private memory.
+
+    Binding a Slack user to a website account currently grants a role only.
+    Do not merge website/DM/channel histories implicitly: public mentions must
+    not retrieve a private conversation from another channel.
+    """
+    if not all(re.fullmatch(r"[A-Za-z0-9]+", value or "") for value in (team_id, user_id, channel_id)):
+        raise HTTPException(status_code=400, detail="Slack request missing valid conversation identity.")
+    identity = json.dumps([team_id, user_id, channel_id], separators=(",", ":"))
+    return "slack:" + hashlib.sha256(identity.encode()).hexdigest()
+
+
 @llm_app.post("/slack/commands/twin", include_in_schema=False)
 async def slack_twin_command(
     raw_request: Request,
@@ -1788,6 +1808,8 @@ async def slack_twin_command(
         for key, values in urllib.parse.parse_qs(raw_body.decode("utf-8")).items()
     }
     user_id = form.get("user_id", "").strip()
+    owner_id = _slack_conversation_owner(form.get("team_id", "").strip(), user_id,
+                                          form.get("channel_id", "").strip())
     question = form.get("text", "").strip()
     response_url = form.get("response_url", "").strip()
     if not question:
@@ -1813,6 +1835,7 @@ async def slack_twin_command(
         response_url=response_url,
         question=question,
         user_id=user_id or "slack-user",
+        owner_id=owner_id,
         user_name=form.get("user_name") or user_id or None,
         user_email=user_email,
         visitor_profile=visitor_profile,
@@ -1871,6 +1894,7 @@ async def slack_events(
         thread_ts = str(event.get("ts") or "").strip() or None
     if not user_id or not channel_id:
         return JSONResponse({"ok": True})
+    owner_id = _slack_conversation_owner(str(payload.get("team_id") or "").strip(), user_id, channel_id)
     if not question:
         usage_text = "用法：`@twin 你的问题`、`/twin 你的问题`，或者直接给 twin 发私信。"
         background_tasks.add_task(_safe_post_slack_message, channel_id, usage_text, thread_ts=thread_ts)
@@ -1892,6 +1916,7 @@ async def slack_events(
         question=question,
         user_id=user_id,
         user_name=str(event.get("username") or user_id or "").strip() or None,
+        owner_id=owner_id,
         user_email=user_email,
         visitor_profile=visitor_profile,
         thread_ts=thread_ts,
