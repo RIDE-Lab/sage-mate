@@ -13,7 +13,8 @@ there is no separate best-effort post-answer executor.
 3. SAGE atomically commits the answer and post-answer task intent to
    `conversation_memory_dir/post_answer_work.sqlite3`.
 4. SAGE owns bounded dispatch, leases, retries and result publication. The handler
-   writes versioned NeuroMem profiles and computes follow-up suggestions/scoring.
+   writes versioned NeuroMem profiles and replay-safe artifact drafts, then
+   computes follow-up suggestions/scoring.
    It cannot call a model, create a booking or send a notification.
 5. Async observers publish only committed task results. Startup starts recovery
    even when model cache warmup is disabled. Shutdown drains workers, permits
@@ -85,6 +86,17 @@ for explicit resolution rather than silently choosing a record. Back up both the
 state database and legacy archive before production rollout.
 
 This destination stores the draft collection and receipts in one atomic record;
-large-queue latency/retention is not yet qualified. Its replay contract is tested,
-but artifact creation is not yet moved from `persist_memory` into the post-answer
-worker. That workflow cutover and deployment remain separate acceptance gates.
+large-queue latency/retention is not yet qualified.
+
+`persist_memory` now captures a typed artifact intent rather than creating a
+draft. The post-answer task stores this intent; the SAGE worker derives its
+identity from the committed source record and invokes the replay-safe destination.
+A task without a source record cannot contain an artifact intent. There is no
+inline artifact-creation path. A missing destination or write failure leaves the
+task retryable; it does not publish a completed artifact trace. Tests gate the
+background destination to verify that the intent is durable before the response
+returns and the completion event follows the actual write. A failure later in the
+handler may replay creation, but cannot duplicate the draft or undo a review.
+
+The whole-turn atomic switch, digest handling and production deployment remain
+separate acceptance gates.

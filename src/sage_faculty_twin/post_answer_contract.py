@@ -16,6 +16,16 @@ from .memory_store import ConversationMemoryHit, ConversationMemoryRecord, Profi
 from .models import AvailabilitySchedule, ChatRequest, ChatResponse, InteractionIntent
 
 
+class ArtifactDraftIntent(BaseModel):
+    """Only captured artifact evidence; turn identity comes from the task."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    artifact_names: list[str] = Field(min_length=1)
+    artifact_sources: list[str]
+    artifact_excerpt_count: int = Field(ge=0)
+    provenance_note: str
+
+
 class PostAnswerTask(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -35,6 +45,7 @@ class PostAnswerTask(BaseModel):
     evaluated_at: datetime
     skip_profile: bool = False
     skip_follow_up: bool = False
+    artifact_draft: ArtifactDraftIntent | None = None
 
     @model_validator(mode="after")
     def validate_identity(self):
@@ -60,6 +71,8 @@ class PostAnswerTask(BaseModel):
                 raise ValueError("post_answer_record_identity_conflict")
         elif self.response.exchange_id is not None or self.response.memory_write_back:
             raise ValueError("post_answer_missing_committed_record")
+        if self.artifact_draft is not None and self.record is None:
+            raise ValueError("artifact_draft_requires_source_record")
         return self
 
     @classmethod
@@ -67,7 +80,7 @@ class PostAnswerTask(BaseModel):
                 evaluate_memory, record=None, interaction_intent=None,
                 memory_hits=(), recent_session_context="", profile_snapshot=(),
                 skip_profile=False, skip_follow_up=False, evaluated_at=None,
-                score_skip_reason="planner"):
+                score_skip_reason="planner", artifact_draft=None):
         # Use the request's explicit serialization policy, then detach every
         # nested object through JSON before handing it to a durable worker.
         task = cls(
@@ -77,6 +90,7 @@ class PostAnswerTask(BaseModel):
             recent_session_context=recent_session_context, profile_snapshot=list(profile_snapshot),
             skip_profile=skip_profile, skip_follow_up=skip_follow_up,
             score_skip_reason=score_skip_reason,
+            artifact_draft=artifact_draft,
             evaluated_at=evaluated_at or datetime.now(UTC),
         )
         return cls.model_validate_json(task.model_dump_json())

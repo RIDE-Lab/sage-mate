@@ -17,7 +17,7 @@ def memory_usefulness_label(signal):
 
 
 class PostAnswerHandler:
-    """Only the idempotent profile writer and pure scorer are injected.
+    """Only replay-safe profile/draft writers and a pure scorer are injected.
 
     There is deliberately no model, booking, knowledge-write or notification
     port. Results are returned to SAGE for atomic publication with task finish.
@@ -25,9 +25,10 @@ class PostAnswerHandler:
     """
 
     def __init__(self, *, consolidate_profiles: Callable[[ConversationMemoryRecord], int],
-                 score: Callable[[PostAnswerTask], tuple[str, str]]):
+                 score: Callable[[PostAnswerTask], tuple[str, str]], create_artifact_draft=None):
         self._consolidate_profiles = consolidate_profiles
         self._score = score
+        self._create_artifact_draft = create_artifact_draft
         self._planner = LightweightActionPlanner()
 
     def __call__(self, lease):
@@ -45,6 +46,22 @@ class PostAnswerHandler:
                 duration_ms=max(0, round((perf_counter() - started) * 1000)),
             ))
             started = perf_counter()
+
+        artifact_draft_id = None
+        if task.artifact_draft is not None:
+            if self._create_artifact_draft is None:
+                raise RuntimeError("artifact_draft_destination_unavailable")
+            draft = self._create_artifact_draft(
+                **task.artifact_draft.model_dump(),
+                conversation_id=task.record.conversation_id, source_memory_id=task.record.memory_id,
+                student_name=task.record.student_name, student_email=task.record.student_email,
+                interaction_domain=task.record.interaction_domain,
+                question=task.record.question, answer=task.record.answer,
+            )
+            artifact_draft_id = draft.draft_id
+            trace("artifact_memory_writeback", "记录材料记忆草稿",
+                  f"已记录 1 条材料记忆草稿，涉及 {len(task.artifact_draft.artifact_names)} 份材料。",
+                  task.artifact_draft.provenance_note)
 
         if task.skip_profile or task.record is None:
             profile_count = 0
@@ -85,5 +102,6 @@ class PostAnswerHandler:
             "workflow_trace": [item for item in task.response.workflow_trace if item.key not in keys] + traces,
         })
         return {"response": response.model_dump(mode="json"),
+                "artifact_draft_id": artifact_draft_id,
                 "profile_count": profile_count,
                 "memory_usefulness": {"signal": signal, "reason": reason}}

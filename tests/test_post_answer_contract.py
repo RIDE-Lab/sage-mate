@@ -40,6 +40,12 @@ def test_snapshot_excludes_transient_context_and_detaches_inputs():
     assert PostAnswerTask.model_validate_json(task.model_dump_json()) == task
 
 
+def test_artifact_intent_cannot_exist_without_stable_source_identity():
+    with pytest.raises(ValidationError, match="requires_source_record"):
+        make_task(artifact_draft={"artifact_names": ["paper.md"], "artifact_sources": ["upload"],
+                                  "artifact_excerpt_count": 1, "provenance_note": "source"})
+
+
 @pytest.mark.parametrize("field,value", [
     ("version", 2), ("task_kind", "book_meeting"),
     ("system_prompt", "not permitted"), ("runtime", {}),

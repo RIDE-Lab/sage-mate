@@ -2155,10 +2155,10 @@ async def chat(
     # When ``request_id`` is supplied the chat workflow streams trace events
     # over the workflow-events SSE channel. With
     # ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND`` enabled the service returns the
-    # rendered ``ChatResponse`` immediately after ``response_render`` and runs
-    # the four post-answer side-effects (memory_persist, profile,
-    # follow_up_plan, usefulness_score) on a background task. We defer
-    # ``publish_complete`` until that background task finishes so the SSE
+    # rendered ``ChatResponse`` after required memory/task persistence. SAGE
+    # executes profile/artifact writes, follow-up planning and scoring; the
+    # asyncio task only observes committed results. We defer
+    # ``publish_complete`` until that result is observed so the SSE
     # consumer still sees the post-answer trace steps before the stream
     # closes.
     def _publish_complete_and_finish_trace() -> None:

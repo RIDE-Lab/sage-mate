@@ -256,6 +256,51 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     )
 
 
+def test_artifact_intent_is_durable_before_background_destination_finishes(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+        conversation_memory_dir=tmp_path / "memory", artifact_memory_draft_dir=tmp_path / "drafts"))
+    service._llm_client = _FastLLMClient()
+    gate, started, completed = threading.Event(), threading.Event(), threading.Event()
+    original = service._artifact_memory_draft_store.create_draft
+    traces = []
+
+    def gated(**kwargs):
+        started.set()
+        if not gate.wait(timeout=5):
+            raise TimeoutError("test artifact gate")
+        return original(**kwargs)
+
+    service._artifact_memory_draft_store.create_draft = gated
+
+    async def driver():
+        try:
+            response = await asyncio.wait_for(service.answer(ChatRequest(
+                student_name="Alice", student_email="alice@example.com", visitor_profile="lab_member",
+                conversation_id="archive-background",
+                question="把我上传的 proposal draft 记录成后续跟进材料，后面继续讨论实验计划。",
+                attachments=[{"file_name": "proposal-draft.md", "media_type": "text/markdown",
+                              "text_content": "# Full evidence\n\n- experiment plan"}],
+            ), trace_callback=lambda step: traces.append(step), on_post_answer_complete=completed.set), timeout=3)
+            assert await asyncio.to_thread(started.wait, 2)
+            state = service._get_post_answer_runtime().journal.read(response.exchange_id)
+            assert state["tasks"]["post_answer"]["payload"]["artifact_draft"]["artifact_names"] == ["proposal-draft.md"]
+            assert state["tasks"]["post_answer"]["status"] != "done"
+            assert service._artifact_memory_draft_store.count_drafts() == 0
+            assert not any(step.key == "artifact_memory_writeback" for step in traces)
+            assert not completed.is_set()
+            gate.set()
+            assert await asyncio.to_thread(completed.wait, 5)
+            assert service._artifact_memory_draft_store.count_drafts() == 1
+            artifact_traces = [step for step in traces if step.key == "artifact_memory_writeback"]
+            assert len(artifact_traces) == 1 and artifact_traces[0].status == "completed"
+        finally:
+            gate.set()
+            if service._post_answer_observers:
+                await asyncio.gather(*service._post_answer_observers, return_exceptions=True)
+
+    asyncio.run(driver())
+
+
 def test_chat_runs_post_answer_inline_when_no_trace_callback(
     tmp_path: Path,
 ) -> None:

@@ -117,11 +117,17 @@ def test_sage_retry_after_profile_commit_preserves_result_and_profile(tmp_path):
     from sage.runtime.work_journal import WorkJournal
     from sage_faculty_twin.config import AppSettings
     from sage_faculty_twin.memory_store import NeuroMemConversationStore
+    from sage_faculty_twin.artifact_memory_draft_store import ArtifactMemoryDraftStore
+    from sage_faculty_twin.post_answer_contract import ArtifactDraftIntent
 
-    task = make_task()
+    task = make_task().model_copy(update={"artifact_draft": ArtifactDraftIntent(
+        artifact_names=["paper.md"], artifact_sources=["upload"],
+        artifact_excerpt_count=1, provenance_note="captured provenance")})
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           artifact_memory_draft_dir=tmp_path / "drafts",
                            conversation_memory_index_type="segment")
     memory = NeuroMemConversationStore(settings)
+    drafts = ArtifactMemoryDraftStore(settings)
     memory.persist_exchange(task.record)
     runtime = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "work.db"))
     journal = WorkJournal(runtime, namespace="post-answer")
@@ -135,7 +141,8 @@ def test_sage_retry_after_profile_commit_preserves_result_and_profile(tmp_path):
         return score(task)
 
     worker = WorkDispatcher(journal, PostAnswerHandler(
-        consolidate_profiles=memory.consolidate_profiles, score=fail_once
+        consolidate_profiles=memory.consolidate_profiles, score=fail_once,
+        create_artifact_draft=drafts.create_draft,
     ), retry_delay=0)
     try:
         assert worker.run_once() == 1
@@ -143,6 +150,8 @@ def test_sage_retry_after_profile_commit_preserves_result_and_profile(tmp_path):
             next(iter(worker._active)).result(timeout=5)
         profiles = memory._durable_profiles.load()
         assert profiles
+        assert drafts.count_drafts() == 1
+        accepted = drafts.mark_accepted(drafts.list_drafts()[0].draft_id)
         assert worker.run_once() == 1
         next(iter(worker._active)).result(timeout=5)
         worker.run_once(admit=False)
@@ -152,6 +161,9 @@ def test_sage_retry_after_profile_commit_preserves_result_and_profile(tmp_path):
         assert state["tasks"]["post_answer"]["attempt"] == 2
         assert state["tasks"]["post_answer"]["result"]["response"]["answer"] == "complete answer"
         assert memory._durable_profiles.load() == profiles
+        assert drafts.count_drafts() == 1
+        assert drafts.list_drafts()[0].to_dict() == accepted.to_dict()
+        assert state["tasks"]["post_answer"]["result"]["artifact_draft_id"] == accepted.draft_id
         assert worker.failed == 1 and worker.completed == 1
     finally:
         worker.close()

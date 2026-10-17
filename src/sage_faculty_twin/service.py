@@ -41,7 +41,6 @@ from .runtime_identity import (
     RuntimeIdentityProvider,
 )
 from .artifact_memory_draft_store import (
-    ArtifactMemoryDraftRecord,
     ArtifactMemoryDraftStore,
 )
 from .auth import (
@@ -125,7 +124,7 @@ from .knowledge_authority import (
 )
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
-from .post_answer_contract import PostAnswerTask
+from .post_answer_contract import ArtifactDraftIntent, PostAnswerTask
 from .post_answer_runtime import PostAnswerRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
 from .meeting import MeetingService
@@ -1066,7 +1065,7 @@ class ChatWorkflowContext:
     follow_up_actions: list[FollowUpAction] = field(default_factory=list)
     persisted_memory_record: ConversationMemoryRecord | None = None
     prepared_memory_record: ConversationMemoryRecord | None = None
-    persisted_artifact_drafts: list[ArtifactMemoryDraftRecord] = field(default_factory=list)
+    artifact_draft_intent: ArtifactDraftIntent | None = None
     planner_decision: PlannerDecision | None = None
     shadow_planner_decision: PlannerDecision | None = None
     shadow_planner_status: str = "shadow_disabled"
@@ -2552,7 +2551,7 @@ class FacultyTwinWorkflowSupport:
         context.persisted_memory_record = self._conversation_store.persist_exchange(
             context.prepared_memory_record
         )
-        self._record_artifact_memory_draft(context, started_at=started_at)
+        self._prepare_artifact_memory_draft(context, started_at=started_at)
         # Trigger rolling conversation digest update (V4.1 context compression).
         self._update_conversation_digest(context)
         self._append_trace(
@@ -2565,7 +2564,7 @@ class FacultyTwinWorkflowSupport:
         )
         return context
 
-    def _record_artifact_memory_draft(
+    def _prepare_artifact_memory_draft(
         self,
         context: ChatWorkflowContext,
         *,
@@ -2595,35 +2594,11 @@ class FacultyTwinWorkflowSupport:
         provenance_note = self._build_artifact_provenance_note(
             context, artifact_hits, artifact_names
         )
-        draft = self._artifact_memory_draft_store.create_draft(
-            conversation_id=context.conversation_id,
-            source_memory_id=(
-                context.persisted_memory_record.memory_id
-                if context.persisted_memory_record is not None
-                else None
-            ),
-            student_name=context.request.student_name,
-            student_email=context.request.student_email,
-            interaction_domain=(
-                context.interaction_intent.domain
-                if context.interaction_intent is not None
-                else None
-            ),
-            question=context.request.question,
-            answer=context.answer or "",
+        context.artifact_draft_intent = ArtifactDraftIntent(
             artifact_names=artifact_names,
             artifact_sources=self._collect_artifact_sources(context.request, artifact_hits),
             artifact_excerpt_count=len(artifact_hits),
             provenance_note=provenance_note,
-        )
-        context.persisted_artifact_drafts.append(draft)
-        self._append_trace(
-            context,
-            key="artifact_memory_writeback",
-            title="记录材料记忆草稿",
-            summary=f"已记录 1 条材料记忆草稿，涉及 {len(artifact_names)} 份材料。",
-            detail=provenance_note,
-            duration_ms=self._elapsed_ms(started_at),
         )
 
     def _update_conversation_digest(self, context: ChatWorkflowContext) -> None:
@@ -9370,7 +9345,8 @@ class DigitalTwinService:
             final.workflow_trace = _canonicalize_workflow_trace(final.workflow_trace)
             if trace_callback is not None:
                 for step in final.workflow_trace:
-                    if step.key in {"memory_profile_consolidate", "follow_up_plan", "memory_usefulness_score"}:
+                    if (step.key in {"memory_profile_consolidate", "follow_up_plan", "memory_usefulness_score"}
+                            or (step.key == "artifact_memory_writeback" and task.artifact_draft is not None)):
                         trace_callback(step)
             if on_post_answer_complete is not None:
                 on_post_answer_complete()
@@ -11707,6 +11683,7 @@ class DigitalTwinService:
                     self._settings.conversation_memory_dir / "post_answer_work.sqlite3",
                     consolidate_profiles=self._conversation_store.consolidate_profiles,
                     score=_score_saved_post_answer,
+                    create_artifact_draft=self._artifact_memory_draft_store.create_draft,
                 )
                 self._post_answer_finalizer = weakref.finalize(self, self._post_answer_runtime.close)
             return self._post_answer_runtime
@@ -11987,6 +11964,7 @@ class DigitalTwinService:
         return PostAnswerTask.capture(
             request_id=response.exchange_id or str(uuid4()), request=context.request, response=response,
             record=context.persisted_memory_record, interaction_intent=context.interaction_intent,
+            artifact_draft=context.artifact_draft_intent,
             memory_hits=context.memory_hits, recent_session_context=context.recent_session_context,
             profile_snapshot=profiles, availability=self._meeting_service.get_availability_schedule(),
             evaluate_memory=(support._planner_requests_any_step(context, "score_memory_usefulness")

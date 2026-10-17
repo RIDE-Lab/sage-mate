@@ -8,11 +8,12 @@ from .post_answer_handler import PostAnswerHandler
 
 
 class PostAnswerRuntime:
-    def __init__(self, path, *, consolidate_profiles, score):
+    def __init__(self, path, *, consolidate_profiles, score, create_artifact_draft=None):
         self._state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(path))
         self.journal = WorkJournal(self._state, namespace="twin-post-answer-v1")
         self._service = WorkService(
-            self.journal, PostAnswerHandler(consolidate_profiles=consolidate_profiles, score=score),
+            self.journal, PostAnswerHandler(consolidate_profiles=consolidate_profiles, score=score,
+                                          create_artifact_draft=create_artifact_draft),
             max_workers=2, poll_interval=0.05,
         )
 
