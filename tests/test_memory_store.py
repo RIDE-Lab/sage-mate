@@ -40,6 +40,36 @@ def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tm
     assert reloaded.list_recent_conversation_records("stable-turn")[0].answer == "complete answer"
 
 
+@pytest.mark.parametrize("failure_stage", ["_store_conversation_entry", "_persist_collection"])
+def test_failed_exchange_is_not_published_to_history(tmp_path, monkeypatch, failure_stage):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment")
+    store = NeuroMemConversationStore(settings)
+    record = store.prepare_exchange(
+        ChatRequest(student_name="Alice", question="research question"),
+        conversation_id="failed-turn", answer="complete answer",
+        workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+        booking_result=None,
+    )
+
+    def fail(*args, **kwargs):
+        raise OSError("injected persistence failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store, failure_stage, fail)
+        with pytest.raises(OSError, match="injected persistence failure"):
+            store.persist_exchange(record)
+    assert store.list_recent_conversation_records("failed-turn") == []
+    assert store.list_records() == []
+    reloaded = NeuroMemConversationStore(settings)
+    assert reloaded.list_recent_conversation_records("failed-turn") == []
+
+    store.persist_exchange(record)
+    assert [item.memory_id for item in store.list_recent_conversation_records("failed-turn")] == [
+        record.memory_id
+    ]
+
+
 def test_store_persists_neuromem_collections_without_records_or_profiles_dirs(
     tmp_path: Path,
 ) -> None:

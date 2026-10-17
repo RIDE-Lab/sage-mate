@@ -531,10 +531,12 @@ class NeuroMemConversationStore:
         existing = self._records.get(record.memory_id)
         if existing is not None and existing.to_dict() != record.to_dict():
             raise ValueError("conversation_memory_identity_conflict")
-        self._records[record.memory_id] = record
-        self._prepend_conversation_timeline(record)
         self._store_conversation_entry(record)
         self._persist_collection(self._conversation_collection, self._conversation_collection_dir)
+        # Publish to history only after persistence succeeds. A failed write
+        # must not become visible as a committed exchange in the timeline.
+        self._records[record.memory_id] = record
+        self._prepend_conversation_timeline(record)
         self._record_telemetry_event(
             "write_conversation",
             collection_name=self._conversation_collection.name,
