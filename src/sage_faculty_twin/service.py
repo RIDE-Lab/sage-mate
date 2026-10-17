@@ -11583,11 +11583,19 @@ class DigitalTwinService:
             await asyncio.to_thread(self._chat_finalizer)
         if self._retrieval_finalizer is not None:
             await asyncio.to_thread(self._retrieval_finalizer)
+        # Retrieval and post-answer producers must stop before index admission
+        # closes; each catalog drains SAGE workers before closing its state.
+        for store in (self._knowledge_store, self._wiki_store):
+            if store is not None:
+                await asyncio.to_thread(store.close)
         if getattr(self, "_digest_store", None) is not None:
             await asyncio.to_thread(self._digest_store.close)
         await self._llm_client.aclose()
 
     def start_background_work(self):
+        for store in (self._knowledge_store, self._wiki_store):
+            if store is not None:
+                store.start_background_indexing()
         self._get_post_answer_runtime().start()
 
     def _project_post_answer_score(self, task, result):

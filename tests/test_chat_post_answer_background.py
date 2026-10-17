@@ -47,13 +47,29 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
                 drain=lambda: calls.append("drain"), close=lambda: calls.append("close")),
             _post_answer_finalizer=SimpleNamespace(detach=lambda: calls.append("detach")),
             _post_answer_observers={asyncio.create_task(observe())},
-            _chat_finalizer=None, _retrieval_finalizer=None,
+            _chat_finalizer=lambda: calls.append("chat_close"),
+            _retrieval_finalizer=lambda: calls.append("retrieval_close"),
+            _knowledge_store=SimpleNamespace(close=lambda: calls.append("private_close")),
+            _wiki_store=SimpleNamespace(close=lambda: calls.append("wiki_close")),
             _llm_client=SimpleNamespace(aclose=close_llm),
         )
         await DigitalTwinService.aclose(fake)
 
     asyncio.run(driver())
-    assert calls == ["drain", "observed", "close", "detach", "llm_close"]
+    assert calls == ["drain", "observed", "close", "detach", "chat_close",
+                     "retrieval_close", "private_close", "wiki_close", "llm_close"]
+
+
+def test_start_recovers_both_knowledge_sources_before_post_answer_work():
+    from types import SimpleNamespace
+    calls = []
+    fake = SimpleNamespace(
+        _knowledge_store=SimpleNamespace(start_background_indexing=lambda: calls.append("private")),
+        _wiki_store=SimpleNamespace(start_background_indexing=lambda: calls.append("wiki")),
+        _get_post_answer_runtime=lambda: SimpleNamespace(start=lambda: calls.append("post_answer")),
+    )
+    DigitalTwinService.start_background_work(fake)
+    assert calls == ["private", "wiki", "post_answer"]
 
 
 def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):

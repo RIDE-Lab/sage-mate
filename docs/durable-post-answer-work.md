@@ -44,10 +44,26 @@ Source-name deduplication creates tombstones without deleting archived originals
 Reads refresh canonical revisions and invalidate obsolete search caches; returned
 records are detached. No-op upserts create neither new revisions nor tasks.
 
-The indexing worker cutover is still pending: synchronous index rebuilds and
-startup reconstruction currently remain, and durable index intents are retained
-as pending rather than falsely acknowledged. The next step must consume them
-through SAGE WorkService. Native SageVDB projections now use canonical revisions
+Index intents are consumed by a bounded SAGE WorkService (one worker per catalog).
+Twin starts both private and Wiki consumers even when model warmup is disabled.
+The domain handler reads current canonical data, checks task namespace/revision,
+and acknowledges only after the projection reaches at least the required revision.
+Failures retain retryable work; an old intent cannot restore an old document body.
+After activation, new body/intent transactions use WorkService's admission lock.
+Shutdown stops producers/retrieval first, drains index workers, then closes their
+state. Drain timeout leaves state available to active work and permits close retry;
+new admissions are rejected. Standalone callers may explicitly start indexing and
+must close the store. A weak finalizer uses SAGE's nonblocking `retire` contract:
+even when the last owner reference is released inside a projector, it does not
+join its own unfinished task. SAGE completes the acknowledgement and drains the
+dispatcher before releasing storage. Retirement failure retains resources and
+does not claim a clean shutdown. This is SAGE scheduling, not an application
+polling/executor loop.
+
+Foreground freshness checks, synchronous rebuild flags and startup reconstruction
+still remain; avoiding duplicated rebuilds and migrating the foreground wait
+boundary without holding the mutation lock are the next cutover steps.
+Native SageVDB projections now use canonical revisions
 and an isolated `canonical-v1/<configuration-sha256>/` generation root. Backend,
 embedding model/dimension, retrieval format, source namespace and a hash of the
 canonical database location select the configuration fingerprint,

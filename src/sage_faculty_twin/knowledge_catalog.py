@@ -3,14 +3,25 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 import weakref
 from uuid import uuid4
 
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.work_journal import WorkJournal
+from sage.runtime.work_service import WorkService
 from sagevdb import VersionedDocumentCatalog
 
 from .models import KnowledgeDocumentRecord
+
+
+def _retire_resources(state, services):
+    if services:
+        # A finalizer may run inside the last active projector. SAGE retires
+        # without joining that same task, then closes state after its ack.
+        services[0].retire(state.close)
+    else:
+        state.close()
 
 
 class KnowledgeCatalog:
@@ -22,13 +33,69 @@ class KnowledgeCatalog:
         self.state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(self.state_path))
         stat = self.state_path.stat()
         self._storage_identity = (stat.st_dev, stat.st_ino)
-        self._finalizer = weakref.finalize(self, self.state.close)
+        self._services = []
+        self._finalizer = weakref.finalize(self, _retire_resources, self.state, self._services)
+        self._lifecycle_lock = threading.RLock()
+        self._index_service = None
+        self._closed = False
+        self._closing = False
         self.catalog = VersionedDocumentCatalog(self.state, namespace=namespace)
         self.journal = WorkJournal(self.state, namespace=f"knowledge-index:{namespace}")
         self._imports_slot = ("twin-knowledge-import-v1", namespace, "files")
 
-    def close(self):
-        self._finalizer()
+    def start_indexing(self, project):
+        """Recover admitted intents using SAGE's bounded worker lifecycle.
+
+        project receives the minimum required revision and returns the actual
+        committed projection revision. It must read current canonical data,
+        never reconstruct documents from the task payload.
+        """
+        with self._lifecycle_lock:
+            self._assert_open()
+            if self._index_service is None:
+                namespace = self.catalog.namespace
+
+                def handle(lease):
+                    payload = lease.payload
+                    if (lease.task_id != "knowledge_index" or not isinstance(payload, dict)
+                            or payload.get("namespace") != namespace):
+                        raise ValueError("invalid_knowledge_index_task")
+                    required = payload.get("revision")
+                    if type(required) is not int or required < 0:
+                        raise ValueError("invalid_knowledge_index_revision")
+                    actual = project(required)
+                    if type(actual) is not int or actual < required:
+                        raise ValueError("knowledge_index_revision_not_reached")
+                    return {"namespace": namespace, "revision": actual}
+
+                self._index_service = WorkService(
+                    self.journal, handle, max_workers=1, poll_interval=0.05,
+                )
+                self._services.append(self._index_service)
+            self._index_service.start()
+
+    def wait_indexing(self, operation_id, *, timeout):
+        if self._index_service is None:
+            raise RuntimeError("knowledge_index_service_not_started")
+        return self._index_service.wait(operation_id, timeout=timeout)
+
+    def close(self, *, timeout=30):
+        # Never hold the lifecycle lock while draining: an active projector may
+        # need canonical reads. On timeout keep state open and allow close retry.
+        with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closing = True
+            service = self._index_service
+        if service is not None:
+            service.close(timeout=timeout)
+        with self._lifecycle_lock:
+            self._finalizer()
+            self._closed = True
+
+    def _assert_open(self):
+        if self._closing or self._closed:
+            raise RuntimeError("knowledge_catalog_closing")
 
     def snapshot(self):
         self._assert_storage()
@@ -39,6 +106,8 @@ class KnowledgeCatalog:
         }
 
     def _assert_storage(self):
+        if self._closed:
+            raise RuntimeError("knowledge_catalog_closed")
         try:
             stat = self.state_path.stat()
         except FileNotFoundError as exc:
@@ -47,6 +116,12 @@ class KnowledgeCatalog:
             raise RuntimeError("canonical_knowledge_storage_replaced_restart_required")
 
     def commit(self, changes, *, expected_revision, extra_mutations=None):
+        with self._lifecycle_lock:
+            self._assert_open()
+            return self._commit(changes, expected_revision=expected_revision,
+                                extra_mutations=extra_mutations)
+
+    def _commit(self, changes, *, expected_revision, extra_mutations=None):
         self._assert_storage()
         self.path.mkdir(parents=True, exist_ok=True)
         operation_id = str(uuid4())
@@ -56,7 +131,8 @@ class KnowledgeCatalog:
              for key, record in changes.items()}, expected_revision=expected_revision)
         mutations = dict(extra_mutations or {})
         mutations[slot] = transform
-        self.journal.commit(operation_id, result={"revision": expected_revision + 1},
+        admission = self._index_service or self.journal
+        admission.commit(operation_id, result={"revision": expected_revision + 1},
                             tasks={"knowledge_index": {"namespace": self.catalog.namespace,
                                                        "revision": expected_revision + 1}},
                             mutations=mutations)

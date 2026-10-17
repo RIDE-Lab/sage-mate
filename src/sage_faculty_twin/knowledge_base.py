@@ -7,6 +7,7 @@ import math
 import re
 import threading
 import time
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -346,6 +347,25 @@ class LocalKnowledgeStore:
         self._load_documents_from_disk()
         self._rebuild_link_graph()
         self._rebuild_backend_indexes()
+
+    def start_background_indexing(self):
+        """Consume durable intents without retaining this store through a worker."""
+        reference = weakref.ref(self)
+
+        def project(required):
+            store = reference()
+            if store is None:
+                raise RuntimeError("knowledge_projector_unavailable")
+            with store._mutation_lock:
+                store._refresh_documents()
+                if store._indexed_catalog_revision != store._catalog_revision:
+                    store._rebuild_backend_indexes()
+                return store._indexed_catalog_revision
+
+        self._catalog.start_indexing(project)
+
+    def close(self, *, timeout=30):
+        self._catalog.close(timeout=timeout)
 
     @_knowledge_locked
     def add_document(
