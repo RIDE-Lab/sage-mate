@@ -426,3 +426,26 @@ pre-upgrade code and consistent storage snapshot, not just an older application
 binary. No automatic workspace assignment or legacy authorization fallback is
 provided. Verify both signed command and event paths, and confirm that the same
 user ID in another workspace cannot reuse the binding or allowlist entry.
+
+### Durable Slack workflow qualification (transport cutover pending)
+
+`slack_workflow.SlackWorkflow` admits answer and delivery intents together into
+SAGE's journal. Its strict `SlackIngress` accepts verified destination IDs,
+stable transport IDs and the question, not a bot token or bearer response URL.
+Duplicate transport IDs with changed input fail rather than overwrite work.
+The host must supply current authorization, canonical recovery, answer and
+delivery ports. `SlackAnswerRecovery` reads the same owner-scoped answer events
+committed by the chat service; it does not run a second chat pipeline.
+
+Delivery failures retry separately from an acknowledged answer. Both stages
+recheck authorization; only a validated accepted receipt marks delivery done.
+External Slack effects are still at-least-once: a lost remote acknowledgement
+can cause duplicates. A success response is not proof that an ephemeral message
+was seen. The event loop, shared state and async clients must outlive successful
+workflow drain.
+
+This module is qualified in isolated tests but is not yet connected to the HTTP
+Slack routes. Release is blocked on replacing their `BackgroundTasks` path,
+wiring startup recovery/shutdown drain, preserving ephemeral visibility without
+persisting callback credentials, and end-to-end transport/restart acceptance.
+Do not advertise durable Slack delivery based on module tests alone.
