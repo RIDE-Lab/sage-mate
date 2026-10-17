@@ -9416,10 +9416,6 @@ class DigitalTwinService:
         if self._settings.app_profile == "auto_scientist":
             return await self._answer_auto_scientist(request)
 
-        fact_response = self._build_lightweight_fact_response(request)
-        if fact_response is not None:
-            return fact_response
-
         recent_session_context = (
             self._build_recent_session_context(request)
             if self._question_needs_recent_context(request.question)
@@ -9576,6 +9572,7 @@ class DigitalTwinService:
         # Both delivery modes share the same required memory-write gate.
         # Persistence failure must propagate, never masquerade as a committed turn.
         await asyncio.to_thread(MemoryPersistStage(support).execute, context)
+        response = self._patch_response_with_post_answer(response, context)
 
         if should_background:
             # The current exchange must be durable before the HTTP response is

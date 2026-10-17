@@ -69,6 +69,26 @@ class _FastLLMClient:
         return self._answer
 
 
+def test_fact_question_uses_unified_execution_and_commit(tmp_path, monkeypatch):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _FastLLMClient("当前证据不足以确认，请查看公开 Wiki。")
+
+    def forbidden_shortcut(*args, **kwargs):
+        raise AssertionError("fact response bypassed SAGE workflow")
+
+    monkeypatch.setattr(service, "_build_lightweight_fact_response", forbidden_shortcut)
+    response = asyncio.run(service.answer(ChatRequest(
+        student_name="Alice", question="张老师是谁？", conversation_id="fact-unified",
+    )))
+    assert response.exchange_id
+    assert response.memory_write_back
+    keys = {step.key for step in response.workflow_trace}
+    assert {"bootstrap", "knowledge_retrieve", "response_render", "memory_persist"} <= keys
+    record = service._conversation_store.get_record(response.exchange_id)
+    assert record.question == "张老师是谁？"
+    assert record.answer == response.answer
+
+
 @pytest.mark.parametrize("background", [True, False])
 def test_required_memory_failure_prevents_success_and_background_work(tmp_path, monkeypatch, background):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
@@ -177,9 +197,8 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
 
     response = asyncio.run(driver())
 
-    # Critical-path response: trace ends at response_render. The four
-    # post-answer keys are NOT in the response itself even though they
-    # eventually flowed through ``trace_callback`` (and hence SSE).
+    # The required memory commit is reflected immediately; remaining
+    # background stages are reported only after they actually finish.
     response_keys = [step.key for step in response.workflow_trace]
     post_answer_keys = {
         "memory_persist",
@@ -187,12 +206,15 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
         "follow_up_plan",
         "memory_usefulness_score",
     }
-    assert post_answer_keys.isdisjoint(response_keys), (
+    assert (post_answer_keys - {"memory_persist"}).isdisjoint(response_keys), (
         "Background mode must NOT include post-answer steps in the immediate "
         f"chat response. Got: {response_keys}"
     )
     assert "response_render" in response_keys
     assert "llm_answer" in response_keys
+    assert "memory_persist" in response_keys
+    assert response.exchange_id
+    assert response.memory_write_back
 
     # The trace callback emits memory_persist before the response and the
     # remaining post-answer steps after it.

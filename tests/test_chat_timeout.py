@@ -316,7 +316,7 @@ def test_chat_returns_retryable_429_when_admission_is_full(
     assert response.headers.get("x-sage-trace-id")
 
 
-def test_fast_chat_exposes_request_boundary_timing() -> None:
+def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing() -> None:
     client.cookies.clear()
     response = client.post(
         "/chat",
@@ -330,10 +330,13 @@ def test_fast_chat_exposes_request_boundary_timing() -> None:
     assert response.status_code == 200
     timing = response.json()["request_timing"]
     assert timing["trace_id"]
-    assert timing["route"] == "fast_path"
+    assert timing["route"] == "sage_workflow"
     assert timing["total_duration_ms"] <= timing["budget_ms"]
     assert "request_parse" in timing["stage_durations_ms"]
-    assert "fast_path_probe" in timing["stage_durations_ms"]
+    assert "fast_path_probe" not in timing["stage_durations_ms"]
+    assert response.json()["exchange_id"]
+    assert response.json()["memory_write_back"]
+    assert any(step["key"] == "memory_persist" for step in response.json()["workflow_trace"])
 
 
 def test_explicit_cancel_endpoint_interrupts_registered_request() -> None:

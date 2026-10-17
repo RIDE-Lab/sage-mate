@@ -2064,44 +2064,6 @@ async def chat(
     if boundary_response is not None:
         return _record_success(boundary_response, route="boundary")
 
-    # Public greetings and bounded local-evidence FAQs do not consume the
-    # model/NPU slot.  Probe this lane before admission so a long DeepSeek
-    # request cannot make a lightweight student question return 429.  Keep a
-    # short guard: an unexpectedly slow local index falls back to the normal
-    # admission path instead of creating an unbounded side queue.
-    fast_response = None
-    if not payload.attachments:
-        stage_started = time.perf_counter()
-        try:
-            fast_response = await asyncio.wait_for(
-                asyncio.to_thread(service.try_fast_answer, payload),
-                timeout=min(2.5, timing.remaining_seconds()),
-            )
-        except asyncio.TimeoutError:
-            fast_response = None
-        finally:
-            timing.record("fast_path_probe", stage_started)
-    if fast_response is not None:
-        # Fast answers skip the workflow DAG by design, but must still write
-        # the exchange before returning so the next turn can resolve short
-        # follow-ups against the same conversation.
-        stage_started = time.perf_counter()
-        try:
-            persisted = await asyncio.wait_for(
-                asyncio.to_thread(service.persist_fast_answer, payload, fast_response),
-                timeout=min(2.0, timing.remaining_seconds()),
-            )
-            timing.record("fast_path_persist", stage_started)
-            return _record_success(persisted, route="fast_path")
-        except asyncio.TimeoutError:
-            _logger.exception("fast-path memory persistence timed out")
-            timing.record("fast_path_persist", stage_started)
-            return _record_success(fast_response, route="fast_path")
-        except Exception:
-            _logger.exception("fast-path memory persistence failed")
-            timing.record("fast_path_persist", stage_started)
-            return _record_success(fast_response, route="fast_path")
-
     global _chat_waiting_requests
     if timing.remaining_seconds() <= 0:
         exc = HTTPException(
