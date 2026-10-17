@@ -350,10 +350,13 @@ def test_artifact_memory_draft_store_create_draft_survives_runtime_dir_wipe(
         provenance_note="provenance",
     )
 
-    written = draft_dir / f"{record.draft_id}.json"
-    assert draft_dir.exists()
-    assert written.is_file()
+    # Legacy JSON directory is no longer the canonical destination. Deleting
+    # it must not cause writes to an unlinked database or revive dual writes.
+    assert (settings.conversation_memory_dir / "neural_state.sqlite3").is_file()
+    assert not (draft_dir / f"{record.draft_id}.json").exists()
     assert store.count_drafts() == 1
+    reopened = ArtifactMemoryDraftStore(settings)
+    assert reopened.get_draft(record.draft_id).to_dict() == record.to_dict()
 
 
 # ---------------------------------------------------------------------------

@@ -65,3 +65,26 @@ Markdown whitespace. The stored field is still named `text_excerpt` for the
 existing record schema; old already-truncated records are not reconstructible
 from these records alone. History response validation no longer rejects generated
 answers merely because they exceed 12000 characters.
+
+## Replay-safe artifact draft destination
+
+Artifact drafts now use SAGE atomic state in the same
+`conversation_memory_dir/neural_state.sqlite3` database, under their own slot.
+Creation and review transitions use one canonical state source, not JSON plus
+an in-memory cache. A source memory ID identifies one immutable draft input;
+replaying the same input returns its current draft/review status. Changed input
+under that identity fails closed. Calls without a source memory ID remain manual
+new creations and must not be used as replayable worker operations.
+
+Legacy JSON drafts are imported in one atomic update with content receipts,
+preserving draft IDs, content and review status. Only after that commit are source
+files moved to `artifact_memory_draft_dir/legacy-imported/`. The archive is for
+recovery/audit, not a second write/read path. Repeated imports cannot reset later
+reviews. Duplicate source identities or changed imported files stop migration
+for explicit resolution rather than silently choosing a record. Back up both the
+state database and legacy archive before production rollout.
+
+This destination stores the draft collection and receipts in one atomic record;
+large-queue latency/retention is not yet qualified. Its replay contract is tested,
+but artifact creation is not yet moved from `persist_memory` into the post-answer
+worker. That workflow cutover and deployment remain separate acceptance gates.
