@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import secrets
 import string
+import weakref
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
 
 _CODE_ALPHABET = string.ascii_uppercase + string.digits
@@ -73,20 +77,37 @@ class SlackLinkCodeRecord:
 class SlackUserLinkStore:
     def __init__(self, root_dir: Path) -> None:
         self._root_dir = root_dir
-        self._links_dir = root_dir / "links"
-        self._codes_dir = root_dir / "codes"
-        self._links_dir.mkdir(parents=True, exist_ok=True)
-        self._codes_dir.mkdir(parents=True, exist_ok=True)
-        self._links_by_slack_id: dict[str, SlackUserLinkRecord] = {}
-        self._links_by_user_id: dict[str, SlackUserLinkRecord] = {}
-        self._codes: dict[str, SlackLinkCodeRecord] = {}
-        self._load()
+        root_dir.mkdir(parents=True, exist_ok=True)
+        self._state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(root_dir / "bindings.sqlite3"))
+        self._finalizer = weakref.finalize(self, self._state.close)
+        self._slot = ("twin-slack-bindings-v1", "bindings", "state")
+        self._import_legacy()
+
+    @staticmethod
+    def _empty():
+        return {"version": 1, "links": {}, "codes": {}}
+
+    def _snapshot(self):
+        return self._validated(self._state.peek(self._slot))
+
+    def _validated(self, value):
+        if value is None:
+            return self._empty()
+        if value.get("version") != 1:
+            raise ValueError("unsupported_slack_binding_version")
+        return value
+
+    @staticmethod
+    def _code_key(code):
+        return hashlib.sha256(code.strip().upper().encode()).hexdigest()
 
     def get_link_for_slack_user(self, slack_user_id: str) -> SlackUserLinkRecord | None:
-        return self._links_by_slack_id.get(slack_user_id.strip())
+        value = self._snapshot()["links"].get(slack_user_id.strip())
+        return SlackUserLinkRecord.from_dict(value) if value else None
 
     def get_link_for_user(self, user_id: str) -> SlackUserLinkRecord | None:
-        return self._links_by_user_id.get(user_id.strip())
+        value = next((link for link in self._snapshot()["links"].values() if link["user_id"] == user_id.strip()), None)
+        return SlackUserLinkRecord.from_dict(value) if value else None
 
     def create_code(
         self,
@@ -96,81 +117,116 @@ class SlackUserLinkStore:
         visitor_profile: str,
         ttl_seconds: int = 600,
     ) -> SlackLinkCodeRecord:
-        self.prune_expired_codes()
+        if ttl_seconds <= 0:
+            raise ValueError("invalid_slack_code_lifetime")
         now = datetime.now(UTC)
         for _ in range(20):
             code = "".join(secrets.choice(_CODE_ALPHABET) for _ in range(8))
-            if code not in self._codes:
-                break
-        else:
-            raise RuntimeError("Unable to generate a unique Slack link code.")
-        record = SlackLinkCodeRecord(
-            code=code,
-            user_id=user_id,
-            email=email,
-            visitor_profile=visitor_profile,
-            expires_at=now + timedelta(seconds=ttl_seconds),
-            created_at=now,
-        )
-        self._codes[code] = record
-        self._persist_code(record)
-        return record
+            record = SlackLinkCodeRecord(code=code, user_id=user_id, email=email, visitor_profile=visitor_profile,
+                expires_at=now + timedelta(seconds=ttl_seconds), created_at=now)
+            key = self._code_key(code)
+            payload = record.to_dict()
+            del payload["code"]  # Only the hash identifies persisted credentials.
+            collision = []
+            def create(old):
+                value = self._validated(old)
+                if key in value["codes"]:
+                    collision.append(True)
+                    return value
+                value["codes"] = {old_key: old_code for old_key, old_code in value["codes"].items()
+                                  if old_code["user_id"] != user_id
+                                  and datetime.fromisoformat(old_code["expires_at"]) > now}
+                value["codes"][key] = payload
+                return value
+            self._state.update(self._slot, create)
+            if not collision:
+                return record
+        raise RuntimeError("Unable to generate a unique Slack link code.")
 
     def consume_code(self, code: str, *, slack_user_id: str) -> SlackUserLinkRecord | None:
-        normalized_code = code.strip().upper()
-        self.prune_expired_codes()
-        record = self._codes.pop(normalized_code, None)
-        if record is None:
-            return None
-        self._delete_code(normalized_code)
-        link = SlackUserLinkRecord(
-            slack_user_id=slack_user_id.strip(),
-            user_id=record.user_id,
-            email=record.email,
-            visitor_profile=record.visitor_profile,
-            linked_at=datetime.now(UTC),
-        )
-        previous = self._links_by_slack_id.get(link.slack_user_id)
-        if previous is not None:
-            self._links_by_user_id.pop(previous.user_id, None)
-        self._links_by_slack_id[link.slack_user_id] = link
-        self._links_by_user_id[link.user_id] = link
-        self._persist_link(link)
-        return link
+        if not slack_user_id.strip():
+            raise ValueError("slack_user_id_required")
+        now, key, consumed = datetime.now(UTC), self._code_key(code), []
+        def consume(old):
+            value = self._validated(old)
+            record = value["codes"].get(key)
+            if record is None:
+                return value
+            del value["codes"][key]
+            if datetime.fromisoformat(record["expires_at"]) <= now:
+                return value
+            link = SlackUserLinkRecord(slack_user_id=slack_user_id.strip(), user_id=record["user_id"],
+                email=record["email"], visitor_profile=record["visitor_profile"], linked_at=now)
+            value["links"] = {identity: existing for identity, existing in value["links"].items()
+                              if existing["user_id"] != link.user_id and identity != link.slack_user_id}
+            value["links"][link.slack_user_id] = link.to_dict()
+            consumed.append(link)
+            return value
+        self._state.update(self._slot, consume)
+        return consumed[0] if consumed else None
 
     def prune_expired_codes(self) -> None:
         now = datetime.now(UTC)
-        expired = [code for code, record in self._codes.items() if record.expires_at <= now]
-        for code in expired:
-            self._codes.pop(code, None)
-            self._delete_code(code)
+        def prune(old):
+            value = self._validated(old)
+            value["codes"] = {key: record for key, record in value["codes"].items()
+                              if datetime.fromisoformat(record["expires_at"]) > now}
+            return value
+        self._state.update(self._slot, prune)
 
-    def _load(self) -> None:
-        for path in sorted(self._links_dir.glob("*.json")):
-            record = SlackUserLinkRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
-            self._links_by_slack_id[record.slack_user_id] = record
-            self._links_by_user_id[record.user_id] = record
-        for path in sorted(self._codes_dir.glob("*.json")):
-            record = SlackLinkCodeRecord.from_dict(json.loads(path.read_text(encoding="utf-8")))
-            self._codes[record.code] = record
-        self.prune_expired_codes()
+    def _import_legacy(self):
+        existing = self._state.peek(self._slot)
+        if existing is not None:
+            self._validated(existing)
+            self._archive_legacy(existing.get("legacy_sources", []))
+            return
+        snapshot, sources, owners = self._empty(), [], set()
+        for path in sorted((self._root_dir / "links").glob("*.json")):
+            raw = path.read_bytes()
+            link = SlackUserLinkRecord.from_dict(json.loads(raw))
+            if link.user_id in owners or link.slack_user_id in snapshot["links"]:
+                raise ValueError("legacy_slack_binding_conflict")
+            owners.add(link.user_id)
+            snapshot["links"][link.slack_user_id] = link.to_dict()
+            sources.append((path, raw))
+        for path in sorted((self._root_dir / "codes").glob("*.json")):
+            raw = path.read_bytes()
+            record = SlackLinkCodeRecord.from_dict(json.loads(raw))
+            value = record.to_dict()
+            del value["code"]
+            key = self._code_key(record.code)
+            if key in snapshot["codes"] and snapshot["codes"][key] != value:
+                raise ValueError("legacy_slack_code_conflict")
+            snapshot["codes"][key] = value
+            sources.append((path, raw))
+        # The committed snapshot is authoritative. Originals remain recoverable;
+        # subsequent opens never import archived/stale files over current state.
+        snapshot["legacy_sources"] = [{"path": str(path.relative_to(self._root_dir)),
+                                       "sha256": hashlib.sha256(raw).hexdigest()} for path, raw in sources]
+        committed = self._state.update(self._slot, lambda old: old if old is not None else snapshot)
+        self._archive_legacy(committed.get("legacy_sources", []))
 
-    def _persist_link(self, record: SlackUserLinkRecord) -> None:
-        self._links_dir.mkdir(parents=True, exist_ok=True)
-        (self._links_dir / f"{record.slack_user_id}.json").write_text(
-            json.dumps(record.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+    def _archive_legacy(self, receipts):
+        for receipt in receipts:
+            relative = Path(receipt["path"])
+            if relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("invalid_slack_import_receipt")
+            path = self._root_dir / relative
+            target = self._root_dir / "legacy-imported" / relative
+            if not path.exists():
+                if not target.exists() or hashlib.sha256(target.read_bytes()).hexdigest() != receipt["sha256"]:
+                    raise ValueError("legacy_slack_archive_missing")
+                continue
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != receipt["sha256"]:
+                raise ValueError("legacy_slack_source_changed")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                if target.read_bytes() != raw:
+                    raise ValueError("legacy_slack_archive_conflict")
+                path.unlink()
+            else:
+                path.replace(target)
 
-    def _persist_code(self, record: SlackLinkCodeRecord) -> None:
-        self._codes_dir.mkdir(parents=True, exist_ok=True)
-        (self._codes_dir / f"{record.code}.json").write_text(
-            json.dumps(record.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
-
-    def _delete_code(self, code: str) -> None:
-        try:
-            (self._codes_dir / f"{code}.json").unlink()
-        except FileNotFoundError:
-            pass
+    def close(self):
+        self._finalizer()
