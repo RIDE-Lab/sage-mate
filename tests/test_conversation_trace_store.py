@@ -124,6 +124,7 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
     store = ConversationTraceStore(db_path)
     monkeypatch.setattr(api_module, "get_conversation_trace_store", lambda: store)
     monkeypatch.setattr(api_module, "STREAM_CHAT_ANSWER", True)
+    monkeypatch.setattr(api_module.workflow_event_broker, "_state_provider", lambda: guest_identity_store._state)
 
     async def fake_answer(
         request,

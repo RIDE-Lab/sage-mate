@@ -9239,6 +9239,16 @@ class DigitalTwinService:
 
         should_background = self._settings.post_answer_background and trace_callback is not None
 
+        # The durable turn is itself a delivery boundary: rejected output must
+        # not enter canonical memory or retryable post-answer intents. Apply the
+        # same public gate before preparing either, preserving its normalized
+        # text as the one answer source. The outer boundary still validates the
+        # final response assembled after post-answer projections.
+        response = self._deliver_chat_response(request, response)
+        context.answer = response.answer
+        if context.prepared_memory_record is not None:
+            context.prepared_memory_record = replace(context.prepared_memory_record, answer=response.answer)
+
         # Preparation is private: it does not write memory or emit a successful
         # commit trace. The final response and task are part of the same commit.
         await asyncio.to_thread(MemoryPrepareStage(support).execute, context)

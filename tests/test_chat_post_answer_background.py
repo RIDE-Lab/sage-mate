@@ -145,6 +145,54 @@ class _FastLLMClient:
         return self._answer
 
 
+@pytest.mark.parametrize("background", [True, False])
+def test_delivery_rejection_prevents_durable_turn(tmp_path, monkeypatch, background):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _FastLLMClient()
+    runtime = service._get_post_answer_runtime()
+    traces = []
+
+    def reject(*args, **kwargs):
+        raise ValueError("injected delivery rejection")
+
+    monkeypatch.setattr(service, "_deliver_chat_response", reject)
+
+    async def run():
+        try:
+            with pytest.raises(ValueError, match="injected delivery rejection"):
+                await service.answer(ChatRequest(student_name="Alice", question="给我一些下一步建议。"),
+                                     trace_callback=traces.append if background else None)
+            assert service._conversation_store.list_records() == []
+            assert runtime._service._thread is None
+            assert not any(step.key == "memory_persist" for step in traces)
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
+def test_delivery_normalization_is_canonical_for_memory_and_work(tmp_path, monkeypatch):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _FastLLMClient()
+    original_gate = service._deliver_chat_response
+
+    def normalize(request, response):
+        return original_gate(request, response.model_copy(update={"answer": "规范化后的完整回答。"}))
+
+    monkeypatch.setattr(service, "_deliver_chat_response", normalize)
+
+    async def run():
+        try:
+            response = await service.answer(ChatRequest(student_name="Alice", question="给我一些下一步建议。"))
+            record = service._conversation_store.get_record(response.exchange_id)
+            task = service._get_post_answer_runtime().journal.read(response.exchange_id)["tasks"]["post_answer"]["payload"]
+            assert response.answer == record.answer == task["record"]["answer"] == task["response"]["answer"] == "规范化后的完整回答。"
+        finally:
+            await service.aclose()
+
+    asyncio.run(run())
+
+
 def test_owned_answer_keeps_memory_profiles_recent_context_and_digest_together(tmp_path):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
         context_digest_dir=tmp_path / "digests",
