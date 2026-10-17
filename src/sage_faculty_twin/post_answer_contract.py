@@ -1,0 +1,86 @@
+"""Versioned data boundary for post-answer work, never a replay of the chat DAG.
+
+Only the enumerated post-answer inputs cross this boundary. Executable stage
+ports, prompts, credentials, booking state and request-local Slack history are
+not task inputs. The already validated response is the immutable answer source.
+"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from .memory_store import ConversationMemoryHit, ConversationMemoryRecord, ProfileMemoryRecord
+from .models import AvailabilitySchedule, ChatRequest, ChatResponse, InteractionIntent
+
+
+class PostAnswerTask(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    task_kind: Literal["post_answer"] = "post_answer"
+    request_id: str = Field(min_length=1)
+    request: ChatRequest
+    response: ChatResponse
+    record: ConversationMemoryRecord | None = None
+    interaction_intent: InteractionIntent | None = None
+    memory_hits: list[ConversationMemoryHit] = Field(default_factory=list)
+    recent_session_context: str = ""
+    profile_snapshot: list[ProfileMemoryRecord] = Field(default_factory=list)
+    availability: AvailabilitySchedule
+    evaluate_memory: bool
+    evaluated_at: datetime
+    skip_profile: bool = False
+    skip_follow_up: bool = False
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if self.request_id != self.request_id.strip():
+            raise ValueError("post_answer_request_id_not_trimmed")
+        if not self.response.conversation_id:
+            raise ValueError("post_answer_missing_conversation")
+        if self.request.slack_channel_context is not None:
+            raise ValueError("post_answer_ephemeral_slack_context_forbidden")
+        if self.request.conversation_id not in (None, self.response.conversation_id):
+            raise ValueError("post_answer_conversation_conflict")
+        if self.evaluated_at.tzinfo is None or self.evaluated_at.utcoffset() is None:
+            raise ValueError("post_answer_evaluation_time_must_be_aware")
+        if self.record is not None:
+            if (self.record.memory_id != self.request_id
+                    or self.response.exchange_id != self.request_id
+                    or self.record.conversation_id != self.response.conversation_id
+                    or self.record.question != self.request.question
+                    or self.record.student_name != self.request.student_name
+                    or self.record.student_email != self.request.student_email
+                    or self.record.workflow_action != self.response.workflow_action
+                    or self.record.answer != self.response.answer):
+                raise ValueError("post_answer_record_identity_conflict")
+        elif self.response.exchange_id is not None or self.response.memory_write_back:
+            raise ValueError("post_answer_missing_committed_record")
+        return self
+
+    @classmethod
+    def capture(cls, *, request_id, request, response, availability,
+                evaluate_memory, record=None, interaction_intent=None,
+                memory_hits=(), recent_session_context="", profile_snapshot=(),
+                skip_profile=False, skip_follow_up=False, evaluated_at=None):
+        # Use the request's explicit serialization policy, then detach every
+        # nested object through JSON before handing it to a durable worker.
+        task = cls(
+            request_id=request_id, request=ChatRequest.model_validate(request.model_dump(mode="json")),
+            response=response, availability=availability, evaluate_memory=evaluate_memory,
+            record=record, interaction_intent=interaction_intent, memory_hits=list(memory_hits),
+            recent_session_context=recent_session_context, profile_snapshot=list(profile_snapshot),
+            skip_profile=skip_profile, skip_follow_up=skip_follow_up,
+            evaluated_at=evaluated_at or datetime.now(UTC),
+        )
+        return cls.model_validate_json(task.model_dump_json())
+
+    def journal_inputs(self):
+        """Inputs to SAGE WorkJournal.commit; no alternative persistence layer."""
+        # Nested Pydantic/dataclass values can be mutated despite frozen=True.
+        # Revalidate at the actual persistence boundary, not just at capture.
+        snapshot = type(self).model_validate_json(self.model_dump_json()).model_dump(mode="json")
+        return {"result": snapshot["response"], "tasks": {"post_answer": snapshot}}
