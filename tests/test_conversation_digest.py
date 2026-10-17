@@ -31,6 +31,7 @@ def support(tmp_path):
     obj._digest_store = ConversationDigestStore(tmp_path / "digests")
     memory = NeuroMemConversationStore.__new__(NeuroMemConversationStore)
     memory._records = {}
+    memory._durable_memory = None
     memory._memory_write_lock = RLock()
     obj._conversation_store = memory
     yield obj

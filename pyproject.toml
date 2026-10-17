@@ -32,8 +32,8 @@ dependencies = [
   "uvicorn>=0.30.0,<1.0.0",
   "cloudpickle>=2.2",
   "tavily-python>=0.5.0",
-  "isage @ git+https://github.com/RIDE-Lab/SAGE.git@bee1218766f52cb1e084bccbc898935ae2f65dfe",
-  "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@f394afd1aee4939df31da38eca2b1fd5d6e2dd04",
+  "isage @ git+https://github.com/RIDE-Lab/SAGE.git@72fe1d04bc61e80e91b41e83fc27390661440153",
+  "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@baff6c38ac7360dc5862124fa2239a2ff8e825bf",
   "isage-anns>=0.2.0",
 ]
 

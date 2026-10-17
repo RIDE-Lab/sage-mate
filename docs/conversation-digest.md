@@ -46,5 +46,8 @@ Mock model tests prove transport inputs, not semantic output quality. Worker
 tests additionally cover restart recovery, failure after destination commit,
 captured-policy stability, nonblocking answer delivery and completion ordering.
 Deployment rebuild, capacity-aware generation and browser acceptance remain
-separate rollout gates. Source snapshots currently use the local memory
-read view; multi-process refresh and paginated large-history access are pending.
+separate rollout gates. Source snapshots use NeuroMem's read-only canonical
+record API rather than the local cache or model reconstruction. This covers
+committed data whose acknowledgement was lost before local publication.
+Paginated large-history access and general multi-process search-view refresh
+are still pending.

@@ -564,11 +564,22 @@ class NeuroMemConversationStore:
             web_search_hits=[hit.model_copy(deep=True) for hit in (web_search_hits or [])],
         )
 
-    def persist_exchange(self, record: ConversationMemoryRecord, *, work_commit=None) -> ConversationMemoryRecord:
-        with self._memory_write_lock:
-            return self._persist_exchange_locked(record, work_commit=work_commit)
+    @property
+    def state_store(self):
+        """Shared SAGE state owned by this memory store, not by work adapters."""
+        return self._memory_state_runtime
 
-    def _persist_exchange_locked(self, record: ConversationMemoryRecord, *, work_commit=None) -> ConversationMemoryRecord:
+    def persist_exchange(self, record: ConversationMemoryRecord, *, commit_work=None) -> ConversationMemoryRecord:
+        """Publish a local view only after destination and optional work commit.
+
+        commit_work receives pure NeuroMem mutations and must admit them through
+        SAGE WorkService on state_store. Hold the memory lock through publication
+        so local worker reads cannot overtake the successful commit acknowledgement.
+        """
+        with self._memory_write_lock:
+            return self._persist_exchange_locked(record, commit_work=commit_work)
+
+    def _persist_exchange_locked(self, record: ConversationMemoryRecord, *, commit_work=None) -> ConversationMemoryRecord:
         """Persist the supplied identity/time, never regenerate them during replay.
 
         Stable input is a prerequisite, not a claim of exactly-once collection
@@ -579,14 +590,14 @@ class NeuroMemConversationStore:
         existing = self._records.get(record.memory_id)
         if existing is not None and existing.to_dict() != record.to_dict():
             raise ValueError("conversation_memory_identity_conflict")
-        if work_commit is not None and self._durable_memory is None:
-            raise RuntimeError("atomic_work_commit_requires_durable_neural_memory")
-        if existing is not None and self._durable_memory is not None and work_commit is None:
+        if commit_work is not None and self._durable_memory is None:
+            raise RuntimeError("atomic_commit_work_requires_durable_neural_memory")
+        if existing is not None and self._durable_memory is not None and commit_work is None:
             return existing
-        if work_commit is None:
+        if commit_work is None:
             self._store_conversation_entry(record)
         else:
-            self._store_conversation_entry(record, work_commit=work_commit)
+            self._store_conversation_entry(record, commit_work=commit_work)
         if existing is not None and self._durable_memory is not None:
             return existing
         if self._durable_memory is None:
@@ -783,7 +794,9 @@ class NeuroMemConversationStore:
     def list_conversation_records(self, conversation_id: str) -> list[ConversationMemoryRecord]:
         """Detached complete chronological snapshot for provenance-aware derivation."""
         with self._memory_write_lock:
-            records = [record for record in self._records.values()
+            source = (self._decode_conversation_records(self._durable_memory.read_records().values())
+                      if self._durable_memory is not None else list(self._records.values()))
+            records = [record for record in source
                        if record.conversation_id == conversation_id]
             return [ConversationMemoryRecord.from_dict(record.to_dict())
                     for record in sorted(records, key=lambda item: (item.created_at, item.memory_id))]
@@ -1448,8 +1461,16 @@ class NeuroMemConversationStore:
         self._load_profiles_from_collection()
 
     def _load_records_from_collection(self) -> None:
-        for data_id in self._conversation_collection.storage.keys():
-            payload = self._conversation_collection.storage.get(data_id)
+        payloads = (self._conversation_collection.storage.get(key)
+                    for key in self._conversation_collection.storage.keys())
+        for record in self._decode_conversation_records(payloads):
+            self._records[record.memory_id] = record
+            self._append_conversation_timeline(record)
+
+    @staticmethod
+    def _decode_conversation_records(payloads):
+        records = []
+        for payload in payloads:
             metadata = dict((payload or {}).get("metadata") or {})
             if str(metadata.get("entry_kind") or "") != "conversation_record":
                 continue
@@ -1459,8 +1480,8 @@ class NeuroMemConversationStore:
                     "Conversation memory snapshot entry is missing record_payload metadata."
                 )
             record = ConversationMemoryRecord.from_dict(record_payload)
-            self._records[record.memory_id] = record
-            self._append_conversation_timeline(record)
+            records.append(record)
+        return records
 
     def _load_profiles_from_collection(self) -> None:
         for data_id in self._profile_collection.storage.keys():
@@ -1828,28 +1849,16 @@ class NeuroMemConversationStore:
             updated_at=profile.updated_at.timestamp(),
         )
 
-    def _store_conversation_entry(self, record: ConversationMemoryRecord, *, work_commit=None) -> None:
+    def _store_conversation_entry(self, record: ConversationMemoryRecord, *, commit_work=None) -> None:
         entry = self._build_conversation_memory_entry(record)
         if self._durable_memory is not None:
             entries = [entry, *self._build_attachment_memory_entries(record)]
             payloads = [{"text": item.text, "metadata": item.metadata} for item in entries]
-            if work_commit is None:
+            if commit_work is None:
                 self._durable_memory.insert_batch_once(f"exchange:{record.memory_id}", payloads)
             else:
-                # Both mutations execute inside SAGE's one backend transaction.
-                # Do not invoke either destination's storage methods here.
-                from sage.runtime.work_journal import PreparedWorkCommit
-
-                if not isinstance(work_commit, PreparedWorkCommit):
-                    raise TypeError("invalid_prepared_work_commit")
                 neural = self._durable_memory.prepare_batch_once(f"exchange:{record.memory_id}", payloads)
-                self._memory_state_runtime.update_many(
-                    [neural.slot, work_commit.slot],
-                    lambda values: {
-                        neural.slot: neural.transform(values[neural.slot]),
-                        work_commit.slot: work_commit.transform(values[work_commit.slot]),
-                    },
-                )
+                commit_work({neural.slot: neural.transform})
             self._conversation_collection = self._durable_memory.load()
             return
         self._insert_collection_entry(self._conversation_collection, entry)

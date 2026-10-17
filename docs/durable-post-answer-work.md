@@ -47,14 +47,20 @@ items. No production cutover is implied by repository tests or a merge to main.
 
 ## Same-store commit integration
 
-The memory storage boundary now supports
-`persist_exchange(record, work_commit=prepared_work_commit)`. It composes a
-NeuroMem prepared batch (including complete attachments and the training receipt)
-with the SAGE journal mutation in the memory state runtime's single transaction.
-The read view/history is published only after commit. Replay of an already
-visible exchange still validates and commits the supplied journal intent; it
-does not bypass that intent or repeat training. Non-durable collection modes
-reject this operation instead of silently falling back to separate writes.
+`PostAnswerRuntime(state=memory.state_store, ...)` borrows the memory owner's
+SAGE store; shutdown drains its worker but does not close borrowed state.
+`submit_turn(task, memory)` rejects a different store before writes, takes one
+detached admission snapshot for both the memory record and task, and admits a
+NeuroMem prepared batch (including attachments and training receipt) through
+SAGE WorkService's atomic destination-mutation API. The old direct prepared-
+journal callback path has been removed. SAGE owns transaction/admission/startup.
+
+The memory adapter holds its write lock through commit and read-view publication.
+Local derivation reads take this lock and decode committed canonical NeuroMem
+records, not a possibly stale cache. This also handles a committed transaction
+whose acknowledgement was lost before local publication. Replay still validates
+the journal intent and does not repeat training. Non-durable collection modes
+reject combined admission rather than falling back to separate writes.
 
 The HTTP workflow does **not yet call this combined boundary**. Its existing
 post-answer journal is in a separate file. Service cutover must reconcile task
