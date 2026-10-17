@@ -273,6 +273,20 @@ enumeration remains a scalability gate. Positive-feedback knowledge writeback is
 still a separate synchronous effect, not a durable replay-safe intent; feedback
 and knowledge are **not** an atomic unit yet. No online migration is implied.
 
+The feedback store now accepts a stable `operation_id` and a `commit_work`
+adapter. It supplies a pure destination mutation to the existing SAGE
+WorkJournal/WorkService transaction on the **same** state store. Immutable
+operation receipts preserve the original feedback response (including creation
+time) after lost acknowledgements or later feedback edits. Reusing an operation
+ID with different feedback fails; replay never rolls the latest feedback back.
+Tests prove feedback and task admission roll back together, including journal
+conflicts. The HTTP path does not yet use this hook, so this is a qualified
+admission prerequisite, not a completed durable knowledge-writeback workflow.
+Receipt retention remains an explicit capacity gate.
+Admission qualification: 9 feedback/provenance tests passed, and the full Twin
+suite passed 1379 tests with 31 existing skips (227.90 s, existing identity-eval
+exclusion retained). These tests do not establish HTTP consumer integration.
+
 Feedback knowledge candidates now require an explicit per-source URL in the saved
 answer; title/token overlap and an unrelated hit do not authorize another source.
 All cited hits are considered, not only the first two. Candidates contain the
@@ -283,9 +297,10 @@ candidate version; repeat feedback preserves curator edits and review decisions,
 and changed source material creates another review candidate. The display title
 may be shortened to the UI limit, but the full title remains in evidence content.
 Existing legacy candidates are not rewritten or deleted automatically; they need
-an audited privacy/migration review. This policy is not a claim of cross-process
-atomicity for the existing knowledge JSON store. Canonical SAGE knowledge state,
-replay-safe projections and atomic feedback/task admission remain required.
+an audited privacy/migration review. Knowledge now uses its canonical SAGE-backed
+catalog and replay-safe projections, not JSON authority. Joining feedback and
+task admission in the HTTP path, then recovering the cross-store knowledge
+effect through that task, remains required; no cross-store atomicity is claimed.
 
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover

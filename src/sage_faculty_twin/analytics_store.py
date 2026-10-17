@@ -7,6 +7,7 @@ import re
 from collections import Counter
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
+from uuid import uuid4
 
 from .config import AppSettings
 from .memory_store import ConversationMemoryRecord, NeuroMemConversationStore
@@ -126,9 +127,23 @@ class ConversationAnalyticsStore:
         resolved: bool | None,
         needs_human_followup: bool,
         issue_summary: str | None,
+        operation_id: str | None = None,
+        commit_work=None,
     ) -> ConversationFeedbackRecord:
+        """Commit feedback, optionally joining SAGE work on this same state store.
+
+        An operation receipt preserves its original response across lost
+        acknowledgements and later feedback edits. commit_work must atomically
+        apply the supplied pure mutations with its task on this state store.
+        No external work may run inside the mutation.
+        """
         if self._conversation_store.get_canonical_record(exchange_id) is None:
             raise KeyError(exchange_id)
+
+        operation_id = uuid4().hex if operation_id is None else operation_id
+        if (not isinstance(operation_id, str) or not operation_id
+                or operation_id != operation_id.strip()):
+            raise ValueError("invalid_feedback_operation_id")
 
         now = datetime.now(UTC)
         feedback = ConversationFeedbackRecord(
@@ -140,17 +155,36 @@ class ConversationAnalyticsStore:
             created_at=now,
             updated_at=now,
         )
+        identity = feedback.to_dict()
+        del identity["created_at"], identity["updated_at"]
+        fingerprint = hashlib.sha256(json.dumps(
+            identity, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+
         def apply(value):
             state = self._collection(value)
+            receipts = state.setdefault("receipts", {})
+            receipt = receipts.get(operation_id)
+            if receipt is not None:
+                if receipt["fingerprint"] != fingerprint:
+                    raise ValueError("feedback_operation_conflict")
+                return state
             payload = feedback.to_dict()
             existing = state["records"].get(exchange_id)
             if existing is not None:
                 payload["created_at"] = existing["created_at"]
             state["records"][exchange_id] = payload
+            receipts[operation_id] = {"fingerprint": fingerprint, "feedback": payload}
             return state
 
-        state = self._state.update(self._slot, apply)
-        return ConversationFeedbackRecord.from_dict(state["records"][exchange_id])
+        if commit_work is None:
+            state = self._state.update(self._slot, apply)
+        else:
+            commit_work({self._slot: apply})
+            state = self._collection(self._state.peek(self._slot))
+        receipt = state.get("receipts", {}).get(operation_id)
+        if receipt is None or receipt["fingerprint"] != fingerprint:
+            raise RuntimeError("feedback_admission_not_committed")
+        return ConversationFeedbackRecord.from_dict(receipt["feedback"])
 
     def get_feedback(self, exchange_id: str) -> ConversationFeedbackRecord | None:
         payload = self._collection(self._state.peek(self._slot))["records"].get(exchange_id)

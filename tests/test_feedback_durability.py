@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.work_journal import WorkJournal
 
 from sage_faculty_twin.analytics_store import ConversationAnalyticsStore, ConversationFeedbackRecord
 
@@ -104,3 +105,64 @@ def test_unknown_source_never_creates_feedback(stores):
     with pytest.raises(KeyError):
         submit(store)
     assert store.count_feedback() == 0
+
+
+def admit(store, journal, operation="feedback-one", rating="up"):
+    return store.submit_feedback(
+        exchange_id="turn", rating=rating, resolved=None,
+        needs_human_followup=False, issue_summary=None, operation_id=operation,
+        commit_work=lambda mutations: journal.commit(
+            operation, result={"accepted": True},
+            tasks={"knowledge": {"sources": [{"title": "source-only"}]}}, mutations=mutations))
+
+
+def test_feedback_and_work_rollback_as_one_transaction(stores, monkeypatch):
+    _, memory, store = stores
+    journal = WorkJournal(memory.state_store, namespace="test-feedback-work")
+    original = memory.state_store.update_many
+    def fail(slots, transform, **kwargs):
+        def transformed_then_fail(values):
+            transform(values)
+            raise OSError("before transaction commit")
+        return original(slots, transformed_then_fail, **kwargs)
+    with monkeypatch.context() as patch:
+        patch.setattr(memory.state_store, "update_many", fail)
+        with pytest.raises(OSError, match="before transaction commit"):
+            admit(store, journal)
+    assert store.get_feedback("turn") is None
+    assert journal.read("feedback-one") is None
+    saved = admit(store, journal)
+    assert saved.rating == "up"
+    assert journal.read("feedback-one")["tasks"]["knowledge"]["status"] == "pending"
+
+
+def test_lost_ack_replay_returns_original_without_reverting_later_feedback(stores, monkeypatch):
+    settings, memory, store = stores
+    journal = WorkJournal(memory.state_store, namespace="test-feedback-work")
+    original = memory.state_store.update_many
+    def lost_ack(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OSError("acknowledgement lost")
+    with monkeypatch.context() as patch:
+        patch.setattr(memory.state_store, "update_many", lost_ack)
+        with pytest.raises(OSError, match="acknowledgement lost"):
+            admit(store, journal)
+    first = store.get_feedback("turn")
+    latest = admit(store, journal, operation="feedback-two", rating="down")
+    reopened = ConversationAnalyticsStore(settings, memory)
+    replayed = admit(reopened, journal)
+    assert replayed == first
+    assert reopened.get_feedback("turn") == latest
+    assert replayed.created_at == latest.created_at
+    with pytest.raises(ValueError, match="feedback_operation_conflict"):
+        admit(reopened, journal, rating="down")
+    assert reopened.get_feedback("turn") == latest
+
+
+def test_journal_conflict_rolls_back_feedback_mutation(stores):
+    _, memory, store = stores
+    journal = WorkJournal(memory.state_store, namespace="test-feedback-work")
+    journal.commit("feedback-one", result={"different": True}, tasks={})
+    with pytest.raises(ValueError, match="journal_commit_conflict"):
+        admit(store, journal)
+    assert store.get_feedback("turn") is None
