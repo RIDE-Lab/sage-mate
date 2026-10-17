@@ -7675,6 +7675,9 @@ async function repairHistoricalCitationCards(root) {
         const sourceUrl = card.dataset.citationUrl ||
             (/^Wiki[:：]/i.test(header?.textContent || '') ? header.getAttribute('href') : null);
         if (!sourceUrl) {
+            // Keep the saved snapshot, but do not present unverifiable legacy
+            // fragments as current evidence. Modern non-Wiki cards are intact.
+            if (!card.dataset.citationFormat || card.dataset.citationFormat === 'unresolved') detail.hidden = true;
             if (card.dataset.citationFormat) continue;
             const notice = document.createElement('p');
             notice.textContent = '旧引用未保存可核验的来源链接，无法自动恢复完整原文。';

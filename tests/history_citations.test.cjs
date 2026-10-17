@@ -19,7 +19,7 @@ async function run(status, hasLink=true, headerText='Wiki: Source') {
   await sandbox.repairHistoricalCitationCards(root);
   assert.equal(root.answer, answer);
   if (hasLink && headerText === 'Wiki: Source') assert.ok(removedLegacyNotice);
-  if (!hasLink || headerText !== 'Wiki: Source') { assert.equal(calls,0); assert.equal(card.dataset.citationFormat,'unresolved'); }
+  if (!hasLink || headerText !== 'Wiki: Source') { assert.equal(calls,0); assert.equal(card.dataset.citationFormat,'unresolved'); assert.equal(detail.hidden,true); }
   else if (status === 'restored') { assert.ok(detail.innerHTML.includes('Tail')); assert.equal(card.dataset.citationFormat,'restored-current'); await sandbox.repairHistoricalCitationCards(root); assert.equal(calls,2); assert.equal(detail.hidden,false); status='unavailable'; await sandbox.repairHistoricalCitationCards(root); assert.equal(detail.hidden,true); assert.equal(card.dataset.citationFormat,'unavailable'); }
   else { assert.equal(card.dataset.citationFormat,'unavailable'); assert.ok(detail.textContent.includes('无法恢复')); }
 }
