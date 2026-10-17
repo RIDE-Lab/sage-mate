@@ -125,6 +125,52 @@ def test_durable_neural_failure_rolls_back_collection_and_history(tmp_path, monk
     assert len(reopened.list_records()) == 1
 
 
+def test_legacy_json_duplicate_is_archived_losslessly(tmp_path):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory", conversation_memory_index_type="segment")
+    store = NeuroMemConversationStore(settings)
+    record = store.add_exchange(ChatRequest(student_name="Alice", question="original question"),
+        conversation_id="legacy", answer="complete answer", workflow_action="answer",
+        interaction_domain=None, knowledge_hit_count=0, booking_result=None)
+    path = settings.conversation_memory_dir / "records" / "original.json"
+    path.parent.mkdir(exist_ok=True)
+    original = json.dumps(record.to_dict(), ensure_ascii=False, indent=4).encode()
+    path.write_bytes(original)
+    state = store._durable_memory.load().export_state()
+    assert not store._migrate_legacy_disk_layout()
+    assert not path.exists()
+    assert (settings.conversation_memory_dir / "legacy-imported/records/original.json").read_bytes() == original
+    assert store._durable_memory.load().export_state() == state
+
+
+@pytest.mark.parametrize("conflict", ["record", "archive", "invalid"])
+def test_legacy_preflight_failure_preserves_all_sources(tmp_path, conflict):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory", conversation_memory_index_type="segment")
+    store = NeuroMemConversationStore(settings)
+    record = store.add_exchange(ChatRequest(student_name="Alice", question="original question"),
+        conversation_id="legacy", answer="complete answer", workflow_action="answer",
+        interaction_domain=None, knowledge_hit_count=0, booking_result=None)
+    path = settings.conversation_memory_dir / "records" / "z-original.json"
+    path.parent.mkdir(exist_ok=True)
+    payload = record.to_dict()
+    if conflict == "record":
+        payload["answer"] = "different answer"
+    path.write_text("invalid JSON" if conflict == "invalid" else json.dumps(payload), encoding="utf-8")
+    new_record = dict(record.to_dict(), memory_id="new-record")
+    earlier = path.parent / "a-new.json"
+    earlier.write_text(json.dumps(new_record), encoding="utf-8")
+    if conflict == "archive":
+        archive = settings.conversation_memory_dir / "legacy-imported/records/z-original.json"
+        archive.parent.mkdir(parents=True)
+        archive.write_text("different original bytes", encoding="utf-8")
+    original = path.read_bytes()
+    state = store._durable_memory.load().export_state()
+    with pytest.raises(ValueError):
+        store._migrate_legacy_disk_layout()
+    assert path.read_bytes() == original and earlier.exists()
+    assert store._durable_memory.load().export_state() == state
+    assert store.get_record("new-record") is None
+
+
 def test_legacy_records_migrate_without_losing_history_or_retraining_on_restart(tmp_path):
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
                            conversation_memory_index_type="segment",

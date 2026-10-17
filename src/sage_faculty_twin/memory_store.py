@@ -1542,43 +1542,56 @@ class NeuroMemConversationStore:
 
     def _migrate_legacy_disk_layout(self) -> bool:
         migrated = False
-        imported_paths = []
-        for path in self._legacy_conversation_record_paths():
-            payload = self._read_json_file(path)
-            if payload is None:
-                continue
-            try:
-                record = ConversationMemoryRecord.from_dict(payload)
-            except Exception:
-                continue
-            if record.memory_id not in self._records:
-                self._records[record.memory_id] = record
-                self._prepend_conversation_timeline(record)
-                self._store_conversation_entry(record)
-                migrated = True
-            imported_paths.append(path)
+        imports = []
+        seen = {"record": dict(self._records), "profile": dict(self._profiles)}
+        # Validate the whole input set before modifying either collection. A
+        # colliding ID is not proof the original document has been preserved.
+        for kind, paths, model, id_field in (
+            ("record", self._legacy_conversation_record_paths(), ConversationMemoryRecord, "memory_id"),
+            ("profile", self._legacy_profile_record_paths(), ProfileMemoryRecord, "profile_id"),
+        ):
+            for path in paths:
+                payload = self._read_json_file(path)
+                if payload is None:
+                    raise ValueError("legacy_memory_document_invalid")
+                item = model.from_dict(payload)
+                key = getattr(item, id_field)
+                existing = seen[kind].get(key)
+                if existing is not None and existing.to_dict() != item.to_dict():
+                    raise ValueError("legacy_memory_identity_conflict")
+                seen[kind][key] = item
+                target = self._base_dir / "legacy-imported" / path.relative_to(self._base_dir)
+                original = path.read_bytes()
+                if target.exists() and target.read_bytes() != original:
+                    raise ValueError("legacy_memory_archive_conflict")
+                imports.append((kind, path, target, item, original))
 
-        for path in self._legacy_profile_record_paths():
-            payload = self._read_json_file(path)
-            if payload is None:
-                continue
-            try:
-                profile = ProfileMemoryRecord.from_dict(payload)
-            except Exception:
-                continue
-            if profile.profile_id not in self._profiles:
-                self._profiles[profile.profile_id] = profile
-                self._store_profile_entry(profile)
+        for kind, _, _, item, _ in imports:
+            if kind == "record" and item.memory_id not in self._records:
+                self._store_conversation_entry(item)
+                self._records[item.memory_id] = item
+                self._prepend_conversation_timeline(item)
                 migrated = True
-            imported_paths.append(path)
+            elif kind == "profile" and item.profile_id not in self._profiles:
+                self._store_profile_entry(item)
+                self._profiles[item.profile_id] = item
+                migrated = True
 
         if migrated:
             self._persist_collection(
                 self._conversation_collection, self._conversation_collection_dir
             )
             self._persist_collection(self._profile_collection, self._profile_collection_dir)
-        for path in imported_paths:
-            path.unlink(missing_ok=True)
+        for _, path, target, _, original in imports:
+            if path.read_bytes() != original:
+                raise ValueError("legacy_memory_source_changed")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists():
+                if target.read_bytes() != original:
+                    raise ValueError("legacy_memory_archive_conflict")
+                path.unlink()  # Identical original bytes remain in the archive.
+            else:
+                path.replace(target)
         self._cleanup_legacy_directory(self._base_dir / "records")
         self._cleanup_legacy_directory(self._base_dir / "profiles")
         return migrated
