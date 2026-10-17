@@ -568,9 +568,10 @@ def _normalize_visitor_profile(value: object) -> object:
 def _resolve_chat_identity(
     raw_request: Request,
     requested_visitor_profile: str | None,
+    refresh: bool = False,
 ) -> ChatIdentity:
     cached = getattr(raw_request.state, "chat_identity", None)
-    if cached is not None:
+    if cached is not None and not refresh:
         if cached.kind != "anonymous":
             return cached
         return ChatIdentity(kind="anonymous", subject_id=cached.subject_id,
@@ -595,6 +596,14 @@ def _resolve_chat_identity(
         return ChatIdentity(kind="account", subject_id=account.user_id,
                             visitor_profile=account.visitor_profile,
                             account_email=account.email, account_name=account.name)
+    if refresh:
+        credential = (getattr(raw_request.state, "new_guest_credential", None)
+                      or raw_request.cookies.get(GUEST_COOKIE_NAME))
+        guest = service._guest_identity_store.authenticate(credential) if credential else None
+        if guest is None:
+            raise HTTPException(status_code=401, detail="当前身份已失效，请重新验证。")
+        return ChatIdentity(kind="anonymous", subject_id=guest.subject_id,
+                            visitor_profile=requested_visitor_profile)
     credential, guest = service._guest_identity_store.resolve(raw_request.cookies.get(GUEST_COOKIE_NAME))
     if credential is not None:
         raw_request.state.new_guest_credential = credential
@@ -1640,8 +1649,25 @@ async def chat_workflow_events(
         if str(exc) != "event_cursor_ahead":
             raise
         raise HTTPException(status_code=409, detail="事件游标超出当前记录，请重新同步。") from exc
+    async def authorized_events():
+        iterator = workflow_event_broker.stream(key, after=after)
+        try:
+            async for frame in iterator:
+                try:
+                    current = await asyncio.to_thread(_resolve_chat_identity, raw_request,
+                                                      identity.visitor_profile, True)
+                    if current != identity:
+                        raise HTTPException(status_code=403, detail="身份权限已变更。")
+                except HTTPException:
+                    # Observer-local denial: never close or alter durable work.
+                    yield 'data: {"type":"error","code":"authority_denied","status":403,"message":"当前身份或权限已失效，请重新验证。"}\n\n'
+                    return
+                yield frame
+        finally:
+            await iterator.aclose()
+
     response = StreamingResponse(
-        workflow_event_broker.stream(key, after=after),
+        authorized_events(),
         media_type="text/event-stream",
         headers={
             **NO_STORE_HEADERS,
