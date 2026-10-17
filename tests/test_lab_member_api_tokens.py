@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 
 import pytest
 from fastapi import HTTPException
@@ -26,9 +27,15 @@ def test_lab_member_api_token_is_hash_only_and_revocable(tmp_path: Path) -> None
     record = (tmp_path / "api_tokens" / f"{identity.token_id}.json").read_text()
     assert token not in record
     assert store.authenticate(token) == identity
+    digest = hashlib.sha256(token.encode()).hexdigest()
+    reopened = LabMemberApiTokenStore(AppSettings(user_account_store_dir=tmp_path))
+    assert reopened.resolve_reference(identity.token_id, digest) == identity
+    assert reopened.authenticate(digest) is None
+    assert reopened.resolve_reference(identity.token_id, "0" * 64) is None
     assert store.authenticate(token + "x") is None
     assert store.revoke(identity.token_id)
     assert store.authenticate(token) is None
+    assert reopened.resolve_reference(identity.token_id, digest) is None
 
 
 def test_bearer_token_grants_only_lab_member_profile(

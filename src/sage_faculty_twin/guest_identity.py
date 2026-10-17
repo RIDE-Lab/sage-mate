@@ -30,7 +30,17 @@ class GuestIdentityStore:
     def authenticate(self, token):
         if not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", token) is None:
             return None
-        value = self._state.peek(self._slot(token))
+        return self.resolve_reference(hashlib.sha256(token.encode()).hexdigest())
+
+    def resolve_reference(self, digest):
+        """Internal job reauthorization, not a public credential endpoint.
+
+        The reference cannot be used as a guest cookie. Always read current
+        state so expiry or removal is observed after admission/restart.
+        """
+        if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            return None
+        value = self._state.peek(("twin-guest-session-v1", "credential", digest))
         if not isinstance(value, dict) or value.get("version") != 1:
             return None
         subject, expiry = value.get("subject_id"), value.get("expires_at")

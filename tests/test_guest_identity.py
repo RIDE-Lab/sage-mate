@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 
 import pytest
@@ -31,9 +32,14 @@ def test_guest_credential_is_hash_only_persistent_and_non_sliding(tmp_path):
     try:
         reopened = GuestIdentityStore(state, ttl_seconds=20, clock=lambda: now[0])
         assert reopened.authenticate(token) == session
+        digest = hashlib.sha256(token.encode()).hexdigest()
+        assert reopened.resolve_reference(digest) == session
+        assert reopened.authenticate(digest) is None
+        assert reopened.resolve_reference("../invalid") is None
         assert reopened.authenticate(token + "x") is None
         now[0] = 120
         assert reopened.authenticate(token) is None
+        assert reopened.resolve_reference(digest) is None
         replacement, other = reopened.resolve(token)
         assert replacement != token and other.subject_id != session.subject_id
     finally:

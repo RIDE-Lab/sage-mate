@@ -76,25 +76,38 @@ class LabMemberApiTokenStore:
         if len(parts) != 4 or "_".join(parts[:2]) != _TOKEN_PREFIX:
             return None
         token_id = parts[2]
+        return self.resolve_reference(token_id, hashlib.sha256(token.encode()).hexdigest())
+
+    def resolve_reference(self, token_id: str, digest: str) -> LabMemberApiTokenIdentity | None:
+        """Internal reauthorization of an admitted job, never bearer authentication.
+
+        Both the original identity and digest must still match the current
+        record. This observes revocation, expiry and credential replacement.
+        Do not expose this method as an HTTP login/authentication endpoint.
+        """
+        if not isinstance(token_id, str) or not isinstance(digest, str):
+            return None
         if len(token_id) != 32 or any(char not in "0123456789abcdef" for char in token_id):
+            return None
+        if len(digest) != 64 or any(char not in "0123456789abcdef" for char in digest):
             return None
         record_path = self._path / f"{token_id}.json"
         try:
             record = json.loads(record_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, ValueError, json.JSONDecodeError):
             return None
-        if record.get("revoked") is True or record.get("visitor_profile") != "lab_member":
+        if (not isinstance(record, dict) or record.get("token_id") != token_id
+                or record.get("revoked") is True or record.get("visitor_profile") != "lab_member"):
             return None
         expected = str(record.get("token_sha256") or "")
-        actual = hashlib.sha256(token.encode()).hexdigest()
-        if not expected or not secrets.compare_digest(expected, actual):
+        if not expected or not secrets.compare_digest(expected, digest):
             return None
         try:
             created_at = datetime.fromisoformat(str(record["created_at"]))
             expires_at = datetime.fromisoformat(str(record["expires_at"]))
         except (KeyError, ValueError):
             return None
-        if expires_at <= datetime.now(UTC):
+        if created_at.tzinfo is None or expires_at.tzinfo is None or expires_at <= datetime.now(UTC):
             return None
         return LabMemberApiTokenIdentity(
             token_id=token_id,
