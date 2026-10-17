@@ -92,6 +92,19 @@ def test_list_chat_conversations_only_returns_exact_email_matches() -> None:
     assert bob_ids == {"conv-bob-only"}
 
 
+def test_history_preserves_long_generated_answer_without_schema_failure():
+    answer = "完整研究分析与引用。" * 4000
+    service = _build_service([_build_record(
+        memory_id="long-answer", conversation_id="long-conversation",
+        student_name="Alice", student_email="alice@example.com",
+        question="请详细分析", answer=answer, offset_seconds=0,
+    )])
+    transcript = service.get_chat_conversation(
+        conversation_id="long-conversation", student_email="alice@example.com")
+    assert transcript.exchanges[0].answer == answer
+    assert transcript.model_dump(mode="json")["exchanges"][0]["answer"] == answer
+
+
 def test_get_chat_conversation_rejects_legacy_anonymous_records_for_logged_in_users() -> None:
     service = _build_service(
         [

@@ -31,6 +31,10 @@ def test_installed_native_runtime_capabilities():
         RequestCancellation, bind_request_cancellation, bootstrap_runtime,
         build_runtime_client, WorkDispatcher, WorkJournal, MemoryEntry, DurableNeuralMemory,
     ))
+    from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+    assert callable(StatefulProcessRuntime.update_many)
+    assert callable(WorkJournal.prepare_commit)
+    assert callable(DurableNeuralMemory.prepare_batch_once)
 
 
 def test_quickstart_replaces_same_version_runtime_and_checks_capabilities():

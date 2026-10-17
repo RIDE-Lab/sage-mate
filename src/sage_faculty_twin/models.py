@@ -277,7 +277,7 @@ class ConversationHistoryListResponse(BaseModel):
 class ConversationExchangeResponse(BaseModel):
     exchange_id: str
     question: str = Field(min_length=1, max_length=4000)
-    answer: str = Field(min_length=1, max_length=12000)
+    answer: str = Field(min_length=1)
     workflow_action: str = Field(min_length=1, max_length=64)
     knowledge_hit_count: int = Field(ge=0)
     created_at: datetime

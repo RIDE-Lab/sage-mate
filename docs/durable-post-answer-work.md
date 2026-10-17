@@ -42,3 +42,26 @@ transactions. A crash between them can leave a stored exchange without a task;
 no successful response is returned before the second commit. Cross-store atomic
 turn recovery and journal retention/admission policies remain separate acceptance
 items. No production cutover is implied by repository tests or a merge to main.
+
+## Same-store commit integration
+
+The memory storage boundary now supports
+`persist_exchange(record, work_commit=prepared_work_commit)`. It composes a
+NeuroMem prepared batch (including complete attachments and the training receipt)
+with the SAGE journal mutation in the memory state runtime's single transaction.
+The read view/history is published only after commit. Replay of an already
+visible exchange still validates and commits the supplied journal intent; it
+does not bypass that intent or repeat training. Non-durable collection modes
+reject this operation instead of silently falling back to separate writes.
+
+The HTTP workflow does **not yet call this combined boundary**. Its existing
+post-answer journal is in a separate file. Service cutover must reconcile task
+capture, journal ownership/migration, artifact drafts and digest updates before
+claiming whole-turn atomicity. The combined boundary tests use the same SAGE
+state runtime for memory and journal; they do not establish cross-file atomicity.
+
+New canonical attachment records preserve full accepted input text, including
+Markdown whitespace. The stored field is still named `text_excerpt` for the
+existing record schema; old already-truncated records are not reconstructible
+from these records alone. History response validation no longer rejects generated
+answers merely because they exceed 12000 characters.

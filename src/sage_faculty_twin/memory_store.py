@@ -582,11 +582,11 @@ class NeuroMemConversationStore:
             web_search_hits=[hit.model_copy(deep=True) for hit in (web_search_hits or [])],
         )
 
-    def persist_exchange(self, record: ConversationMemoryRecord) -> ConversationMemoryRecord:
+    def persist_exchange(self, record: ConversationMemoryRecord, *, work_commit=None) -> ConversationMemoryRecord:
         with self._memory_write_lock:
-            return self._persist_exchange_locked(record)
+            return self._persist_exchange_locked(record, work_commit=work_commit)
 
-    def _persist_exchange_locked(self, record: ConversationMemoryRecord) -> ConversationMemoryRecord:
+    def _persist_exchange_locked(self, record: ConversationMemoryRecord, *, work_commit=None) -> ConversationMemoryRecord:
         """Persist the supplied identity/time, never regenerate them during replay.
 
         Stable input is a prerequisite, not a claim of exactly-once collection
@@ -597,9 +597,16 @@ class NeuroMemConversationStore:
         existing = self._records.get(record.memory_id)
         if existing is not None and existing.to_dict() != record.to_dict():
             raise ValueError("conversation_memory_identity_conflict")
+        if work_commit is not None and self._durable_memory is None:
+            raise RuntimeError("atomic_work_commit_requires_durable_neural_memory")
+        if existing is not None and self._durable_memory is not None and work_commit is None:
+            return existing
+        if work_commit is None:
+            self._store_conversation_entry(record)
+        else:
+            self._store_conversation_entry(record, work_commit=work_commit)
         if existing is not None and self._durable_memory is not None:
             return existing
-        self._store_conversation_entry(record)
         if self._durable_memory is None:
             self._persist_collection(self._conversation_collection, self._conversation_collection_dir)
         # Publish to history only after persistence succeeds. A failed write
@@ -1831,14 +1838,28 @@ class NeuroMemConversationStore:
             updated_at=profile.updated_at.timestamp(),
         )
 
-    def _store_conversation_entry(self, record: ConversationMemoryRecord) -> None:
+    def _store_conversation_entry(self, record: ConversationMemoryRecord, *, work_commit=None) -> None:
         entry = self._build_conversation_memory_entry(record)
         if self._durable_memory is not None:
             entries = [entry, *self._build_attachment_memory_entries(record)]
-            self._durable_memory.insert_batch_once(
-                f"exchange:{record.memory_id}",
-                [{"text": item.text, "metadata": item.metadata} for item in entries],
-            )
+            payloads = [{"text": item.text, "metadata": item.metadata} for item in entries]
+            if work_commit is None:
+                self._durable_memory.insert_batch_once(f"exchange:{record.memory_id}", payloads)
+            else:
+                # Both mutations execute inside SAGE's one backend transaction.
+                # Do not invoke either destination's storage methods here.
+                from sage.runtime.work_journal import PreparedWorkCommit
+
+                if not isinstance(work_commit, PreparedWorkCommit):
+                    raise TypeError("invalid_prepared_work_commit")
+                neural = self._durable_memory.prepare_batch_once(f"exchange:{record.memory_id}", payloads)
+                self._memory_state_runtime.update_many(
+                    [neural.slot, work_commit.slot],
+                    lambda values: {
+                        neural.slot: neural.transform(values[neural.slot]),
+                        work_commit.slot: work_commit.transform(values[work_commit.slot]),
+                    },
+                )
             self._conversation_collection = self._durable_memory.load()
             return
         self._insert_collection_entry(self._conversation_collection, entry)
@@ -2027,8 +2048,10 @@ class NeuroMemConversationStore:
     ) -> list[AttachmentMemoryRecord]:
         records: list[AttachmentMemoryRecord] = []
         for attachment in attachments:
-            excerpt = self._clip_attachment_excerpt(attachment.text_content)
-            if not excerpt:
+            # Canonical evidence must retain full text and Markdown structure.
+            # Retrieval/display summaries must not replace stored source text.
+            excerpt = attachment.text_content
+            if not excerpt.strip():
                 continue
             records.append(
                 AttachmentMemoryRecord(
@@ -2126,12 +2149,6 @@ class NeuroMemConversationStore:
             if len(token) >= 2
         }
         return tokens
-
-    def _clip_attachment_excerpt(self, text: str, limit: int = 1200) -> str:
-        normalized = re.sub(r"\s+", " ", text).strip()
-        if len(normalized) <= limit:
-            return normalized
-        return f"{normalized[: max(limit - 1, 0)].rstrip()}…"
 
     def _format_summary(self, record: ConversationMemoryRecord) -> str:
         timestamp = record.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
