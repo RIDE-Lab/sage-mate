@@ -2343,6 +2343,7 @@ const managedServiceButtons = [
     },
 ].filter(({ element }) => Boolean(element));
 const submittedFeedbackExchangeIds = new Set();
+const feedbackAttempts = new Map();
 
 if (workflowTrace) {
     workflowTrace.addEventListener("click", handleWorkflowTraceToggle);
@@ -8805,12 +8806,53 @@ function attachFeedbackHandlers(container, exchangeId) {
 }
 
 async function submitFeedbackExchange(exchangeId, payload, ui) {
+    const fingerprint = JSON.stringify(payload);
+    let attempt = feedbackAttempts.get(exchangeId);
+    if (attempt?.running) return;
+    if (!attempt || attempt.fingerprint !== fingerprint) {
+        attempt = { fingerprint, requestId: crypto.randomUUID(), operationId: null, running: false };
+        feedbackAttempts.set(exchangeId, attempt);
+    }
+    attempt.running = true;
+    ui.upButton.disabled = true;
+    ui.downButton.disabled = true;
     try {
         ui.status.textContent = "正在提交反馈...";
-        const response = await apiRequest("/chat/feedback", {
-            method: "POST",
-            body: JSON.stringify({ exchange_id: exchangeId, ...payload }),
-        });
+        let response;
+        if (!attempt.operationId) {
+            try {
+                response = await apiRequest("/chat/feedback", {
+                    method: "POST",
+                    body: JSON.stringify({ exchange_id: exchangeId, ...payload, request_id: attempt.requestId }),
+                });
+            } catch (error) {
+                let detail;
+                try { detail = JSON.parse(error.responseBody || "{}").detail; } catch { /* Non-JSON failure. */ }
+                if (error.status !== 503 || detail?.code !== "feedback_knowledge_pending"
+                    || detail.feedback_saved !== true || typeof detail.operation_id !== "string") throw error;
+                attempt.operationId = detail.operation_id;
+            }
+        }
+        // This is delivery polling, not a second knowledge-work executor.
+        // Leaving the rendered message stops polling but never cancels saved work.
+        for (let poll = 0; !response && poll < 30; poll += 1) {
+            if (!ui.container.isConnected || feedbackAttempts.get(exchangeId) !== attempt) return;
+            ui.status.textContent = "反馈已保存，知识写入仍在后台处理中…";
+            const progress = await apiRequest(
+                `/chat/feedback/${encodeURIComponent(attempt.operationId)}?exchange_id=${encodeURIComponent(exchangeId)}`
+            );
+            if (progress.operation_id !== attempt.operationId || progress.feedback?.exchange_id !== exchangeId) {
+                throw new Error("反馈结果标识不一致，请稍后重试查询。");
+            }
+            if (progress.status === "completed") response = progress.feedback;
+            else if (progress.status !== "pending") throw new Error("无法识别反馈处理状态，请稍后重试查询。");
+            if (!response && poll < 29) await new Promise(resolve => globalThis.setTimeout(resolve, 2000));
+        }
+        if (!response) {
+            ui.status.textContent = "反馈已保存，后台尚未完成；再次点击可查询进度，不会重复提交。";
+            return;
+        }
+        if (!ui.container.isConnected || feedbackAttempts.get(exchangeId) !== attempt) return;
         submittedFeedbackExchangeIds.add(response.exchange_id);
         const writeBackCount = Array.isArray(response.knowledge_write_backs)
             ? response.knowledge_write_backs.length
@@ -8822,7 +8864,13 @@ async function submitFeedbackExchange(exchangeId, payload, ui) {
         ui.downButton.disabled = true;
         ui.form?.classList.add("hidden");
     } catch (error) {
-        ui.status.textContent = error.message;
+        ui.status.textContent = attempt.operationId
+            ? `反馈已保存，暂时无法查询结果；再次点击可重试。${error.message}` : error.message;
+    } finally {
+        attempt.running = false;
+        const complete = submittedFeedbackExchangeIds.has(exchangeId);
+        ui.upButton.disabled = complete;
+        ui.downButton.disabled = complete;
     }
 }
 
@@ -10644,6 +10692,8 @@ function handleTopbarActionsClick(event) {
 async function handleAdminLogout() {
     try {
         await apiRequest("/auth/admin/logout", { method: "POST" });
+        feedbackAttempts.clear();
+        submittedFeedbackExchangeIds.clear();
         bookingList.innerHTML = "";
         escalationList.innerHTML = "";
         memoryProfilesSummary.innerHTML = "";
@@ -10684,6 +10734,8 @@ async function handleAdminLogout() {
 async function handleUserLogout() {
     try {
         await apiRequest("/auth/user/logout", { method: "POST" });
+        feedbackAttempts.clear();
+        submittedFeedbackExchangeIds.clear();
         await refreshUserSession();
         closeDrawer();
     } catch (error) {

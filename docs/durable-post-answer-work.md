@@ -309,7 +309,14 @@ hyphen or underscore). Clients retain it across retries of the same feedback.
 The server scopes it to trusted owner plus exchange; the same key with changed
 feedback fails409. Replaying an older operation returns its original feedback
 and result without reverting a newer rating. Omitting it creates a fresh intent.
-Browser retry/pending-state integration and reload recovery remain open gates.
+The browser retains the key for unchanged feedback in the current page, suppresses
+concurrent clicks, recognizes saved/pending503 responses, and polls the owned GET
+without re-posting the feedback. Polling is bounded to30 reads with2-second gaps;
+a later click resumes querying. Removing the message stops polling without
+cancelling server work. Logout clears local attempts and ignores their late
+successes. Page-reload recovery remains an open gate; these in-memory keys are not
+persisted in browser storage. Node tests execute the actual application function;
+rendered browser and live-service acceptance remain separate.
 After a lost destination acknowledgement, an upsert may repeat without replacing
 curator edits. `created` describes the acknowledged attempt, not exactly-once
 execution across stores.
