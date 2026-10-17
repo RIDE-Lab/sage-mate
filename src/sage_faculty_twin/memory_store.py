@@ -563,6 +563,10 @@ class NeuroMemConversationStore:
         return record
 
     def consolidate_profiles(self, record: ConversationMemoryRecord) -> int:
+        with self._memory_write_lock:
+            return self._consolidate_profiles_locked(record)
+
+    def _consolidate_profiles_locked(self, record: ConversationMemoryRecord) -> int:
         started_at = time.time()
         profiles = self._derive_profiles(record)
         for profile in profiles:
@@ -1645,6 +1649,14 @@ class NeuroMemConversationStore:
         ]
 
     def _upsert_profile(self, profile: ProfileMemoryRecord) -> None:
+        existing = self._profiles.get(profile.profile_id)
+        if existing is not None:
+            if existing.updated_at > profile.updated_at:
+                return
+            if existing.updated_at == profile.updated_at:
+                if existing.to_dict() != profile.to_dict():
+                    raise ValueError("profile_revision_conflict")
+                return
         self._profiles[profile.profile_id] = profile
         self._delete_profile_entries(profile.profile_id)
         self._store_profile_entry(profile)

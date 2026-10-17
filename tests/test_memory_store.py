@@ -345,6 +345,23 @@ def test_profile_upsert_replaces_existing_collection_entry(tmp_path: Path) -> No
     assert profiles[0].summary == "该用户最近的主要交流场景是：推理系统选型"
     assert profiles[0].evidence == "Question: 第二次讨论推理系统选型。"
 
+    # A delayed/replayed task must not move the profile revision backwards.
+    reloaded_store._upsert_profile(older)
+    reloaded_store._upsert_profile(newer)
+    assert reloaded_store._profile_collection.size() == 1
+    reloaded_store._persist_collection(
+        reloaded_store._profile_collection, reloaded_store._profile_collection_dir
+    )
+    final_store = NeuroMemConversationStore(settings)
+    assert final_store.list_profiles_for_student(
+        student_name="Alice", student_email="alice@example.com"
+    )[0].to_dict() == newer.to_dict()
+    conflict = ProfileMemoryRecord.from_dict(newer.to_dict())
+    conflict.summary = "conflicting same revision"
+    with pytest.raises(ValueError, match="profile_revision_conflict"):
+        final_store._upsert_profile(conflict)
+    assert final_store._profiles[newer.profile_id].to_dict() == newer.to_dict()
+
 
 def test_store_canonicalizes_duplicate_profile_entries_on_startup(
     tmp_path: Path,
