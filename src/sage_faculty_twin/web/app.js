@@ -10853,15 +10853,33 @@ function formatMessageContent(rawText) {
     });
 
     // ── List grouping ──────────────────────────────────────────────────
-    // Collect consecutive lines starting with "- " or "* " into <ul>,
-    // and consecutive lines starting with "N. " into <ol>.
-    formatted = formatted.replace(/((?:^[-*+] .+$\n?)+)/gm, (block) => {
-        const items = block.trim().split('\n').map(l => `<li>${l.replace(/^[-*+] /, '')}</li>`).join('');
-        return `<ul>${items}</ul>`;
-    });
-    formatted = formatted.replace(/((?:^\d+\. .+$\n?)+)/gm, (block) => {
-        const items = block.trim().split('\n').map(l => `<li>${l.replace(/^\d+\. /, '')}</li>`).join('');
-        return `<ol>${items}</ol>`;
+    // Preserve nesting and mixed ordered/unordered lists. Code was protected
+    // above, so indented list-like code never enters this parser.
+    formatted = formatted.replace(/((?:^[ \t]*(?:[-*+]|\d+\.)[ \t]+.+(?:\n|$))+)/gm, (block) => {
+        const entries = block.trimEnd().split('\n').map(line => {
+            const match = line.match(/^([ \t]*)([-*+]|\d+\.)[ \t]+(.*)$/);
+            return { indent: match[1].replace(/\t/g, '    ').length,
+                type: /^\d/.test(match[2]) ? 'ol' : 'ul', text: match[3] };
+        });
+        let position = 0;
+        const renderLevel = indent => {
+            let html = '', type = null;
+            while (position < entries.length && entries[position].indent >= indent) {
+                const entry = entries[position++];
+                if (entry.type !== type) {
+                    if (type) html += `</${type}>`;
+                    type = entry.type;
+                    html += `<${type}>`;
+                }
+                html += `<li>${entry.text}`;
+                if (position < entries.length && entries[position].indent > indent) {
+                    html += renderLevel(entries[position].indent);
+                }
+                html += '</li>';
+            }
+            return html + (type ? `</${type}>` : '');
+        };
+        return renderLevel(entries[0].indent);
     });
 
     // ── Inline formatting (order matters: ** before *) ─────────────────

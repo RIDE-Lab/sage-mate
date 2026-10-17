@@ -28,3 +28,6 @@ assert.ok(sandbox.formatMessageContent('#### Heading\n\n* first\n+ second').incl
 assert.ok(sandbox.formatMessageContent('* first\n+ second').includes('<li>second</li>'));
 assert.ok(sandbox.buildAnswerBasisItemHtml({label:'Wiki', title:'Test', detail:'# Body', source_url:'https://example.org/wiki'}).includes('data-citation-url="https://example.org/wiki"'));
 assert.ok(sandbox.buildFollowUpActionHtml({label:'Task', title:'Read', detail:'Next'}).includes('follow-up-action'));
+assert.equal(sandbox.formatMessageContent('- Parent\n    * Child\n    * Child two\n- Next'), '<ul><li>Parent<ul><li>Child</li><li>Child two</li></ul></li><li>Next</li></ul>');
+assert.equal(sandbox.formatMessageContent('1. Parent\n    - Child\n        1. Deep\n2. Next'), '<ol><li>Parent<ul><li>Child<ol><li>Deep</li></ol></li></ul></li><li>Next</li></ol>');
+assert.equal(sandbox.formatMessageContent('```text\n- Not a list\n    * Literal\n```'), '<pre>- Not a list\n    * Literal</pre>');
