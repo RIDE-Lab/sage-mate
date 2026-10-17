@@ -25,6 +25,72 @@ def test_contract_rejects_credentials_and_identity_changes():
     assert item.request_id != other.request_id
 
 
+@pytest.mark.parametrize("error, attempts", [(OSError("private detail"), 2), (ValueError("private detail"), 1)])
+def test_failure_is_bounded_durable_and_status_is_owner_scoped(tmp_path, error, attempts):
+    from sage.runtime.work_service import WorkFailedError
+    async def scenario():
+        state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
+        calls = []
+        async def authorize(item):
+            return None
+        async def recover(item):
+            return None
+        async def answer(item):
+            calls.append(item.request_id)
+            raise error
+        async def deliver(*args):
+            pytest.fail("a failed answer must not be delivered as success")
+        item = ingress()
+        workflow = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer,
+                                 deliver=deliver, max_attempts=2, retry_delay=0, poll_interval=0.01)
+        try:
+            await workflow.submit(item)
+            with pytest.raises(WorkFailedError):
+                await workflow.wait(item.request_id, timeout=3)
+            status = await workflow.status(item, item.request_id)
+            assert status["status"] == "failed"
+            assert status["tasks"]["answer"]["attempt"] == attempts
+            assert status["tasks"]["deliver"]["status"] == "blocked"
+            assert "private" not in str(status)
+            other = SlackIngress.model_validate({**item.model_dump(), "user_id": "U2"})
+            assert await workflow.status(other, item.request_id) is None
+            await workflow.submit(item)
+            await asyncio.sleep(0.03)
+            assert calls == [item.request_id] * attempts
+        finally:
+            await workflow.aclose()
+            state.close()
+    asyncio.run(scenario())
+
+
+def test_final_attempt_recovers_committed_answer_after_lost_ack(tmp_path):
+    async def scenario():
+        state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
+        committed, sent = [], []
+        async def authorize(item):
+            return None
+        async def recover(item):
+            return committed[0] if committed else None
+        async def answer(item):
+            committed.append(SlackReply(text="canonical answer"))
+            raise ConnectionError("lost acknowledgement")
+        async def deliver(item, reply):
+            sent.append(reply.text)
+            return {"accepted": True}
+        workflow = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer,
+                                 deliver=deliver, max_attempts=1, poll_interval=0.01)
+        try:
+            item = ingress()
+            await workflow.submit(item)
+            result = await workflow.wait(item.request_id, timeout=3)
+            assert result["tasks"]["answer"]["attempt"] == 1
+            assert sent == ["canonical answer"]
+        finally:
+            await workflow.aclose()
+            state.close()
+    asyncio.run(scenario())
+
+
 def test_delivery_retry_does_not_regenerate_answer_and_duplicate_ingress_is_idempotent(tmp_path):
     async def scenario():
         state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))

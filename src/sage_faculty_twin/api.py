@@ -905,7 +905,8 @@ async def _produce_slack_reply(ingress):
 def _create_slack_workflow(state):
     return SlackWorkflow(state, authorize=_authorize_slack_ingress,
         recover=SlackAnswerRecovery(state, render=_render_slack_reply),
-        answer=_produce_slack_reply, deliver=_deliver_slack_reply)
+        answer=_produce_slack_reply, deliver=_deliver_slack_reply,
+        max_attempts=int(os.environ.get("SLACK_TWIN_MAX_ATTEMPTS", "5")))
 
 
 async def _admit_slack(ingress, *, notice=None):
@@ -1772,12 +1773,30 @@ async def slack_twin_command(
             transport_id=form.get("trigger_id", "").strip(), kind="command", question=question)
     except ValidationError:
         raise HTTPException(status_code=400, detail="Slack request missing valid transport identity.") from None
+    if words[0].lower() == "status":
+        if len(words) != 2 or not re.fullmatch(r"slack-[a-f0-9]{64}", words[1]):
+            return JSONResponse({"response_type": "ephemeral", "text": "用法：`/twin status 请求编号`"})
+        if slack_workflow is None:
+            raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+        status = await slack_workflow.status(ingress, words[1])
+        labels = {"failed": "处理已失败并停止重试，请联系管理员检查；本次请求不会自动重跑。",
+                  "done": "处理完成，Slack 已接受投递（不代表消息已被阅读）。",
+                  "pending": "仍在处理或等待重试。"}
+        text = "未找到当前账号在此会话中的请求。" if status is None else labels[status["status"]]
+        if status is not None:
+            text += "\n" + "；".join(f"{name}: {task['status']}，尝试 {task['attempt']} 次"
+                                      for name, task in status["tasks"].items())
+        return JSONResponse({"response_type": "ephemeral", "text": text})
     await _admit_slack(ingress)
+    current = await slack_workflow.status(ingress, ingress.request_id)
+    if current is not None and current["status"] == "failed":
+        return JSONResponse({"response_type": "ephemeral",
+            "text": f"本次请求已失败并停止重试，不会自动重跑。\n查询详情：`/twin status {ingress.request_id}`"})
     question_preview = question if len(question) <= 80 else f"{question[:77]}..."
     return JSONResponse(
         {
             "response_type": "ephemeral",
-            "text": f"收到，我正在问 twin。\n你问：{question_preview}\n答案会稍后发回这里。",
+            "text": f"收到，我正在问 twin。\n你问：{question_preview}\n答案会稍后发回这里。\n查询进度：`/twin status {ingress.request_id}`",
         }
     )
 

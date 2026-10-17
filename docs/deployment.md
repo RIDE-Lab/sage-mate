@@ -462,8 +462,22 @@ used by model I/O and the SAGE pipeline. Its configured answer timeout also
 reaches synchronous I/O; timeout, task cancellation and answer exceptions invoke
 registered resource closers. This is cooperative cancellation, not forced thread
 termination or a guarantee that an external model server stopped computing.
-The timeout configuration and journal retry policy are unchanged; permanent
-failure classification and bounded retry policy still require qualification.
+The answer timeout configuration is unchanged. Slack now supplies SAGE with a
+failure policy: invalid payloads/permission errors and non-retryable HTTP 4xx
+terminate; other failures retry with exponential delay capped at 60 seconds.
+`SLACK_TWIN_MAX_ATTEMPTS` sets the per-task attempt limit (default 5, positive
+integer). Attempts survive restart; exhausted tasks remain failed, with dependent
+delivery blocked. The final attempt still checks canonical answer recovery after
+an acknowledgement error. No exception body is placed in task status.
+
+Command acknowledgements include `/twin status <request-id>`. Status is signed,
+reauthorizes the caller, and is restricted to the same user/workspace/channel;
+it returns operational metadata only. Replaying a failed command reports its
+failure instead of claiming to start it again. Terminal states require operator
+review; this status command does not requeue or delete work. Proactive failure
+notifications, and a status-entry experience for DM/mention events, remain open.
+Version-3 SAGE records require upgraded consumers; do not downgrade code over
+them. Stop old workers and retain consistent rollback snapshots before rollout.
 
 The signed command/event routes now admit this workflow before acknowledging a
 question. Commands require Slack's `trigger_id`; events require `event_id`.

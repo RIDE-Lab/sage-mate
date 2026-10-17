@@ -127,6 +127,33 @@ def test_normalization_and_owned_memory():
         assert api_module._slack_conversation_owner(*ids) != owner
 
 
+def test_signed_status_reports_terminal_failure_without_new_work_or_cross_channel_disclosure(harness):
+    from sage.runtime.work_service import WorkFailedError
+    harness.fail_delivery = 10
+    body = command()
+    response = harness.client.post("/slack/commands/twin", content=body, headers=signed(body))
+    assert response.status_code == 200
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    request_id = rows[0]["key"]
+    assert request_id in response.json()["text"]
+    with pytest.raises(WorkFailedError):
+        harness.flush()
+    for channel, expected in [("D123", "处理已失败"), ("COTHER", "未找到")]:
+        query = command(text=f"status {request_id}", trigger_id="status-query", channel_id=channel)
+        reply = harness.client.post("/slack/commands/twin", content=query, headers=signed(query))
+        assert reply.status_code == 200
+        assert reply.json()["response_type"] == "ephemeral"
+        assert expected in reply.json()["text"]
+        assert "完整的研究回答" not in reply.json()["text"]
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    assert len(rows) == 1
+    assert rows[0]["value"]["tasks"]["deliver"]["attempt"] == 5
+    assert len(harness.calls) == 1
+    replay = harness.client.post("/slack/commands/twin", content=body, headers=signed(body))
+    assert "已失败并停止重试" in replay.json()["text"]
+    assert "我正在问" not in replay.json()["text"]
+
+
 @pytest.mark.parametrize("stop", ["timeout", "cancel", "error"])
 def test_slack_answer_propagates_deadline_and_interrupts_active_io(harness, monkeypatch, stop):
     from sage_faculty_twin.request_context import (

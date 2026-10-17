@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sage.runtime.async_work_service import AsyncWorkService
 from sage.runtime.event_journal import EventJournal
 from sage.runtime.work_journal import WorkJournal
+from sage.runtime.work_dispatcher import WorkFailure
 
 from .post_answer_contract import DeliveryIntent
 from .models import ChatResponse
@@ -81,7 +82,7 @@ class SlackAnswerRecovery:
 
 
 class SlackWorkflow:
-    def __init__(self, state, *, authorize, recover, answer, deliver, **options):
+    def __init__(self, state, *, authorize, recover, answer, deliver, max_attempts=5, **options):
         """Ports are async. authorize returns denial text or None, never a role cache.
 
         recover must read the canonical answer using ingress.delivery before
@@ -94,10 +95,38 @@ class SlackWorkflow:
         self._state = state
         self._authorize, self._recover = authorize, recover
         self._answer, self._deliver = answer, deliver
+        if type(max_attempts) is not int or max_attempts < 1:
+            raise ValueError("slack_max_attempts_must_be_positive")
+        self._max_attempts = max_attempts
+        self._retry_delay = options.get("retry_delay", 5)
         self._work = AsyncWorkService(self.journal, self._handle,
-                                      **{"max_workers": 2, "poll_interval": 0.05, **options})
+                                      **{"max_workers": 2, "poll_interval": 0.05,
+                                         "failure_policy": self._classify_failure, **options})
         self._start_lock = asyncio.Lock()
         self._started = False
+
+    def _classify_failure(self, lease, error):
+        status = getattr(error, "status_code", getattr(error, "code", None))
+        permanent = isinstance(error, (ValueError, PermissionError)) or (
+            isinstance(status, int) and 400 <= status < 500 and status not in {408, 429}
+        )
+        code = "invalid_request" if permanent else "temporary_failure"
+        if permanent or lease.attempt >= self._max_attempts:
+            return WorkFailure(code if permanent else "retry_exhausted")
+        return WorkFailure(code, min(60, self._retry_delay * 2 ** min(lease.attempt - 1, 10)))
+
+    async def status(self, ingress, request_id):
+        """Owner-scoped operational metadata only; never return a stored prompt."""
+        if await self._authorize(ingress) is not None:
+            return None
+        record = await asyncio.to_thread(self.journal.read, request_id)
+        if record is None or record["result"].get("owner_id") != ingress.owner_id:
+            return None
+        tasks = {name: {key: task[key] for key in ("status", "attempt", "failure_code") if key in task}
+                 for name, task in record["tasks"].items()}
+        failed = any(task["status"] in {"failed", "blocked"} for task in tasks.values())
+        done = all(task["status"] == "done" for task in tasks.values())
+        return {"status": "failed" if failed else "done" if done else "pending", "tasks": tasks}
 
     async def start(self):
         async with self._start_lock:
@@ -168,7 +197,15 @@ class SlackWorkflow:
             else:
                 reply = await self._recover(ingress)
                 if reply is None:
-                    reply = await self._answer(ingress)
+                    try:
+                        reply = await self._answer(ingress)
+                    except Exception:
+                        # A lost acknowledgement can follow a committed answer,
+                        # including on the final allowed attempt. Recover that
+                        # answer before classifying the attempt as failed.
+                        reply = await self._recover(ingress)
+                        if reply is None:
+                            raise
                 reply = SlackReply.model_validate(reply)
             return reply.model_dump(mode="json")
         if lease.task_id != "deliver":
@@ -183,7 +220,7 @@ class SlackWorkflow:
             reply = SlackReply(text=denial) if denial is not None else SlackReply.model_validate(completed["result"])
         receipt = await self._deliver(ingress, reply)
         if not isinstance(receipt, dict) or receipt.get("accepted") is not True:
-            raise ValueError("slack_delivery_requires_accepted_receipt")
+            raise RuntimeError("slack_delivery_requires_accepted_receipt")
         return SlackReceipt.model_validate(receipt).model_dump(mode="json")
 
     async def wait(self, request_id, *, timeout):
