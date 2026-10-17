@@ -39,12 +39,14 @@ def test_bearer_token_grants_only_lab_member_profile(
     token, _ = store.issue(label="portfolio-audit", ttl_seconds=3600)
     monkeypatch.setattr(api_module, "lab_member_api_token_store", store)
 
-    profile = api_module._resolve_effective_chat_visitor_profile(
+    identity = api_module._resolve_chat_identity(
         _request(authorization=f"Bearer {token}"),
         "general_visitor",
     )
 
-    assert profile == "lab_member"
+    assert identity.visitor_profile == "lab_member"
+    assert identity.kind == "api_token"
+    assert identity.account_email is None
 
 
 def test_invalid_bearer_token_is_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -52,7 +54,7 @@ def test_invalid_bearer_token_is_rejected(tmp_path: Path, monkeypatch: pytest.Mo
     monkeypatch.setattr(api_module, "lab_member_api_token_store", store)
 
     with pytest.raises(HTTPException, match="无效或过期") as error:
-        api_module._resolve_effective_chat_visitor_profile(
+        api_module._resolve_chat_identity(
             _request(authorization="Bearer invalid"),
             "lab_member",
         )

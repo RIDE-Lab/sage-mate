@@ -43,6 +43,25 @@ endpoint. Recovered scoring results remain in the journal; the existing in-proce
 operational telemetry projection is not a durable aggregate. Its event-id
 deduplication applies only within the retained telemetry window.
 
+### Trusted HTTP identity prerequisite
+
+The HTTP chat entry resolves one immutable `ChatIdentity` before tracing or
+workflow execution. A bearer token takes precedence over browser cookies; its
+stored role and token ID never imply a personal account. A valid user session
+binds the account ID, name and normalized email from server-side account data;
+a conflicting request email is rejected with 403. Anonymous/expired sessions
+and role-only API tokens cannot write a caller-supplied personal email into the
+chat record. Public profile hints remain non-privileged. JSON and multipart
+requests use the same boundary. Raw credentials are not part of this contract.
+
+This is identity binding, **not yet conversation ownership enforcement**. Names
+and conversation IDs must not become authorization keys. Anonymous contact
+details cannot double as verified history ownership; contact/booking flows need
+an explicit separate policy. Slack uses its existing verified account-link path,
+not HTTP bearer identity. Ownership checks for retrieval, compression, workflow
+events and cancellation, and an authorized resumable result endpoint remain
+required before deployment of the full delivery design.
+
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover
 that saved intent, but client retry identity/resumption is not yet implemented.

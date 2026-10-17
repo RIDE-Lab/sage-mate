@@ -126,6 +126,7 @@ from .models import (
 )
 from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
+from .chat_identity import ChatIdentity
 from .service import (
     DigitalTwinService,
     PromptCapacityError,
@@ -728,10 +729,10 @@ def _normalize_visitor_profile(value: object) -> object:
     return aliases.get(normalized, value)
 
 
-def _resolve_effective_chat_visitor_profile(
+def _resolve_chat_identity(
     raw_request: Request,
     requested_visitor_profile: str | None,
-) -> str | None:
+) -> ChatIdentity:
     authorization = raw_request.headers.get("authorization", "").strip()
     if authorization:
         scheme, _, token = authorization.partition(" ")
@@ -742,24 +743,28 @@ def _resolve_effective_chat_visitor_profile(
         )
         if identity is None:
             raise HTTPException(status_code=401, detail="无效或过期的 API token。")
-        return identity.visitor_profile
+        return ChatIdentity(kind="api_token", subject_id=identity.token_id,
+                            visitor_profile=identity.visitor_profile)
     session_token = raw_request.cookies.get(USER_COOKIE_NAME)
     if not session_token:
         # Public profile hints may tailor course answers, but a client-owned
         # request field must never grant access to team-only knowledge.
-        return (
+        return ChatIdentity(kind="anonymous", subject_id=None, visitor_profile=(
             "general_visitor"
             if requested_visitor_profile == "lab_member"
             else requested_visitor_profile
-        )
+        ))
     user_session = service.get_user_session(session_token)
     if user_session.is_authenticated and user_session.account is not None:
-        return user_session.account.visitor_profile
-    return (
+        account = user_session.account
+        return ChatIdentity(kind="account", subject_id=account.user_id,
+                            visitor_profile=account.visitor_profile,
+                            account_email=account.email, account_name=account.name)
+    return ChatIdentity(kind="anonymous", subject_id=None, visitor_profile=(
         "general_visitor"
         if requested_visitor_profile == "lab_member"
         else requested_visitor_profile
-    )
+    ))
 
 
 def _require_user_account(raw_request: Request):
@@ -2015,20 +2020,12 @@ async def chat(
     )
     if long_deep_request:
         timing.budget_seconds = CHAT_LONG_REQUEST_TIMEOUT_SECONDS
-    effective_visitor_profile = _resolve_effective_chat_visitor_profile(
+    identity = _resolve_chat_identity(
         raw_request,
         payload.visitor_profile,
     )
-    payload = payload.model_copy(
-        update={
-            "visitor_profile": effective_visitor_profile,
-            "answer_max_tokens": (
-                payload.answer_max_tokens
-                if effective_visitor_profile == "lab_member"
-                else None
-            ),
-        }
-    )
+    payload = identity.bind(payload)
+    raw_request.state.chat_identity = identity
     timing.record("request_parse", stage_started)
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     trace_id = secrets.token_hex(16)
