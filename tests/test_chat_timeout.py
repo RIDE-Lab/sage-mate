@@ -24,6 +24,62 @@ from sage_faculty_twin.models import ChatResponse
 client = TestClient(app)
 
 
+def test_completed_answer_does_not_wait_for_disconnect_when_poll_swallows_cancel(monkeypatch):
+    """Python 3.11 wait_for can consume cancellation at poll completion.
+
+    A finished answer must stop the watcher cooperatively, not wait until the
+    browser eventually disconnects. Keep a release path so the old code fails
+    an assertion instead of hanging the test runner.
+    """
+    async def run():
+        polling = asyncio.Event()
+        release = asyncio.Event()
+        original_wait_for = asyncio.wait_for
+
+        async def wait_for_with_completion_race(coro, timeout):
+            if getattr(coro, "__name__", "") != "is_disconnected":
+                return await original_wait_for(coro, timeout)
+            result = await coro
+            try:
+                await release.wait()
+            except asyncio.CancelledError:
+                # Python 3.11 wait_for returns fut.result() when cancellation
+                # arrives after its inner future has completed. Force this
+                # scheduling window instead of relying on a probabilistic race.
+                return result
+            return True
+
+        monkeypatch.setattr(asyncio, "wait_for", wait_for_with_completion_race)
+
+        class Request:
+            headers = {"content-type": "application/json"}
+
+            async def is_disconnected(self):
+                polling.set()
+                # Finish in the same loop turn as service.answer. This makes
+                # wait_for's inner task complete as its outer watcher is
+                # cancelled, the cancellation/completion race in production.
+                return release.is_set()
+
+        async def answer(*args, **kwargs):
+            await polling.wait()
+            return ChatResponse(answer="ready", owner_name="Twin", used_model="test")
+
+        monkeypatch.setattr(service, "answer", answer)
+        task = asyncio.create_task(api_module._run_chat_with_cancellation(
+            Request(), timeout_seconds=1, payload=object(),
+        ))
+        try:
+            done, _ = await asyncio.wait({task}, timeout=0.15)
+            assert task in done, "finished response blocked on cancelled disconnect watcher"
+            assert task.result().answer == "ready"
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(run())
+
+
 @pytest.mark.parametrize('suffix', ['', '?request_id=capacity-regression'])
 def test_prompt_capacity_failure_is_actionable_not_500(monkeypatch, isolated_chat_service, suffix):
     async def fail(*args, **kwargs):

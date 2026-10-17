@@ -313,6 +313,7 @@ def test_answer_question_sync_streams_responses_events_in_order() -> None:
         "prompt_tokens": 9,
         "completion_tokens": 4,
         "total_tokens": 13,
+        "reasoning_tokens": 0,
     }
 
 

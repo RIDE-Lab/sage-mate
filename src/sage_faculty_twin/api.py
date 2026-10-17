@@ -266,13 +266,19 @@ async def _run_chat_with_cancellation(
         "multipart/"
     )
 
+    stop_disconnect_watch = asyncio.Event()
+
     async def _watch_disconnect():
-        while True:
+        while not stop_disconnect_watch.is_set():
             try:
                 disconnected = await asyncio.wait_for(raw_request.is_disconnected(), timeout=0.5)
             except asyncio.TimeoutError:
                 disconnected = False
-            if disconnected:
+            # On Python 3.11 wait_for can consume cancellation when its inner
+            # poll completes concurrently. Cancellation alone is therefore
+            # not a stop signal: otherwise finally waits until the browser
+            # disconnects even though the answer is already ready.
+            if disconnected or stop_disconnect_watch.is_set():
                 return
             await asyncio.sleep(0.25)
 
@@ -307,6 +313,7 @@ async def _run_chat_with_cancellation(
         await asyncio.gather(answer_task, return_exceptions=True)
         raise
     finally:
+        stop_disconnect_watch.set()
         cancellation.cancel()
         if not answer_task.done():
             answer_task.cancel()
