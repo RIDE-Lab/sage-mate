@@ -265,6 +265,9 @@ def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
         real_publish_error(request_id, message)
 
     monkeypatch.setattr(api_module.workflow_event_broker, "publish_error", spy_publish_error)
+    from sage_faculty_twin.chat_identity import ChatIdentity
+    monkeypatch.setattr(api_module, "_resolve_chat_identity", lambda *args:
+                        ChatIdentity("anonymous", "timeout-owner", None))
 
     client.cookies.clear()
 
@@ -280,9 +283,8 @@ def test_chat_with_request_id_publishes_timeout_to_workflow_stream(
     )
 
     assert response.status_code == 504
-    assert any(
-        rid == "test-rid-timeout" and "未完成响应" in msg for rid, msg in published_errors
-    ), published_errors
+    expected_key = api_module._owned_chat_request_key("guest:timeout-owner", "test-rid-timeout")
+    assert any(rid == expected_key and "未完成响应" in msg for rid, msg in published_errors), published_errors
 
 
 def test_chat_returns_retryable_429_when_admission_is_full(
@@ -351,14 +353,17 @@ def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing(tmp_
     assert any(step["key"] == "memory_persist" for step in response.json()["workflow_trace"])
 
 
-def test_explicit_cancel_endpoint_interrupts_registered_request() -> None:
+def test_explicit_cancel_endpoint_interrupts_registered_request(monkeypatch) -> None:
+    from sage_faculty_twin.chat_identity import ChatIdentity
+    monkeypatch.setattr(api_module, "_resolve_chat_identity", lambda *args: ChatIdentity("anonymous", "cancel-owner", None))
     request_id = "cancel-endpoint-test"
     controller = RequestCancellationController()
-    api_module.active_chat_request_registry.register(request_id, controller)
+    key = api_module._owned_chat_request_key("guest:cancel-owner", request_id)
+    api_module.active_chat_request_registry.register(key, controller)
 
     response = client.post("/chat/cancel", params={"request_id": request_id})
 
     assert response.status_code == 200
     assert response.json() == {"request_id": request_id, "cancelled": True}
     assert controller.is_cancelled()
-    assert api_module.active_chat_request_registry.cancel(request_id) is False
+    assert api_module.active_chat_request_registry.cancel(key) is False

@@ -256,9 +256,11 @@ async def _run_chat_with_cancellation(
     checked before every retry and post-answer branch.
     """
     cancellation = RequestCancellationController(diagnostics=runtime_diagnostics)
+    request_payload = answer_kwargs.pop("payload")
+    if active_request_id:
+        active_request_id = _owned_chat_request_key(request_payload.owner_id, active_request_id)
     if active_request_id:
         active_chat_request_registry.register(active_request_id, cancellation)
-    request_payload = answer_kwargs.pop("payload")
 
     async def _run_answer():
         with request_cancellation_scope(cancellation, deadline_at=deadline_at):
@@ -407,6 +409,13 @@ SUPPORTED_CHAT_ATTACHMENT_MEDIA_TYPES = {
     "text/plain",
     "text/x-python",
 }
+
+
+def _owned_chat_request_key(owner_id: str, request_id: str) -> str:
+    """Internal channel identity; public request IDs are not capabilities."""
+    if not owner_id:
+        raise ValueError("chat_request_requires_trusted_owner")
+    return hashlib.sha256(json.dumps([owner_id, request_id], separators=(",", ":")).encode()).hexdigest()
 
 
 class ActiveChatRequestRegistry:
@@ -1840,12 +1849,15 @@ async def get_previous_week_availability_template(
 
 @llm_app.get("/chat/workflow-events", include_in_schema=False)
 async def chat_workflow_events(
+    raw_request: Request,
     request_id: str = Query(min_length=1, max_length=128),
 ) -> StreamingResponse:
-    return StreamingResponse(
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    key = _owned_chat_request_key(identity.owner_id, request_id)
+    response = StreamingResponse(
         workflow_event_broker.stream(
-            request_id,
-            on_disconnect=lambda: active_chat_request_registry.cancel(request_id),
+            key,
+            on_disconnect=lambda: active_chat_request_registry.cancel(key),
         ),
         media_type="text/event-stream",
         headers={
@@ -1854,13 +1866,19 @@ async def chat_workflow_events(
             "X-Accel-Buffering": "no",
         },
     )
+    _deliver_guest_cookie(raw_request, response)
+    return response
 
 
 @llm_app.post("/chat/cancel", include_in_schema=False)
 async def cancel_chat_request(
+    raw_request: Request,
+    response: Response,
     request_id: str = Query(min_length=1, max_length=128),
 ) -> dict[str, bool | str]:
-    cancelled = active_chat_request_registry.cancel(request_id)
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    cancelled = active_chat_request_registry.cancel(_owned_chat_request_key(identity.owner_id, request_id))
+    _deliver_guest_cookie(raw_request, response)
     return {"request_id": request_id, "cancelled": cancelled}
 
 
@@ -2175,17 +2193,19 @@ async def chat(
     # ``publish_complete`` until that result is observed so the SSE
     # consumer still sees the post-answer trace steps before the stream
     # closes.
+    event_key = _owned_chat_request_key(payload.owner_id, request_id)
+
     def _publish_complete_and_finish_trace() -> None:
         trace_store.append_event(trace_id, "complete", {})
         trace_store.finish(trace_id, status="completed")
-        workflow_event_broker.publish_complete(request_id)
+        workflow_event_broker.publish_complete(event_key)
 
     answer_complete_gate = _AnswerDoneCompleteGate(_publish_complete_and_finish_trace)
 
     def _publish_trace_step(step: object) -> None:
         step_payload = getattr(step, "model_dump")(mode="json")
         trace_store.append_event(trace_id, "trace-step", step_payload)
-        workflow_event_broker.publish_step(request_id, step)
+        workflow_event_broker.publish_step(event_key, step)
 
     def _on_post_answer_complete() -> None:
         answer_complete_gate.mark_post_answer_complete()
@@ -2218,7 +2238,7 @@ async def chat(
         timing.record("sage_workflow", stage_started)
         _record_error(exc, status="timeout")
         message = "后端在本次请求总预算内未完成响应，请稍后重试。"
-        workflow_event_broker.publish_error(request_id, message)
+        workflow_event_broker.publish_error(event_key, message)
         raise HTTPException(
             status_code=504,
             detail=message,
@@ -2227,12 +2247,12 @@ async def chat(
     except PromptCapacityError as exc:
         _record_error(exc, status="rejected")
         message = "所选完整材料超出当前可安全使用的上下文容量；未截断原文。请分篇提问或缩小材料范围。"
-        workflow_event_broker.publish_error(request_id, message)
+        workflow_event_broker.publish_error(event_key, message)
         raise HTTPException(status_code=413, detail=message,
             headers={"X-Sage-Trace-ID": timing.trace_id}) from exc
     except Exception as exc:
         _record_error(exc)
-        workflow_event_broker.publish_error(request_id, str(exc))
+        workflow_event_broker.publish_error(event_key, str(exc))
         raise
     finally:
         _chat_admission.release()
@@ -2246,7 +2266,7 @@ async def chat(
         # rendered fields (answer_basis, follow_up_actions, etc.) without
         # re-fetching anything.
         try:
-            workflow_event_broker.publish_answer_done(request_id, response)
+            workflow_event_broker.publish_answer_done(event_key, response)
         except Exception:  # pragma: no cover - defensive
             pass
     answer_complete_gate.mark_answer_done()

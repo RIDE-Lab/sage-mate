@@ -1,5 +1,21 @@
 # Durable post-answer work
 
+## Event and cancellation ownership
+
+HTTP workflow-event subscriptions and explicit cancellation resolve the same
+trusted account/token/guest identity as chat. The internal broker/controller key
+is a hash of owner identity and public request ID; publishing and registration
+use that same scope. A guessed or reused public ID cannot subscribe to, replace,
+disconnect-cancel or explicitly cancel another owner's work. New guest credentials
+are delivered on event/cancel responses. Tests cover same-ID cross-owner
+registration, subscription/disconnect and explicit cancellation, alongside timeout
+publication and existing guest/streaming contracts.
+
+This secures the current in-process channel, not durable delivery: its queues,
+subscription replacement and controller ownership still need SAGE-owned replay
+and lifecycle qualification. It does not provide cross-process cancellation or
+event replay after restart, and does not imply production deployment.
+
 ## SageVDB dependency qualification
 
 The base dependency pins `311d65e972fb3cb4e5a2904a4c499a51dafae38d`, which
