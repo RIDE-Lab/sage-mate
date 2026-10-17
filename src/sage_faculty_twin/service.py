@@ -220,6 +220,7 @@ from .models import (
     UnresolvedQuestionItem,
     UserLoginRequest,
     UserRegisterRequest,
+    UserAccountResponse,
     UserSessionResponse,
     WebSearchHit,
     WorkflowReplayReportResponse,
@@ -10489,6 +10490,10 @@ class DigitalTwinService:
         if match:
             return match.group(1).strip()
         return ""
+
+    def get_slack_link_account(self, user_id: str) -> UserAccountResponse | None:
+        """Read current local authorization for a server-issued Slack link."""
+        return self._user_store.get_user_by_id(user_id)
 
     def get_user_session(self, session_token: str | None) -> UserSessionResponse:
         support = self._build_support()

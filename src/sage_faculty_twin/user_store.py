@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -124,8 +125,9 @@ class UserAccountStore:
         self, *, email: str, password: str, invitation_code: str = ""
     ) -> UserAccountResponse:
         normalized_email = self._normalize_email(email)
-        record = self._records_by_email.get(normalized_email)
-        if record is None:
+        cached = self._records_by_email.get(normalized_email)
+        record = self._read_current_record(cached.user_id) if cached is not None else None
+        if record is None or self._normalize_email(record.email) != normalized_email:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="用户邮箱或密码错误。"
             )
@@ -161,8 +163,22 @@ class UserAccountStore:
         return record.to_response()
 
     def get_user_by_id(self, user_id: str) -> UserAccountResponse | None:
-        record = self._records_by_id.get(user_id)
+        record = self._read_current_record(user_id)
         return record.to_response() if record else None
+
+    def _read_current_record(self, user_id: str) -> UserAccountRecord | None:
+        # Session/linked-channel authorization must observe revocation by
+        # another process, not the account snapshot loaded at startup.
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", user_id):
+            return None
+        try:
+            payload = json.loads((self._path / f"{user_id}.json").read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        record = UserAccountRecord.from_dict(payload)
+        if record.user_id != user_id:
+            raise ValueError("account_record_identity_conflict")
+        return record
 
     def count_users(self) -> int:
         return len(self._records_by_id)

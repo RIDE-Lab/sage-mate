@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import json
 import time
+import pytest
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -17,6 +18,33 @@ from sage_faculty_twin.slack_channel_context import SlackChannelContext, SlackHi
 
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def current_accounts_for_transport_fixtures(monkeypatch):
+    # These tests isolate transport behavior. Revocation tests below override
+    # this port; the real disk-backed account store has independent coverage.
+    def account(user_id):
+        link = api_module.slack_link_store.get_link_for_user(user_id)
+        return SimpleNamespace(visitor_profile=link.visitor_profile, email=link.email) if link else None
+    monkeypatch.setattr(api_module.service, "get_slack_link_account", account)
+
+
+@pytest.mark.parametrize("current_role", [None, "general_visitor", "lab_member"])
+def test_slack_binding_uses_current_role_even_for_allowlisted_user(monkeypatch, tmp_path, current_role):
+    store = SlackUserLinkStore(tmp_path)
+    code = store.create_code(user_id="account-id", email="old@example.com", visitor_profile="lab_member")
+    store.consume_code(code.code, slack_user_id="U1")
+    monkeypatch.setattr(api_module, "slack_link_store", store)
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U1"})
+    current = (None if current_role is None else SimpleNamespace(visitor_profile=current_role, email="new@example.com"))
+    monkeypatch.setattr(api_module.service, "get_slack_link_account", lambda _: current)
+    role, email, denial = api_module._resolve_slack_twin_identity("U1")
+    if current_role == "lab_member":
+        assert (role, email, denial) == ("lab_member", "new@example.com", None)
+    else:
+        assert denial is not None
+        assert email is None
 
 
 def _slack_signature(body: bytes, secret: str) -> tuple[str, str]:
