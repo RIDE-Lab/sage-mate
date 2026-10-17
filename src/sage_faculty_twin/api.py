@@ -1780,6 +1780,13 @@ async def public_wiki_questions() -> dict[str, object]:
     return {'questions': service.public_wiki_questions()}
 
 
+@llm_app.get('/wiki/citation')
+async def recover_public_citation(source_url: str = Query(min_length=1, max_length=2048)):
+    if not service.is_initialized():
+        raise HTTPException(status_code=503, detail='知识来源尚未就绪，请稍后重试。')
+    return service.recover_public_citation(source_url)
+
+
 @llm_app.get("/availability", response_model=AvailabilitySchedule)
 async def get_availability(
     _: dict = Depends(require_admin_session),

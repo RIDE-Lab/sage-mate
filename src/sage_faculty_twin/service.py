@@ -11565,6 +11565,25 @@ class DigitalTwinService:
             active_conversations=snapshot.active_conversations,
         )
 
+    def recover_public_citation(self, source_url: str) -> dict[str, str]:
+        """Resolve an exact surviving source identity, never a title/question search.
+
+        public_documents rechecks current ACLs. No remote URL is fetched and
+        no private store is consulted, including for logged-in callers.
+        """
+        key = source_url.split('#', 1)[0].rstrip('/')
+        documents = [document for document in self._knowledge_retriever.public_documents()
+                     if document.metadata.get('wiki_url', '').split('#', 1)[0].rstrip('/') == key
+                     and key]
+        if not documents:
+            return {'status': 'unavailable', 'source_url': source_url}
+        documents.sort(key=lambda document: int(document.metadata.get('wiki_chunk', '1')))
+        return {
+            'status': 'restored', 'source_url': source_url,
+            'content': '\n\n'.join(document.content for document in documents),
+            'notice': '已按当前公开来源恢复完整引用；原回答未改动。内容可能与回答时的版本不同。',
+        }
+
     def public_wiki_questions(self) -> list[dict[str, str]]:
         """Suggest only real public Wiki pages, never private records or model guesses."""
         pages = {}

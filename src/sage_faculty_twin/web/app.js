@@ -7533,6 +7533,13 @@ async function restoreConversationFromHistory(conversationId) {
             hideOnboardingCard();
         }
         hydrateConversationInteractiveState();
+        await repairHistoricalCitationCards(chatStream);
+        if (activeConversationId !== conversationId) return;
+        if (activeConversationId === conversationId) {
+            // Update only the stored markup, not the answer, title or timestamp.
+            entry.html = chatStream.innerHTML;
+            saveConversationHistory();
+        }
         renderConversationHistoryList();
         renderWorkflowTrace([], {
             workflowAction: null,
@@ -7654,6 +7661,40 @@ function restoreHistoryRailState() {
         setHistoryRailCollapsed(globalThis.localStorage?.getItem(HISTORY_RAIL_COLLAPSED_KEY) !== "0");
     } catch {
         setHistoryRailCollapsed(true);
+    }
+}
+
+async function repairHistoricalCitationCards(root) {
+    const cards = [...root.querySelectorAll('.message-basis-item:not([data-citation-format])')];
+    for (const card of cards) {
+        const detail = card.querySelector('.message-basis-detail');
+        if (!detail) continue;
+        // The first source link survived the old preview truncation. Never
+        // infer missing identity from an answer or a fuzzy title match.
+        const sourceUrl = detail.querySelector('a[href]')?.getAttribute('href');
+        if (!sourceUrl) {
+            const notice = document.createElement('p');
+            notice.textContent = '旧引用未保存可核验的来源链接，无法自动恢复完整原文。';
+            card.appendChild(notice);
+            card.dataset.citationFormat = 'unresolved';
+            continue;
+        }
+        try {
+            const result = await apiRequest(`/wiki/citation?source_url=${encodeURIComponent(sourceUrl)}`, { timeoutMs: 10000 });
+            if (!root.contains(card)) return; // User switched conversations.
+            if (result.status === 'restored') {
+                detail.innerHTML = formatMessageContent(result.content);
+                const notice = document.createElement('p');
+                notice.textContent = result.notice;
+                card.appendChild(notice);
+                card.dataset.citationFormat = 'restored-current';
+            } else {
+                detail.textContent = '原来源已移除、不再公开或无法精确定位；无法恢复完整引用。原回答未改动。';
+                card.dataset.citationFormat = 'unavailable';
+            }
+        } catch {
+            // Leave the original snapshot intact and retry on next opening.
+        }
     }
 }
 
@@ -8457,7 +8498,7 @@ function buildFollowUpActionHtml(action) {
         `
         : `<p class="message-basis-detail">${escapeHtml(card.detail)}</p>`;
     return `
-        <article class="message-basis-item">
+        <article class="message-basis-item" data-citation-format="full-markdown-v1">
             <div class="message-basis-head">
                 <span class="message-basis-tag">${escapeHtml(card.label)}</span>
                 ${card.badge ? `<span class="message-basis-source">${escapeHtml(card.badge)}</span>` : ""}
