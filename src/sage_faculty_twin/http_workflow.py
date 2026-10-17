@@ -186,3 +186,24 @@ class HttpWorkflow:
 
     async def aclose(self):
         await self._work.aclose()
+
+    async def cancel(self, *, owner_id, request_id):
+        """Cancel only a transport-verified owner's durable task.
+
+        This port never accepts client-supplied authority. The transport must
+        authenticate the current caller before providing owner_id.
+        """
+        delivery = DeliveryIntent(owner_id=owner_id, request_id=request_id)
+        record = await asyncio.to_thread(self.journal.read, delivery.stream_id)
+        if record is None:
+            return "missing"
+        ingress = HttpIngress.model_validate(record["tasks"]["answer"]["payload"])
+        if ingress.delivery != delivery:
+            raise PermissionError("http_cancel_owner_mismatch")
+        # Preparing an append does not publish it. Its native slot identifies
+        # the canonical stream protected inside SAGE's cancellation transaction.
+        terminal = self.events.prepare_append(delivery.stream_id, event_id="terminal",
+            payload={"type": "error", "code": "request_cancelled"}, terminal=True)
+        return await self._work.cancel(delivery.stream_id, "answer", protect={
+            terminal.slot: lambda old: bool(old and any(event["id"] == "answer_done"
+                                                       for event in old["events"]))})
