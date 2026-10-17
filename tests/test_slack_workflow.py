@@ -248,7 +248,7 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
         try:
             await workflow.start()
             completed = await workflow.wait(item.request_id, timeout=3)
-            assert completed["version"] == 4
+            assert completed["version"] == 5
             assert completed["dependencies"] == {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
             assert completed["settled"] == ["finalize"]
             assert completed["tasks"]["finalize"]["result"] == {"skipped": True}
