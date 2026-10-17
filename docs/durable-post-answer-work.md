@@ -54,6 +54,15 @@ All four new caller tests passed. This remains pre-production qualification.
 
 ## Canonical knowledge cutover
 
+Feedback service cutover regression passed 1386 tests with 31 existing skips
+(242.25 s; the existing identity-evaluation exclusion remains). An additional
+18-test feedback qualification includes actual service reconstruction after
+pending admission and after committed-but-lost acknowledgements. Fresh service
+startup consumes persisted source tasks without invoking the feedback producer;
+private question, answer and owner data are absent from knowledge candidates.
+This is scratch CPU/segment/hash qualification, not a process-kill test or an
+online deployment/answer-quality result.
+
 All knowledge backends now use SageVDB's `VersionedDocumentCatalog` for canonical
 documents. The local, NeuroMem and native/Sage-ANNS indexes remain derived views,
 not alternate document authorities. `KnowledgeCatalog` is a schema adapter over

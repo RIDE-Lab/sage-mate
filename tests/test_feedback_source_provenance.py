@@ -5,7 +5,7 @@ import pytest
 from fastapi import HTTPException
 
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.models import ChatFeedbackRequest, WebSearchHit
+from sage_faculty_twin.models import ChatFeedbackRequest, ChatRequest, WebSearchHit
 from sage_faculty_twin.service import DigitalTwinService
 from test_memory_ownership import persist
 
@@ -142,3 +142,66 @@ def test_feedback_timeout_retains_work_and_shutdown_drains_before_catalog(tmp_pa
     assert order == ["write", "catalog-close"]
     with pytest.raises(RuntimeError, match="feedback_service_closing"):
         service._get_feedback_runtime()
+
+
+@pytest.mark.parametrize("lost_ack", [False, True])
+def test_service_startup_recovers_admitted_feedback_without_request_replay(tmp_path, monkeypatch, lost_ack):
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge", conversation_memory_dir=tmp_path / "memory",
+        knowledge_backend="local", conversation_memory_index_type="segment",
+        feedback_writeback_wait_seconds=0)
+    service = DigitalTwinService(settings)
+    record = service._conversation_store.add_exchange(
+        ChatRequest(student_name="Owner", owner_id="account:owner", question="PRIVATE_QUESTION"),
+        conversation_id="recovery", answer="PRIVATE_ANSWER [source](https://example.org/recovery)",
+        workflow_action="answer", interaction_domain="research", knowledge_hit_count=0,
+        booking_result=None, web_search_hits=[WebSearchHit(
+            title="Public source", url="https://example.org/recovery", snippet="Public evidence")])
+    runtime = service._get_feedback_runtime()
+    admitted = []
+    original_commit = runtime.journal.commit
+
+    def commit(operation, **kwargs):
+        result = original_commit(operation, **kwargs)
+        admitted.append(operation)
+        if lost_ack:
+            raise RuntimeError("commit acknowledgement lost")
+        return result
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(runtime.journal, "commit", commit)
+            patch.setattr(runtime._service, "start", lambda: None)
+            with pytest.raises(RuntimeError if lost_ack else HTTPException):
+                service.submit_chat_feedback(
+                    ChatFeedbackRequest(exchange_id=record.memory_id, rating="up"),
+                    owner_id=record.owner_id)
+        assert len(admitted) == 1
+        assert service.list_knowledge() == []
+        assert service._analytics_store.get_feedback(record.memory_id).rating == "up"
+    finally:
+        asyncio.run(service.aclose())
+
+    # Reconstruct the actual service and reopen both canonical destinations.
+    # Recovery has only saved source tasks, not a producer/request callback.
+    recovered = DigitalTwinService(settings)
+    try:
+        def forbidden(*args, **kwargs):
+            raise AssertionError("recovery must not replay the feedback producer")
+        monkeypatch.setattr(recovered, "submit_chat_feedback", forbidden)
+        recovered.start_background_work()
+        result = recovered._get_feedback_runtime().wait(admitted[0], timeout=3)
+        assert len(result) == 1
+        documents = recovered.list_knowledge()
+        assert len(documents) == 1
+        content = documents[0].model_dump_json()
+        assert "Public evidence" in content
+        assert "PRIVATE_QUESTION" not in content
+        assert "PRIVATE_ANSWER" not in content
+        assert "account:owner" not in content
+        assert recovered._analytics_store.get_feedback(record.memory_id).rating == "up"
+        recovered.start_background_work()
+        assert recovered._get_feedback_runtime().wait(admitted[0], timeout=0) == result
+        assert len(recovered.list_knowledge()) == 1
+    finally:
+        asyncio.run(recovered.aclose())
