@@ -670,10 +670,8 @@ def test_sage_anns_changed_content_rebuilds_stale_index(
     )
     pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
     old_generation = pointer.read_text(encoding="ascii")
-    document_path = settings.knowledge_base_dir / f"{record.document_id}.json"
-    document = json.loads(document_path.read_text(encoding="utf-8"))
-    document["content"] = "beta changed"
-    document_path.write_text(json.dumps(document), encoding="utf-8")
+    first.update_document(record.document_id, KnowledgeDocumentCreate(
+        title="First", content="beta changed", source_name="changed-note"), rebuild_indexes=False)
 
     calls: list[int] = []
     original = LocalKnowledgeStore._embed_documents

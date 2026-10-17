@@ -9,11 +9,13 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from functools import wraps
 from uuid import uuid4
 
 import httpx
 
 from .config import AppSettings
+from .knowledge_catalog import KnowledgeCatalog
 from .source_ownership import SOURCE_OWNERSHIP
 from .models import (
     KnowledgeDocumentCreate,
@@ -288,11 +290,23 @@ class NeuromemBgeEmbedder:
         return array
 
 
+def _knowledge_locked(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._mutation_lock:
+            return method(self, *args, **kwargs)
+    return wrapped
+
+
 class LocalKnowledgeStore:
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
         self._base_dir = settings.knowledge_base_dir
         self._base_dir.mkdir(parents=True, exist_ok=True)
+        self._mutation_lock = threading.RLock()
+        self._catalog = KnowledgeCatalog(self._base_dir, namespace=settings.knowledge_namespace)
+        self._catalog_revision = -1
+        self._indexed_catalog_revision = -1
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
         self._backend = settings.knowledge_backend.lower()
         self._sagevdb = None
@@ -330,11 +344,9 @@ class LocalKnowledgeStore:
         self._link_expansion_enabled = settings.knowledge_link_expansion_enabled
         self._load_documents_from_disk()
         self._rebuild_link_graph()
-        if self._backend == "sagevdb":
-            self._initialize_sagevdb()
-        elif self._backend == "neuromem":
-            self._initialize_neuromem()
+        self._rebuild_backend_indexes()
 
+    @_knowledge_locked
     def add_document(
         self,
         payload: KnowledgeDocumentCreate,
@@ -342,6 +354,7 @@ class LocalKnowledgeStore:
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
         self._check_source_namespace(payload.source_name)
+        self._refresh_documents()
         record = KnowledgeDocumentRecord(
             document_id=str(uuid4()),
             title=payload.title,
@@ -351,19 +364,14 @@ class LocalKnowledgeStore:
             metadata=_normalize_knowledge_metadata(payload),
             created_at=datetime.now(UTC),
         )
-        target_path = self._base_dir / f"{record.document_id}.json"
-        # Defensive: re-create the directory in case it was wiped at runtime.
-        self._base_dir.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(record.model_dump_json(indent=2), encoding="utf-8")
-        self._documents[record.document_id] = record
-        if self._backend == "sagevdb":
-            self._add_to_sagevdb(record, rebuild_index=rebuild_indexes)
-        elif self._backend == "neuromem" and rebuild_indexes:
-            self._add_to_neuromem(record)
+        self._commit_documents({record.document_id: record})
+        if rebuild_indexes:
+            self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
         return record
 
+    @_knowledge_locked
     def upsert_document(
         self,
         payload: KnowledgeDocumentCreate,
@@ -372,6 +380,7 @@ class LocalKnowledgeStore:
         preserve_existing: bool = False,
     ) -> tuple[KnowledgeDocumentRecord, bool]:
         self._check_source_namespace(payload.source_name)
+        self._refresh_documents()
         existing = self._find_document_by_source_name(payload.source_name)
         if existing is None:
             return self.add_document(payload, rebuild_indexes=rebuild_indexes), True
@@ -400,21 +409,14 @@ class LocalKnowledgeStore:
             metadata=normalized_metadata,
             created_at=existing.created_at,
         )
-        target_path = self._base_dir / f"{updated_record.document_id}.json"
-        # Defensive: re-create the directory in case it was wiped at runtime.
-        self._base_dir.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(updated_record.model_dump_json(indent=2), encoding="utf-8")
-        self._documents[updated_record.document_id] = updated_record
-        self._remove_duplicate_documents_for_source(
-            payload.source_name,
-            keep_document_id=updated_record.document_id,
-        )
+        self._commit_record_and_duplicates(updated_record)
         if rebuild_indexes:
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
         return updated_record, False
 
+    @_knowledge_locked
     def update_document(
         self,
         document_id: str,
@@ -423,6 +425,7 @@ class LocalKnowledgeStore:
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
         self._check_source_namespace(payload.source_name)
+        self._refresh_documents()
         existing = self._documents.get(document_id)
         if existing is None:
             raise KeyError(document_id)
@@ -436,24 +439,18 @@ class LocalKnowledgeStore:
             metadata=_normalize_knowledge_metadata(payload),
             created_at=existing.created_at,
         )
-        target_path = self._base_dir / f"{updated_record.document_id}.json"
-        # Defensive: re-create the directory in case it was wiped at runtime.
-        self._base_dir.mkdir(parents=True, exist_ok=True)
-        target_path.write_text(updated_record.model_dump_json(indent=2), encoding="utf-8")
-        self._documents[updated_record.document_id] = updated_record
-        self._remove_duplicate_documents_for_source(
-            payload.source_name,
-            keep_document_id=updated_record.document_id,
-            persist=True,
-        )
+        self._commit_record_and_duplicates(updated_record)
         if rebuild_indexes:
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
         return updated_record
 
+    @_knowledge_locked
     def list_documents(self) -> list[KnowledgeDocumentRecord]:
-        return sorted(self._documents.values(), key=lambda item: item.created_at)
+        self._refresh_documents()
+        return [item.model_copy(deep=True) for item in
+                sorted(self._documents.values(), key=lambda item: item.created_at)]
 
     def _check_source_namespace(self, source_name: str | None) -> None:
         namespace = self._settings.knowledge_namespace
@@ -463,8 +460,11 @@ class LocalKnowledgeStore:
         if namespace == 'private' and (is_wiki or source_name in SOURCE_OWNERSHIP):
             raise ValueError('Wiki-owned sources belong in the independent Wiki index, not the private KB')
 
+    @_knowledge_locked
     def get_document(self, document_id: str) -> KnowledgeDocumentRecord | None:
-        return self._documents.get(document_id)
+        self._refresh_documents()
+        record = self._documents.get(document_id)
+        return record.model_copy(deep=True) if record is not None else None
 
     def get_visible_document(
         self, document_id: str, *, visitor_profile: str | None = None,
@@ -478,22 +478,20 @@ class LocalKnowledgeStore:
             return None
         return document
 
+    @_knowledge_locked
     def delete_documents(
         self,
         document_ids: list[str],
         *,
         rebuild_indexes: bool = True,
     ) -> int:
-        removed = 0
-        for document_id in {item for item in document_ids if item}:
-            record = self._documents.pop(document_id, None)
-            if record is None:
-                continue
-            target_path = self._base_dir / f"{document_id}.json"
-            if target_path.exists():
-                target_path.unlink()
-            self._document_id_to_vector_id.pop(document_id, None)
-            removed += 1
+        self._refresh_documents()
+        changes = {key: None for key in set(document_ids) if key in self._documents}
+        removed = len(changes)
+        if changes:
+            self._commit_documents(changes)
+            for key in changes:
+                self._document_id_to_vector_id.pop(key, None)
 
         if removed and rebuild_indexes:
             self._rebuild_backend_indexes()
@@ -502,10 +500,13 @@ class LocalKnowledgeStore:
             self._clear_search_cache()
         return removed
 
+    @_knowledge_locked
     def rebuild_indexes(self) -> None:
+        self._refresh_documents()
         self._rebuild_backend_indexes()
         self._clear_search_cache()
 
+    @_knowledge_locked
     def search(
         self,
         query: str,
@@ -514,6 +515,9 @@ class LocalKnowledgeStore:
         visitor_profile: str | None = None,
         admin_role: str | None = None,
     ) -> list[KnowledgeSearchHit]:
+        self._refresh_documents()
+        if self._indexed_catalog_revision != self._catalog_revision:
+            self._rebuild_backend_indexes()
         cache_key = self._search_cache_key(query, top_k, visitor_profile, admin_role)
         cached = self._get_cached_search(cache_key)
         if cached is not None:
@@ -648,7 +652,9 @@ class LocalKnowledgeStore:
         with self._search_cache_lock:
             self._search_cache.clear()
 
+    @_knowledge_locked
     def count_documents(self) -> int:
+        self._refresh_documents()
         return len(self._documents)
 
     def indexed_document_count(self) -> int:
@@ -688,8 +694,9 @@ class LocalKnowledgeStore:
         return self._backend
 
     def _load_documents_from_disk(self) -> None:
-        for path in sorted(self._base_dir.glob("*.json")):
-            document = KnowledgeDocumentRecord.model_validate_json(path.read_text(encoding="utf-8"))
+        def decode(payload):
+            document = KnowledgeDocumentRecord.model_validate(payload)
+            self._check_source_namespace(document.source_name)
             if not document.metadata:
                 document = document.model_copy(
                     update={
@@ -700,8 +707,28 @@ class LocalKnowledgeStore:
                         )
                     }
                 )
-            self._documents[document.document_id] = document
+            return document
+        self._catalog.import_legacy(decode)
+        self._refresh_documents()
         self._deduplicate_loaded_documents()
+
+    def _refresh_documents(self):
+        revision, documents = self._catalog.snapshot()
+        if revision != self._catalog_revision:
+            self._documents = documents
+            self._clear_search_cache()
+            self._rebuild_link_graph()
+            self._catalog_revision = revision
+
+    def _commit_documents(self, changes):
+        self._catalog.commit(changes, expected_revision=self._catalog_revision)
+        self._refresh_documents()
+
+    def _commit_record_and_duplicates(self, record):
+        changes = {item.document_id: None for item in self._find_documents_by_source_name(record.source_name)
+                   if item.document_id != record.document_id}
+        changes[record.document_id] = record
+        self._commit_documents(changes)
 
     def _find_document_by_source_name(
         self, source_name: str | None
@@ -726,36 +753,30 @@ class LocalKnowledgeStore:
             document.source_name for document in self._documents.values() if document.source_name
         }
         for source_name in source_names:
-            self._remove_duplicate_documents_for_source(source_name, persist=True)
+            self._remove_duplicate_documents_for_source(source_name)
 
     def _remove_duplicate_documents_for_source(
         self,
         source_name: str | None,
         *,
         keep_document_id: str | None = None,
-        persist: bool = False,
     ) -> int:
         matches = self._find_documents_by_source_name(source_name)
         if len(matches) <= 1:
             return 0
 
         canonical_document_id = keep_document_id or matches[0].document_id
-        removed = 0
-        for document in matches:
-            if document.document_id == canonical_document_id:
-                continue
-            self._documents.pop(document.document_id, None)
-            target_path = self._base_dir / f"{document.document_id}.json"
-            if persist and target_path.exists():
-                target_path.unlink()
-            removed += 1
-        return removed
+        changes = {document.document_id: None for document in matches
+                   if document.document_id != canonical_document_id}
+        self._commit_documents(changes)
+        return len(changes)
 
     def _rebuild_backend_indexes(self) -> None:
         if self._backend == "sagevdb":
             self._initialize_sagevdb()
         elif self._backend == "neuromem":
             self._initialize_neuromem()
+        self._indexed_catalog_revision = self._catalog_revision
 
     def _normalize_sagevdb_backend(self) -> str:
         backend = (
@@ -1232,29 +1253,6 @@ class LocalKnowledgeStore:
             self._document_id_to_vector_id[document.document_id] = int(vector_id)
 
         self._sagevdb.build_index(self._np.stack(vectors), metadata=metadata_batch)
-
-    def _add_to_sagevdb(
-        self, document: KnowledgeDocumentRecord, rebuild_index: bool = True
-    ) -> None:
-        if self._sagevdb is None:
-            return
-
-        if self._uses_sagevdb_anns_backend():
-            if rebuild_index:
-                self._initialize_sagevdb()
-            return
-
-        if self._sagevdb_persistence is not None:
-            if rebuild_index:
-                self._initialize_sagevdb()
-            return
-
-        vector = self._embed_text(self._compose_retrieval_text(document))
-        vector_id = self._sagevdb.add(vector.tolist())
-        self._document_id_to_vector_id[document.document_id] = int(vector_id)
-        self._sagevdb.set_metadata(int(vector_id), self._document_metadata(document))
-        if rebuild_index:
-            self._sagevdb.build_index()
 
     def _search_sagevdb(
         self,

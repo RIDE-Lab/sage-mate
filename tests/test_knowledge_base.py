@@ -148,7 +148,7 @@ def test_knowledge_store_caches_searches_and_invalidates_on_write(tmp_path: Path
     assert after_write[0].title == "Specific GPU access policy"
 
 
-def test_knowledge_store_upsert_noop_preserves_created_at_and_file(tmp_path: Path) -> None:
+def test_knowledge_store_upsert_noop_preserves_created_at_and_canonical_revision(tmp_path: Path) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path)
     store = LocalKnowledgeStore(settings)
 
@@ -159,16 +159,17 @@ def test_knowledge_store_upsert_noop_preserves_created_at_and_file(tmp_path: Pat
         source_name="owner-note",
     )
     created = store.add_document(payload, rebuild_indexes=False)
-    target = tmp_path / f"{created.document_id}.json"
-    before_content = target.read_text(encoding="utf-8")
+    before_content = store._catalog.catalog.snapshot()
+    before_tasks = store._catalog.journal.records()
 
     upserted, inserted = store.upsert_document(payload, rebuild_indexes=False)
-    after_content = target.read_text(encoding="utf-8")
+    after_content = store._catalog.catalog.snapshot()
 
     assert inserted is False
     assert upserted.document_id == created.document_id
     assert upserted.created_at == created.created_at
     assert after_content == before_content
+    assert store._catalog.journal.records() == before_tasks
 
 
 def test_knowledge_store_derives_and_returns_explicit_metadata(tmp_path: Path) -> None:

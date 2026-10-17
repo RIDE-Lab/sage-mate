@@ -2,7 +2,7 @@
 
 ## SageVDB dependency qualification
 
-Both VDB extras pin `9d933f78c35e7caf2f754ab8c869559730b1190e`, which
+The base dependency pins `9d933f78c35e7caf2f754ab8c869559730b1190e`, which
 provides `VersionedDocumentCatalog`, revision-fenced index generations and
 `rebuild_from_catalog`. An exact Git archive was built offline on A100 after
 Git transport/DNS prevented network builds; no shared Git/network configuration
@@ -13,8 +13,43 @@ venv's site-packages, and all 48 catalog/native-persistence/recovery tests passe
 without source overlays. That venv exposes system packages, so this is not a
 clean-room dependency-resolution test. The version number remains 0.2.0.12;
 commit and wheel hash, not the version string alone, identify this qualification.
-This dependency update does not yet migrate Twin's canonical knowledge JSON,
-activate the durable indexing workflow, or change the production environment.
+The installed-package qualification does not imply a production cutover.
+
+## Canonical knowledge cutover
+
+All knowledge backends now use SageVDB's `VersionedDocumentCatalog` for canonical
+documents. The local, NeuroMem and native/Sage-ANNS indexes remain derived views,
+not alternate document authorities. `KnowledgeCatalog` is a schema adapter over
+SageVDB/SAGE, not a new transaction or worker implementation. Every mutation
+atomically commits document versions/tombstones and a SAGE `knowledge_index`
+intent. Competing revisions fail rather than silently overwrite concurrent edits.
+Public Wiki and private knowledge retain separate directories and namespaces.
+
+For a legacy directory `/runtime/knowledge`, canonical state is stored in the
+sibling `/runtime/.knowledge.knowledge-state.sqlite3`, including its SQLite WAL
+and SHM sidecars while open. Keep this database with the dataset during backup,
+restore or relocation; the legacy directory alone is no longer a complete backup.
+Use a consistent SQLite backup or stopped writers, not a live database-only copy.
+Removing rebuildable JSON/index directories does not remove canonical records.
+Removing or replacing the canonical database causes reads/writes to fail, never to acknowledge
+data saved only in an unlinked database handle.
+
+Legacy JSON import records content-hash receipts in the same transaction as the
+documents and indexing intent, then moves originals to `legacy-imported/` for
+recovery/audit. Repeated import cannot overwrite newer canonical edits; changed
+legacy inputs or conflicting IDs fail explicitly. New writes never create JSON.
+Imports obey the same Wiki/private source-ownership checks as new writes; a
+misclassified legacy source is retained for review, not silently admitted.
+Source-name deduplication creates tombstones without deleting archived originals.
+Reads refresh canonical revisions and invalidate obsolete search caches; returned
+records are detached. No-op upserts create neither new revisions nor tasks.
+
+The indexing worker cutover is still pending: synchronous index rebuilds and
+startup reconstruction currently remain, and durable index intents are retained
+as pending rather than falsely acknowledged. The next step must consume them
+through SAGE WorkService and activate revision-fenced native projections. This
+intermediate repository state is not approved for production rollout. Catalog
+snapshot/receipt retention and API-level retry identity also remain open.
 
 Twin composes SAGE `WorkJournal`/`WorkService` with a restricted application
 handler. Inline and background HTTP delivery use the same journal and worker;

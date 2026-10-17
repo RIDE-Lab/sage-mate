@@ -42,6 +42,7 @@ data/escalations/
 data/follow_up_actions/
 data/homepage/
 data/knowledge_base/
+*.knowledge-state.sqlite3*
 data/knowledge_gap_drafts/
 data/operations_task_state/
 data/persona/

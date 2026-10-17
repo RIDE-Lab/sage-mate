@@ -484,9 +484,9 @@ def test_knowledge_store_add_document_survives_runtime_dir_wipe(
         rebuild_indexes=False,
     )
 
-    written = base_dir / f"{record.document_id}.json"
     assert base_dir.exists()
-    assert written.is_file()
+    assert not (base_dir / f"{record.document_id}.json").exists()
+    assert LocalKnowledgeStore(settings).get_document(record.document_id) == record
 
 
 def test_knowledge_store_upsert_document_survives_runtime_dir_wipe(
@@ -524,9 +524,9 @@ def test_knowledge_store_upsert_document_survives_runtime_dir_wipe(
 
     assert inserted is False
     assert record.document_id == seeded.document_id
-    written = base_dir / f"{record.document_id}.json"
     assert base_dir.exists()
-    assert written.is_file()
+    assert not (base_dir / f"{record.document_id}.json").exists()
+    assert LocalKnowledgeStore(settings).get_document(record.document_id) == record
 
 
 def test_knowledge_store_update_document_survives_runtime_dir_wipe(
@@ -561,6 +561,6 @@ def test_knowledge_store_update_document_survives_runtime_dir_wipe(
     )
 
     assert record.document_id == seeded.document_id
-    written = base_dir / f"{record.document_id}.json"
     assert base_dir.exists()
-    assert written.is_file()
+    assert not (base_dir / f"{record.document_id}.json").exists()
+    assert LocalKnowledgeStore(settings).get_document(record.document_id) == record

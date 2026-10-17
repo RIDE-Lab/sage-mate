@@ -35,6 +35,7 @@ dependencies = [
   "isage @ git+https://github.com/RIDE-Lab/SAGE.git@72fe1d04bc61e80e91b41e83fc27390661440153",
   "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@baff6c38ac7360dc5862124fa2239a2ff8e825bf",
   "isage-anns>=0.2.0",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@9d933f78c35e7caf2f754ab8c869559730b1190e",
 ]
 
 [project.optional-dependencies]
@@ -43,12 +44,10 @@ sage-stack = [
 neuromem = [
 ]
 vdb = [
-  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@9d933f78c35e7caf2f754ab8c869559730b1190e",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",
 ]
 vdb-anns = [
-  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@9d933f78c35e7caf2f754ab8c869559730b1190e",
   "isage-anns>=0.2.0",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",
