@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import HTTPException, status
 from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
 from sage.runtime import FlowNetEnvironment
+from sage.runtime.work_journal import PreparedLeaseGuard
 
 from . import __version__ as _app_version
 from .analytics_store import ConversationAnalyticsStore
@@ -9010,6 +9011,7 @@ class DigitalTwinService:
         delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
         admin_session_reference: dict | None = None,
+        admission_guard: PreparedLeaseGuard | None = None,
     ) -> DeliveredChatResponse:
         if delivery is not None and delivery.owner_id != request.owner_id:
             raise ValueError("delivery_owner_conflict")
@@ -9020,11 +9022,12 @@ class DigitalTwinService:
             delivery=delivery,
             answer_chunk_callback=answer_chunk_callback,
             admin_session_reference=admin_session_reference,
+            admission_guard=admission_guard,
         )
         delivered = self._deliver_chat_response(request, response)
         if delivery is not None:
             await asyncio.to_thread(WorkflowEventBroker(lambda: self._conversation_store.state_store).finish_immediate,
-                                    delivery.stream_id, delivered)
+                                    delivery.stream_id, delivered, guard=admission_guard)
         return delivered
 
     def _deliver_chat_response(
@@ -9075,6 +9078,7 @@ class DigitalTwinService:
         delivery: DeliveryIntent | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
         admin_session_reference: dict | None = None,
+        admission_guard: PreparedLeaseGuard | None = None,
     ) -> ChatResponse:
         if admin_session_reference is not None:
             if admin_session_token is not None:
@@ -9287,7 +9291,7 @@ class DigitalTwinService:
             task = task.model_copy(update={"delivery": delivery})
         runtime = self._get_post_answer_runtime()
         context.persisted_memory_record = await asyncio.to_thread(
-            runtime.submit_turn, task, self._conversation_store
+            runtime.submit_turn, task, self._conversation_store, guard=admission_guard
         )
         if memory_commit_trace is not None and trace_callback is not None and delivery is None:
             trace_callback(memory_commit_trace.model_copy(deep=True))

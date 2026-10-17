@@ -61,7 +61,7 @@ def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(api_module, "slack_link_store", links)
     monkeypatch.setattr(api_module, "slack_workflow", None)
     monkeypatch.setattr(api_module, "settings", SimpleNamespace(warm_service_on_startup=False))
-    async def answer(request, *, delivery):
+    async def answer(request, *, delivery, admission_guard):
         h.calls.append(request)
         if h.block:
             h.release = asyncio.Event()
@@ -69,7 +69,7 @@ def harness(monkeypatch, tmp_path):
             await h.release.wait()
         response = ChatResponse(answer="完整的研究回答。", owner_name="Twin", used_model="fixture-model")
         delivered = ChatDeliveryGate().deliver(response=response, original_question=request.question)
-        broker.finish_immediate(delivery.stream_id, delivered)
+        broker.finish_immediate(delivery.stream_id, delivered, guard=admission_guard)
         if h.commit_then_fail:
             h.commit_then_fail = False
             raise ConnectionError("answer acknowledgement lost")
@@ -246,7 +246,7 @@ def test_slack_answer_propagates_deadline_and_interrupts_active_io(harness, monk
                            transport_id="cancellation", kind="command", question="research")
 
     async def scenario():
-        task = asyncio.create_task(api_module._produce_slack_reply(ingress))
+        task = asyncio.create_task(api_module._produce_slack_reply(ingress, admission_guard=None))
         if stop == "cancel":
             assert await asyncio.to_thread(entered.wait, 1)
             task.cancel()

@@ -56,7 +56,7 @@ class WorkflowEventBroker:
 
         self._state_provider().update(prepared.slot, apply)
 
-    def finish_immediate(self, request_id, response):
+    def finish_immediate(self, request_id, response, *, guard=None):
         """Finish a validated early return, or leave an admitted turn to its worker."""
         if not isinstance(response, DeliveredChatResponse):
             raise TypeError("answer_done requires a DeliveredChatResponse")
@@ -76,7 +76,16 @@ class WorkflowEventBroker:
                 return old
             return terminal.transform(answer.transform(old))
 
-        self._state_provider().update(answer.slot, apply)
+        state = self._state_provider()
+        if guard is not None:
+            guard.validate_store(state)
+
+        def commit(values):
+            updates = guard.apply(values) if guard is not None else {}
+            updates[answer.slot] = apply(values[answer.slot])
+            return updates
+
+        state.update_many((answer.slot, *((guard.slot,) if guard is not None else ())), commit)
 
     def publish_complete(self, request_id):
         self._journal().append(request_id, event_id="terminal", terminal=True,

@@ -400,7 +400,7 @@ def _create_http_workflow(instance):
                 return None
             cursor = page["cursor"]
 
-    async def answer(ingress):
+    async def answer(ingress, *, admission_guard):
         budget = (CHAT_LONG_REQUEST_TIMEOUT_SECONDS if ingress.request.deep_thinking
                   and ingress.request.deep_thinking_explicit else CHAT_REQUEST_TIMEOUT_SECONDS)
         controller = RequestCancellationController()
@@ -415,6 +415,7 @@ def _create_http_workflow(instance):
                     return await instance.answer(
                         ingress.request, delivery=ingress.delivery,
                         admin_session_reference=ingress.authority.admin_session,
+                        admission_guard=admission_guard,
                         trace_callback=lambda step: broker.publish_step(key, step),
                         answer_chunk_callback=_untraced_answer_chunk_callback(),
                     )
@@ -852,7 +853,7 @@ async def _slack_status_text(ingress, words):
     return text
 
 
-async def _produce_slack_reply(ingress):
+async def _produce_slack_reply(ingress, *, admission_guard):
     _require_slack_destination(ingress.team_id)
     role, email, denial = await asyncio.to_thread(_resolve_slack_twin_identity,
                                                  ingress.user_id, team_id=ingress.team_id)
@@ -880,7 +881,7 @@ async def _produce_slack_reply(ingress):
         # without either a deadline or its registered cancellation signal.
         with request_cancellation_scope(cancellation, deadline_at=deadline_at):
             try:
-                return await service.answer(request, delivery=ingress.delivery)
+                return await service.answer(request, delivery=ingress.delivery, admission_guard=admission_guard)
             except BaseException:
                 cancellation.cancel()
                 raise

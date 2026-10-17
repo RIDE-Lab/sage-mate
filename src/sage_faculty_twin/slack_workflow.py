@@ -205,7 +205,7 @@ class SlackWorkflow:
                 reply = await self._recover(ingress)
                 if reply is None:
                     try:
-                        reply = await self._answer(ingress)
+                        reply = await self._answer(ingress, admission_guard=self.journal.prepare_guard(lease))
                     except Exception:
                         # A lost acknowledgement can follow a committed answer,
                         # including on the final allowed attempt. Recover that

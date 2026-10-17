@@ -128,6 +128,7 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
         request,
         admin_session_token=None,
         admin_session_reference=None,
+        admission_guard=None,
         trace_callback=None,
         delivery=None,
         answer_chunk_callback=None,

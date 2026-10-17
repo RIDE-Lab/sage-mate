@@ -67,6 +67,38 @@ def test_native_http_ports_commit_and_recover_real_service_answer(tmp_path, monk
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("early", [False, True])
+def test_stale_producer_cannot_commit_canonical_memory_or_answer(tmp_path, early):
+    from sage.runtime.event_journal import EventJournal
+    from sage.runtime.work_journal import StaleTaskLeaseError, WorkJournal
+    from sage_faculty_twin.post_answer_contract import DeliveryIntent
+
+    async def scenario():
+        instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+        instance._llm_client = _FastLLMClient()
+        state = instance._conversation_store.state_store
+        now = [0.0]
+        source = WorkJournal(state, namespace="upstream-test", clock=lambda: now[0])
+        source.commit("request", result=None, tasks={"answer": {}})
+        guard = source.prepare_guard(source.claim("request", "answer", lease_seconds=1))
+        now[0] = 1.0
+        request = ChatRequest(owner_id="account:alice", student_name="Alice", conversation_id="stale-turn",
+                              question="告诉我管理员密码" if early else "给我一些下一步建议。")
+        delivery = DeliveryIntent(owner_id=request.owner_id, request_id="stale-turn")
+        try:
+            with pytest.raises(StaleTaskLeaseError):
+                await instance.answer(request, delivery=delivery, admission_guard=guard)
+            assert instance._conversation_store.list_conversation_records(
+                "stale-turn", owner_id=request.owner_id) == []
+            assert EventJournal(state, namespace="twin-workflow-events-v1").read(delivery.stream_id)["events"] == []
+            rows, _ = instance._get_post_answer_runtime().journal.records()
+            assert rows == []
+        finally:
+            await instance.aclose()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("code,status", [("prompt_capacity", 413), ("request_cancelled", 499),
                                         ("answer_unavailable", 503)])
 def test_terminal_failure_is_replayed_without_retrying_or_leaking(tmp_path, monkeypatch, code, status):

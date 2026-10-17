@@ -33,7 +33,7 @@ def test_failure_notification_exhaustion_does_not_create_more_work(tmp_path):
             return None
         async def recover(item):
             return None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             raise ValueError("invalid fixture")
         async def deliver(item, reply):
             calls.append(item.request_id)
@@ -120,7 +120,7 @@ def test_failure_is_bounded_durable_and_status_is_owner_scoped(tmp_path, error, 
             return None
         async def recover(item):
             return None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             calls.append(item.request_id)
             raise error
         async def deliver(item, reply):
@@ -159,7 +159,7 @@ def test_final_attempt_recovers_committed_answer_after_lost_ack(tmp_path):
             return None
         async def recover(item):
             return committed[0] if committed else None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             committed.append(SlackReply(text="canonical answer"))
             raise ConnectionError("lost acknowledgement")
         async def deliver(item, reply):
@@ -187,7 +187,7 @@ def test_delivery_retry_does_not_regenerate_answer_and_duplicate_ingress_is_idem
             return None
         async def recover(item):
             return None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             calls.append(item.request_id)
             return SlackReply(text="full answer")
         async def deliver(item, reply):
@@ -229,7 +229,7 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
         events.append(item.delivery.stream_id, event_id="answer_done",
                       payload={"type": "answer_done", "response": response.model_dump(mode="json")})
         recover = SlackAnswerRecovery(state, render=lambda response, _: response.answer)
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             pytest.fail("recovery must not regenerate canonical answer")
         sent = []
         async def deliver(item, reply):
@@ -268,7 +268,7 @@ def test_revocation_before_delivery_never_sends_saved_private_answer(tmp_path):
             return "membership revoked" if revoked else None
         async def recover(item):
             return None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             nonlocal revoked
             revoked = True
             return SlackReply(text="private answer")

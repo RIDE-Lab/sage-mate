@@ -28,7 +28,7 @@ def test_duplicate_conflict_and_cancelled_observer_share_one_producer(tmp_path):
             return True
         async def recover(item):
             return None
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             calls.append(item.request.question)
             entered.set()
             await release.wait()
@@ -67,7 +67,7 @@ def test_restart_recovers_canonical_answer_and_rechecks_authority(tmp_path):
             return permitted[0]
         async def recover(item):
             return ChatResponse(answer="already committed", owner_name="Twin", used_model="fake")
-        async def answer(item):
+        async def answer(item, *, admission_guard):
             pytest.fail("canonical answer must not regenerate")
         flow = HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer)
         item = ingress()
@@ -108,7 +108,7 @@ def test_two_instances_share_lease_and_recover_lost_answer_ack(tmp_path):
                     if event["id"] == "answer_done":
                         return ChatResponse.model_validate(event["payload"])
                 return None
-            async def answer(item):
+            async def answer(item, *, admission_guard):
                 calls.append(item.request.question)
                 entered.set()
                 await release.wait()

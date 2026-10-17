@@ -76,7 +76,7 @@ class PostAnswerRuntime:
 
         return {mutations[0].slot: apply}
 
-    def submit_turn(self, task, memory):
+    def submit_turn(self, task, memory, *, guard=None):
         """Atomically admit canonical memory and intent on their shared store."""
         if self._state is not memory.state_store:
             raise ValueError("turn_and_work_must_share_state_store")
@@ -87,10 +87,10 @@ class PostAnswerRuntime:
         record = (ConversationMemoryRecord.from_dict(payload["record"])
                   if payload["record"] is not None else None)
         if record is None:
-            self._service.commit(request_id, **inputs, mutations=delivery_mutations)
+            self._service.commit(request_id, **inputs, mutations=delivery_mutations, guard=guard)
             return None
         return memory.persist_exchange(record, commit_work=lambda mutations:
-            self._service.commit(request_id, **inputs, mutations={**mutations, **delivery_mutations}))
+            self._service.commit(request_id, **inputs, mutations={**mutations, **delivery_mutations}, guard=guard))
 
     def wait(self, request_id, *, timeout):
         record = self._service.wait(request_id, timeout=timeout)

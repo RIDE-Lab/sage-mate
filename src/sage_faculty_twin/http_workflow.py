@@ -55,7 +55,8 @@ class HttpWorkflow:
 
     authorize(ingress) must return exactly True from fresh authority, including
     the captured access scope. recover/answer return validated ChatResponse.
-    answer must commit through ingress.delivery before acknowledging success.
+    answer(ingress, admission_guard=...) must commit through ingress.delivery
+    with that guard in the same state transaction before acknowledging success.
     Borrowed state and ports must remain alive until aclose drains successfully.
     """
 
@@ -93,7 +94,7 @@ class HttpWorkflow:
         response = await self._recover(ingress)
         if response is None:
             try:
-                response = await self._answer(ingress)
+                response = await self._answer(ingress, admission_guard=self.journal.prepare_guard(lease))
             except Exception:
                 response = await self._recover(ingress)
                 if response is None:
