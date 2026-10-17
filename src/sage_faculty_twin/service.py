@@ -9556,20 +9556,16 @@ class DigitalTwinService:
 
         should_background = self._settings.post_answer_background and trace_callback is not None
 
+        # Both delivery modes share the same required memory-write gate.
+        # Persistence failure must propagate, never masquerade as a committed turn.
+        await asyncio.to_thread(MemoryPersistStage(support).execute, context)
+
         if should_background:
             # The current exchange must be durable before the HTTP response is
             # returned. Otherwise an immediate follow-up can race the
             # background task and miss the turn that the user just saw. Keep
             # the slower profile consolidation, follow-up planning, and
             # usefulness scoring off the critical path.
-            try:
-                MemoryPersistStage(support).execute(context)
-            except Exception:  # pragma: no cover - defensive log
-                _logger.exception(
-                    "critical conversation memory persist failed (conversation_id=%s)",
-                    getattr(context, "conversation_id", None),
-                )
-
             # Production fast path: ship the rendered response immediately,
             # run non-critical post-answer side-effects on a background task. The trace
             # callback inside ``_run_post_answer_inline_blocking`` keeps the
@@ -9608,7 +9604,9 @@ class DigitalTwinService:
         # mirror the legacy semantics so direct callers (tests, batch jobs,
         # benchmark adapter) still see the canonical 14-step trace and the
         # populated post-answer fields.
-        await asyncio.to_thread(self._run_post_answer_inline_blocking, context, support)
+        await asyncio.to_thread(
+            self._run_post_answer_inline_blocking, context, support, include_memory_persist=False
+        )
         final_response = self._patch_response_with_post_answer(response, context)
         if on_post_answer_complete is not None:
             on_post_answer_complete()
@@ -12251,7 +12249,7 @@ class DigitalTwinService:
         This runs synchronously on whatever thread the caller is on. The
         stages mutate ``context`` in place (memory writes, follow-up
         planning, profile consolidation, usefulness scoring) and emit trace
-        steps via the support's ``trace_callback``. Each stage is wrapped in
+        steps via the support's ``trace_callback``. Non-critical stages are wrapped in
         a try/except so a failure in one stage does not cancel the others;
         the chat answer has already been delivered to the user, so this
         layer is best-effort.
@@ -12262,7 +12260,7 @@ class DigitalTwinService:
             ("memory_usefulness_score", MemoryUsefulnessScoringStage),
         ]
         if include_memory_persist:
-            post_answer_stages.insert(0, ("memory_persist", MemoryPersistStage))
+            MemoryPersistStage(support).execute(context)
         for stage_key, stage_cls in post_answer_stages:
             try:
                 stage_cls(support).execute(context)

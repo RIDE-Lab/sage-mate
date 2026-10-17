@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import pytest
 from pathlib import Path
 
 from sage_faculty_twin.config import AppSettings
@@ -66,6 +67,35 @@ class _FastLLMClient:
 
     async def answer_question(self, system_prompt: str, user_prompt: str) -> str:
         return self._answer
+
+
+@pytest.mark.parametrize("background", [True, False])
+def test_required_memory_failure_prevents_success_and_background_work(tmp_path, monkeypatch, background):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _FastLLMClient()
+    completed = []
+    post_answer = []
+
+    def fail(*args, **kwargs):
+        raise OSError("injected memory persistence failure")
+
+    monkeypatch.setattr(service._conversation_store, "add_exchange", fail)
+    monkeypatch.setattr(service, "_run_post_answer_inline_blocking",
+                        lambda *args, **kwargs: post_answer.append(True))
+
+    async def run():
+        with pytest.raises(OSError, match="injected memory persistence failure"):
+            await service.answer(
+                ChatRequest(student_name="Alice", question="给我一些下一步建议。",
+                            conversation_id="commit-failure"),
+                trace_callback=(lambda step: None) if background else None,
+                on_post_answer_complete=lambda: completed.append(True),
+            )
+        await asyncio.sleep(0)
+
+    asyncio.run(run())
+    assert post_answer == []
+    assert completed == []
 
 
 def test_chat_returns_before_post_answer_completes_when_background_enabled(
