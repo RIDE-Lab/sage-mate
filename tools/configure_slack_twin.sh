@@ -3,7 +3,8 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 signing_secret="${1:-}"
-allowed_user_ids="${SLACK_TWIN_ALLOWED_USER_IDS:-U013T91JDQT}"
+# Entries must be workspace-qualified: T123:U456. Empty means binding required.
+allowed_user_ids="${SLACK_TWIN_ALLOWED_USER_IDS:-}"
 visitor_profile="${SLACK_TWIN_VISITOR_PROFILE:-lab_member}"
 request_url="${SLACK_TWIN_REQUEST_URL:-https://twin.sage.org.ai/slack/commands/twin}"
 

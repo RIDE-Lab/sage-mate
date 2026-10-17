@@ -34,12 +34,12 @@ def current_accounts_for_transport_fixtures(monkeypatch):
 def test_slack_binding_uses_current_role_even_for_allowlisted_user(monkeypatch, tmp_path, current_role):
     store = SlackUserLinkStore(tmp_path)
     code = store.create_code(user_id="account-id", email="old@example.com", visitor_profile="lab_member")
-    store.consume_code(code.code, slack_user_id="U1")
+    store.consume_code(code.code, team_id="T123", slack_user_id="U1")
     monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U1"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U1"})
     current = (None if current_role is None else SimpleNamespace(visitor_profile=current_role, email="new@example.com"))
     monkeypatch.setattr(api_module.service, "get_slack_link_account", lambda _: current)
-    role, email, denial = api_module._resolve_slack_twin_identity("U1")
+    role, email, denial = api_module._resolve_slack_twin_identity("U1", team_id="T123")
     if current_role == "lab_member":
         assert (role, email, denial) == ("lab_member", "new@example.com", None)
     else:
@@ -52,6 +52,43 @@ def _slack_signature(body: bytes, secret: str) -> tuple[str, str]:
     base = b"v0:" + timestamp.encode("ascii") + b":" + body
     signature = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
     return timestamp, signature
+
+
+@pytest.mark.parametrize("transport", ["command", "event"])
+@pytest.mark.parametrize("authorization", ["binding", "qualified_allowlist", "bare_allowlist"])
+def test_signed_foreign_workspace_cannot_reuse_authorization(monkeypatch, tmp_path, transport, authorization):
+    store = SlackUserLinkStore(tmp_path)
+    monkeypatch.setattr(api_module, "slack_link_store", store)
+    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS",
+                        {"UOTHER"} if authorization == "bare_allowlist" else {"T123:UOTHER"})
+    if authorization == "binding":
+        code = store.create_code(user_id="account", email="lab@example.com", visitor_profile="lab_member")
+        store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER")
+        monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", set())
+    def forbidden(**kwargs):
+        pytest.fail("foreign workspace reached model handler")
+    monkeypatch.setattr(api_module, "_answer_slack_twin_command", forbidden)
+    monkeypatch.setattr(api_module, "_answer_slack_twin_dm", forbidden)
+    messages = []
+    async def post(channel, text, **kwargs):
+        messages.append(text)
+    monkeypatch.setattr(api_module, "_safe_post_slack_message", post)
+    try:
+        if transport == "command":
+            body = _body(user_id="UOTHER", team_id="TFOREIGN")
+            response = client.post("/slack/commands/twin", content=body, headers=_signed_headers(body, "secret"))
+            messages.append(response.json()["text"])
+        else:
+            payload = json.loads(_event_body(user="UOTHER"))
+            payload["team_id"] = "TFOREIGN"
+            body = json.dumps(payload).encode()
+            response = client.post("/slack/events", content=body, headers=_signed_json_headers(body, "secret"))
+        assert response.status_code == 200
+        assert len(messages) == 1
+        assert "生成 Slack 绑定码" in messages[0]
+    finally:
+        store.close()
 
 
 def _signed_headers(body: bytes, secret: str) -> dict[str, str]:
@@ -191,13 +228,13 @@ def test_slack_twin_link_code_created_for_lab_member(monkeypatch, tmp_path):
     payload = response.json()
     assert payload["can_link"] is True
     assert len(payload["code"]) == 8
-    assert store.consume_code(payload["code"], slack_user_id="UOTHER") is not None
+    assert store.consume_code(payload["code"], team_id="T123", slack_user_id="UOTHER") is not None
 
 
 def test_slack_twin_command_guides_unlinked_user(monkeypatch, tmp_path):
     secret = "secret"
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     body = _body(user_id="UOTHER")
 
@@ -214,7 +251,7 @@ def test_slack_twin_command_guides_unlinked_user(monkeypatch, tmp_path):
 def test_slack_twin_bind_invalid_code(monkeypatch, tmp_path):
     secret = "secret"
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     body = _body(user_id="UOTHER", text="bind BADCODE")
 
@@ -237,7 +274,7 @@ def test_slack_twin_bind_code_success(monkeypatch, tmp_path):
         visitor_profile="lab_member",
     )
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
     body = _body(user_id="UOTHER", text=f"bind {code.code}")
 
@@ -249,7 +286,7 @@ def test_slack_twin_bind_code_success(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert "绑定成功" in response.json()["text"]
-    assert store.get_link_for_slack_user("UOTHER").email == "lab@example.com"
+    assert store.get_link_for_slack_user("UOTHER", team_id="T123").email == "lab@example.com"
 
 
 def test_slack_twin_bound_non_lab_user_cannot_ask(monkeypatch, tmp_path):
@@ -260,9 +297,9 @@ def test_slack_twin_bound_non_lab_user_cannot_ask(monkeypatch, tmp_path):
         email="visitor@example.com",
         visitor_profile="general_visitor",
     )
-    assert store.consume_code(code.code, slack_user_id="UOTHER") is not None
+    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
     body = _body(user_id="UOTHER", text="研究路线是什么？", owner_id="account:spoofed")
 
@@ -284,7 +321,7 @@ def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
         email="lab@example.com",
         visitor_profile="lab_member",
     )
-    assert store.consume_code(code.code, slack_user_id="UOTHER") is not None
+    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
     posted: list[tuple[str, str]] = []
     seen: list[tuple[str, str | None]] = []
 
@@ -297,7 +334,7 @@ def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
         posted.append((response_url, text))
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
     monkeypatch.setattr(api_module, "_post_slack_response", fake_post)
@@ -333,7 +370,7 @@ def test_slack_twin_command_whitelist_answers_in_background(monkeypatch, tmp_pat
         posted.append((response_url, text))
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     monkeypatch.setattr(api_module, "SLACK_TWIN_VISITOR_PROFILE", "lab_member")
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
@@ -372,7 +409,7 @@ def test_slack_twin_response_url_failure_does_not_break_background_task(
         raise OSError("response url unavailable")
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
     monkeypatch.setattr(api_module, "_post_slack_response", failing_post)
@@ -414,7 +451,7 @@ def test_slack_twin_uses_current_dm_history_as_transient_twin_context(monkeypatc
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
     monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     monkeypatch.setattr(api_module, "fetch_slack_channel_context", fake_fetch)
     monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=fake_answer))
@@ -443,7 +480,7 @@ def test_slack_twin_does_not_invent_prior_context_without_history(monkeypatch, t
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
     monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     monkeypatch.setattr(api_module, "fetch_slack_channel_context", missing_history)
     monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=should_not_answer))
@@ -508,7 +545,7 @@ def test_slack_events_unlinked_user_gets_guidance(monkeypatch, tmp_path):
         posted.append((channel_id, text, thread_ts))
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
     monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
     body = _event_body(user="UOTHER")
@@ -534,7 +571,7 @@ def test_slack_events_bound_lab_member_can_ask(monkeypatch, tmp_path):
         email="lab@example.com",
         visitor_profile="lab_member",
     )
-    assert store.consume_code(code.code, slack_user_id="UOTHER") is not None
+    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
     posted: list[tuple[str, str, str | None]] = []
     seen: list[tuple[str, str | None, str]] = []
 
@@ -547,7 +584,7 @@ def test_slack_events_bound_lab_member_can_ask(monkeypatch, tmp_path):
         posted.append((channel_id, text, thread_ts))
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
     monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
@@ -606,7 +643,7 @@ def test_slack_events_app_mention_bound_lab_member_replies_in_thread(monkeypatch
         email="lab@example.com",
         visitor_profile="lab_member",
     )
-    assert store.consume_code(code.code, slack_user_id="UOTHER") is not None
+    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
     posted: list[tuple[str, str, str | None]] = []
     seen: list[tuple[str, str | None, str, str]] = []
 
@@ -618,7 +655,7 @@ def test_slack_events_app_mention_bound_lab_member_replies_in_thread(monkeypatch
         posted.append((channel_id, text, thread_ts))
 
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U013T91JDQT"})
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
     monkeypatch.setattr(api_module, "slack_link_store", store)
     monkeypatch.setattr(api_module.service, "answer", fake_answer)
     monkeypatch.setattr(api_module, "_post_slack_message", fake_post)

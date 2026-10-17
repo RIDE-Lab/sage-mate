@@ -378,6 +378,7 @@ def get_conversation_trace_store() -> ConversationTraceStore:
             _conversation_trace_stores[store_key] = store
     return store
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
+# Explicit authorization pairs only (T123:U456); bare IDs grant no access.
 SLACK_TWIN_ALLOWED_USER_IDS = {
     user_id.strip()
     for user_id in os.environ.get("SLACK_TWIN_ALLOWED_USER_IDS", "").split(",")
@@ -803,14 +804,14 @@ def _normalize_slack_twin_question(text: str) -> str:
     return " ".join(words).strip()
 
 
-def _handle_slack_twin_bind_text(*, user_id: str, text: str) -> str | None:
+def _handle_slack_twin_bind_text(*, team_id: str, user_id: str, text: str) -> str | None:
     normalized_text = _normalize_slack_twin_question(text)
     words = normalized_text.split()
     if not words or words[0].lower() != "bind":
         return None
     if len(words) < 2:
         return "用法：`/twin bind 你的绑定码`"
-    link = slack_link_store.consume_code(words[1], slack_user_id=user_id)
+    link = slack_link_store.consume_code(words[1], slack_user_id=user_id, team_id=team_id)
     if link is None:
         return "绑定码无效或已过期。请回到 twin 网页端重新生成 Slack 绑定码。"
     account = service.get_slack_link_account(link.user_id)
@@ -822,12 +823,12 @@ def _handle_slack_twin_bind_text(*, user_id: str, text: str) -> str | None:
     )
 
 
-def _resolve_slack_twin_identity(user_id: str) -> tuple[str, str | None, str | None]:
+def _resolve_slack_twin_identity(user_id: str, *, team_id: str) -> tuple[str, str | None, str | None]:
     visitor_profile = SLACK_TWIN_VISITOR_PROFILE or "lab_member"
     user_email = None
-    linked_account = slack_link_store.get_link_for_slack_user(user_id)
+    linked_account = slack_link_store.get_link_for_slack_user(user_id, team_id=team_id)
     if linked_account is None:
-        if user_id in SLACK_TWIN_ALLOWED_USER_IDS:
+        if f"{team_id}:{user_id}" in SLACK_TWIN_ALLOWED_USER_IDS:
             return visitor_profile, user_email, None
         return visitor_profile, user_email, _slack_twin_link_instructions()
     current_account = service.get_slack_link_account(linked_account.user_id)
@@ -1810,7 +1811,8 @@ async def slack_twin_command(
         for key, values in urllib.parse.parse_qs(raw_body.decode("utf-8")).items()
     }
     user_id = form.get("user_id", "").strip()
-    owner_id = _slack_conversation_owner(form.get("team_id", "").strip(), user_id,
+    team_id = form.get("team_id", "").strip()
+    owner_id = _slack_conversation_owner(team_id, user_id,
                                           form.get("channel_id", "").strip())
     question = form.get("text", "").strip()
     response_url = form.get("response_url", "").strip()
@@ -1824,11 +1826,11 @@ async def slack_twin_command(
     if not response_url:
         raise HTTPException(status_code=400, detail="Slack request missing response_url.")
 
-    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, user_id=user_id, text=question)
+    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
     if bind_reply is not None:
         return JSONResponse({"response_type": "ephemeral", "text": bind_reply})
 
-    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id)
+    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
     if denial_message is not None:
         return JSONResponse({"response_type": "ephemeral", "text": denial_message})
 
@@ -1896,18 +1898,19 @@ async def slack_events(
         thread_ts = str(event.get("ts") or "").strip() or None
     if not user_id or not channel_id:
         return JSONResponse({"ok": True})
-    owner_id = _slack_conversation_owner(str(payload.get("team_id") or "").strip(), user_id, channel_id)
+    team_id = str(payload.get("team_id") or "").strip()
+    owner_id = _slack_conversation_owner(team_id, user_id, channel_id)
     if not question:
         usage_text = "用法：`@twin 你的问题`、`/twin 你的问题`，或者直接给 twin 发私信。"
         background_tasks.add_task(_safe_post_slack_message, channel_id, usage_text, thread_ts=thread_ts)
         return JSONResponse({"ok": True})
 
-    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, user_id=user_id, text=question)
+    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
     if bind_reply is not None:
         background_tasks.add_task(_safe_post_slack_message, channel_id, bind_reply, thread_ts=thread_ts)
         return JSONResponse({"ok": True})
 
-    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id)
+    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
     if denial_message is not None:
         background_tasks.add_task(_safe_post_slack_message, channel_id, denial_message, thread_ts=thread_ts)
         return JSONResponse({"ok": True})

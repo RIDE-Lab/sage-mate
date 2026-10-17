@@ -401,3 +401,28 @@ The streaming flag and the latency knobs (`DIGITAL_TWIN_STREAM_CHAT_ANSWER`,
 launching uvicorn, so both settings-backed and module-level latency controls
 see one consistent deployment contract. If you write your own launcher, load
 the same environment before importing the application.
+
+### Slack workspace authorization migration
+
+Slack bindings use the signature-verified `team_id` and `user_id` together.
+`SLACK_TWIN_ALLOWED_USER_IDS` accepts comma-separated workspace-qualified pairs
+such as `T123:U456,T789:U012`. A bare user ID grants no access; an empty list
+requires account binding. The configuration helper no longer grants a default
+user access. Keep signing secrets and bot tokens in the deployment's secret
+environment; do not put them in test fixtures or migration reports.
+
+The SAGE-backed `bindings.sqlite3` state upgrades to schema version 2. Old links
+without verified workspace identity are retained under `unscoped_links`, but
+cannot authorize requests. Users must generate a new code in the authenticated
+Twin web UI and bind again in their intended workspace. One website account has
+one active Slack binding; rebinding revokes its previous identity atomically.
+Current account membership is still checked for every authorized request.
+
+Before release, stop old binding writers and snapshot the entire binding
+directory consistently, including SQLite sidecars. Validate upgrade on a copy
+first; do not run old and new writers concurrently. Legacy JSON originals are
+archived under `legacy-imported`, not deleted. Rollback requires the matching
+pre-upgrade code and consistent storage snapshot, not just an older application
+binary. No automatic workspace assignment or legacy authorization fallback is
+provided. Verify both signed command and event paths, and confirm that the same
+user ID in another workspace cannot reuse the binding or allowlist entry.

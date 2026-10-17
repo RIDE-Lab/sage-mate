@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import secrets
 import string
 import weakref
@@ -22,6 +23,7 @@ class SlackUserLinkRecord:
     email: str
     visitor_profile: str
     linked_at: datetime
+    team_id: str = ""
 
     @classmethod
     def from_dict(cls, payload: dict[str, object]) -> SlackUserLinkRecord:
@@ -31,6 +33,7 @@ class SlackUserLinkRecord:
             email=str(payload["email"]),
             visitor_profile=str(payload["visitor_profile"]),
             linked_at=datetime.fromisoformat(str(payload["linked_at"])),
+            team_id=str(payload.get("team_id", "")),
         )
 
     def to_dict(self) -> dict[str, object]:
@@ -40,6 +43,7 @@ class SlackUserLinkRecord:
             "email": self.email,
             "visitor_profile": self.visitor_profile,
             "linked_at": self.linked_at.isoformat(),
+            "team_id": self.team_id,
         }
 
 
@@ -85,7 +89,7 @@ class SlackUserLinkStore:
 
     @staticmethod
     def _empty():
-        return {"version": 1, "links": {}, "codes": {}}
+        return {"version": 2, "links": {}, "codes": {}, "unscoped_links": {}}
 
     def _snapshot(self):
         return self._validated(self._state.peek(self._slot))
@@ -93,7 +97,7 @@ class SlackUserLinkStore:
     def _validated(self, value):
         if value is None:
             return self._empty()
-        if value.get("version") != 1:
+        if value.get("version") != 2:
             raise ValueError("unsupported_slack_binding_version")
         return value
 
@@ -101,8 +105,14 @@ class SlackUserLinkStore:
     def _code_key(code):
         return hashlib.sha256(code.strip().upper().encode()).hexdigest()
 
-    def get_link_for_slack_user(self, slack_user_id: str) -> SlackUserLinkRecord | None:
-        value = self._snapshot()["links"].get(slack_user_id.strip())
+    @staticmethod
+    def _identity(team_id: str, slack_user_id: str) -> str:
+        if not all(re.fullmatch(r"[A-Za-z0-9]+", part) for part in (team_id, slack_user_id)):
+            raise ValueError("valid_slack_team_and_user_required")
+        return f"{team_id}:{slack_user_id}"
+
+    def get_link_for_slack_user(self, slack_user_id: str, *, team_id: str) -> SlackUserLinkRecord | None:
+        value = self._snapshot()["links"].get(self._identity(team_id, slack_user_id))
         return SlackUserLinkRecord.from_dict(value) if value else None
 
     def get_link_for_user(self, user_id: str) -> SlackUserLinkRecord | None:
@@ -143,9 +153,8 @@ class SlackUserLinkStore:
                 return record
         raise RuntimeError("Unable to generate a unique Slack link code.")
 
-    def consume_code(self, code: str, *, slack_user_id: str) -> SlackUserLinkRecord | None:
-        if not slack_user_id.strip():
-            raise ValueError("slack_user_id_required")
+    def consume_code(self, code: str, *, slack_user_id: str, team_id: str) -> SlackUserLinkRecord | None:
+        identity_key = self._identity(team_id, slack_user_id)
         now, key, consumed = datetime.now(UTC), self._code_key(code), []
         def consume(old):
             value = self._validated(old)
@@ -156,10 +165,10 @@ class SlackUserLinkStore:
             if datetime.fromisoformat(record["expires_at"]) <= now:
                 return value
             link = SlackUserLinkRecord(slack_user_id=slack_user_id.strip(), user_id=record["user_id"],
-                email=record["email"], visitor_profile=record["visitor_profile"], linked_at=now)
+                email=record["email"], visitor_profile=record["visitor_profile"], linked_at=now, team_id=team_id)
             value["links"] = {identity: existing for identity, existing in value["links"].items()
-                              if existing["user_id"] != link.user_id and identity != link.slack_user_id}
-            value["links"][link.slack_user_id] = link.to_dict()
+                              if existing["user_id"] != link.user_id and identity != identity_key}
+            value["links"][identity_key] = link.to_dict()
             consumed.append(link)
             return value
         self._state.update(self._slot, consume)
@@ -177,6 +186,14 @@ class SlackUserLinkStore:
     def _import_legacy(self):
         existing = self._state.peek(self._slot)
         if existing is not None:
+            if existing.get("version") == 1:
+                def upgrade(old):
+                    if old.get("version") != 1:
+                        return self._validated(old)
+                    # V1 bindings contain no trustworthy workspace identity.
+                    # Preserve them for review, but never use them for access.
+                    return {**old, "version": 2, "links": {}, "unscoped_links": old["links"]}
+                existing = self._state.update(self._slot, upgrade)
             self._validated(existing)
             self._archive_legacy(existing.get("legacy_sources", []))
             return
@@ -184,10 +201,10 @@ class SlackUserLinkStore:
         for path in sorted((self._root_dir / "links").glob("*.json")):
             raw = path.read_bytes()
             link = SlackUserLinkRecord.from_dict(json.loads(raw))
-            if link.user_id in owners or link.slack_user_id in snapshot["links"]:
+            if link.user_id in owners or link.slack_user_id in snapshot["unscoped_links"]:
                 raise ValueError("legacy_slack_binding_conflict")
             owners.add(link.user_id)
-            snapshot["links"][link.slack_user_id] = link.to_dict()
+            snapshot["unscoped_links"][link.slack_user_id] = link.to_dict()
             sources.append((path, raw))
         for path in sorted((self._root_dir / "codes").glob("*.json")):
             raw = path.read_bytes()
