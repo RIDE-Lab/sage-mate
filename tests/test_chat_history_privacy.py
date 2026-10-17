@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -48,6 +48,24 @@ def _build_service(records: list[ConversationMemoryRecord]) -> DigitalTwinServic
     service = object.__new__(DigitalTwinService)
     service._conversation_store = _ConversationStoreStub(records)
     return service
+
+
+def test_history_requires_owner_as_well_as_matching_email():
+    records = [replace(_build_record(memory_id=str(index), conversation_id="same",
+        student_name="Same", student_email="same@example.com", question=f"private-{index}",
+        answer=f"answer-{index}", offset_seconds=index), owner_id=owner)
+        for index, owner in enumerate(("account:a", "account:b", None))]
+    service = _build_service(records)
+    for index, owner in enumerate(("account:a", "account:b", None)):
+        history = service.list_chat_conversations(student_email="same@example.com", owner_id=owner)
+        assert len(history.conversations) == 1
+        assert history.conversations[0].exchange_count == 1
+        transcript = service.get_chat_conversation(conversation_id="same", student_email="same@example.com", owner_id=owner)
+        assert len(transcript.exchanges) == 1
+        assert transcript.exchanges[0].question == f"private-{index}"
+    with pytest.raises(HTTPException) as error:
+        service.get_chat_conversation(conversation_id="same", student_email="same@example.com", owner_id="account:other")
+    assert error.value.status_code == 404
 
 
 def test_list_chat_conversations_only_returns_exact_email_matches() -> None:

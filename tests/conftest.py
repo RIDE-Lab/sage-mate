@@ -148,6 +148,18 @@ def _isolate_conversation_memory(tmp_path, monkeypatch):
     monkeypatch.setenv("DIGITAL_TWIN_CONVERSATION_MEMORY_DIR", str(isolated))
 
 
+@pytest.fixture
+def guest_identity_store(tmp_path):
+    """Real isolated credential boundary for lightweight HTTP service doubles."""
+    from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+    from sage_faculty_twin.guest_identity import GuestIdentityStore
+    state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "guest-identities.db"))
+    try:
+        yield GuestIdentityStore(state, ttl_seconds=300)
+    finally:
+        state.close()
+
+
 def pytest_collection_modifyitems(config, items):
     if _HAS_SENTENCE_TRANSFORMERS and _HAS_LOCAL_EMBEDDING_MODEL:
         return  # all good — run everything

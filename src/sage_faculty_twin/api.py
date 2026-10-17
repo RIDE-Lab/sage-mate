@@ -17,7 +17,7 @@ from contextvars import ContextVar
 from datetime import date
 from io import BytesIO
 from pathlib import Path
-from uuid import UUID, uuid4
+from uuid import uuid4
 
 from . import __version__
 from .runtime_env import bootstrap_runtime_env
@@ -127,6 +127,7 @@ from .models import (
 from .code_workbench import CODE_WORKBENCH_PROFILES
 from .history_auth import resolve_authenticated_history_email
 from .chat_identity import ChatIdentity
+from .guest_identity import GUEST_COOKIE_NAME
 from .service import (
     DigitalTwinService,
     PromptCapacityError,
@@ -733,6 +734,13 @@ def _resolve_chat_identity(
     raw_request: Request,
     requested_visitor_profile: str | None,
 ) -> ChatIdentity:
+    cached = getattr(raw_request.state, "chat_identity", None)
+    if cached is not None:
+        if cached.kind != "anonymous":
+            return cached
+        return ChatIdentity(kind="anonymous", subject_id=cached.subject_id,
+                            visitor_profile=("general_visitor" if requested_visitor_profile == "lab_member"
+                                             else requested_visitor_profile))
     authorization = raw_request.headers.get("authorization", "").strip()
     if authorization:
         scheme, _, token = authorization.partition(" ")
@@ -746,25 +754,28 @@ def _resolve_chat_identity(
         return ChatIdentity(kind="api_token", subject_id=identity.token_id,
                             visitor_profile=identity.visitor_profile)
     session_token = raw_request.cookies.get(USER_COOKIE_NAME)
-    if not session_token:
-        # Public profile hints may tailor course answers, but a client-owned
-        # request field must never grant access to team-only knowledge.
-        return ChatIdentity(kind="anonymous", subject_id=None, visitor_profile=(
-            "general_visitor"
-            if requested_visitor_profile == "lab_member"
-            else requested_visitor_profile
-        ))
-    user_session = service.get_user_session(session_token)
-    if user_session.is_authenticated and user_session.account is not None:
+    user_session = service.get_user_session(session_token) if session_token else None
+    if user_session is not None and user_session.is_authenticated and user_session.account is not None:
         account = user_session.account
         return ChatIdentity(kind="account", subject_id=account.user_id,
                             visitor_profile=account.visitor_profile,
                             account_email=account.email, account_name=account.name)
-    return ChatIdentity(kind="anonymous", subject_id=None, visitor_profile=(
+    credential, guest = service._guest_identity_store.resolve(raw_request.cookies.get(GUEST_COOKIE_NAME))
+    if credential is not None:
+        raw_request.state.new_guest_credential = credential
+    return ChatIdentity(kind="anonymous", subject_id=guest.subject_id, visitor_profile=(
         "general_visitor"
         if requested_visitor_profile == "lab_member"
         else requested_visitor_profile
     ))
+
+
+def _deliver_guest_cookie(raw_request: Request, response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    credential = getattr(raw_request.state, "new_guest_credential", None)
+    if credential is not None:
+        response.set_cookie(GUEST_COOKIE_NAME, credential, httponly=True, secure=True,
+                            samesite="lax", path="/", max_age=settings.user_session_ttl_seconds)
 
 
 def _require_user_account(raw_request: Request):
@@ -1434,8 +1445,12 @@ async def auth_session(request: Request) -> AdminSessionResponse:
 
 
 @llm_app.get("/auth/user/session", response_model=UserSessionResponse)
-async def user_auth_session(request: Request) -> UserSessionResponse:
-    return service.get_user_session(request.cookies.get(USER_COOKIE_NAME))
+async def user_auth_session(request: Request, response: Response) -> UserSessionResponse:
+    session = service.get_user_session(request.cookies.get(USER_COOKIE_NAME))
+    if not session.is_authenticated:
+        request.state.chat_identity = await asyncio.to_thread(_resolve_chat_identity, request, None)
+        _deliver_guest_cookie(request, response)
+    return session
 
 
 @llm_app.get("/slack/twin-link/status", response_model=SlackTwinLinkStatusResponse)
@@ -2020,12 +2035,13 @@ async def chat(
     )
     if long_deep_request:
         timing.budget_seconds = CHAT_LONG_REQUEST_TIMEOUT_SECONDS
-    identity = _resolve_chat_identity(
+    identity = await asyncio.to_thread(_resolve_chat_identity,
         raw_request,
         payload.visitor_profile,
     )
     payload = identity.bind(payload)
     raw_request.state.chat_identity = identity
+    _deliver_guest_cookie(raw_request, http_response)
     timing.record("request_parse", stage_started)
     admin_session_token = raw_request.cookies.get(ADMIN_COOKIE_NAME)
     trace_id = secrets.token_hex(16)
@@ -2252,6 +2268,7 @@ async def stream_chat(
     # Starlette's streaming disconnect watcher reads the ASGI receive channel.
     # Cache the upload first so it cannot race with chat's JSON/form parsing.
     await raw_request.body()
+    raw_request.state.chat_identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
 
     async def events() -> AsyncIterator[str]:
         async def run_chat() -> ChatResponse:
@@ -2288,11 +2305,13 @@ async def stream_chat(
             if not task.done():
                 task.cancel()
 
-    return StreamingResponse(
+    response = StreamingResponse(
         events(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+    _deliver_guest_cookie(raw_request, response)
+    return response
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
@@ -2334,30 +2353,23 @@ async def get_conversation_trace(
 @llm_app.post("/context/compress")
 async def compress_context(raw_request: Request) -> JSONResponse:
     """Manually trigger context compression for a conversation."""
-    user_session = service.get_user_session(raw_request.cookies.get(USER_COOKIE_NAME))
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
     try:
         payload = await raw_request.json()
     except json.JSONDecodeError:
         raise HTTPException(status_code=400, detail="无效的 JSON 请求体") from None
 
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="请求体必须是对象")
     conversation_id = str(payload.get("conversation_id", "") or "").strip()
-    if not conversation_id:
-        raise HTTPException(status_code=422, detail="conversation_id 不能为空")
+    if not conversation_id or len(conversation_id) > 128:
+        raise HTTPException(status_code=422, detail="conversation_id 长度必须为 1–128")
 
-    # Guest conversations are browser-generated UUIDs and contain no account
-    # data.  Allow compression for that scoped capability; reject arbitrary
-    # strings so the endpoint cannot be used as a write primitive against
-    # internal digest paths. Authenticated users retain the existing behavior.
-    if not user_session.is_authenticated:
-        try:
-            parsed_id = UUID(conversation_id)
-        except (ValueError, AttributeError):
-            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。") from None
-        if parsed_id.version != 4:
-            raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。")
-
-    result = await asyncio.to_thread(service.compress_conversation_context, conversation_id)
-    return JSONResponse(content=result)
+    result = await asyncio.to_thread(service.compress_conversation_context, conversation_id,
+                                     owner_id=identity.owner_id)
+    response = JSONResponse(content=result)
+    _deliver_guest_cookie(raw_request, response)
+    return response
 
 
 @llm_app.get("/chat/conversations", response_model=ConversationHistoryListResponse)
@@ -2372,7 +2384,8 @@ async def list_chat_conversations(
         account_email=(user_session.account.email if user_session.account else None),
         requested_email=student_email,
     )
-    return service.list_chat_conversations(student_email=resolved_email, limit=limit)
+    return service.list_chat_conversations(student_email=resolved_email, limit=limit,
+                                           owner_id=f"account:{user_session.account.user_id}")
 
 
 @llm_app.get(
@@ -2391,7 +2404,8 @@ async def get_chat_conversation(
         requested_email=student_email,
     )
     return service.get_chat_conversation(
-        conversation_id=conversation_id, student_email=resolved_email
+        conversation_id=conversation_id, student_email=resolved_email,
+        owner_id=f"account:{user_session.account.user_id}"
     )
 
 

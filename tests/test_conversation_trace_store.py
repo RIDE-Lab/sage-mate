@@ -64,7 +64,7 @@ def test_completed_trace_is_replicated_and_startup_backfills(tmp_path: Path) -> 
 
 
 def test_plain_chat_returns_trace_header_and_persists_trace(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, guest_identity_store
 ) -> None:
     db_path = tmp_path / "traces.sqlite3"
     store = ConversationTraceStore(db_path)
@@ -91,6 +91,7 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
         api_module,
         "service",
         SimpleNamespace(
+            _guest_identity_store=guest_identity_store,
             answer=fake_answer,
             try_fast_answer=lambda _request: None,
             _check_sensitive_boundary_request=lambda _request: None,
@@ -117,7 +118,7 @@ def test_plain_chat_returns_trace_header_and_persists_trace(
 
 
 def test_sse_chat_persists_validated_answer_and_background_steps(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, guest_identity_store
 ) -> None:
     db_path = tmp_path / "traces.sqlite3"
     store = ConversationTraceStore(db_path)
@@ -155,6 +156,7 @@ def test_sse_chat_persists_validated_answer_and_background_steps(
         "service",
         SimpleNamespace(
             answer=fake_answer,
+            _guest_identity_store=guest_identity_store,
             try_fast_answer=lambda _request: None,
             _check_sensitive_boundary_request=lambda _request: None,
         ),

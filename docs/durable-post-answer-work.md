@@ -54,15 +54,14 @@ and role-only API tokens cannot write a caller-supplied personal email into the
 chat record. Public profile hints remain non-privileged. JSON and multipart
 requests use the same boundary. Raw credentials are not part of this contract.
 
-This is identity binding, **not yet conversation ownership enforcement**. Names
-and conversation IDs must not become authorization keys. Anonymous contact
+Names and conversation IDs are not authorization keys. Anonymous contact
 details cannot double as verified history ownership; contact/booking flows need
 an explicit separate policy. Slack uses its existing verified account-link path,
-not HTTP bearer identity. Ownership checks for retrieval, compression, workflow
-events and cancellation, and an authorized resumable result endpoint remain
+not HTTP bearer identity; its owner adapter is still pending. Workflow events,
+cancellation, feedback and an authorized resumable result endpoint remain
 required before deployment of the full delivery design.
 
-### Owner-scoped canonical memory contract (adapter cutover pending)
+### Owner-scoped canonical memory and HTTP binding
 
 Conversation and profile records can now carry an immutable `owner_id` scope
 (`account:`, `api_token:`, `guest:` or `slack:` plus an opaque subject). Canonical
@@ -81,12 +80,26 @@ are not rewritten. Unassigned/internal reads cannot see assigned records; a
 scoped read cannot see unassigned records. Administrative inventory remains a
 separate privileged internal operation.
 
-This contract is not yet activated for HTTP traffic: `ChatIdentity.bind` clears
-any client-provided owner field. The coordinated cutover must establish durable
-guest identity, pass trusted scope through every service/history/digest path,
-and handle legacy ownership explicitly. Until then, the old unassigned-data
-behavior remains; no end-to-end ownership or deployment claim is made. Do not
+HTTP chat overwrites client owner claims with the resolved account, token or guest
+subject. Authenticated history requires both account owner and matching email;
+unassigned legacy records are preserved but not automatically claimed or exposed
+through that route. Explicit reviewed migration remains a rollout gate. Do not
 expose journal recovery on this intermediate schema alone.
+
+Guests receive a random 256-bit opaque credential in a Secure, HttpOnly,
+SameSite=Lax cookie. Only its SHA-256 lookup key, random subject and absolute
+expiry are persisted in SAGE state; raw credentials are never persisted or
+included in work payloads. Authentication is read-only and does not extend
+expiry. Reopening the store preserves identity; an invalid/expired credential
+creates a new identity, without transferring old ownership. No development
+default signing secret is used. HTTPS is required for browser cookie continuity.
+
+The existing user-session bootstrap, direct JSON/multipart chat and streaming
+chat establish this identity. Streaming does so before response headers and
+reuses it inside the worker request; cookies cannot be attached after streaming
+begins. Credential-bearing responses are no-store. Manual compression also
+uses the trusted scope, not a client UUID as an access capability. Guest issuance
+capacity and expired-state retention still need qualification before deployment.
 
 Owned service requests now propagate their scope through recent-session context,
 meta recall and saved profile snapshots. Digests use a separate owner-derived
@@ -99,9 +112,9 @@ Both manual digest tasks and automatic post-answer projection carry scope throug
 the same durable worker port. A restart does not infer identity from the current
 request, display name or email. Tests exercise same-ID multi-owner publication,
 reopen, rejected cross-owner plans and an actual owned answer with recent context,
-profile capture and automatic digest. Transport activation and owner-bound
-history/events/cancellation remain pending; these internal service tests do not
-establish online isolation.
+profile capture and automatic digest. HTTPS transport tests verify cookie
+delivery/continuity and isolation across clients. Event/cancel/feedback ownership,
+Slack cutover and online acceptance remain pending.
 
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover

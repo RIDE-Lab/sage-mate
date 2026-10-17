@@ -49,7 +49,8 @@ def test_anonymous_or_expired_session_does_not_claim_account(monkeypatch, cookie
     bound = identity.bind(ChatRequest(student_name="Guest", student_email="victim@example.com", question="hello",
                                      answer_max_tokens=4096))
     assert identity.kind == "anonymous"
-    assert identity.subject_id is None
+    assert identity.subject_id
+    assert bound.owner_id == f"guest:{identity.subject_id}"
     assert bound.student_email is None
     assert bound.visitor_profile == "general_visitor"
     assert bound.answer_max_tokens is None
@@ -73,6 +74,21 @@ def test_non_account_cannot_carry_server_account_fields():
     with pytest.raises(ValueError, match="cannot_claim_personal_account"):
         ChatIdentity("api_token", "id", "lab_member", "victim@example.com").bind(
             ChatRequest(student_name="Guest", question="hello"))
+
+
+@pytest.mark.parametrize("route,method", [("/chat/conversations", "list_chat_conversations"),
+                                         ("/chat/conversations/same", "get_chat_conversation")])
+def test_history_owner_comes_from_authenticated_account(monkeypatch, route, method):
+    monkeypatch.setattr(api.service, "get_user_session", lambda _: account_session())
+    seen = []
+    def capture(**kwargs):
+        seen.append(kwargs)
+        raise HTTPException(status_code=404, detail="test empty history")
+    monkeypatch.setattr(api.service, method, capture)
+    response = TestClient(api.app).get(route, params={"owner_id": "account:forged"})
+    assert response.status_code == 404
+    assert seen[0]["owner_id"] == "account:account-1"
+    assert seen[0]["student_email"] == "owner@example.com"
 
 
 @pytest.mark.parametrize("transport", ["json", "multipart"])

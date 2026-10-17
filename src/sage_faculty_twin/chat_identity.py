@@ -20,6 +20,13 @@ class ChatIdentity:
     account_email: str | None = None
     account_name: str | None = None
 
+    @property
+    def owner_id(self):
+        if not self.subject_id:
+            raise ValueError("chat_identity_requires_subject")
+        prefix = "guest" if self.kind == "anonymous" else self.kind
+        return f"{prefix}:{self.subject_id}"
+
     def bind(self, payload: ChatRequest) -> ChatRequest:
         email = (self.account_email or "").strip().lower() or None
         if self.kind == "account":
@@ -31,9 +38,7 @@ class ChatIdentity:
         elif email is not None or self.account_name is not None:
             raise ValueError("non_account_identity_cannot_claim_personal_account")
         return payload.model_copy(update={
-            # Owner-scoped HTTP cutover requires authenticated guest continuity
-            # and all retrieval/digest ports. Never accept a client owner claim.
-            "owner_id": None,
+            "owner_id": self.owner_id,
             "student_email": email,
             "student_name": self.account_name if self.kind == "account" else payload.student_name,
             "visitor_profile": self.visitor_profile,

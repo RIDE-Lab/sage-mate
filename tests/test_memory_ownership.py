@@ -81,10 +81,10 @@ def test_legacy_roundtrip_is_not_implicitly_claimed_and_owner_is_validated(tmp_p
             ConversationMemoryRecord.from_dict({**legacy, "owner_id": invalid})
 
 
-def test_client_owner_claim_is_not_trusted_before_adapter_cutover():
+def test_client_owner_claim_is_overwritten_by_trusted_identity():
     probe = request("account:victim")
-    bound = ChatIdentity("anonymous", None, "general_visitor").bind(probe)
-    assert bound.owner_id is None
+    bound = ChatIdentity("anonymous", "trusted-guest", "general_visitor").bind(probe)
+    assert bound.owner_id == "guest:trusted-guest"
 
 
 def test_index_results_cannot_bypass_canonical_owner_check(tmp_path, monkeypatch):

@@ -8909,6 +8909,9 @@ class DigitalTwinService:
             self._knowledge_store, self._wiki_store, top_k=settings.retrieval_top_k,
         )
         self._conversation_store = NeuroMemConversationStore(settings)
+        from .guest_identity import GuestIdentityStore
+        self._guest_identity_store = GuestIdentityStore(
+            self._conversation_store.state_store, ttl_seconds=settings.user_session_ttl_seconds)
         self._analytics_store = ConversationAnalyticsStore(settings, self._conversation_store)
         self._artifact_memory_draft_store = ArtifactMemoryDraftStore(settings)
         self._knowledge_gap_draft_store = KnowledgeGapDraftStore(settings)
@@ -10624,6 +10627,7 @@ class DigitalTwinService:
         *,
         student_email: str | None,
         limit: int = 30,
+        owner_id: str | None = None,
     ) -> ConversationHistoryListResponse:
         normalized_email = (student_email or "").strip().lower()
         if not normalized_email:
@@ -10634,7 +10638,7 @@ class DigitalTwinService:
             record_email = (record.student_email or "").strip().lower()
             # Never expose legacy anonymous records through authenticated
             # history sync because they cannot be safely attributed.
-            if record_email != normalized_email:
+            if record_email != normalized_email or record.owner_id != owner_id:
                 continue
             grouped_records.setdefault(record.conversation_id, []).append(record)
 
@@ -10667,6 +10671,7 @@ class DigitalTwinService:
         *,
         conversation_id: str,
         student_email: str | None,
+        owner_id: str | None = None,
     ) -> ConversationTranscriptResponse:
         normalized_email = (student_email or "").strip().lower()
         if not normalized_email:
@@ -10679,6 +10684,7 @@ class DigitalTwinService:
             record
             for record in self._conversation_store.list_records()
             if record.conversation_id == conversation_id
+            and record.owner_id == owner_id
             and (record.student_email or "").strip().lower() == normalized_email
         ]
         records.sort(key=lambda record: record.created_at)
