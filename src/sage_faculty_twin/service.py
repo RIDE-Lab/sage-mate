@@ -2045,7 +2045,14 @@ class FacultyTwinWorkflowSupport:
 
     def build_prompt(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
-        if context.route != "answer" or context.answer is not None:
+        if (
+            context.route != "answer"
+            or context.answer is not None
+            or context.runtime_identity is not None
+        ):
+            # Runtime answers are rendered from the trusted provider snapshot,
+            # not generated from retrieved documents. Sending those receipts
+            # through document re-resolution would erase their provenance.
             self._append_trace(
                 context,
                 key="prompt_build",
@@ -2710,9 +2717,6 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
-        if context.prompt_envelope is None:
-            raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
-
         award_verification_answer = self._build_owner_award_verification_answer(context)
         if award_verification_answer is not None:
             context.answer = award_verification_answer
@@ -2748,6 +2752,9 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
             return context
+
+        if context.prompt_envelope is None:
+            raise RuntimeError("chat workflow reached llm stage without a prepared prompt")
 
         relevance_question = self._build_answer_relevance_question(context)
         explicit_deep = self._is_explicit_deep_request(context.request)

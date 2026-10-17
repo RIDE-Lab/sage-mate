@@ -286,7 +286,7 @@ def test_structured_fast_answer_has_complete_budget_and_failed_repair_is_503(tmp
         interaction_intent=InteractionIntent(action="answer", domain="research"),
         knowledge_hits=[hit("paper", ["research"])],
     )
-    assert support._build_llm_serving_policy_context(context)["max_tokens"] == 1024
+    assert support._build_llm_serving_policy_context(context)["max_tokens"] == 16384
     with pytest.raises(HTTPException) as exc_info:
         support._retry_answer_with_compact_prompt(context)
     assert exc_info.value.status_code == 503
