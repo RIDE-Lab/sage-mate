@@ -7,6 +7,16 @@ on:
   workflow_dispatch:
 
 jobs:
+  dependency-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Verify pinned source provenance without private dependency installation
+        run: python tools/check_dependency_lock.py
+
   lint:
     runs-on: ubuntu-latest
     steps:

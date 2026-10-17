@@ -971,14 +971,10 @@ wheels = [
 [[package]]
 name = "isage"
 version = "0.3.2.4"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/RIDE-Lab/SAGE.git?rev=ba47d586d0a40cc9f16c29614e334dfc6bd1222b#ba47d586d0a40cc9f16c29614e334dfc6bd1222b" }
 dependencies = [
     { name = "cloudpickle" },
     { name = "pyyaml" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/4c/72142c591ed4872ea1217b42eeed269ed0931711bd5bb7129e9126ef5815/isage-0.3.2.4.tar.gz", hash = "sha256:5f695fcd60532fe10a81b639aa82b013f3de3ee364e94f76521e0dc98204cb29", size = 365300, upload-time = "2026-06-20T01:48:51.498Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/5c/d08b0d7032c87230d43b30d5b8bd496246f17983ceca3accb186d3a3c63b/isage-0.3.2.4-py3-none-any.whl", hash = "sha256:6fc5d75e437bfd9aa222449896f7e9462a29610f8cae92b58cd64d0e751a6e3b", size = 453703, upload-time = "2026-06-20T01:48:49.294Z" },
 ]
 
 [[package]]
@@ -1043,7 +1039,7 @@ wheels = [
 [[package]]
 name = "isage-neuromem"
 version = "0.2.1.12"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "https://github.com/RIDE-Lab/neuromem.git?rev=2b047f316c3fe88774f6ab2e0c64ebd7dfda7e09#2b047f316c3fe88774f6ab2e0c64ebd7dfda7e09" }
 dependencies = [
     { name = "aioboto3" },
     { name = "aiohttp" },
@@ -1076,22 +1072,14 @@ dependencies = [
     { name = "uvicorn" },
     { name = "zhipuai" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0c/78/e3b86b41fd0f1a5ca94ec8e8b2a5d3762427ff285d4db33e45a186815ca8/isage_neuromem-0.2.1.12.tar.gz", hash = "sha256:c098fc437546da382095ac5ef2a4d06f7ae499db7a465563bbfa2be73897d223", size = 132668, upload-time = "2026-06-10T15:16:07.174Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/37/c0/cf9ed0cff972f5fbf26e79a5804e37e80eec631aae605461caa4c4290772/isage_neuromem-0.2.1.12-py3-none-any.whl", hash = "sha256:c5aba44d936e194483dcc76bf72e5b4f666b06ddb8130748571def4680fdd302", size = 163984, upload-time = "2026-06-10T15:16:05.219Z" },
-]
 
 [[package]]
 name = "isage-vdb"
-version = "0.2.0.11"
-source = { registry = "https://pypi.org/simple" }
+version = "0.2.0.12"
+source = { git = "https://github.com/intellistream/sageVDB.git?rev=311d65e972fb3cb4e5a2904a4c499a51dafae38d#311d65e972fb3cb4e5a2904a4c499a51dafae38d" }
 dependencies = [
     { name = "faiss-cpu" },
     { name = "numpy" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/a1/e8/81d9e0d4d22d95fa6e9fa6a194608b34d07d4f3b87be865e3eb634ff7797/isage_vdb-0.2.0.11.tar.gz", hash = "sha256:04b06915450b46f5b40276a399e8b3f18658473b87f58522b15aead88668f9ca", size = 120205, upload-time = "2026-06-10T15:15:40.188Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9b/3c/fbf57d14182f86130d114106d9f5edaefedc4e3b9f81e9fbca77e941fa21/isage_vdb-0.2.0.11-cp311-abi3-manylinux_2_34_aarch64.whl", hash = "sha256:450a2d16e112de03ba8bd06c257dc74a069760ad2efb809e624ac56796373f54", size = 405705, upload-time = "2026-06-10T15:24:27.663Z" },
 ]
 
 [[package]]
@@ -2621,6 +2609,8 @@ dependencies = [
     { name = "httpx", extra = ["http2"] },
     { name = "isage" },
     { name = "isage-anns" },
+    { name = "isage-neuromem" },
+    { name = "isage-vdb" },
     { name = "numpy" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -2636,24 +2626,12 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
-neuromem = [
-    { name = "isage" },
-    { name = "isage-neuromem" },
-]
-sage-stack = [
-    { name = "isage" },
-    { name = "isage-neuromem" },
-]
 vdb = [
-    { name = "isage" },
-    { name = "isage-vdb" },
     { name = "numpy" },
     { name = "sentence-transformers" },
 ]
 vdb-anns = [
-    { name = "isage" },
     { name = "isage-anns" },
-    { name = "isage-vdb" },
     { name = "numpy" },
     { name = "sentence-transformers" },
 ]
@@ -2663,17 +2641,11 @@ requires-dist = [
     { name = "cloudpickle", specifier = ">=2.2" },
     { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
     { name = "httpx", extras = ["http2"], specifier = ">=0.28.0,<1.0.0" },
-    { name = "isage", specifier = ">=0.3.2.4" },
-    { name = "isage", marker = "extra == 'neuromem'", specifier = ">=0.3.2.4" },
-    { name = "isage", marker = "extra == 'sage-stack'", specifier = ">=0.3.2.4" },
-    { name = "isage", marker = "extra == 'vdb'", specifier = ">=0.3.2.4" },
-    { name = "isage", marker = "extra == 'vdb-anns'", specifier = ">=0.3.2.4" },
+    { name = "isage", git = "https://github.com/RIDE-Lab/SAGE.git?rev=ba47d586d0a40cc9f16c29614e334dfc6bd1222b" },
     { name = "isage-anns", specifier = ">=0.2.0" },
     { name = "isage-anns", marker = "extra == 'vdb-anns'", specifier = ">=0.2.0" },
-    { name = "isage-neuromem", marker = "extra == 'neuromem'", specifier = ">=0.2.1.12" },
-    { name = "isage-neuromem", marker = "extra == 'sage-stack'", specifier = ">=0.2.1.12" },
-    { name = "isage-vdb", marker = "extra == 'vdb'", specifier = ">=0.2.0.10" },
-    { name = "isage-vdb", marker = "extra == 'vdb-anns'", specifier = ">=0.2.0.10" },
+    { name = "isage-neuromem", git = "https://github.com/RIDE-Lab/neuromem.git?rev=2b047f316c3fe88774f6ab2e0c64ebd7dfda7e09" },
+    { name = "isage-vdb", git = "https://github.com/intellistream/sageVDB.git?rev=311d65e972fb3cb4e5a2904a4c499a51dafae38d" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'vdb'", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'vdb-anns'", specifier = ">=1.24.0" },

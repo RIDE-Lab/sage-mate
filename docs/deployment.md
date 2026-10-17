@@ -433,6 +433,17 @@ binary. No automatic workspace assignment or legacy authorization fallback is
 provided. Verify both signed command and event paths, and confirm that the same
 user ID in another workspace cannot reuse the binding or allowlist entry.
 
+### Release dependency provenance
+
+Before preparing a release, run `python tools/check_dependency_lock.py` and
+`uv lock --check`. The offline guard verifies that Git-pinned runtime components
+have the same repository and resolved commit in `uv.lock`; the full uv check
+also validates dependency metadata. Update the lock whenever source pins change.
+Use locked resolution for a release, and record the resulting commit/artifact
+provenance. Matching package version strings alone is insufficient: different
+SAGE commits can share a version number. A dependency-fetch failure is a release
+failure, not permission to substitute a similarly named registry package.
+
 ### Durable Slack workflow and transport
 
 `slack_workflow.SlackWorkflow` admits answer and delivery intents together into
