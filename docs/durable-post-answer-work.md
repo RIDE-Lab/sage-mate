@@ -2,14 +2,14 @@
 
 ## SageVDB dependency qualification
 
-The base dependency pins `9d933f78c35e7caf2f754ab8c869559730b1190e`, which
+The base dependency pins `c1b38311109fbe65dfe7ef203be7938231587c54`, which
 provides `VersionedDocumentCatalog`, revision-fenced index generations and
-`rebuild_from_catalog`. An exact Git archive was built offline on A100 after
+`rebuild_from_catalog` and revision-qualified read-only `refresh`. An exact Git archive was built offline on A100 after
 Git transport/DNS prevented network builds; no shared Git/network configuration
 was changed. The CPython 3.11 Linux x86-64 wheel SHA-256 is
-`f63a99a06f09bb90ec977d4c7ab1315f400133d4bfc1545bd6317cb1536299d9`.
+`d7113cce263c3cb3a923f71045a13789c5511654197a18e50071bcf5d126fdad`.
 Installed module hashes match the source commit, exports resolve from the scratch
-venv's site-packages, and all 48 catalog/native-persistence/recovery tests passed
+venv's site-packages, and all 58 catalog/native-persistence/recovery/refresh tests passed
 without source overlays. That venv exposes system packages, so this is not a
 clean-room dependency-resolution test. The version number remains 0.2.0.12;
 commit and wheel hash, not the version string alone, identify this qualification.
@@ -63,6 +63,11 @@ polling/executor loop.
 Foreground freshness checks, synchronous rebuild flags and startup reconstruction
 still remain; avoiding duplicated rebuilds and migrating the foreground wait
 boundary without holding the mutation lock are the next cutover steps.
+When another worker has already published a sufficiently new native generation,
+the caller now refreshes its process-local handle directly from that generation;
+it does not invoke embedding or reconstruct the index. Missing, behind or damaged
+generations do not count as fresh. Explicit task targeting for different projection
+configurations and replacing the remaining foreground build path are still pending.
 Native SageVDB projections now use canonical revisions
 and an isolated `canonical-v1/<configuration-sha256>/` generation root. Backend,
 embedding model/dimension, retrieval format, source namespace and a hash of the

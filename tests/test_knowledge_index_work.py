@@ -101,6 +101,31 @@ def test_running_worker_projects_new_admission_without_foreground_rebuild(tmp_pa
         store.close()
 
 
+def test_foreground_reads_other_workers_generation_without_rebuilding(tmp_path, monkeypatch):
+    first = store_at(tmp_path)
+    old = add(first, "old research evidence")
+    first.rebuild_indexes()
+    other = store_at(tmp_path)
+    try:
+        other.start_background_indexing()
+        other.delete_documents([old.document_id], rebuild_indexes=False)
+        new = add(other, "new research evidence")
+        for request in operations(other):
+            other._catalog.wait_indexing(request, timeout=5)
+        def forbidden():
+            pytest.fail("already committed worker projection must not be rebuilt")
+        monkeypatch.setattr(first, "_initialize_sagevdb", forbidden)
+        hits = first.search("new research evidence")
+        assert hits and hits[0].document_id == new.document_id
+        assert old.document_id not in first._document_id_to_vector_id
+        assert first._sagevdb_open_result.reason == "refreshed_current"
+        assert first._sagevdb_last_sync is None
+        assert first._indexed_catalog_revision == 3
+    finally:
+        other.close()
+        first.close()
+
+
 def test_failed_projection_is_not_acknowledged_and_recovers_on_restart(tmp_path, monkeypatch):
     store = store_at(tmp_path)
     add(store)

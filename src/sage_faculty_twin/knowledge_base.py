@@ -794,7 +794,8 @@ class LocalKnowledgeStore:
 
     def _rebuild_backend_indexes(self) -> None:
         if self._backend == "sagevdb":
-            self._initialize_sagevdb()
+            if not self._refresh_native_projection():
+                self._initialize_sagevdb()
         elif self._backend == "neuromem":
             self._initialize_neuromem()
         self._indexed_catalog_revision = (
@@ -802,6 +803,27 @@ class LocalKnowledgeStore:
             if self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
             else self._catalog_revision
         )
+
+    def _refresh_native_projection(self) -> bool:
+        """A completed shared worker does not refresh this process's handle."""
+        if self._uses_sagevdb_anns_backend() or self._sagevdb_persistence is None:
+            return False
+        from sagevdb import PersistenceError
+
+        try:
+            result = self._sagevdb_persistence.refresh(
+                minimum_source_revision=self._catalog_revision)
+        except (PersistenceError, OSError, ValueError):
+            # Missing/behind/damaged projections still require the canonical
+            # projector. Never serve the retained old handle as fresh.
+            return False
+        self._sagevdb_open_result = result
+        self._sagevdb_last_sync = None  # This read did not synchronize or embed.
+        self._sagevdb = self._sagevdb_persistence.database
+        self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
+        if self._sagevdb_persistence.source_revision > self._catalog_revision:
+            self._refresh_documents()
+        return True
 
     def _normalize_sagevdb_backend(self) -> str:
         backend = (
