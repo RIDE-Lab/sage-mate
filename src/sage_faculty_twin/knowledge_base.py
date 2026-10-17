@@ -353,6 +353,7 @@ class LocalKnowledgeStore:
         self._sagevdb_persistence = None
         self._sagevdb_open_result = None
         self._sagevdb_last_sync = None
+        self._sagevdb_recovery_count = 0
         self._neuromem_collection = None
         raw_index_type = (settings.neuromem_index_type or "auto").strip().lower()
         if raw_index_type == "auto":
@@ -384,7 +385,43 @@ class LocalKnowledgeStore:
         self._link_expansion_enabled = settings.knowledge_link_expansion_enabled
         self._load_documents_from_disk()
         self._rebuild_link_graph()
-        self._rebuild_backend_indexes()
+        if self._has_native_projection():
+            try:
+                self._initialize_sagevdb(prepare_only=True)
+                self._catalog.bind_projection(self._sagevdb_persistence.root.name)
+                self._open_native_projection()
+                self._wait_for_projection(self._catalog_revision)
+            except BaseException:
+                # A worker may still be finishing a durable acknowledgement.
+                # SAGE releases storage after drain, never from under that task.
+                self._catalog.retire()
+                raise
+        else:
+            self._rebuild_backend_indexes()
+
+    def _open_native_projection(self):
+        """Startup only reads a committed generation; it never builds one."""
+        from sagevdb import PersistenceError
+        try:
+            result = self._sagevdb_persistence.open()
+        except (PersistenceError, OSError, ValueError):
+            return  # The single SAGE projector owns repair from canonical data.
+        if not result.loaded:
+            if self._catalog_revision != 0:
+                return
+            # No canonical history and no generation: an empty read view needs
+            # no embeddings, durable task or generation publication.
+            revision = 0
+        else:
+            revision = self._sagevdb_persistence.source_revision
+            if revision > self._catalog_revision:
+                self._refresh_documents()
+            if revision > self._catalog_revision:
+                raise RuntimeError("knowledge_projection_ahead_of_catalog")
+        self._sagevdb_open_result = result
+        self._sagevdb = self._sagevdb_persistence.database
+        self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
+        self._indexed_catalog_revision = revision
 
     def start_background_indexing(self):
         """Consume durable intents without retaining this store through a worker."""
@@ -933,7 +970,7 @@ class LocalKnowledgeStore:
             "source_name": document.source_name or "",
         }
 
-    def _initialize_sagevdb(self) -> None:
+    def _initialize_sagevdb(self, *, prepare_only=False) -> None:
         try:
             import numpy as np
             from sagevdb import (
@@ -1008,6 +1045,8 @@ class LocalKnowledgeStore:
                     compatibility=compatibility,
                     source_namespace=self._catalog.catalog.namespace,
                 )
+                if prepare_only:
+                    return
                 documents_by_id = {
                     document.document_id: document for document in self.list_documents()
                 }
@@ -1053,6 +1092,7 @@ class LocalKnowledgeStore:
                     self._sagevdb_open_result = OpenResult(
                         loaded=True, recovered=True, generation=self._sagevdb_persistence.generation,
                         reason="rebuilt_from_canonical_catalog")
+                    self._sagevdb_recovery_count += 1
                     self._refresh_documents()
                 self._sagevdb = self._sagevdb_persistence.database
                 self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids

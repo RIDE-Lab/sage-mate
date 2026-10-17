@@ -207,7 +207,7 @@ def test_close_timeout_keeps_canonical_state_available_for_active_worker(tmp_pat
         entered.set()
         assert release.wait(5)
         return store._catalog.snapshot()[0]
-    store._catalog.start_indexing(project)
+    store._catalog.start_indexing(project, projection_key=store._sagevdb_persistence.root.name)
     try:
         assert entered.wait(5)
         with pytest.raises(TimeoutError, match="drain_timeout"):
@@ -229,7 +229,7 @@ def test_projection_must_prove_required_revision_before_acknowledgement(tmp_path
     def project(required):
         called.set()
         return actual
-    store._catalog.start_indexing(project)
+    store._catalog.start_indexing(project, projection_key=store._sagevdb_persistence.root.name)
     try:
         assert called.wait(5)
     finally:
@@ -357,3 +357,59 @@ def test_catalog_rollback_does_not_spin_or_serve_newer_projection(tmp_path, monk
             store.search("evidence")
     finally:
         store.close()
+
+
+def test_native_cold_start_builds_only_through_sage_worker(tmp_path, monkeypatch):
+    config = AppSettings(knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="local")
+    seed = LocalKnowledgeStore(config)
+    record = seed.add_document(KnowledgeDocumentCreate(
+        title="cold evidence", content="cold research evidence", source_name="cold"))
+    seed.close()
+    original = LocalKnowledgeStore._initialize_sagevdb
+    builds = []
+    def initialize(self, *, prepare_only=False):
+        if not prepare_only:
+            assert threading.current_thread().name.startswith("sage-work")
+            builds.append(threading.current_thread().name)
+        return original(self, prepare_only=prepare_only)
+    monkeypatch.setattr(LocalKnowledgeStore, "_initialize_sagevdb", initialize)
+    store = store_at(tmp_path)
+    try:
+        assert builds
+        assert store._indexed_catalog_revision == 1
+        assert store.search("cold research evidence")[0].document_id == record.document_id
+    finally:
+        store.close()
+
+
+def test_failed_native_startup_retires_worker_without_losing_canonical_data(tmp_path, monkeypatch):
+    from sage_faculty_twin.knowledge_catalog import KnowledgeCatalog
+    seed = LocalKnowledgeStore(AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="local"))
+    seed.add_document(KnowledgeDocumentCreate(title="saved", content="saved evidence", source_name="saved"))
+    seed.close()
+    original = KnowledgeCatalog.retire
+    retired = []
+    def retire(self):
+        retired.append(self)
+        original(self)
+    def fail(self, texts):
+        assert threading.current_thread().name.startswith("sage-work")
+        raise OSError("embedding unavailable")
+    with monkeypatch.context() as patch:
+        patch.setattr(KnowledgeCatalog, "retire", retire)
+        patch.setattr(LocalKnowledgeStore, "_embed_documents", fail)
+        with pytest.raises(TimeoutError):
+            LocalKnowledgeStore(AppSettings(
+                knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="sagevdb",
+                sagevdb_embedding_backend="hash", sagevdb_dimension=128,
+                chat_request_timeout_seconds=1))
+    assert len(retired) == 1 and retired[0]._closing
+    assert retired[0]._index_service._stopped.wait(5)
+    assert retired[0]._index_service._closed
+    recovered = store_at(tmp_path)
+    try:
+        assert recovered.count_documents() == 1
+        assert recovered.search("saved evidence")
+    finally:
+        recovered.close()

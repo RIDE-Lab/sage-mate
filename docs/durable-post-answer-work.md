@@ -60,7 +60,7 @@ dispatcher before releasing storage. Retirement failure retains resources and
 does not claim a clean shutdown. This is SAGE scheduling, not an application
 polling/executor loop.
 
-After initialization, native mutations, explicit rebuilds and stale searches use
+Native mutations, explicit rebuilds and stale searches use
 targeted SAGE work rather than running an index builder on the caller thread.
 Mutation admission is locked, but waiting is outside that lock; nested upsert
 uses an internal creation helper so it cannot wait under its parent's lock.
@@ -69,8 +69,14 @@ Wait timeout retains committed bodies/tasks and raises rather than serving stale
 results. The existing request deadline bounds waiting, not generated evidence.
 Inactive bulk imports with `rebuild_indexes=False` bind targeted intents without
 starting a consumer; explicit rebuild/search starts work later. Already-active
-workers may consume those intents asynchronously. Startup reconstruction and
-non-native projection cutover remain pending.
+workers may consume those intents asynchronously. Native startup prepares the
+configuration and only reads a valid committed generation. Missing, stale or
+damaged indexes are built/repaired by the same targeted SAGE projector, not a
+second startup builder. A truly empty catalog with no index history uses an empty
+read view without publishing a generation or starting a worker. Failed startup
+retires its consumer nonblockingly; committed data and pending work survive,
+while SAGE releases storage only after active acknowledgements finish. Non-native
+projection cutover remains pending.
 When another worker has already published a sufficiently new native generation,
 the caller now refreshes its process-local handle directly from that generation;
 it does not invoke embedding or reconstruct the index. Missing, behind or damaged

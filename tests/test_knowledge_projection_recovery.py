@@ -51,7 +51,7 @@ def test_damaged_index_rebuild_uses_latest_body_and_omits_deleted_source(tmp_pat
         file = "index.vectors" if damage == "vectors" else "manifest.json"
         (root / f"generation-{generation}" / file).write_text("corrupt")
     restarted = LocalKnowledgeStore(config)
-    assert restarted._sagevdb_open_result.reason == "rebuilt_from_canonical_catalog"
+    assert restarted._sagevdb_recovery_count == 1
     assert restarted._sagevdb_persistence.source_revision == 3
     assert restarted._indexed_catalog_revision == 3
     assert set(restarted._document_id_to_vector_id) == {current.document_id}
@@ -82,13 +82,14 @@ def test_rebuild_embedding_failure_does_not_publish_success(tmp_path, monkeypatc
     record = store.add_document(payload("Saved canonical evidence"))
     root = store._sagevdb_persistence.root
     before = (root / "CURRENT").read_text()
+    store.close()
     (root / f"generation-{store._sagevdb_persistence.generation}" / "index.vectors").write_text("corrupt")
     with monkeypatch.context() as patch:
         def fail(self, texts):
             raise OSError("embedding offline")
         patch.setattr(LocalKnowledgeStore, "_embed_documents", fail)
-        with pytest.raises(OSError, match="embedding offline"):
-            LocalKnowledgeStore(config)
+        with pytest.raises(TimeoutError):
+            LocalKnowledgeStore(config.model_copy(update={"chat_request_timeout_seconds": 1}))
     assert (root / "CURRENT").read_text() == before
     recovered = LocalKnowledgeStore(config)
     assert recovered.get_document(record.document_id) is not None
@@ -108,7 +109,7 @@ def test_different_embedding_configurations_do_not_replace_each_others_index(tmp
     assert (first_root / "CURRENT").read_text().strip() == first_generation
     reopened = LocalKnowledgeStore(config)
     assert reopened._sagevdb_persistence.generation == first_generation
-    assert reopened._sagevdb_last_sync.embedded == 0
+    assert reopened._sagevdb_last_sync is None
 
 
 def test_different_catalogs_cannot_share_a_live_generation(tmp_path):

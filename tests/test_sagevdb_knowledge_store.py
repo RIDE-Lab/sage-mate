@@ -105,8 +105,7 @@ def test_sagevdb_restart_reuses_durable_index_without_reembedding(
 
     assert restarted._sagevdb_open_result.loaded is True
     assert restarted._sagevdb_persistence.generation == first_generation
-    assert restarted._sagevdb_last_sync.embedded == 0
-    assert restarted._sagevdb_last_sync.committed is False
+    assert restarted._sagevdb_last_sync is None  # Warm startup is read-only.
     hits = restarted.search("What should students send before office hours?", top_k=1)
     assert hits
     assert hits[0].source_name == "persistent-note"

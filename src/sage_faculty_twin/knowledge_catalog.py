@@ -134,6 +134,12 @@ class KnowledgeCatalog:
             self._finalizer()
             self._closed = True
 
+    def retire(self):
+        """Failed startup can stop admission without joining an active task."""
+        with self._lifecycle_lock:
+            self._closing = True
+            self._finalizer()
+
     def _assert_open(self):
         if self._closing or self._closed:
             raise RuntimeError("knowledge_catalog_closing")
