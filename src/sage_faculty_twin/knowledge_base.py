@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -776,7 +777,11 @@ class LocalKnowledgeStore:
             self._initialize_sagevdb()
         elif self._backend == "neuromem":
             self._initialize_neuromem()
-        self._indexed_catalog_revision = self._catalog_revision
+        self._indexed_catalog_revision = (
+            self._sagevdb_persistence.source_revision
+            if self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+            else self._catalog_revision
+        )
 
     def _normalize_sagevdb_backend(self) -> str:
         backend = (
@@ -811,6 +816,8 @@ class LocalKnowledgeStore:
                 IndexType,
                 PersistentRecord,
                 PersistentSageVDB,
+                PersistenceError,
+                OpenResult,
                 create_database,
                 stable_content_hash,
             )
@@ -848,12 +855,17 @@ class LocalKnowledgeStore:
                 persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
                 if persistence_dir is None:
                     persistence_dir = self._base_dir / ".sagevdb-index"
+                # Old unversioned generations remain offline recovery material;
+                # they are never read as an alternate live index.
 
                 def database_factory():
                     return create_database(cfg, **database_kwargs)
 
                 compatibility = {
                     "backend": backend,
+                    "catalog_store_id": hashlib.sha256(
+                        str(self._catalog.state_path.resolve()).encode()).hexdigest(),
+                    "source_namespace": self._catalog.catalog.namespace,
                     "dimension": int(self._text_embedder.dimension),
                     "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
                     "embedding_model": self._settings.sagevdb_embedding_model,
@@ -861,15 +873,19 @@ class LocalKnowledgeStore:
                     "metric": "COSINE",
                     "retrieval_text_format": 1,
                 }
+                configuration_id = hashlib.sha256(
+                    json.dumps(compatibility, sort_keys=True).encode()).hexdigest()
+                persistence_dir = persistence_dir / "canonical-v1" / configuration_id
                 self._sagevdb_persistence = PersistentSageVDB(
                     persistence_dir,
                     database_factory,
                     compatibility=compatibility,
+                    source_namespace=self._catalog.catalog.namespace,
                 )
-                self._sagevdb_open_result = self._sagevdb_persistence.open()
                 documents_by_id = {
                     document.document_id: document for document in self.list_documents()
                 }
+                source_revision = self._catalog_revision
                 persistent_records = [
                     PersistentRecord(
                         key=document.document_id,
@@ -888,10 +904,30 @@ class LocalKnowledgeStore:
                     ]
                     return self._embed_documents(texts)
 
-                self._sagevdb_last_sync = self._sagevdb_persistence.sync(
-                    persistent_records,
-                    vector_provider,
-                )
+                try:
+                    self._sagevdb_open_result = self._sagevdb_persistence.open()
+                    self._sagevdb_last_sync = self._sagevdb_persistence.sync(
+                        persistent_records, vector_provider, source_revision=source_revision,
+                    )
+                except PersistenceError:
+                    # Recovery reads the current canonical catalog itself; an
+                    # old request's snapshot must not become recovery authority.
+                    recovery_texts = {}
+                    def build_record(key, payload):
+                        document = KnowledgeDocumentRecord.model_validate(payload)
+                        self._check_source_namespace(document.source_name)
+                        text = self._compose_retrieval_text(document)
+                        recovery_texts[key] = text
+                        return PersistentRecord(key, stable_content_hash(text), self._document_metadata(document))
+
+                    self._sagevdb_last_sync = self._sagevdb_persistence.rebuild_from_catalog(
+                        self._catalog.catalog, build_record,
+                        lambda records: self._embed_documents([recovery_texts[item.key] for item in records]),
+                    )
+                    self._sagevdb_open_result = OpenResult(
+                        loaded=True, recovered=True, generation=self._sagevdb_persistence.generation,
+                        reason="rebuilt_from_canonical_catalog")
+                    self._refresh_documents()
                 self._sagevdb = self._sagevdb_persistence.database
                 self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         except ImportError as exc:

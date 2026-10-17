@@ -47,7 +47,18 @@ records are detached. No-op upserts create neither new revisions nor tasks.
 The indexing worker cutover is still pending: synchronous index rebuilds and
 startup reconstruction currently remain, and durable index intents are retained
 as pending rather than falsely acknowledged. The next step must consume them
-through SAGE WorkService and activate revision-fenced native projections. This
+through SAGE WorkService. Native SageVDB projections now use canonical revisions
+and an isolated `canonical-v1/<configuration-sha256>/` generation root. Backend,
+embedding model/dimension, retrieval format, source namespace and a hash of the
+canonical database location select the configuration fingerprint,
+so an older process cannot overwrite a different configuration's index. All such
+indexes derive from the same canonical document authority. Old unversioned generations stay
+offline and are never an alternate live read path. Open/sync failures invoke
+SageVDB's reconstruction from the current catalog; namespace/regression conflicts
+remain errors, and embedding failures do not publish a successful generation.
+The indexed revision comes from the committed index, not a potentially newer
+document-cache revision. Sage-ANNS/NeuroMem projection scheduling and version
+contracts still need qualification during worker integration. This
 intermediate repository state is not approved for production rollout. Catalog
 snapshot/receipt retention and API-level retry identity also remain open.
 
