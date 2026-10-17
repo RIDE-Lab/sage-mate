@@ -7683,6 +7683,10 @@ async function repairHistoricalCitationCards(root) {
             continue;
         }
         card.dataset.citationUrl = sourceUrl;
+        // Remove only our pre-marker recovery notices, never document content.
+        for (const oldNotice of card.querySelectorAll(':scope > p:not([data-citation-notice])')) {
+            if ((oldNotice.textContent || '').startsWith('已按当前公开来源恢复完整引用；原回答未改动。')) oldNotice.remove();
+        }
         let notice = card.querySelector('[data-citation-notice]');
         if (!notice) {
             notice = document.createElement('p');

@@ -7,7 +7,8 @@ const start = source.indexOf('async function repairHistoricalCitationCards(');
 const end = source.indexOf('\nfunction hydrateConversationInteractiveState', start);
 async function run(status, hasLink=true, headerText='Wiki: Source') {
   const detail = { innerHTML: 'OLD truncated', textContent: 'OLD', querySelector: () => hasLink ? { textContent:headerText, getAttribute: () => 'https://example.org/wiki' } : null };
-  const card = { dataset: {}, querySelector: selector => selector === '.message-basis-detail' ? detail : card.notice, appendChild: node => card.notice = node };
+  let removedLegacyNotice = false;
+  const card = { dataset: {}, querySelectorAll: () => [{textContent:'已按当前公开来源恢复完整引用；原回答未改动。', remove: () => { removedLegacyNotice = true; }}], querySelector: selector => selector === '.message-basis-detail' ? detail : card.notice, appendChild: node => card.notice = node };
   const answer = 'Original answer stays byte-for-byte unchanged';
   const root = { answer, querySelectorAll: () => [card], contains: () => true };
   let calls = 0;
@@ -17,6 +18,7 @@ async function run(status, hasLink=true, headerText='Wiki: Source') {
   vm.runInNewContext(source.slice(start, end), sandbox);
   await sandbox.repairHistoricalCitationCards(root);
   assert.equal(root.answer, answer);
+  if (hasLink && headerText === 'Wiki: Source') assert.ok(removedLegacyNotice);
   if (!hasLink || headerText !== 'Wiki: Source') { assert.equal(calls,0); assert.equal(card.dataset.citationFormat,'unresolved'); }
   else if (status === 'restored') { assert.ok(detail.innerHTML.includes('Tail')); assert.equal(card.dataset.citationFormat,'restored-current'); await sandbox.repairHistoricalCitationCards(root); assert.equal(calls,2); assert.equal(detail.hidden,false); status='unavailable'; await sandbox.repairHistoricalCitationCards(root); assert.equal(detail.hidden,true); assert.equal(card.dataset.citationFormat,'unavailable'); }
   else { assert.equal(card.dataset.citationFormat,'unavailable'); assert.ok(detail.textContent.includes('无法恢复')); }
