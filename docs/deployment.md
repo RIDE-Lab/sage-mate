@@ -450,7 +450,7 @@ after answer completion. Dependency waiting is not a failed attempt and does
 not incur transport retry backoff. Startup upgrades old independent Slack task
 records before starting consumers. Stop old workers first: live leases and
 inconsistent completed-child states reject migration, and dependency-unaware
-SAGE versions cannot read the new version-2 graph records. Roll back code and
+SAGE versions cannot read the upgraded graph records. Roll back code and
 the matching consistent state snapshot together, not just the dependency pin.
 External Slack effects are still at-least-once: a lost remote acknowledgement
 can cause duplicates. A success response is not proof that an ephemeral message
@@ -474,10 +474,28 @@ Command acknowledgements include `/twin status <request-id>`. Status is signed,
 reauthorizes the caller, and is restricted to the same user/workspace/channel;
 it returns operational metadata only. Replaying a failed command reports its
 failure instead of claiming to start it again. Terminal states require operator
-review; this status command does not requeue or delete work. Proactive failure
-notifications, and a status-entry experience for DM/mention events, remain open.
-Version-3 SAGE records require upgraded consumers; do not downgrade code over
+review; this status command does not requeue or delete work. DM and mention
+events also accept `status <request-id>`; these replies are private durable
+notices, never another model query. Answer replies include the status reference.
+Version-4 SAGE records require upgraded consumers; do not downgrade code over
 them. Stop old workers and retain consistent rollback snapshots before rollout.
+
+Each answer workflow now includes a SAGE settled-dependency `finalize` task that
+waits for answer and delivery to finish. On success it records a no-op. On
+terminal failure it rechecks authorization and sends a generic private failure
+notice (or the current access-denial message), without question or exception
+text. It uses the same transport, leases and bounded retry policy; a failed
+notification cannot recursively schedule another. Original task failures remain
+visible even when notification succeeds. `wait` may report failure before the
+finalizer finishes; inspect its task receipt separately. If Slack is unavailable,
+notification may itself fail and the durable status remains the source of truth.
+
+Before starting consumers, startup uses SAGE's additive extension to add this
+finalizer to old two-task records. Existing successes, failures and attempts are
+preserved; live leases reject the upgrade. Old successful records produce no
+extra external notice; old failed records can deliver their pending failure
+notice after recovery. External delivery is still at-least-once, including a
+notification whose acknowledgement is lost.
 
 The signed command/event routes now admit this workflow before acknowledging a
 question. Commands require Slack's `trigger_id`; events require `event_id`.

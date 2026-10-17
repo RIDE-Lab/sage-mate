@@ -859,7 +859,24 @@ async def _authorize_slack_ingress(ingress):
 
 
 def _render_slack_reply(response, ingress):
-    return _format_slack_twin_answer(response, question=ingress.question)
+    return (_format_slack_twin_answer(response, question=ingress.question)
+            + f"\n查询状态：`/twin status {ingress.request_id}`")
+
+
+async def _slack_status_text(ingress, words):
+    if len(words) != 2 or not re.fullmatch(r"slack-[a-f0-9]{64}", words[1]):
+        return "用法：`/twin status 请求编号`，或私信 `status 请求编号`。"
+    if slack_workflow is None:
+        raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+    status = await slack_workflow.status(ingress, words[1])
+    labels = {"failed": "处理已失败并停止重试，请联系管理员检查；本次请求不会自动重跑。",
+              "done": "处理完成，Slack 已接受投递（不代表消息已被阅读）。",
+              "pending": "仍在处理或等待重试。"}
+    text = "未找到当前账号在此会话中的请求。" if status is None else labels[status["status"]]
+    if status is not None:
+        text += "\n" + "；".join(f"{name}: {task['status']}，尝试 {task['attempt']} 次"
+                                  for name, task in status["tasks"].items())
+    return text
 
 
 async def _produce_slack_reply(ingress):
@@ -1774,19 +1791,7 @@ async def slack_twin_command(
     except ValidationError:
         raise HTTPException(status_code=400, detail="Slack request missing valid transport identity.") from None
     if words[0].lower() == "status":
-        if len(words) != 2 or not re.fullmatch(r"slack-[a-f0-9]{64}", words[1]):
-            return JSONResponse({"response_type": "ephemeral", "text": "用法：`/twin status 请求编号`"})
-        if slack_workflow is None:
-            raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
-        status = await slack_workflow.status(ingress, words[1])
-        labels = {"failed": "处理已失败并停止重试，请联系管理员检查；本次请求不会自动重跑。",
-                  "done": "处理完成，Slack 已接受投递（不代表消息已被阅读）。",
-                  "pending": "仍在处理或等待重试。"}
-        text = "未找到当前账号在此会话中的请求。" if status is None else labels[status["status"]]
-        if status is not None:
-            text += "\n" + "；".join(f"{name}: {task['status']}，尝试 {task['attempt']} 次"
-                                      for name, task in status["tasks"].items())
-        return JSONResponse({"response_type": "ephemeral", "text": text})
+        return JSONResponse({"response_type": "ephemeral", "text": await _slack_status_text(ingress, words)})
     await _admit_slack(ingress)
     current = await slack_workflow.status(ingress, ingress.request_id)
     if current is not None and current["status"] == "failed":
@@ -1854,6 +1859,8 @@ async def slack_events(
         raise HTTPException(status_code=400, detail="Slack event missing valid transport identity.") from None
     if question.split()[:1] and question.split()[0].lower() == "bind":
         ingress = ingress.model_copy(update={"question": "Slack binding status", "private_reply": is_public_mention})
+    elif question.split()[:1] and question.split()[0].lower() == "status":
+        ingress = ingress.model_copy(update={"private_reply": True})
     if slack_workflow is None:
         raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
     words = question.split()
@@ -1880,6 +1887,9 @@ async def slack_events(
         await _admit_slack(ingress, notice=denial_message)
         return JSONResponse({"ok": True})
 
+    if words and words[0].lower() == "status":
+        await _admit_slack(ingress, notice=await _slack_status_text(ingress, words))
+        return JSONResponse({"ok": True})
     await _admit_slack(ingress)
     return JSONResponse({"ok": True})
 

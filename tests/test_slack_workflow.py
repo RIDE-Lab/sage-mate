@@ -25,6 +25,91 @@ def test_contract_rejects_credentials_and_identity_changes():
     assert item.request_id != other.request_id
 
 
+def test_failure_notification_exhaustion_does_not_create_more_work(tmp_path):
+    async def scenario():
+        state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
+        calls = []
+        async def authorize(item):
+            return None
+        async def recover(item):
+            return None
+        async def answer(item):
+            raise ValueError("invalid fixture")
+        async def deliver(item, reply):
+            calls.append(item.request_id)
+            raise OSError("Slack unavailable")
+        workflow = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer,
+                                 deliver=deliver, max_attempts=2, retry_delay=0, poll_interval=0.01)
+        try:
+            item = ingress()
+            await workflow.submit(item)
+            async def observe():
+                while workflow.journal.read(item.request_id)["tasks"]["finalize"]["status"] != "failed":
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(observe(), 3)
+            record = workflow.journal.read(item.request_id)
+            assert set(record["tasks"]) == {"answer", "deliver", "finalize"}
+            assert record["tasks"]["finalize"]["attempt"] == 2
+            assert await workflow.resume_if_admitted(item)
+            await asyncio.sleep(0.03)
+            assert calls == [item.request_id] * 2
+        finally:
+            await workflow.aclose()
+            state.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("denial", [None, "membership revoked"])
+def test_legacy_failure_recovers_private_notice_once_and_preserves_failure(tmp_path, denial):
+    from sage.runtime.work_journal import WorkJournal
+    async def scenario():
+        path = str(tmp_path / "state.db")
+        state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
+        item = ingress()
+        journal = WorkJournal(state, namespace="twin-slack-workflow-v1")
+        payload = item.model_dump(mode="json")
+        journal.commit(item.request_id, result={"owner_id": item.owner_id},
+                       tasks={"answer": payload, "deliver": payload}, dependencies={"deliver": ["answer"]})
+        lease = journal.claim(item.request_id, "answer", lease_seconds=30)
+        journal.fail(lease, code="retry_exhausted")
+        before = journal.read(item.request_id)["tasks"]["answer"]
+        state.close()
+        state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
+        sent = []
+        async def authorize(item):
+            return denial
+        async def forbidden(*args):
+            pytest.fail("terminal failure must not regenerate an answer")
+        async def deliver(item, reply):
+            assert item.private_reply is True
+            assert item.question not in reply.text
+            sent.append(reply.text)
+            return {"accepted": True}
+        def workflow():
+            return SlackWorkflow(state, authorize=authorize, recover=forbidden, answer=forbidden,
+                                 deliver=deliver, poll_interval=0.01, retry_delay=0)
+        current = workflow()
+        try:
+            await current.start()
+            async def observed():
+                while current.journal.read(item.request_id)["tasks"]["finalize"]["status"] != "done":
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(observed(), 3)
+            assert current.journal.read(item.request_id)["tasks"]["answer"] == before
+            assert len(sent) == 1
+            assert sent[0] == denial if denial else "已停止自动重试" in sent[0]
+            await current.aclose()
+            current = workflow()
+            await current.start()
+            assert await current.resume_if_admitted(item)
+            await asyncio.sleep(0.03)
+            assert len(sent) == 1
+        finally:
+            await current.aclose()
+            state.close()
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("error, attempts", [(OSError("private detail"), 2), (ValueError("private detail"), 1)])
 def test_failure_is_bounded_durable_and_status_is_owner_scoped(tmp_path, error, attempts):
     from sage.runtime.work_service import WorkFailedError
@@ -38,8 +123,11 @@ def test_failure_is_bounded_durable_and_status_is_owner_scoped(tmp_path, error, 
         async def answer(item):
             calls.append(item.request_id)
             raise error
-        async def deliver(*args):
-            pytest.fail("a failed answer must not be delivered as success")
+        async def deliver(item, reply):
+            assert item.private_reply
+            assert "已停止自动重试" in reply.text
+            assert "private" not in reply.text
+            return {"accepted": True}
         item = ingress()
         workflow = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer,
                                  deliver=deliver, max_attempts=2, retry_delay=0, poll_interval=0.01)
@@ -160,8 +248,10 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
         try:
             await workflow.start()
             completed = await workflow.wait(item.request_id, timeout=3)
-            assert completed["version"] == 2
-            assert completed["dependencies"] == {"deliver": ["answer"]}
+            assert completed["version"] == 4
+            assert completed["dependencies"] == {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
+            assert completed["settled"] == ["finalize"]
+            assert completed["tasks"]["finalize"]["result"] == {"skipped": True}
             assert completed["tasks"]["deliver"]["attempt"] == 1
             assert sent == ["canonical answer"]
         finally:

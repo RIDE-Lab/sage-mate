@@ -19,6 +19,8 @@ from sage.runtime.work_dispatcher import WorkFailure
 from .post_answer_contract import DeliveryIntent
 from .models import ChatResponse
 
+_ANSWER_DEPENDENCIES = {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
+
 
 class SlackIngress(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -142,6 +144,10 @@ class SlackWorkflow:
             for row in rows:
                 if set(row["value"]["tasks"]) == {"answer", "deliver"}:
                     self.journal.upgrade_dependencies(row["key"], {"deliver": ["answer"]})
+                    payload = row["value"]["tasks"]["answer"]["payload"]
+                    self.journal.extend_tasks(row["key"], tasks={"finalize": payload},
+                                              dependencies={"finalize": ["answer", "deliver"]},
+                                              settled=["finalize"])
             if cursor is None:
                 return
 
@@ -150,8 +156,9 @@ class SlackWorkflow:
         payload = captured.model_dump(mode="json")
         await self.start()
         return await self._work.commit(captured.request_id,
-            result={"owner_id": captured.owner_id}, tasks={"answer": payload, "deliver": payload},
-            dependencies={"deliver": ["answer"]})
+            result={"owner_id": captured.owner_id},
+            tasks={"answer": payload, "deliver": payload, "finalize": payload},
+            dependencies=_ANSWER_DEPENDENCIES, settled=["finalize"])
 
     async def submit_notice(self, ingress: SlackIngress, reply: SlackReply):
         captured = SlackIngress.model_validate_json(ingress.model_dump_json())
@@ -183,7 +190,7 @@ class SlackWorkflow:
         payload = SlackIngress.model_validate_json(ingress.model_dump_json()).model_dump(mode="json")
         tasks = {name: payload for name in record["tasks"]}
         await self._work.commit(ingress.request_id, result=record["result"], tasks=tasks,
-                                dependencies=record.get("dependencies"))
+                                dependencies=record.get("dependencies"), settled=record.get("settled"))
         return True
 
     async def _handle(self, lease):
@@ -208,11 +215,21 @@ class SlackWorkflow:
                             raise
                 reply = SlackReply.model_validate(reply)
             return reply.model_dump(mode="json")
-        if lease.task_id != "deliver":
+        if lease.task_id not in {"deliver", "finalize"}:
             raise ValueError("unknown_slack_work_kind")
         record = await asyncio.to_thread(self.journal.read, lease.request_id)
         notice = record["result"].get("notice")
-        if notice is not None:
+        if lease.task_id == "finalize":
+            if not any(record["tasks"][name]["status"] in {"failed", "blocked"}
+                       for name in ("answer", "deliver")):
+                return {"skipped": True}
+            denial = await self._authorize(ingress)
+            reply = SlackReply(text=denial or (
+                "本次 Twin 请求处理或投递失败，已停止自动重试。请联系管理员检查。\n"
+                f"查询状态：`/twin status {ingress.request_id}`"))
+            # Failure details must not become a public channel message.
+            ingress = ingress.model_copy(update={"private_reply": True})
+        elif notice is not None:
             reply = SlackReply.model_validate(notice)
         else:
             completed = record["tasks"]["answer"]

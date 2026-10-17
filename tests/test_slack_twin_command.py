@@ -127,6 +127,55 @@ def test_normalization_and_owned_memory():
         assert api_module._slack_conversation_owner(*ids) != owner
 
 
+@pytest.mark.parametrize("event_type", ["message", "app_mention"])
+def test_event_status_is_private_durable_and_does_not_call_model(harness, event_type):
+    original = event(type=event_type)
+    assert harness.client.post("/slack/events", content=original, headers=signed(original, json_body=True)).status_code == 200
+    harness.flush()
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    request_id = rows[0]["key"]
+    assert request_id in harness.sent[0][1]["text"]
+    query = event(event_id="EvStatus", type=event_type, text=f"status {request_id}")
+    for _ in range(2):
+        assert harness.client.post("/slack/events", content=query, headers=signed(query, json_body=True)).status_code == 200
+        harness.flush()
+    assert len(harness.calls) == 1
+    assert len(harness.sent) == 2
+    method, payload = harness.sent[-1]
+    assert method == "chat.postEphemeral"
+    assert payload["user"] == "U1"
+    assert "处理完成" in payload["text"]
+    assert "完整的研究回答" not in payload["text"]
+
+
+@pytest.mark.parametrize("transport", ["command", "message", "mention"])
+def test_terminal_answer_failure_sends_private_notice_without_question(harness, monkeypatch, transport):
+    async def fail(*args, **kwargs):
+        raise ValueError("private model exception")
+    monkeypatch.setattr(harness.service, "answer", fail)
+    body = command() if transport == "command" else event(type="app_mention" if transport == "mention" else "message")
+    endpoint = "/slack/commands/twin" if transport == "command" else "/slack/events"
+    response = harness.client.post(endpoint, content=body, headers=signed(body, json_body=transport != "command"))
+    assert response.status_code == 200
+    async def observe():
+        while True:
+            rows, _ = api_module.slack_workflow.journal.records(limit=10)
+            if rows[0]["value"]["tasks"]["finalize"]["status"] == "done":
+                return rows[0]["value"]
+            await asyncio.sleep(0.01)
+    record = harness.client.portal.call(partial(asyncio.wait_for, observe(), timeout=3))
+    assert record["tasks"]["answer"]["status"] == "failed"
+    assert record["tasks"]["answer"]["attempt"] == 1
+    assert record["tasks"]["deliver"]["status"] == "blocked"
+    assert len(harness.sent) == 1
+    method, payload = harness.sent[0]
+    assert method == "chat.postEphemeral"
+    assert payload["user"] == "U1"
+    assert "已停止自动重试" in payload["text"]
+    assert "private model exception" not in payload["text"]
+    assert "研究路线" not in payload["text"]
+
+
 def test_signed_status_reports_terminal_failure_without_new_work_or_cross_channel_disclosure(harness):
     from sage.runtime.work_service import WorkFailedError
     harness.fail_delivery = 10
@@ -280,7 +329,7 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     if transport == "mention":
         assert payload["thread_ts"] == "1719200000.000100"
     records, _ = api_module.slack_workflow.journal.records(limit=10)
-    assert records[0]["value"]["dependencies"] == {"deliver": ["answer"]}
+    assert records[0]["value"]["dependencies"] == {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
     assert records[0]["value"]["tasks"]["deliver"]["attempt"] == 1
     saved = json.dumps(records)
     assert "private-credential" not in saved
