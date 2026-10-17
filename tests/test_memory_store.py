@@ -363,6 +363,54 @@ def test_profile_upsert_replaces_existing_collection_entry(tmp_path: Path) -> No
     assert final_store._profiles[newer.profile_id].to_dict() == newer.to_dict()
 
 
+def test_profile_commit_survives_stale_worker_and_index_failure(tmp_path, monkeypatch):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment")
+    first = NeuroMemConversationStore(settings)
+    second = NeuroMemConversationStore(settings)
+
+    def prepare(store, context, minute):
+        record = store.prepare_exchange(
+            ChatRequest(student_name="Alice", student_email="alice@example.com",
+                        course_context=context, question="research question"),
+            conversation_id="profiles", answer="complete answer", workflow_action="answer",
+            interaction_domain=None, knowledge_hit_count=0, booking_result=None,
+        )
+        record.created_at = datetime(2026, 6, 1, 12, minute, tzinfo=UTC)
+        return record
+
+    older = prepare(first, "old research", 0)
+    newer = prepare(second, "new research", 1)
+    first.consolidate_profiles(older)
+    before = first._durable_profiles.load()
+    original = second._initialize_collection
+
+    def fail_index(name, **kwargs):
+        if name == "conversation-profile-memory":
+            raise OSError("injected index failure")
+        return original(name, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(second, "_initialize_collection", fail_index)
+        with pytest.raises(OSError, match="injected index failure"):
+            second.consolidate_profiles(newer)
+    committed = second._durable_profiles.load()
+    assert committed != before
+    second.consolidate_profiles(newer)
+    first.consolidate_profiles(older)
+    assert first._durable_profiles.load() == committed
+    assert second._durable_profiles.load() == committed
+    reopened = NeuroMemConversationStore(settings)
+    assert reopened._durable_profiles.load() == committed
+    assert {key: profile.to_dict() for key, profile in reopened._profiles.items()} == {
+        key: entry["payload"] for key, entry in committed.items()
+    }
+    with sqlite3.connect(reopened._sqlite_db_path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM collection_snapshots WHERE name='conversation-profile-memory'"
+        ).fetchone()[0] == 0
+
+
 def test_store_canonicalizes_duplicate_profile_entries_on_startup(
     tmp_path: Path,
 ) -> None:
@@ -549,6 +597,8 @@ def test_stale_sage_vdb_snapshot_config_is_migrated_without_faiss_fallback(
         sagevdb_dimension=128,
     )
     store = NeuroMemConversationStore(settings)
+    # Construct an actual old-format snapshot; normal writes no longer use it.
+    store._durable_profiles = None
     store._persist_collection(
         store._profile_collection,
         store._profile_collection_dir,
@@ -573,11 +623,12 @@ def test_stale_sage_vdb_snapshot_config_is_migrated_without_faiss_fallback(
     assert profile_index.active_backend == "sage-anns:faiss_hnsw"
     assert profile_index.allow_faiss_fallback is False
     with sqlite3.connect(reloaded._sqlite_db_path) as connection:
-        migrated_raw = connection.execute(
+        obsolete_snapshot = connection.execute(
             "SELECT index_metadata FROM collection_snapshots WHERE name = ?",
             ("conversation-profile-memory",),
-        ).fetchone()[0]
-    migrated_config = json.loads(migrated_raw)["search"]["config"]
+        ).fetchone()
+    assert obsolete_snapshot is None
+    migrated_config = reloaded._profile_collection.index_metadata["search"]["config"]
     assert migrated_config["backend_name"] == "sage-anns"
     assert migrated_config["allow_faiss_fallback"] is False
 

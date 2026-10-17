@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sqlite3
 import weakref
@@ -333,6 +334,7 @@ class NeuroMemConversationStore:
         self._conversation_collection_type = self._resolve_conversation_collection_type()
         self._memory_write_lock = RLock()
         self._durable_memory = None
+        self._durable_profiles = None
         self._memory_state_runtime = None
         self._records: dict[str, ConversationMemoryRecord] = {}
         self._profiles: dict[str, ProfileMemoryRecord] = {}
@@ -356,6 +358,61 @@ class NeuroMemConversationStore:
             self._rebuild_runtime_state()
         if self._canonicalize_profile_collection():
             self._rebuild_runtime_state()
+        self._activate_durable_profiles()
+
+    @staticmethod
+    def _versioned_profile_entries(profiles):
+        latest = {}
+        for profile in profiles:
+            previous = latest.get(profile.profile_id)
+            if previous is not None:
+                if previous.updated_at > profile.updated_at:
+                    continue
+                if previous.updated_at == profile.updated_at and previous.to_dict() != profile.to_dict():
+                    raise ValueError("profile_revision_conflict")
+            latest[profile.profile_id] = profile
+        entries = []
+        for key, profile in sorted(latest.items()):
+            delta = profile.updated_at.astimezone(UTC) - datetime(1970, 1, 1, tzinfo=UTC)
+            revision = (delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds
+            entries.append({"key": key, "revision": revision, "payload": profile.to_dict()})
+        return entries
+
+    def _activate_durable_profiles(self):
+        from sage.neuromem.memory_collection.durable_versioned_records import DurableVersionedRecords
+        from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+
+        if self._memory_state_runtime is None:
+            self._memory_state_runtime = StatefulProcessRuntime(
+                backend="sqlite", sqlite_path=str(self._base_dir / "neural_state.sqlite3")
+            )
+            self._memory_state_finalizer = weakref.finalize(self, self._memory_state_runtime.close)
+        self._durable_profiles = DurableVersionedRecords(
+            self._memory_state_runtime, namespace="conversation", name="profiles"
+        )
+        self._commit_profile_records(list(self._profiles.values()))
+        # Only the canonical versioned store remains authoritative after migration.
+        with sqlite3.connect(self._sqlite_db_path) as connection:
+            connection.execute("DELETE FROM collection_snapshots WHERE name = ?",
+                               ("conversation-profile-memory",))
+
+    def _commit_profile_records(self, profiles, *, operation_id=None):
+        entries = self._versioned_profile_entries(profiles)
+        if operation_id is None:
+            digest = hashlib.sha256(json.dumps(entries, sort_keys=True, ensure_ascii=False,
+                                               separators=(",", ":")).encode()).hexdigest()
+            operation_id = f"profile-snapshot:{digest}"
+        self._durable_profiles.upsert_batch_once(operation_id, entries)
+        records = self._durable_profiles.load()
+        view = self._initialize_collection("conversation-profile-memory", collection_type="unified")
+        current = {}
+        for key, entry in records.items():
+            profile = ProfileMemoryRecord.from_dict(entry["payload"])
+            self._insert_collection_entry(view, self._build_profile_memory_entry(profile))
+            current[key] = profile
+        # Index construction can fail without publishing a partial read view.
+        self._profile_collection = view
+        self._profiles = current
 
     def _default_collection_index_type(self) -> str:
         configured = (self._settings.conversation_memory_index_type or "").strip().lower()
@@ -569,10 +626,8 @@ class NeuroMemConversationStore:
     def _consolidate_profiles_locked(self, record: ConversationMemoryRecord) -> int:
         started_at = time.time()
         profiles = self._derive_profiles(record)
-        for profile in profiles:
-            self._upsert_profile(profile)
+        self._commit_profile_records(profiles, operation_id=f"profile-exchange:{record.memory_id}")
         if profiles:
-            self._persist_collection(self._profile_collection, self._profile_collection_dir)
             self._record_telemetry_event(
                 "write_profile",
                 collection_name=self._profile_collection.name,
@@ -1341,6 +1396,16 @@ class NeuroMemConversationStore:
 
     def _persist_collection(self, collection: Any, snapshot_dir: Path) -> None:
         del snapshot_dir
+        if collection.name == "conversation-profile-memory" and self._durable_profiles is not None:
+            profiles = []
+            for key in collection.storage.keys():
+                payload = collection.storage.get(key)
+                profile = payload.get("metadata", {}).get("profile_payload")
+                if profile is None:
+                    raise ValueError("missing_profile_payload")
+                profiles.append(ProfileMemoryRecord.from_dict(profile))
+            self._commit_profile_records(profiles)
+            return
         if self._is_neural_collection(collection) and self._durable_memory is not None:
             if collection.export_state() != self._durable_memory.load().export_state():
                 raise RuntimeError("uncommitted_neural_view_mutation")
