@@ -1737,7 +1737,8 @@ def test_teaching_prompt_adds_course_understanding_grounding_guidance(
     assert "不必转成科研方向讨论" in llm.prompts[-1]
 
 
-def test_chat_returns_traceable_basis_for_knowledge_hits(tmp_path: Path) -> None:
+@pytest.mark.parametrize("visitor_profile", ["general_visitor", "lab_member"])
+def test_chat_returns_traceable_basis_for_knowledge_hits(tmp_path: Path, visitor_profile: str) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local")
     service = DigitalTwinService(settings)
     service._llm_client = IntentAwareLLMClient(
@@ -1760,11 +1761,21 @@ def test_chat_returns_traceable_basis_for_knowledge_hits(tmp_path: Path) -> None
                 student_email="alice@example.com",
                 course_context="科研指导",
                 question="FlowRAG 主要做什么？",
+                visitor_profile=visitor_profile,
             )
         )
     )
 
-    assert any(item.basis_label == "论文资料" for item in response.answer_basis)
+    # Storage origin is authoritative: a PDF in the private KB is not a public
+    # paper citation. Guests must not see its content or follow-up links.
+    if visitor_profile == "general_visitor":
+        assert response.answer_basis == []
+        assert not any(action.action_type == "recommended_reading" for action in response.follow_up_actions)
+        return
+    assert len(response.answer_basis) == 1
+    assert response.answer_basis[0].basis_label == "私有知识库"
+    assert response.answer_basis[0].title == "FlowRAG 论文解读"
+    assert "提高回答质量与可控性。" in response.answer_basis[0].detail
     assert any(
         item.source_label == "个人主页 / 研究论文 PDF / flowrag.pdf"
         for item in response.answer_basis
@@ -1941,6 +1952,7 @@ def test_chat_returns_recommended_reading_and_resource_actions(tmp_path: Path) -
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-followup-actions",
+                visitor_profile="lab_member",
                 question="和老师约时间前，我应该先准备什么？",
             )
         )
@@ -1980,6 +1992,7 @@ def test_chat_sanitizes_internalish_follow_up_reading_titles(tmp_path: Path) -> 
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-followup-sanitized-reading",
+                visitor_profile="lab_member",
                 question="和老师约时间前，我应该先准备什么？",
             )
         )
@@ -2467,6 +2480,7 @@ def test_chat_dedupes_same_title_published_gap_hits(tmp_path: Path) -> None:
                 student_name="Alice",
                 student_email="alice@example.com",
                 course_context="科研指导",
+                visitor_profile="lab_member",
                 question="和老师约时间前，我应该先准备什么？",
             )
         )
