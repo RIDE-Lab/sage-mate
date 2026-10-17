@@ -60,9 +60,17 @@ dispatcher before releasing storage. Retirement failure retains resources and
 does not claim a clean shutdown. This is SAGE scheduling, not an application
 polling/executor loop.
 
-Foreground freshness checks, synchronous rebuild flags and startup reconstruction
-still remain; avoiding duplicated rebuilds and migrating the foreground wait
-boundary without holding the mutation lock are the next cutover steps.
+After initialization, native mutations, explicit rebuilds and stale searches use
+targeted SAGE work rather than running an index builder on the caller thread.
+Mutation admission is locked, but waiting is outside that lock; nested upsert
+uses an internal creation helper so it cannot wait under its parent's lock.
+Search checks its canonical/index revision under the lock before using its cache.
+Wait timeout retains committed bodies/tasks and raises rather than serving stale
+results. The existing request deadline bounds waiting, not generated evidence.
+Inactive bulk imports with `rebuild_indexes=False` bind targeted intents without
+starting a consumer; explicit rebuild/search starts work later. Already-active
+workers may consume those intents asynchronously. Startup reconstruction and
+non-native projection cutover remain pending.
 When another worker has already published a sufficiently new native generation,
 the caller now refreshes its process-local handle directly from that generation;
 it does not invoke embedding or reconstruct the index. Missing, behind or damaged
@@ -75,8 +83,7 @@ without editing canonical data; requesting an uncommitted revision is rejected.
 Legacy/standalone intents without a fingerprint remain generic recovery work,
 not proof of any particular configuration's freshness. All consumers sharing a
 journal must be upgraded before targeted producers are deployed; an older worker
-without selection must not run concurrently against that journal. Replacing the
-remaining foreground build path with unlocked targeted waits is still pending.
+without selection must not run concurrently against that journal.
 Native SageVDB projections now use canonical revisions
 and an isolated `canonical-v1/<configuration-sha256>/` generation root. Backend,
 embedding model/dimension, retrieval format, source namespace and a hash of the

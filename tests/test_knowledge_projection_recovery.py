@@ -36,11 +36,15 @@ def test_damaged_index_rebuild_uses_latest_body_and_omits_deleted_source(tmp_pat
     old = first.add_document(payload("Obsolete GPU policy"))
     root = first._sagevdb_persistence.root
     generation = first._sagevdb_persistence.generation
+    first.close()
     second = LocalKnowledgeStore(config)
-    second.delete_documents([old.document_id], rebuild_indexes=False)
-    current = second.add_document(KnowledgeDocumentCreate(
-        title="Current GPU policy", content="Current GPU policy verified access procedure",
-        source_name="current-policy"), rebuild_indexes=False)
+    # Stage the crash window explicitly; public mutations now auto-start work.
+    with second._mutation_lock:
+        second._commit_documents({old.document_id: None})
+        current = second._add_document_locked(KnowledgeDocumentCreate(
+            title="Current GPU policy", content="Current GPU policy verified access procedure",
+            source_name="current-policy"), rebuild_indexes=False)
+    second.close()
     if damage == "pointer":
         (root / "CURRENT").unlink()
     else:

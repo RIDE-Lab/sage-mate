@@ -44,6 +44,19 @@ class KnowledgeCatalog:
         self.journal = WorkJournal(self.state, namespace=f"knowledge-index:{namespace}")
         self._imports_slot = ("twin-knowledge-import-v1", namespace, "files")
 
+    def bind_projection(self, projection_key):
+        """Bind admission identity without starting a batch consumer."""
+        with self._lifecycle_lock:
+            self._assert_open()
+            if projection_key is not None and (
+                    not isinstance(projection_key, str) or not projection_key
+                    or projection_key != projection_key.strip()):
+                raise ValueError("invalid_knowledge_projection_key")
+            if ((self._index_service is not None or self._projection_key is not None)
+                    and projection_key != self._projection_key):
+                raise RuntimeError("knowledge_projection_changed_restart_required")
+            self._projection_key = projection_key
+
     def start_indexing(self, project, *, projection_key=None):
         """Recover admitted intents using SAGE's bounded worker lifecycle.
 
@@ -52,16 +65,9 @@ class KnowledgeCatalog:
         never reconstruct documents from the task payload.
         """
         with self._lifecycle_lock:
-            self._assert_open()
-            if projection_key is not None and (
-                    not isinstance(projection_key, str) or not projection_key
-                    or projection_key != projection_key.strip()):
-                raise ValueError("invalid_knowledge_projection_key")
-            if self._index_service is not None and projection_key != self._projection_key:
-                raise RuntimeError("knowledge_projection_changed_restart_required")
+            self.bind_projection(projection_key)
             if self._index_service is None:
                 namespace = self.catalog.namespace
-                self._projection_key = projection_key
 
                 def accepts(task_id, payload):
                     return (isinstance(payload, dict)

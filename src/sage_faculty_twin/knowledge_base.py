@@ -300,6 +300,43 @@ def _knowledge_locked(method):
     return wrapped
 
 
+def _knowledge_mutation(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        with self._mutation_lock:
+            native = self._has_native_projection()
+            if native:
+                self._catalog.bind_projection(self._sagevdb_persistence.root.name)
+                if kwargs.get("rebuild_indexes", True):
+                    self.start_background_indexing()
+            before = self._catalog_revision
+            result = method(self, *args, **kwargs)
+            revision = self._catalog_revision
+            operation = self._last_index_operation if revision != before else None
+        if native and kwargs.get("rebuild_indexes", True):
+            self._wait_for_projection(revision, operation_id=operation)
+        return result
+    return wrapped
+
+
+def _knowledge_search(method):
+    @wraps(method)
+    def wrapped(self, *args, **kwargs):
+        deadline = time.monotonic() + self._settings.chat_request_timeout_seconds
+        while True:
+            with self._mutation_lock:
+                if not self._has_native_projection():
+                    return method(self, *args, **kwargs)
+                self._refresh_documents()
+                if self._indexed_catalog_revision > self._catalog_revision:
+                    raise RuntimeError("knowledge_projection_ahead_of_catalog")
+                if self._indexed_catalog_revision == self._catalog_revision:
+                    return method(self, *args, **kwargs)
+                revision = self._catalog_revision
+            self._wait_for_projection(revision, deadline=deadline)
+    return wrapped
+
+
 class LocalKnowledgeStore:
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
@@ -309,6 +346,7 @@ class LocalKnowledgeStore:
         self._catalog = KnowledgeCatalog(self._base_dir, namespace=settings.knowledge_namespace)
         self._catalog_revision = -1
         self._indexed_catalog_revision = -1
+        self._last_index_operation = None
         self._documents: dict[str, KnowledgeDocumentRecord] = {}
         self._backend = settings.knowledge_backend.lower()
         self._sagevdb = None
@@ -358,7 +396,8 @@ class LocalKnowledgeStore:
                 raise RuntimeError("knowledge_projector_unavailable")
             with store._mutation_lock:
                 store._refresh_documents()
-                if store._indexed_catalog_revision != store._catalog_revision:
+                if (store._has_native_projection()
+                        or store._indexed_catalog_revision != store._catalog_revision):
                     store._rebuild_backend_indexes()
                 return store._indexed_catalog_revision
 
@@ -372,13 +411,44 @@ class LocalKnowledgeStore:
     def close(self, *, timeout=30):
         self._catalog.close(timeout=timeout)
 
-    @_knowledge_locked
+    def _has_native_projection(self):
+        return self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+
+    def _wait_for_projection(self, revision, *, operation_id=None, deadline=None, force=False):
+        if deadline is None:
+            deadline = time.monotonic() + self._settings.chat_request_timeout_seconds
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("knowledge_projection_wait_timeout")
+            with self._mutation_lock:
+                self._refresh_documents()
+                required = max(revision, self._catalog_revision)
+                if self._indexed_catalog_revision > self._catalog_revision:
+                    raise RuntimeError("knowledge_projection_ahead_of_catalog")
+                if not force:
+                    if self._indexed_catalog_revision >= required:
+                        return
+                    if self._refresh_native_projection() and self._indexed_catalog_revision >= required:
+                        return
+                self.start_background_indexing()
+                request = operation_id or self._catalog.request_indexing(
+                    required, projection_key=self._sagevdb_persistence.root.name)
+            # No mutation lock is held while a worker acquires it to project.
+            self._catalog.wait_indexing(request, timeout=max(0, deadline - time.monotonic()))
+            operation_id = None
+            force = False
+
+    @_knowledge_mutation
     def add_document(
         self,
         payload: KnowledgeDocumentCreate,
         *,
         rebuild_indexes: bool = True,
     ) -> KnowledgeDocumentRecord:
+        return self._add_document_locked(payload, rebuild_indexes=rebuild_indexes)
+
+    def _add_document_locked(self, payload, *, rebuild_indexes):
         self._check_source_namespace(payload.source_name)
         self._refresh_documents()
         record = KnowledgeDocumentRecord(
@@ -391,13 +461,13 @@ class LocalKnowledgeStore:
             created_at=datetime.now(UTC),
         )
         self._commit_documents({record.document_id: record})
-        if rebuild_indexes:
+        if rebuild_indexes and not self._has_native_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
         return record
 
-    @_knowledge_locked
+    @_knowledge_mutation
     def upsert_document(
         self,
         payload: KnowledgeDocumentCreate,
@@ -409,7 +479,7 @@ class LocalKnowledgeStore:
         self._refresh_documents()
         existing = self._find_document_by_source_name(payload.source_name)
         if existing is None:
-            return self.add_document(payload, rebuild_indexes=rebuild_indexes), True
+            return self._add_document_locked(payload, rebuild_indexes=rebuild_indexes), True
 
         if preserve_existing:
             # Feedback snapshots must not reset a curator's review or edits.
@@ -436,13 +506,13 @@ class LocalKnowledgeStore:
             created_at=existing.created_at,
         )
         self._commit_record_and_duplicates(updated_record)
-        if rebuild_indexes:
+        if rebuild_indexes and not self._has_native_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
         return updated_record, False
 
-    @_knowledge_locked
+    @_knowledge_mutation
     def update_document(
         self,
         document_id: str,
@@ -466,7 +536,7 @@ class LocalKnowledgeStore:
             created_at=existing.created_at,
         )
         self._commit_record_and_duplicates(updated_record)
-        if rebuild_indexes:
+        if rebuild_indexes and not self._has_native_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
@@ -504,7 +574,7 @@ class LocalKnowledgeStore:
             return None
         return document
 
-    @_knowledge_locked
+    @_knowledge_mutation
     def delete_documents(
         self,
         document_ids: list[str],
@@ -519,20 +589,25 @@ class LocalKnowledgeStore:
             for key in changes:
                 self._document_id_to_vector_id.pop(key, None)
 
-        if removed and rebuild_indexes:
+        if removed and rebuild_indexes and not self._has_native_projection():
             self._rebuild_backend_indexes()
         if removed:
             self._rebuild_link_graph()
             self._clear_search_cache()
         return removed
 
-    @_knowledge_locked
     def rebuild_indexes(self) -> None:
-        self._refresh_documents()
-        self._rebuild_backend_indexes()
-        self._clear_search_cache()
+        with self._mutation_lock:
+            self._refresh_documents()
+            revision = self._catalog_revision
+            native = self._has_native_projection()
+            if not native:
+                self._rebuild_backend_indexes()
+            self._clear_search_cache()
+        if native:
+            self._wait_for_projection(revision, force=True)
 
-    @_knowledge_locked
+    @_knowledge_search
     def search(
         self,
         query: str,
@@ -541,9 +616,10 @@ class LocalKnowledgeStore:
         visitor_profile: str | None = None,
         admin_role: str | None = None,
     ) -> list[KnowledgeSearchHit]:
-        self._refresh_documents()
-        if self._indexed_catalog_revision != self._catalog_revision:
-            self._rebuild_backend_indexes()
+        if not self._has_native_projection():
+            self._refresh_documents()
+            if self._indexed_catalog_revision != self._catalog_revision:
+                self._rebuild_backend_indexes()
         cache_key = self._search_cache_key(query, top_k, visitor_profile, admin_role)
         cached = self._get_cached_search(cache_key)
         if cached is not None:
@@ -747,7 +823,7 @@ class LocalKnowledgeStore:
             self._catalog_revision = revision
 
     def _commit_documents(self, changes):
-        self._catalog.commit(changes, expected_revision=self._catalog_revision)
+        self._last_index_operation = self._catalog.commit(changes, expected_revision=self._catalog_revision)
         self._refresh_documents()
 
     def _commit_record_and_duplicates(self, record):
@@ -822,12 +898,15 @@ class LocalKnowledgeStore:
             # Missing/behind/damaged projections still require the canonical
             # projector. Never serve the retained old handle as fresh.
             return False
+        if self._sagevdb_persistence.source_revision > self._catalog_revision:
+            self._refresh_documents()
+        if self._sagevdb_persistence.source_revision > self._catalog_revision:
+            raise RuntimeError("knowledge_projection_ahead_of_catalog")
         self._sagevdb_open_result = result
         self._sagevdb_last_sync = None  # This read did not synchronize or embed.
         self._sagevdb = self._sagevdb_persistence.database
         self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
-        if self._sagevdb_persistence.source_revision > self._catalog_revision:
-            self._refresh_documents()
+        self._indexed_catalog_revision = self._sagevdb_persistence.source_revision
         return True
 
     def _normalize_sagevdb_backend(self) -> str:

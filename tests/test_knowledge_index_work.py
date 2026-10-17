@@ -19,6 +19,14 @@ def add(store, text="current research evidence"):
         title=text, content=text, source_name=text), rebuild_indexes=False)
 
 
+def stage_without_consumption(store, text="current research evidence"):
+    # Fault/recovery fixtures explicitly stage canonical work before workers
+    # start. The public mutation API now starts its consumer automatically.
+    with store._mutation_lock:
+        return store._add_document_locked(KnowledgeDocumentCreate(
+            title=text, content=text, source_name=text), rebuild_indexes=False)
+
+
 def operations(store):
     return [row["key"] for row in store._catalog.journal.records()[0]]
 
@@ -42,7 +50,7 @@ def test_last_store_reference_released_inside_projector_retires_after_ack(tmp_pa
     entered, release = threading.Event(), threading.Event()
     original = LocalKnowledgeStore._rebuild_backend_indexes
     store = store_at(tmp_path)
-    add(store)
+    stage_without_consumption(store)
     request = operations(store)[0]
     def blocked(self):
         entered.set()
@@ -69,9 +77,10 @@ def test_last_store_reference_released_inside_projector_retires_after_ack(tmp_pa
 
 def test_recovery_consumes_pending_native_index_intents(tmp_path):
     first = store_at(tmp_path)
-    old = add(first, "deleted evidence")
-    first.delete_documents([old.document_id], rebuild_indexes=False)
-    latest = add(first)
+    old = stage_without_consumption(first, "deleted evidence")
+    with first._mutation_lock:
+        first._commit_documents({old.document_id: None})
+    latest = stage_without_consumption(first)
     requests = operations(first)
     first.close()
     restarted = store_at(tmp_path)
@@ -106,6 +115,7 @@ def test_foreground_reads_other_workers_generation_without_rebuilding(tmp_path, 
     first = store_at(tmp_path)
     old = add(first, "old research evidence")
     first.rebuild_indexes()
+    first._catalog._index_service.close()
     other = store_at(tmp_path)
     try:
         other.start_background_indexing()
@@ -130,7 +140,7 @@ def test_foreground_reads_other_workers_generation_without_rebuilding(tmp_path, 
 def test_different_configurations_do_not_claim_targeted_tasks(tmp_path):
     first = store_at(tmp_path)
     other = LocalKnowledgeStore(first._settings.model_copy(update={"sagevdb_dimension": 64}))
-    add(first)
+    stage_without_consumption(first)
     key = first._sagevdb_persistence.root.name
     request = first._catalog.request_indexing(1, projection_key=key)
     other_request = other._catalog.request_indexing(
@@ -169,7 +179,7 @@ def test_active_native_writer_tags_atomic_intent_with_projection_identity(tmp_pa
 
 def test_failed_projection_is_not_acknowledged_and_recovers_on_restart(tmp_path, monkeypatch):
     store = store_at(tmp_path)
-    add(store)
+    stage_without_consumption(store)
     request = operations(store)[0]
     called = threading.Event()
     def fail():
@@ -191,7 +201,7 @@ def test_failed_projection_is_not_acknowledged_and_recovers_on_restart(tmp_path,
 
 def test_close_timeout_keeps_canonical_state_available_for_active_worker(tmp_path):
     store = store_at(tmp_path)
-    add(store)
+    stage_without_consumption(store)
     entered, release = threading.Event(), threading.Event()
     def project(required):
         entered.set()
@@ -214,7 +224,7 @@ def test_close_timeout_keeps_canonical_state_available_for_active_worker(tmp_pat
 @pytest.mark.parametrize("actual", [0, True, None])
 def test_projection_must_prove_required_revision_before_acknowledgement(tmp_path, actual):
     store = store_at(tmp_path)
-    add(store)
+    stage_without_consumption(store)
     called = threading.Event()
     def project(required):
         called.set()
@@ -229,3 +239,121 @@ def test_projection_must_prove_required_revision_before_acknowledgement(tmp_path
         assert reopened._catalog.journal.read(operations(reopened)[0])["tasks"]["knowledge_index"]["status"] != "done"
     finally:
         reopened.close()
+
+
+def test_native_mutations_wait_without_lock_and_build_only_in_sage_worker(tmp_path, monkeypatch):
+    store = store_at(tmp_path)
+    builds, waits = [], []
+    original_build = store._rebuild_backend_indexes
+    original_wait = store._catalog.wait_indexing
+    def build():
+        assert threading.current_thread().name.startswith("sage-work")
+        builds.append(threading.current_thread().name)
+        original_build()
+    def wait(request, *, timeout):
+        acquired = threading.Event()
+        def probe():
+            if store._mutation_lock.acquire(timeout=0.5):
+                acquired.set()
+                store._mutation_lock.release()
+        thread = threading.Thread(target=probe)
+        thread.start()
+        thread.join(1)
+        assert acquired.is_set(), "foreground held mutation lock while waiting"
+        waits.append(request)
+        return original_wait(request, timeout=timeout)
+    monkeypatch.setattr(store, "_rebuild_backend_indexes", build)
+    monkeypatch.setattr(store._catalog, "wait_indexing", wait)
+    try:
+        record, inserted = store.upsert_document(KnowledgeDocumentCreate(
+            title="first", content="first research", source_name="research"))
+        assert inserted and store._indexed_catalog_revision == 1
+        store.update_document(record.document_id, KnowledgeDocumentCreate(
+            title="second", content="second research", source_name="research"))
+        assert store.search("second research")[0].document_id == record.document_id
+        store.delete_documents([record.document_id])
+        assert store.search("second research") == []
+        store.rebuild_indexes()
+        assert waits and builds
+    finally:
+        store.close()
+
+
+def test_native_wait_timeout_retains_committed_body_and_never_serves_old_index(tmp_path, monkeypatch):
+    store = store_at(tmp_path)
+    store._settings.chat_request_timeout_seconds = 1
+    def fail():
+        raise OSError("embedding offline")
+    monkeypatch.setattr(store, "_rebuild_backend_indexes", fail)
+    try:
+        with pytest.raises(TimeoutError):
+            store.add_document(KnowledgeDocumentCreate(
+                title="durable", content="durable research", source_name="durable"))
+        assert store.count_documents() == 1
+        assert store._catalog.journal.read(operations(store)[0])["tasks"]["knowledge_index"]["status"] != "done"
+        with pytest.raises(TimeoutError):
+            store.search("durable research")
+    finally:
+        store.close()
+    recovered = store_at(tmp_path)
+    try:
+        assert recovered.search("durable research")
+    finally:
+        recovered.close()
+
+
+def test_search_waits_for_its_configuration_not_another_workers_receipt(tmp_path, monkeypatch):
+    writer = store_at(tmp_path)
+    reader = LocalKnowledgeStore(writer._settings.model_copy(update={"sagevdb_dimension": 64}))
+    original = reader._initialize_sagevdb
+    def build():
+        assert threading.current_thread().name.startswith("sage-work")
+        original()
+    monkeypatch.setattr(reader, "_initialize_sagevdb", build)
+    try:
+        record = writer.add_document(KnowledgeDocumentCreate(
+            title="evidence", content="shared canonical evidence", source_name="evidence"))
+        assert writer._indexed_catalog_revision == 1
+        assert reader._indexed_catalog_revision == 0
+        assert reader.search("shared canonical evidence")[0].document_id == record.document_id
+        assert reader._sagevdb_persistence.source_revision == 1
+        assert reader._sagevdb_persistence.root != writer._sagevdb_persistence.root
+        assert any(row["value"]["tasks"]["knowledge_index"]["payload"].get("projection_key")
+                   == reader._sagevdb_persistence.root.name
+                   for row in reader._catalog.journal.records()[0])
+    finally:
+        reader.close()
+        writer.close()
+
+
+def test_inactive_bulk_import_defers_consumption_but_binds_all_intents(tmp_path):
+    store = store_at(tmp_path)
+    try:
+        first = add(store, "first evidence")
+        second = add(store, "second evidence")
+        assert store._catalog._index_service is None
+        assert store._indexed_catalog_revision == 0
+        rows = store._catalog.journal.records()[0]
+        assert len(rows) == 2
+        for row in rows:
+            task = row["value"]["tasks"]["knowledge_index"]
+            assert task["status"] == "pending"
+            assert task["payload"]["projection_key"] == store._sagevdb_persistence.root.name
+        store.rebuild_indexes()
+        assert store._indexed_catalog_revision == 2
+        assert set(store._document_id_to_vector_id) == {first.document_id, second.document_id}
+    finally:
+        store.close()
+
+
+def test_catalog_rollback_does_not_spin_or_serve_newer_projection(tmp_path, monkeypatch):
+    store = store_at(tmp_path)
+    try:
+        store.add_document(KnowledgeDocumentCreate(
+            title="evidence", content="evidence", source_name="evidence"))
+        # Model a canonical restore behind the already committed projection.
+        monkeypatch.setattr(store._catalog, "snapshot", lambda: (0, {}))
+        with pytest.raises(RuntimeError, match="projection_ahead_of_catalog"):
+            store.search("evidence")
+    finally:
+        store.close()
