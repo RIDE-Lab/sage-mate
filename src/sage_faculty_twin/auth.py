@@ -17,6 +17,60 @@ ADMIN_COOKIE_NAME = "faculty_twin_admin"
 USER_COOKIE_NAME = "faculty_twin_user"
 
 
+def capture_work_session_reference(token: str | None, settings: AppSettings, *, kind: str):
+    """Attest an already signed session for internal work, never copy its token.
+
+    The domain-separated proof is not accepted by cookie authentication. It
+    preserves original expiry and invalidates on signing-key rotation. Account
+    existence/current role must still be checked by the caller at execution.
+    This does not add logout revocation to existing stateless sessions.
+    """
+    secret = _work_session_secret(settings, kind)
+    claims = _decode_session_cookie(token, secret)
+    if not isinstance(claims, dict):
+        return None
+    # Retain only the signed identity/expiry fields, never credential bytes.
+    fields = ("sub", "iat", "exp", "nonce", "email") if kind == "user" else (
+        "sub", "iat", "exp", "nonce", "role")
+    claims = {name: claims[name] for name in fields if name in claims}
+    reference = {"version": 1, "kind": kind, "claims": claims}
+    reference["proof"] = _work_session_proof(reference, secret)
+    return reference
+
+
+def resolve_work_session_reference(reference, settings: AppSettings, *, kind: str):
+    """Internal-only fresh verification; never expose as an HTTP credential."""
+    secret = _work_session_secret(settings, kind)
+    if (not isinstance(reference, dict) or set(reference) != {"version", "kind", "claims", "proof"}
+            or reference["version"] != 1 or reference["kind"] != kind):
+        return None
+    proof, claims = reference["proof"], reference["claims"]
+    if not isinstance(proof, str) or not isinstance(claims, dict):
+        return None
+    try:
+        expected = _work_session_proof({k: v for k, v in reference.items() if k != "proof"}, secret)
+        if not secrets.compare_digest(proof, expected):
+            return None
+    except (TypeError, ValueError):
+        return None
+    expiry = claims.get("exp")
+    if type(expiry) is not int or expiry <= time.time() or not isinstance(claims.get("sub"), str):
+        return None
+    return dict(claims)
+
+
+def _work_session_secret(settings, kind):
+    if kind not in {"user", "admin"}:
+        raise ValueError("unsupported_work_session_kind")
+    return settings.user_session_secret if kind == "user" else settings.admin_session_secret
+
+
+def _work_session_proof(reference, secret):
+    message = b"sage-mate/internal-work-session/v1\x00" + json.dumps(
+        reference, separators=(",", ":"), sort_keys=True, allow_nan=False).encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
 def decode_admin_session_token(token: str | None, settings: AppSettings) -> dict[str, Any] | None:
     return _decode_session_cookie(token, settings.admin_session_secret)
 
