@@ -26,6 +26,7 @@ from sage.runtime import FlowNetEnvironment
 from . import __version__ as _app_version
 from .analytics_store import ConversationAnalyticsStore
 from .retrieval_runtime import RetrievalRuntime
+from .chat_runtime import ChatRuntime
 from .deployment_receipts import DeploymentReceiptStore
 from .request_context import (
     RequestCancelledError,
@@ -8983,27 +8984,6 @@ class ChatResponseRenderStage(MapFunction):
         return self._support.render_chat_response(data)
 
 
-class _CaptureContextStage(MapFunction):
-    """Pass-through map that side-channels the in-flight ChatWorkflowContext.
-
-    The chat critical-path DAG ends with ``ChatResponseRenderStage`` which
-    consumes a ``ChatWorkflowContext`` and emits a ``ChatResponse``. We need
-    the underlying context after the pipeline completes so the post-answer
-    fan-out stages can run on it (Task 2 of the Chat Latency Optimizations
-    plan). Inserting this stage right before render lets us capture the
-    same mutable context object the render will see, without adding a
-    second sink to the DAG.
-    """
-
-    def __init__(self, captured: list[ChatWorkflowContext]) -> None:
-        super().__init__()
-        self._captured = captured
-
-    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        self._captured.append(data)
-        return data
-
-
 class ReadAdminSessionStage(MapFunction):
     def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
         super().__init__()
@@ -9219,6 +9199,9 @@ class DigitalTwinService:
         self._retrieval_runtime = None
         self._retrieval_runtime_lock = threading.Lock()
         self._retrieval_finalizer = None
+        self._chat_runtime = None
+        self._chat_runtime_lock = threading.Lock()
+        self._chat_finalizer = None
         self._llm_client = VllmChatClient(settings)
         self._deployment_receipt_store = DeploymentReceiptStore(settings)
         self._deployment_receipt_store.sync_inbox()
@@ -9279,7 +9262,7 @@ class DigitalTwinService:
             max_parallel_tools=settings.skill_tool_parallelism,
             answer_max_tokens=settings.skill_answer_max_tokens,
         )
-        self._sage_runtime_class = FlowNetEnvironment
+        self._sage_runtime_class = ChatRuntime
         self._booking_workflows: dict[str, BookingWorkflowState] = {}
         self._fixed_prefix_cache_warmup_attempted = False
         self._fixed_prefix_cache_warmup_lock = threading.Lock()
@@ -11899,6 +11882,8 @@ class DigitalTwinService:
         return self._build_support().compress_conversation_context(conversation_id)
 
     async def aclose(self) -> None:
+        if self._chat_finalizer is not None:
+            await asyncio.to_thread(self._chat_finalizer)
         if self._retrieval_finalizer is not None:
             await asyncio.to_thread(self._retrieval_finalizer)
         await self._llm_client.aclose()
@@ -11909,6 +11894,13 @@ class DigitalTwinService:
                 self._retrieval_runtime = RetrievalRuntime()
                 self._retrieval_finalizer = weakref.finalize(self, self._retrieval_runtime.close)
             return self._retrieval_runtime
+
+    def _get_chat_runtime(self) -> ChatRuntime:
+        with self._chat_runtime_lock:
+            if self._chat_runtime is None:
+                self._chat_runtime = ChatRuntime()
+                self._chat_finalizer = weakref.finalize(self, self._chat_runtime.close)
+            return self._chat_runtime
 
     def _describe_sage_runtime(self) -> str:
         return self._sage_runtime_class.__name__
@@ -12136,57 +12128,26 @@ class DigitalTwinService:
         request: ChatRequest,
         support: FacultyTwinWorkflowSupport,
     ) -> tuple[ChatResponse, ChatWorkflowContext]:
-        """Run the chat application stages in FlowNet and return both the rendered
-        :class:`ChatResponse` and the underlying :class:`ChatWorkflowContext`.
+        """Execute the single persistent SAGE chat graph with request-local ports.
 
-        All chat callers use this single SAGE execution path.
-        Retrieval uses a persistent native SAGE endpoint with independent input
-        snapshots and explicit results, merged only after both branches finish.
-
-        The four post-answer fan-out stages (``memory_persist``,
-        ``memory_profile_consolidate``, ``follow_up_plan``,
-        ``memory_usefulness_score``) are intentionally *not* part of this
-        graph: they run after this method returns either inline (test path)
-        or as a fire-and-forget ``asyncio.create_task`` (production path).
-        See :meth:`_run_post_answer_inline_blocking`.
-
+        Memory commit and post-answer work remain explicit subsequent stages;
+        the native graph must not replay external side effects automatically.
         """
-        env = FlowNetEnvironment("faculty-twin-chat")
-        responses: list[ChatResponse] = []
-        contexts: list[ChatWorkflowContext] = []
-
-        stream = env.from_batch([request])
-        for stage_class in self._chat_critical_stage_types():
-            if stage_class is ParallelRetrievalStage:
-                stream = stream.map(stage_class, support, self._get_retrieval_runtime())
-            else:
-                stream = stream.map(stage_class, support)
-        after_render = stream.map(_CaptureContextStage, contexts).map(
-            ChatResponseRenderStage, support
-        )
-        after_render.sink(ResultCollector, responses)
-
-        env.submit(autostop=True)
-
-        if not responses:
-            raise RuntimeError("SAGE runtime completed without producing a chat response.")
-        if not contexts:
-            raise RuntimeError(
-                "SAGE runtime completed without capturing the chat workflow context."
-            )
-        return responses[-1], contexts[-1]
-
-    @staticmethod
-    def _chat_critical_stage_types() -> tuple[type[MapFunction], ...]:
-        return (
-            BootstrapChatContextStage,
-            InteractionUnderstandingStage,
-            BookingPreparationStage,
-            BookingExecutionStage,
-            KnowledgeWriteStage,
-            ParallelRetrievalStage,
-            PromptBuildStage,
-            LlmAnswerStage,
+        ports = {
+            "bootstrap": BootstrapChatContextStage(support),
+            "understand": InteractionUnderstandingStage(support),
+            "prepare_booking": BookingPreparationStage(support),
+            "execute_booking": BookingExecutionStage(support),
+            "write_knowledge": KnowledgeWriteStage(support),
+            "retrieve": ParallelRetrievalStage(support, self._get_retrieval_runtime()),
+            "prompt": PromptBuildStage(support),
+            "answer": LlmAnswerStage(support),
+            "render": ChatResponseRenderStage(support),
+        }
+        remaining = request_remaining_seconds()
+        return self._get_chat_runtime().answer(
+            request, ports,
+            timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds,
         )
 
     def _run_post_answer_inline_blocking(

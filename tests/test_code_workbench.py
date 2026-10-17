@@ -591,6 +591,7 @@ async def test_auto_scientist_profile_bootstraps_research_with_code_node(
     service._code_workbench = CodeWorkbench(service._settings)
     service._llm_client = StubLlmClient()
     service._knowledge_store = StubKnowledgeStore()
+    service._knowledge_retriever = service._knowledge_store
 
     response = await service._answer_auto_scientist(
         ChatRequest(

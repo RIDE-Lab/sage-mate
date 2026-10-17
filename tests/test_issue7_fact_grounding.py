@@ -214,8 +214,8 @@ def test_stack_comparison_bypasses_model_intent_for_lab_member(tmp_path: Path) -
 
 def test_system_project_list_uses_canonical_overview_and_rejects_paper_noise(tmp_path: Path) -> None:
     service = _service(tmp_path)
-    service._knowledge_store = type("Store", (), {
-        "list_documents": lambda self: [
+    service._knowledge_retriever = type("PublicSources", (), {
+        "public_documents": lambda self: [
             type("Record", (), {
                 "document_id": "systems",
                 "title": "主页资料｜当前系统建设",

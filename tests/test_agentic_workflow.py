@@ -441,8 +441,12 @@ def test_simple_greeting_plan_skips_live_retrieval_stages(tmp_path: Path) -> Non
 
     assert response.decision_mode == "direct_fast_path"
     assert response.used_model == "sage-fast-path"
-    assert response.workflow_trace == []
-    assert response.planner_preview is None
+    trace = {step.key: step for step in response.workflow_trace}
+    assert trace["memory_retrieve"].status == "skipped"
+    assert trace["knowledge_retrieve"].status == "skipped"
+    assert trace["llm_answer"].status == "skipped"
+    assert trace["memory_persist"].status == "completed"
+    assert response.exchange_id and response.memory_write_back
     assert service._conversation_store.get_telemetry_summary()["query_count"] == 0
 
 

@@ -526,18 +526,18 @@ def test_ascend_follow_up_uses_fast_path_from_session_context(tmp_path: Path) ->
     assert intent.domain == "research"
 
 
-def test_general_question_uses_fast_path_without_llm_classification(tmp_path: Path) -> None:
+def test_unclassified_general_question_requires_semantic_classification(tmp_path: Path) -> None:
     service = object.__new__(FacultyTwinWorkflowSupport)
     service._settings = AppSettings(knowledge_base_dir=tmp_path)
     context = _build_context()
+    context.request.visitor_profile = "general_visitor"
     context.request.question = "请解释检索增强生成中召回率和准确性的关系。"
 
     intent = service._build_fast_path_interaction_intent(context)
 
-    assert intent is not None
-    assert intent.action == "answer"
-    assert intent.domain == "general"
-    assert intent.decision_mode == "direct_answer"
+    # Do not silently assign empty retrieval scopes to an unclassified query.
+    # The caller must obtain a semantic intent instead of bypassing retrieval.
+    assert intent is None
 
 
 def test_general_follow_up_uses_fast_path_from_session_context(tmp_path: Path) -> None:

@@ -165,14 +165,10 @@ def test_default_chat_executes_sage_graph_without_alternate_executor(tmp_path, m
 
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     service._llm_client = _AdviseOnlyLLMClient("建议先复现 baseline，再围绕评估指标做对比实验。")
-    submitted = []
-    original_submit = FlowNetEnvironment.submit
+    def forbidden_submit(*args, **kwargs):
+        raise AssertionError("chat rebuilt the obsolete per-request environment")
 
-    def track_submit(environment, *args, **kwargs):
-        submitted.append(environment.name)
-        return original_submit(environment, *args, **kwargs)
-
-    monkeypatch.setattr(FlowNetEnvironment, "submit", track_submit)
+    monkeypatch.setattr(FlowNetEnvironment, "submit", forbidden_submit)
     response = asyncio.run(service.answer(ChatRequest(
         student_name="Alice",
         question="我想做一个图神经网络相关的研究，下一步该怎么推进？",
@@ -180,13 +176,21 @@ def test_default_chat_executes_sage_graph_without_alternate_executor(tmp_path, m
     )))
 
     assert response.answer
-    assert submitted == ["faculty-twin-chat"]
+    runtime = service._get_chat_runtime()
+    endpoint_id = runtime._endpoint.flow_instance.instance_id
+    assert runtime._endpoint._requests == {}
+    second = asyncio.run(service.answer(ChatRequest(
+        student_name="Bob", question="你好", conversation_id="second-sage-request",
+    )))
+    assert second.exchange_id and second.exchange_id != response.exchange_id
+    assert service._get_chat_runtime()._endpoint.flow_instance.instance_id == endpoint_id
     assert not hasattr(service, "answer_in_process")
     assert not hasattr(service, "_run_chat_in_process")
     assert "chat_runtime_pipeline_enabled" not in AppSettings.model_fields
 
 
 def test_sage_stage_failure_is_not_retried_through_another_executor(tmp_path, monkeypatch):
+    from sage.runtime.flownet import FlowRequestOutcomeError
     from sage_faculty_twin.service import LlmAnswerStage
 
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
@@ -198,7 +202,7 @@ def test_sage_stage_failure_is_not_retried_through_another_executor(tmp_path, mo
         raise OSError("stage unavailable")
 
     monkeypatch.setattr(LlmAnswerStage, "execute", fail)
-    with pytest.raises(OSError, match="stage unavailable"):
+    with pytest.raises(FlowRequestOutcomeError, match="error_type=OSError.*stage unavailable"):
         asyncio.run(service.answer(ChatRequest(
             student_name="Alice",
             question="我想做一个图神经网络相关的研究，下一步该怎么推进？",

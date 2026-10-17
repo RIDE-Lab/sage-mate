@@ -64,18 +64,19 @@ def test_ascend_engine_cleanup_propagates_pinned_cleanup_failure(
     assert result.returncode == 41
 
 
-def test_runtime_dependency_contract_separates_portable_core_from_full_neuromem() -> (
+def test_runtime_dependency_contract_includes_required_neuromem() -> (
     None
 ):
     project = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))[
         "project"
     ]
     dependencies = {
-        dependency.split(">=", 1)[0].lower() for dependency in project["dependencies"]
+        dependency.split(">=", 1)[0].split(" @ ", 1)[0].lower()
+        for dependency in project["dependencies"]
     }
 
     assert project["requires-python"] == ">=3.11"
-    assert {"isage", "isage-anns"} <= dependencies
+    assert {"isage", "isage-anns", "isage-neuromem"} <= dependencies
     assert any(
         dependency.lower().startswith("isage-neuromem")
         for dependency in project["optional-dependencies"]["neuromem"]
