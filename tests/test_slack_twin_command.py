@@ -4,685 +4,380 @@ import hashlib
 import hmac
 import json
 import time
-import pytest
+import asyncio
+from threading import Event
+from functools import partial
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
+import pytest
 from fastapi.testclient import TestClient
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
 from sage_faculty_twin import api as api_module
-from sage_faculty_twin.api import app
+from sage_faculty_twin.chat_delivery import ChatDeliveryGate
 from sage_faculty_twin.models import ChatResponse, UserAccountResponse, UserSessionResponse
-from sage_faculty_twin.slack_link_store import SlackUserLinkStore
 from sage_faculty_twin.slack_channel_context import SlackChannelContext, SlackHistoryUnavailable
+from sage_faculty_twin.slack_link_store import SlackUserLinkStore
+from sage_faculty_twin.slack_workflow import SlackAnswerRecovery, SlackWorkflow
+from sage_faculty_twin.workflow_events import WorkflowEventBroker
 
 
-client = TestClient(app)
+def signed(body, *, json_body=False):
+    stamp = str(int(time.time()))
+    digest = hmac.new(b"secret", b"v0:" + stamp.encode() + b":" + body, hashlib.sha256).hexdigest()
+    return {"content-type": "application/json" if json_body else "application/x-www-form-urlencoded",
+            "x-slack-request-timestamp": stamp, "x-slack-signature": "v0=" + digest}
 
 
-@pytest.fixture(autouse=True)
-def current_accounts_for_transport_fixtures(monkeypatch):
-    # These tests isolate transport behavior. Revocation tests below override
-    # this port; the real disk-backed account store has independent coverage.
-    def account(user_id):
-        link = api_module.slack_link_store.get_link_for_user(user_id)
-        return SimpleNamespace(visitor_profile=link.visitor_profile, email=link.email) if link else None
-    monkeypatch.setattr(api_module.service, "get_slack_link_account", account)
-
-
-@pytest.mark.parametrize("current_role", [None, "general_visitor", "lab_member"])
-def test_slack_binding_uses_current_role_even_for_allowlisted_user(monkeypatch, tmp_path, current_role):
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(user_id="account-id", email="old@example.com", visitor_profile="lab_member")
-    store.consume_code(code.code, team_id="T123", slack_user_id="U1")
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U1"})
-    current = (None if current_role is None else SimpleNamespace(visitor_profile=current_role, email="new@example.com"))
-    monkeypatch.setattr(api_module.service, "get_slack_link_account", lambda _: current)
-    role, email, denial = api_module._resolve_slack_twin_identity("U1", team_id="T123")
-    if current_role == "lab_member":
-        assert (role, email, denial) == ("lab_member", "new@example.com", None)
-    else:
-        assert denial is not None
-        assert email is None
-
-
-def _slack_signature(body: bytes, secret: str) -> tuple[str, str]:
-    timestamp = str(int(time.time()))
-    base = b"v0:" + timestamp.encode("ascii") + b":" + body
-    signature = "v0=" + hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
-    return timestamp, signature
-
-
-@pytest.mark.parametrize("transport", ["command", "event"])
-@pytest.mark.parametrize("authorization", ["binding", "qualified_allowlist", "bare_allowlist"])
-def test_signed_foreign_workspace_cannot_reuse_authorization(monkeypatch, tmp_path, transport, authorization):
-    store = SlackUserLinkStore(tmp_path)
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS",
-                        {"UOTHER"} if authorization == "bare_allowlist" else {"T123:UOTHER"})
-    if authorization == "binding":
-        code = store.create_code(user_id="account", email="lab@example.com", visitor_profile="lab_member")
-        store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER")
-        monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", set())
-    def forbidden(**kwargs):
-        pytest.fail("foreign workspace reached model handler")
-    monkeypatch.setattr(api_module, "_answer_slack_twin_command", forbidden)
-    monkeypatch.setattr(api_module, "_answer_slack_twin_dm", forbidden)
-    messages = []
-    async def post(channel, text, **kwargs):
-        messages.append(text)
-    monkeypatch.setattr(api_module, "_safe_post_slack_message", post)
-    try:
-        if transport == "command":
-            body = _body(user_id="UOTHER", team_id="TFOREIGN")
-            response = client.post("/slack/commands/twin", content=body, headers=_signed_headers(body, "secret"))
-            messages.append(response.json()["text"])
-        else:
-            payload = json.loads(_event_body(user="UOTHER"))
-            payload["team_id"] = "TFOREIGN"
-            body = json.dumps(payload).encode()
-            response = client.post("/slack/events", content=body, headers=_signed_json_headers(body, "secret"))
-        assert response.status_code == 200
-        assert len(messages) == 1
-        assert "生成 Slack 绑定码" in messages[0]
-    finally:
-        store.close()
-
-
-def _signed_headers(body: bytes, secret: str) -> dict[str, str]:
-    timestamp, signature = _slack_signature(body, secret)
-    return {
-        "content-type": "application/x-www-form-urlencoded",
-        "x-slack-request-timestamp": timestamp,
-        "x-slack-signature": signature,
-    }
-
-
-def _signed_json_headers(body: bytes, secret: str) -> dict[str, str]:
-    timestamp, signature = _slack_signature(body, secret)
-    return {
-        "content-type": "application/json",
-        "x-slack-request-timestamp": timestamp,
-        "x-slack-signature": signature,
-    }
-
-
-def _body(**overrides: str) -> bytes:
-    payload = {
-        "token": "legacy-token",
-        "team_id": "T123",
-        "team_domain": "intellistream",
-        "channel_id": "D123",
-        "channel_name": "directmessage",
-        "user_id": "U013T91JDQT",
-        "user_name": "shuhao",
-        "command": "/twin",
-        "text": "研究路线是什么？",
-        "response_url": "https://hooks.slack.test/response",
-    }
-    payload.update(overrides)
+def command(**changes):
+    payload = {"team_id": "T123", "channel_id": "D123", "user_id": "U1",
+               "trigger_id": "trigger-1", "text": "研究路线是什么？",
+               "response_url": "https://hooks.slack.test/private-credential"}
+    payload.update(changes)
     return urlencode(payload).encode()
 
 
-def _event_body(**event_overrides: object) -> bytes:
-    event = {
-        "type": "message",
-        "channel": "D123",
-        "channel_type": "im",
-        "user": "U013T91JDQT",
-        "text": "研究路线是什么？",
-        "ts": "1719200000.000100",
-    }
-    event.update(event_overrides)
-    payload = {
-        "type": "event_callback",
-        "team_id": "T123",
-        "api_app_id": "A123",
-        "event": event,
-        "event_id": "Ev123",
-        "event_time": 1719200000,
-    }
-    return json.dumps(payload, ensure_ascii=False).encode()
+def event(*, team_id="T123", event_id="Ev1", **changes):
+    value = {"type": "message", "channel_type": "im", "channel": "D123",
+             "user": "U1", "text": "研究路线是什么？", "ts": "1719200000.000100"}
+    value.update(changes)
+    return json.dumps({"type": "event_callback", "team_id": team_id,
+                       "event_id": event_id, "event": value}).encode()
 
 
-def test_normalize_slack_twin_question():
-    assert api_module._normalize_slack_twin_question("<@UAPP> 研究路线是什么？") == "研究路线是什么？"
-    assert api_module._normalize_slack_twin_question("<@UAPP> <@UAPP2> 研究路线是什么？") == "研究路线是什么？"
-    assert api_module._normalize_slack_twin_question("研究路线是什么？") == "研究路线是什么？"
-
-
-def test_slack_memory_identity_is_workspace_user_and_channel_scoped():
-    owner = api_module._slack_conversation_owner("T1", "U1", "D1")
-    assert owner.startswith("slack:")
-    assert owner == api_module._slack_conversation_owner("T1", "U1", "D1")
-    assert len({owner, api_module._slack_conversation_owner("T2", "U1", "D1"),
-                api_module._slack_conversation_owner("T1", "U2", "D1"),
-                api_module._slack_conversation_owner("T1", "U1", "C1")}) == 4
-
-
-def test_signed_slack_request_without_workspace_is_rejected(monkeypatch):
+@pytest.fixture
+def harness(monkeypatch, tmp_path):
+    state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
+    links = SlackUserLinkStore(tmp_path / "links")
+    h = SimpleNamespace(state=state, links=links, sent=[], calls=[], lifecycle=[], accounts={},
+                        fail_delivery=0, history=[], commit_then_fail=False, accept=True,
+                        block=False, entered=Event(), release=None)
+    broker = WorkflowEventBroker(lambda: state)
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
-    body = _body(team_id="")
-    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, "secret"))
-    assert response.status_code == 400
-    event = json.loads(_event_body())
-    del event["team_id"]
-    body = json.dumps(event).encode()
-    response = client.post("/slack/events", data=body, headers=_signed_json_headers(body, "secret"))
-    assert response.status_code == 400
+    monkeypatch.setattr(api_module, "SLACK_TWIN_TEAM_ID", "T123")
+    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "fixture-token")
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U1"})
+    monkeypatch.setattr(api_module, "slack_link_store", links)
+    monkeypatch.setattr(api_module, "slack_workflow", None)
+    monkeypatch.setattr(api_module, "settings", SimpleNamespace(warm_service_on_startup=False))
+    async def answer(request, *, delivery):
+        h.calls.append(request)
+        if h.block:
+            h.release = asyncio.Event()
+            h.entered.set()
+            await h.release.wait()
+        response = ChatResponse(answer="完整的研究回答。", owner_name="Twin", used_model="fixture-model")
+        delivered = ChatDeliveryGate().deliver(response=response, original_question=request.question)
+        broker.finish_immediate(delivery.stream_id, delivered)
+        if h.commit_then_fail:
+            h.commit_then_fail = False
+            raise ConnectionError("answer acknowledgement lost")
+        return delivered
+    async def close():
+        assert api_module.slack_workflow is None
+        h.lifecycle.append("service-close")
+    instance = SimpleNamespace(_conversation_store=SimpleNamespace(state_store=state),
+                               start_background_work=lambda: h.lifecycle.append("service-start"))
+    h.service = SimpleNamespace(answer=answer, ensure_initialized=lambda: instance,
+        is_initialized=lambda: True, aclose=close, get_slack_link_account=lambda uid: h.accounts.get(uid))
+    monkeypatch.setattr(api_module, "service", h.service)
+    def post(method, payload):
+        if method == "auth.test":
+            return {"ok": True, "team_id": "T123"}
+        if h.fail_delivery:
+            h.fail_delivery -= 1
+            raise OSError("simulated network failure")
+        h.sent.append((method, payload))
+        return {"ok": True, "message_ts": "123.456"}
+    monkeypatch.setattr(api_module, "_post_slack_api", post)
+    def history(**kwargs):
+        h.history.append(kwargs)
+        return SlackChannelContext(text="Earlier lab discussion", message_count=2)
+    monkeypatch.setattr(api_module, "fetch_slack_channel_context", history)
+    def factory(shared):
+        return SlackWorkflow(shared, authorize=api_module._authorize_slack_ingress,
+            recover=SlackAnswerRecovery(shared, render=api_module._render_slack_reply),
+            answer=api_module._produce_slack_reply, deliver=api_module._deliver_slack_reply,
+            poll_interval=0.01, retry_delay=0.01, accept_task=lambda *_: h.accept)
+    monkeypatch.setattr(api_module, "_create_slack_workflow", factory)
+    def bind(role="lab_member"):
+        h.accounts["account"] = SimpleNamespace(visitor_profile=role, email="member@example.com")
+        code = links.create_code(user_id="account", email="old@example.com", visitor_profile="lab_member")
+        links.consume_code(code.code, team_id="T123", slack_user_id="UOTHER")
+    h.bind = bind
+    with TestClient(api_module.llm_app) as client:
+        h.client = client
+        def flush():
+            rows, _ = api_module.slack_workflow.journal.records(limit=100)
+            for row in rows:
+                client.portal.call(partial(api_module.slack_workflow.wait, row["key"], timeout=3))
+        h.flush = flush
+        yield h
+    assert h.lifecycle == ["service-start", "service-close"] * (len(h.lifecycle) // 2)
+    links.close()
+    state.close()
 
 
-def _session(visitor_profile: str) -> UserSessionResponse:
-    return UserSessionResponse(
-        is_authenticated=True,
-        mode="user",
-        account=UserAccountResponse(
-            user_id=f"user-{visitor_profile}",
-            name="Test User",
-            email=f"{visitor_profile}@example.com",
-            visitor_profile=visitor_profile,
-            created_at="2026-06-23T00:00:00+00:00",
-        ),
-    )
+def test_normalization_and_owned_memory():
+    assert api_module._normalize_slack_twin_question("<@BOT> <@BOT> question") == "question"
+    owner = api_module._slack_conversation_owner("T1", "U1", "C1")
+    assert owner == api_module._slack_conversation_owner("T1", "U1", "C1")
+    for ids in [("T2", "U1", "C1"), ("T1", "U2", "C1"), ("T1", "U1", "C2")]:
+        assert api_module._slack_conversation_owner(*ids) != owner
 
 
-def test_slack_twin_command_rejects_bad_signature(monkeypatch):
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=_body(),
-        headers={
-            "content-type": "application/x-www-form-urlencoded",
-            "x-slack-request-timestamp": str(int(time.time())),
-            "x-slack-signature": "v0=bad",
-        },
-    )
-
+@pytest.mark.parametrize("transport", ["command", "event"])
+def test_bad_signature_never_admits(harness, transport):
+    body = command() if transport == "command" else event()
+    headers = signed(body, json_body=transport == "event")
+    headers["x-slack-signature"] = "v0=bad"
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+                                   content=body, headers=headers)
     assert response.status_code == 401
+    assert api_module.slack_workflow.journal.records(limit=10)[0] == []
 
 
-def test_slack_twin_link_code_requires_lab_member(monkeypatch, tmp_path):
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module.service, "get_user_session", lambda _token: _session("general_visitor"))
+@pytest.mark.parametrize("transport", ["command", "event"])
+@pytest.mark.parametrize("team", ["", "TFOREIGN"])
+def test_missing_or_foreign_workspace_rejected(harness, transport, team):
+    body = command(team_id=team) if transport == "command" else event(team_id=team)
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+                                   content=body, headers=signed(body, json_body=transport == "event"))
+    assert response.status_code == (400 if not team else 403)
+    assert harness.calls == []
 
-    response = client.post("/slack/twin-link/code")
 
+@pytest.mark.parametrize("role", [None, "general_visitor", "lab_member"])
+def test_link_role_is_current_even_when_allowlisted(harness, monkeypatch, role):
+    harness.bind()
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:UOTHER"})
+    if role is None:
+        del harness.accounts["account"]
+    else:
+        harness.accounts["account"].visitor_profile = role
+    profile, email, denial = api_module._resolve_slack_twin_identity("UOTHER", team_id="T123")
+    assert (denial is None) == (role == "lab_member")
+    if role == "lab_member":
+        assert (profile, email) == ("lab_member", "member@example.com")
+
+
+@pytest.mark.parametrize("transport", ["command", "event"])
+def test_bare_allowlist_is_not_authorization(harness, monkeypatch, transport):
+    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"U1"})
+    body = command() if transport == "command" else event()
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+                                   content=body, headers=signed(body, json_body=transport == "event"))
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["can_link"] is False
-    assert payload["code"] is None
-    assert "邀请码升级" in payload["message"]
+    harness.flush()
+    text = response.json()["text"] if transport == "command" else harness.sent[0][1]["text"]
+    assert "生成 Slack 绑定码" in text
+    assert harness.calls == []
 
 
-def test_slack_twin_link_code_created_for_lab_member(monkeypatch, tmp_path):
-    store = SlackUserLinkStore(tmp_path)
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module.service, "get_user_session", lambda _token: _session("lab_member"))
-
-    response = client.post("/slack/twin-link/code")
-
+@pytest.mark.parametrize("transport", ["command", "event", "mention"])
+def test_signed_requests_use_durable_answer_and_correct_visibility(harness, transport):
+    harness.bind()
+    body = (command(user_id="UOTHER", owner_id="account:forged") if transport == "command"
+            else event(user="UOTHER", **({"type": "app_mention", "channel_type": "channel",
+                                         "text": "<@BOT> 研究路线是什么？"} if transport == "mention" else {})))
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+                                   content=body, headers=signed(body, json_body=transport != "command"))
     assert response.status_code == 200
-    payload = response.json()
-    assert payload["can_link"] is True
-    assert len(payload["code"]) == 8
-    assert store.consume_code(payload["code"], team_id="T123", slack_user_id="UOTHER") is not None
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
+    request = harness.calls[0]
+    assert request.owner_id == api_module._slack_conversation_owner("T123", "UOTHER", "D123")
+    assert request.student_email == "member@example.com"
+    assert request.visitor_profile == "lab_member"
+    assert request.slack_channel_context == "Earlier lab discussion"
+    assert "slack_channel_context" not in request.model_dump()
+    method, payload = harness.sent[0]
+    assert method == ("chat.postEphemeral" if transport == "command" else "chat.postMessage")
+    assert "完整的研究回答。" in payload["text"]
+    if transport == "command":
+        assert payload["user"] == "UOTHER"
+    if transport == "mention":
+        assert payload["thread_ts"] == "1719200000.000100"
+    records, _ = api_module.slack_workflow.journal.records(limit=10)
+    saved = json.dumps(records)
+    assert "private-credential" not in saved
+    assert "fixture-token" not in saved
+    assert "Earlier lab discussion" not in saved
 
 
-def test_slack_twin_command_guides_unlinked_user(monkeypatch, tmp_path):
-    secret = "secret"
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    body = _body(user_id="UOTHER")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "生成 Slack 绑定码" in response.json()["text"]
+def test_event_retry_and_lost_answer_ack_do_not_regenerate(harness):
+    harness.commit_then_fail = True
+    harness.fail_delivery = 1
+    body = event()
+    headers = signed(body, json_body=True)
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    headers["x-slack-retry-num"] = "1"
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
 
 
-def test_slack_twin_bind_invalid_code(monkeypatch, tmp_path):
-    secret = "secret"
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    body = _body(user_id="UOTHER", text="bind BADCODE")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "无效或已过期" in response.json()["text"]
-
-
-def test_slack_twin_bind_code_success(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-1",
-        email="lab@example.com",
-        visitor_profile="lab_member",
-    )
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    body = _body(user_id="UOTHER", text=f"bind {code.code}")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "绑定成功" in response.json()["text"]
-    assert store.get_link_for_slack_user("UOTHER", team_id="T123").email == "lab@example.com"
+def test_startup_recovers_http_admission_after_service_reconstruction(harness):
+    harness.accept = False
+    body = event()
+    headers = signed(body, json_body=True)
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    assert harness.calls == []
+    harness.client.portal.call(api_module.shutdown_event)
+    assert api_module.slack_workflow is None
+    harness.accept = True
+    harness.client.portal.call(api_module.startup_event)
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
+    headers["x-slack-retry-num"] = "1"
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
 
 
-def test_slack_twin_bound_non_lab_user_cannot_ask(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-2",
-        email="visitor@example.com",
-        visitor_profile="general_visitor",
-    )
-    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    body = _body(user_id="UOTHER", text="研究路线是什么？", owner_id="account:spoofed")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "不是课题组成员" in response.json()["text"]
+def test_shutdown_drains_handler_before_closing_model_and_recovers_delivery(harness):
+    harness.block = True
+    body = command()
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 200
+    assert harness.entered.wait(3)
+    closing = harness.client.portal.start_task_soon(api_module.shutdown_event)
+    try:
+        time.sleep(0.03)
+        assert not closing.done()
+        assert "service-close" not in harness.lifecycle
+    finally:
+        harness.block = False
+        harness.client.portal.call(harness.release.set)
+        closing.result(timeout=3)
+        harness.client.portal.call(api_module.startup_event)
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
 
 
-def test_slack_twin_bound_lab_member_can_ask(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-3",
-        email="lab@example.com",
-        visitor_profile="lab_member",
-    )
-    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
-    posted: list[tuple[str, str]] = []
-    seen: list[tuple[str, str | None]] = []
-
-    async def fake_answer(request):
-        seen.append((request.visitor_profile, request.student_email))
-        assert request.owner_id == api_module._slack_conversation_owner("T123", "UOTHER", "D123")
-        return ChatResponse(answer="绑定回答。", owner_name="张书豪", used_model="fake-model")
-
-    def fake_post(response_url: str, text: str, *, response_type: str = "ephemeral") -> None:
-        posted.append((response_url, text))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
-    monkeypatch.setattr(api_module, "_post_slack_response", fake_post)
-    body = _body(user_id="UOTHER", text="研究路线是什么？", owner_id="account:spoofed")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert seen == [("lab_member", "lab@example.com")]
-    assert posted == [
-        (
-            "https://hooks.slack.test/response",
-            "你问：研究路线是什么？\n绑定回答。\n\nSlack 上下文：本次未能读取频道历史，仅回答了当前问题。\n\n模型：`fake-model`",
-        )
-    ]
+def test_unconfigured_workspace_cannot_admit(harness, monkeypatch):
+    monkeypatch.setattr(api_module, "SLACK_TWIN_TEAM_ID", "")
+    body = command()
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 503
+    assert harness.calls == []
 
 
-def test_slack_twin_command_whitelist_answers_in_background(monkeypatch, tmp_path):
-    secret = "secret"
-    posted: list[tuple[str, str]] = []
-    seen_questions: list[str] = []
-
-    async def fake_answer(request):
-        seen_questions.append(request.question)
-        assert request.visitor_profile == "lab_member"
-        return ChatResponse(answer="这是回答。", owner_name="张书豪", used_model="fake-model")
-
-    def fake_post(response_url: str, text: str, *, response_type: str = "ephemeral") -> None:
-        posted.append((response_url, text))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module, "SLACK_TWIN_VISITOR_PROFILE", "lab_member")
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
-    monkeypatch.setattr(api_module, "_post_slack_response", fake_post)
-    body = _body(text="研究路线是什么？")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "正在问 twin" in response.json()["text"]
-    assert "你问：研究路线是什么？" in response.json()["text"]
-    assert seen_questions == ["研究路线是什么？"]
-    assert posted == [
-        (
-            "https://hooks.slack.test/response",
-            "你问：研究路线是什么？\n这是回答。\n\nSlack 上下文：本次未能读取频道历史，仅回答了当前问题。\n\n模型：`fake-model`",
-        )
-    ]
+def test_wrong_bot_workspace_is_rejected_before_service_start(harness, monkeypatch):
+    harness.client.portal.call(api_module.shutdown_event)
+    starts = harness.lifecycle.count("service-start")
+    with monkeypatch.context() as patch:
+        patch.setattr(api_module, "_post_slack_api", lambda *_: {"ok": True, "team_id": "TOTHER"})
+        with pytest.raises(RuntimeError, match="workspace_mismatch"):
+            harness.client.portal.call(api_module.startup_event)
+        assert harness.lifecycle.count("service-start") == starts
+    harness.client.portal.call(api_module.startup_event)
 
 
-def test_slack_twin_response_url_failure_does_not_break_background_task(
-    monkeypatch, tmp_path
-):
-    secret = "secret"
-    seen_questions: list[str] = []
-
-    async def fake_answer(request):
-        seen_questions.append(request.question)
-        return ChatResponse(answer="这是回答。", owner_name="张书豪", used_model="fake-model")
-
-    def failing_post(response_url: str, text: str, *, response_type: str = "ephemeral") -> None:
-        raise OSError("response url unavailable")
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
-    monkeypatch.setattr(api_module, "_post_slack_response", failing_post)
-    body = _body(text="研究路线是什么？")
-
-    response = client.post(
-        "/slack/commands/twin",
-        data=body,
-        headers=_signed_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert "正在问 twin" in response.json()["text"]
-    assert seen_questions == ["研究路线是什么？"]
+def test_public_binding_notice_is_private(harness):
+    harness.accounts["account"] = SimpleNamespace(visitor_profile="lab_member", email="private@example.com")
+    code = harness.links.create_code(user_id="account", email="private@example.com", visitor_profile="lab_member")
+    body = event(type="app_mention", channel_type="channel", user="UOTHER", text=f"<@BOT> bind {code.code}")
+    assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
+    harness.flush()
+    method, payload = harness.sent[0]
+    assert method == "chat.postEphemeral"
+    assert payload["user"] == "UOTHER"
 
 
-def test_slack_twin_uses_current_dm_history_as_transient_twin_context(monkeypatch, tmp_path):
-    secret = "secret"
-    posted: list[str] = []
-    seen: list[tuple[str, str | None, dict[str, object]]] = []
-
-    async def fake_answer(request):
-        seen.append((request.question, request.slack_channel_context, request.model_dump()))
-        return ChatResponse(
-            answer="hongyi 和 debin 一起开会；冯威、刘世峰单独开会。",
-            owner_name="张书豪",
-            used_model="fake-model",
-        )
-
-    def fake_fetch(*, bot_token, channel_id, latest_ts):
-        assert bot_token == "test-bot-token"
-        assert channel_id == "D123456789"
-        assert latest_ts.isdigit()
-        return SlackChannelContext(
-            text="[10-10 14:39] U1: hongyi和debin一起开会\n"
-            "[10-10 14:51] U1: 冯威、刘世峰单独开会",
-            message_count=2,
-        )
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module, "fetch_slack_channel_context", fake_fetch)
-    monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=fake_answer))
-    monkeypatch.setattr(api_module, "_post_slack_response", lambda _url, text, **_kw: posted.append(text))
-    body = _body(channel_id="D123456789", text="总结一下前面的上下文")
-
-    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, secret))
-
-    assert response.status_code == 200
-    assert len(seen) == 1
-    assert seen[0][0] == "总结一下前面的上下文"
-    assert "hongyi和debin一起开会" in (seen[0][1] or "")
-    assert "slack_channel_context" not in seen[0][2]
-    assert "已读取当前会话最近 2 条消息" in posted[0]
+def test_worker_revalidates_revocation_after_http_admission(harness):
+    harness.bind()
+    harness.accept = False
+    body = event(user="UOTHER")
+    assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
+    del harness.accounts["account"]
+    harness.accept = True
+    harness.flush()
+    assert harness.calls == []
+    assert "不是课题组成员" in harness.sent[0][1]["text"]
 
 
-def test_slack_twin_does_not_invent_prior_context_without_history(monkeypatch, tmp_path):
-    secret = "secret"
-    posted: list[str] = []
+def test_same_transport_id_with_different_input_conflicts(harness):
+    for text, status in [("first", 200), ("different", 409)]:
+        body = command(text=text)
+        assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == status
+    harness.flush()
+    assert len(harness.calls) == 1
 
-    async def should_not_answer(_request):
-        raise AssertionError("Twin must not answer a context request without history")
 
-    def missing_history(**_kwargs):
+@pytest.mark.parametrize("transport", ["command", "event"])
+def test_missing_transport_id_rejected(harness, transport):
+    body = command(trigger_id="") if transport == "command" else event(event_id="")
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+                                   content=body, headers=signed(body, json_body=transport == "event"))
+    assert response.status_code == 400
+
+
+def test_admission_failure_is_not_acknowledged(harness, monkeypatch):
+    async def fail(*args, **kwargs):
+        raise RuntimeError("storage unavailable")
+    monkeypatch.setattr(api_module.slack_workflow, "submit", fail)
+    body = command()
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        harness.client.post("/slack/commands/twin", content=body, headers=signed(body))
+    assert harness.sent == []
+
+
+def test_context_request_without_history_never_calls_model(harness, monkeypatch):
+    def missing(**kwargs):
         raise SlackHistoryUnavailable("not_in_channel")
+    monkeypatch.setattr(api_module, "fetch_slack_channel_context", missing)
+    body = command(text="总结一下前面的上下文")
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 200
+    harness.flush()
+    assert harness.calls == []
+    assert "读不到当前 Slack 会话的历史消息" in harness.sent[0][1]["text"]
 
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "test-bot-token")
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module, "fetch_slack_channel_context", missing_history)
-    monkeypatch.setattr(api_module, "service", SimpleNamespace(answer=should_not_answer))
-    monkeypatch.setattr(api_module, "_post_slack_response", lambda _url, text, **_kw: posted.append(text))
-    body = _body(channel_id="D123456789", text="总结一下前面的上下文")
 
-    response = client.post("/slack/commands/twin", data=body, headers=_signed_headers(body, secret))
-
+@pytest.mark.parametrize("transport", ["command", "event"])
+def test_bind_success_and_event_retry_do_not_persist_code(harness, transport):
+    harness.accounts["account"] = SimpleNamespace(visitor_profile="lab_member", email="member@example.com")
+    code = harness.links.create_code(user_id="account", email="member@example.com", visitor_profile="lab_member")
+    body = command(user_id="UOTHER", text=f"bind {code.code}") if transport == "command" else event(user="UOTHER", text=f"bind {code.code}")
+    endpoint = "/slack/commands/twin" if transport == "command" else "/slack/events"
+    headers = signed(body, json_body=transport == "event")
+    response = harness.client.post(endpoint, content=body, headers=headers)
     assert response.status_code == 200
-    assert "读不到当前 Slack 会话的历史消息" in posted[0]
+    if transport == "event":
+        headers["x-slack-retry-num"] = "1"
+        assert harness.client.post(endpoint, content=body, headers=headers).status_code == 200
+    harness.flush()
+    text = response.json()["text"] if transport == "command" else harness.sent[0][1]["text"]
+    assert "绑定成功" in text
+    assert harness.links.get_link_for_slack_user("UOTHER", team_id="T123").user_id == "account"
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    assert code.code not in json.dumps(rows)
 
 
-def test_slack_events_url_verification(monkeypatch):
-    secret = "secret"
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    body = json.dumps({"type": "url_verification", "challenge": "abc123"}).encode()
+def test_invalid_bind_and_usage(harness):
+    for text, expected in [("bind BADCODE", "无效或已过期"), ("bind", "用法"), ("", "用法")]:
+        body = command(text=text)
+        response = harness.client.post("/slack/commands/twin", content=body, headers=signed(body))
+        assert response.status_code == 200
+        assert expected in response.json()["text"]
+    body = event(type="app_mention", text="<@BOT>", channel_type="channel")
+    assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
+    harness.flush()
+    assert "用法" in harness.sent[0][1]["text"]
 
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
 
+def test_url_verification(harness):
+    body = json.dumps({"type": "url_verification", "challenge": "challenge-value"}).encode()
+    response = harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True))
+    assert response.json() == {"challenge": "challenge-value"}
+
+
+@pytest.mark.parametrize("role", ["lab_member", "general_visitor"])
+def test_web_link_code_membership_gate(harness, monkeypatch, role):
+    session = UserSessionResponse(is_authenticated=True, mode="user", account=UserAccountResponse(user_id="account",
+        name="Member", email="member@example.com", visitor_profile=role, created_at="2026-06-23T00:00:00+00:00"))
+    monkeypatch.setattr(harness.service, "get_user_session", lambda _: session, raising=False)
+    response = harness.client.post("/slack/twin-link/code")
     assert response.status_code == 200
-    assert response.json() == {"challenge": "abc123"}
-
-
-def test_slack_events_bind_code_success(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-1",
-        email="lab@example.com",
-        visitor_profile="lab_member",
-    )
-    posted: list[tuple[str, str, str | None]] = []
-
-    def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-        posted.append((channel_id, text, thread_ts))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
-    body = _event_body(user="UOTHER", text=f"bind {code.code}")
-
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert posted == [("D123", "绑定成功。以后可以直接输入 `/twin 你的问题`，或者直接给 twin 发私信。已绑定账号：lab@example.com", None)]
-
-
-def test_slack_events_unlinked_user_gets_guidance(monkeypatch, tmp_path):
-    secret = "secret"
-    posted: list[tuple[str, str, str | None]] = []
-
-    def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-        posted.append((channel_id, text, thread_ts))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
-    body = _event_body(user="UOTHER")
-
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert len(posted) == 1
-    assert posted[0][0] == "D123"
-    assert "生成 Slack 绑定码" in posted[0][1]
-
-
-def test_slack_events_bound_lab_member_can_ask(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-3",
-        email="lab@example.com",
-        visitor_profile="lab_member",
-    )
-    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
-    posted: list[tuple[str, str, str | None]] = []
-    seen: list[tuple[str, str | None, str]] = []
-
-    async def fake_answer(request):
-        seen.append((request.visitor_profile, request.student_email, request.course_context))
-        assert request.owner_id == api_module._slack_conversation_owner("T123", "UOTHER", "D123")
-        return ChatResponse(answer="DM 回答。", owner_name="张书豪", used_model="fake-model")
-
-    def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-        posted.append((channel_id, text, thread_ts))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
-    monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
-    body = _event_body(user="UOTHER", text="这个课题组的研究路线和一般企业 R&D 有什么区别？")
-
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert seen == [("lab_member", "lab@example.com", "Slack DM")]
-    assert posted == [
-        (
-            "D123",
-            "你问：这个课题组的研究路线和一般企业 R&D 有什么区别？\nDM 回答。\n\n模型：`fake-model`",
-            None,
-        )
-    ]
-
-
-def test_slack_events_app_mention_without_question_shows_usage(monkeypatch, tmp_path):
-    secret = "secret"
-    posted: list[tuple[str, str, str | None]] = []
-
-    def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-        posted.append((channel_id, text, thread_ts))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "slack_link_store", SlackUserLinkStore(tmp_path))
-    monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
-    body = _event_body(type="app_mention", channel_type="channel", text="<@UAPP>", ts="1719200000.000100")
-
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert posted == [(
-        "D123",
-        "用法：`@twin 你的问题`、`/twin 你的问题`，或者直接给 twin 发私信。",
-        "1719200000.000100",
-    )]
-
-
-def test_slack_events_app_mention_bound_lab_member_replies_in_thread(monkeypatch, tmp_path):
-    secret = "secret"
-    store = SlackUserLinkStore(tmp_path)
-    code = store.create_code(
-        user_id="user-4",
-        email="lab@example.com",
-        visitor_profile="lab_member",
-    )
-    assert store.consume_code(code.code, team_id="T123", slack_user_id="UOTHER") is not None
-    posted: list[tuple[str, str, str | None]] = []
-    seen: list[tuple[str, str | None, str, str]] = []
-
-    async def fake_answer(request):
-        seen.append((request.visitor_profile, request.student_email, request.course_context, request.question))
-        return ChatResponse(answer="公开回答。", owner_name="张书豪", used_model="fake-model")
-
-    def fake_post(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-        posted.append((channel_id, text, thread_ts))
-
-    monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", secret)
-    monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U013T91JDQT"})
-    monkeypatch.setattr(api_module, "slack_link_store", store)
-    monkeypatch.setattr(api_module.service, "answer", fake_answer)
-    monkeypatch.setattr(api_module, "_post_slack_message", fake_post)
-    body = _event_body(
-        type="app_mention",
-        channel_type="channel",
-        user="UOTHER",
-        text="<@UAPP> 这个课题组的研究路线和一般企业 R&D 有什么区别？",
-        ts="1719200000.000100",
-    )
-
-    response = client.post(
-        "/slack/events",
-        data=body,
-        headers=_signed_json_headers(body, secret),
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {"ok": True}
-    assert seen == [(
-        "lab_member",
-        "lab@example.com",
-        "Slack @twin",
-        "这个课题组的研究路线和一般企业 R&D 有什么区别？",
-    )]
-    assert posted == [(
-        "D123",
-        "你问：这个课题组的研究路线和一般企业 R&D 有什么区别？\n公开回答。\n\n模型：`fake-model`",
-        "1719200000.000100",
-    )]
+    assert response.json()["can_link"] == (role == "lab_member")
+    if role == "lab_member":
+        assert len(response.json()["code"]) == 8

@@ -28,6 +28,7 @@ class SlackIngress(BaseModel):
     channel_id: str = Field(pattern=r"^[A-Za-z0-9]+$")
     transport_id: str = Field(min_length=1, max_length=256)
     kind: Literal["command", "message", "mention"]
+    private_reply: bool = False
     question: str = Field(min_length=1)
     thread_ts: str | None = Field(default=None, pattern=r"^[0-9]+\.[0-9]+$")
     latest_ts: str = Field(default="", pattern=r"^(?:[0-9]+(?:\.[0-9]+)?)?$")
@@ -104,12 +105,27 @@ class SlackWorkflow:
         return await self._work.commit(captured.request_id,
             result={"owner_id": captured.owner_id}, tasks={"answer": payload, "deliver": payload})
 
+    async def submit_notice(self, ingress: SlackIngress, reply: SlackReply):
+        captured = SlackIngress.model_validate_json(ingress.model_dump_json())
+        return await self._work.commit(captured.request_id,
+            result={"owner_id": captured.owner_id, "notice": SlackReply.model_validate(reply).model_dump(mode="json")},
+            tasks={"deliver": captured.model_dump(mode="json")})
+
+    async def resume_if_admitted(self, ingress: SlackIngress):
+        record = await asyncio.to_thread(self.journal.read, ingress.request_id)
+        if record is None:
+            return False
+        payload = SlackIngress.model_validate_json(ingress.model_dump_json()).model_dump(mode="json")
+        tasks = {name: payload for name in record["tasks"]}
+        await self._work.commit(ingress.request_id, result=record["result"], tasks=tasks)
+        return True
+
     async def _handle(self, lease):
         ingress = SlackIngress.model_validate(lease.payload)
         if ingress.request_id != lease.request_id:
             raise ValueError("slack_request_identity_mismatch")
-        denial = await self._authorize(ingress)
         if lease.task_id == "answer":
+            denial = await self._authorize(ingress)
             if denial is not None:
                 reply = SlackReply(text=denial)
             else:
@@ -121,11 +137,15 @@ class SlackWorkflow:
         if lease.task_id != "deliver":
             raise ValueError("unknown_slack_work_kind")
         record = await asyncio.to_thread(self.journal.read, lease.request_id)
-        completed = record["tasks"]["answer"]
-        if completed["status"] != "done":
-            # The same bounded dispatcher owns dependency retry and leases.
-            raise RuntimeError("slack_answer_not_ready")
-        reply = SlackReply(text=denial) if denial is not None else SlackReply.model_validate(completed["result"])
+        notice = record["result"].get("notice")
+        if notice is not None:
+            reply = SlackReply.model_validate(notice)
+        else:
+            completed = record["tasks"]["answer"]
+            if completed["status"] != "done":
+                raise RuntimeError("slack_answer_not_ready")
+            denial = await self._authorize(ingress)
+            reply = SlackReply(text=denial) if denial is not None else SlackReply.model_validate(completed["result"])
         receipt = await self._deliver(ingress, reply)
         if not isinstance(receipt, dict) or receipt.get("accepted") is not True:
             raise ValueError("slack_delivery_requires_accepted_receipt")

@@ -25,7 +25,7 @@ from .runtime_env import bootstrap_runtime_env
 
 bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query, Request, Response
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
@@ -46,6 +46,7 @@ from .config import settings
 from .conversation_trace_store import ConversationTraceStore
 from .workflow_events import WorkflowEventBroker
 from .post_answer_contract import DeliveryIntent
+from .slack_workflow import SlackAnswerRecovery, SlackIngress, SlackReply, SlackWorkflow
 from .chat_delivery import ChatDeliveryGate
 from .request_context import (
     RequestCancellationController,
@@ -378,6 +379,7 @@ def get_conversation_trace_store() -> ConversationTraceStore:
             _conversation_trace_stores[store_key] = store
     return store
 SLACK_TWIN_SIGNING_SECRET = os.environ.get("SLACK_TWIN_SIGNING_SECRET", "").strip()
+SLACK_TWIN_TEAM_ID = os.environ.get("SLACK_TWIN_TEAM_ID", "").strip()
 # Explicit authorization pairs only (T123:U456); bare IDs grant no access.
 SLACK_TWIN_ALLOWED_USER_IDS = {
     user_id.strip()
@@ -463,6 +465,7 @@ workflow_event_broker = WorkflowEventBroker(
     lambda: service._conversation_store.state_store,
     heartbeat_provider=lambda: CHAT_SSE_KEEPALIVE_SECONDS,
 )
+slack_workflow = None
 
 
 def _raise_chat_validation_error(exc: ValidationError) -> None:
@@ -729,19 +732,6 @@ def _verify_slack_signature(raw_body: bytes, request: Request) -> None:
         raise HTTPException(status_code=401, detail="Invalid Slack signature.")
 
 
-def _post_slack_response(response_url: str, text: str, *, response_type: str = "ephemeral") -> None:
-    payload = json.dumps(
-        {"response_type": response_type, "text": text},
-        ensure_ascii=False,
-    ).encode("utf-8")
-    req = urllib.request.Request(
-        response_url,
-        data=payload,
-        headers={"Content-Type": "application/json; charset=utf-8"},
-    )
-    urllib.request.urlopen(req, timeout=8).read()
-
-
 def _post_slack_api(method: str, payload: dict[str, object]) -> dict[str, object]:
     if not SLACK_TWIN_BOT_TOKEN:
         raise RuntimeError("Slack bot token is not configured.")
@@ -761,33 +751,24 @@ def _post_slack_api(method: str, payload: dict[str, object]) -> dict[str, object
     return parsed
 
 
-def _post_slack_message(channel_id: str, text: str, *, thread_ts: str | None = None) -> None:
-    payload: dict[str, object] = {"channel": channel_id, "text": text}
-    if thread_ts:
-        payload["thread_ts"] = thread_ts
-    _post_slack_api("chat.postMessage", payload)
+def _require_slack_destination(team_id):
+    if not SLACK_TWIN_TEAM_ID or not SLACK_TWIN_BOT_TOKEN:
+        raise HTTPException(status_code=503, detail="Slack workspace credentials are not configured.")
+    if team_id != SLACK_TWIN_TEAM_ID:
+        raise HTTPException(status_code=403, detail="Slack workspace is not configured.")
 
 
-def _safe_post_slack_response(
-    response_url: str, text: str, *, response_type: str = "ephemeral"
-) -> bool:
-    try:
-        _post_slack_response(response_url, text, response_type=response_type)
-        return True
-    except Exception as exc:  # pragma: no cover - exception type depends on network stack
-        _logger.warning("Failed to post Slack /twin response: %s", exc)
-        return False
-
-
-def _safe_post_slack_message(
-    channel_id: str, text: str, *, thread_ts: str | None = None
-) -> bool:
-    try:
-        _post_slack_message(channel_id, text, thread_ts=thread_ts)
-        return True
-    except Exception as exc:  # pragma: no cover - exception type depends on network stack
-        _logger.warning("Failed to post Slack twin DM response: %s", exc)
-        return False
+async def _deliver_slack_reply(ingress, reply):
+    _require_slack_destination(ingress.team_id)
+    payload = {"channel": ingress.channel_id, "text": reply.text}
+    if ingress.thread_ts:
+        payload["thread_ts"] = ingress.thread_ts
+    method = "chat.postMessage"
+    if ingress.kind == "command" or ingress.private_reply:
+        method = "chat.postEphemeral"
+        payload["user"] = ingress.user_id
+    result = await asyncio.to_thread(_post_slack_api, method, payload)
+    return {"accepted": True, "message_ts": result.get("ts") or result.get("message_ts")}
 
 
 def _slack_twin_link_instructions() -> str:
@@ -866,133 +847,62 @@ def _format_slack_twin_answer(
     return "\n".join(line for line in lines if line)
 
 
-async def _answer_slack_twin_question(
-    *,
-    question: str,
-    user_id: str,
-    owner_id: str,
-    user_name: str | None,
-    user_email: str | None = None,
-    visitor_profile: str = "lab_member",
-    course_context: str = "Slack /twin",
-    slack_channel_id: str | None = None,
-    slack_latest_ts: str | None = None,
-    delivery_callback,
-) -> None:
+async def _authorize_slack_ingress(ingress):
+    _require_slack_destination(ingress.team_id)
+    _, _, denial = await asyncio.to_thread(_resolve_slack_twin_identity,
+                                           ingress.user_id, team_id=ingress.team_id)
+    return denial
+
+
+def _render_slack_reply(response, ingress):
+    return _format_slack_twin_answer(response, question=ingress.question)
+
+
+async def _produce_slack_reply(ingress):
+    _require_slack_destination(ingress.team_id)
+    role, email, denial = await asyncio.to_thread(_resolve_slack_twin_identity,
+                                                 ingress.user_id, team_id=ingress.team_id)
+    if denial is not None:
+        return SlackReply(text=denial)
+    slack_context = None
     try:
-        slack_context = None
-        slack_history_unavailable = False
-        if slack_channel_id:
-            try:
-                slack_context = await asyncio.to_thread(
-                    fetch_slack_channel_context,
-                    bot_token=SLACK_TWIN_BOT_TOKEN,
-                    channel_id=slack_channel_id,
-                    latest_ts=slack_latest_ts or "",
-                )
-                slack_history_unavailable = slack_context.message_count == 0
-            except SlackHistoryUnavailable as exc:
-                slack_history_unavailable = True
-                _logger.warning("Slack channel history unavailable: %s", exc.code)
-
-        if asks_about_prior_context(question) and (
-            slack_context is None or slack_context.message_count == 0
-        ):
-            await asyncio.to_thread(
-                delivery_callback,
-                "我已接入 Twin，但目前读不到当前 Slack 会话的历史消息，"
-                "不能可靠地总结前文。请管理员确认 Twin Bot 已加入该频道、"
-                "并具有对应的历史读取权限。",
-            )
-            return
-
-        chat_request = ChatRequest(
-            owner_id=owner_id,
-            student_name=user_name or user_id,
-            student_email=user_email,
-            question=question,
-            course_context=course_context,
-            slack_channel_context=slack_context.text if slack_context else None,
-            visitor_profile=visitor_profile,
-            conversation_id=f"slack-{user_id}-{uuid4().hex}",
-            deep_thinking=False,
-            deep_thinking_explicit=False,
-            web_search=False,
-        )
-        response = await asyncio.wait_for(
-            service.answer(chat_request),
-            timeout=SLACK_TWIN_RESPONSE_TIMEOUT_SECONDS,
-        )
-        await asyncio.to_thread(
-            delivery_callback,
-            _format_slack_twin_answer(
-                response,
-                question=question,
-                slack_message_count=slack_context.message_count if slack_context else 0,
-                slack_history_unavailable=slack_history_unavailable,
-            ),
-        )
-    except Exception as exc:
-        await asyncio.to_thread(
-            delivery_callback,
-            f"抱歉，twin 这次没有完成回答：{exc}",
-        )
+        slack_context = await asyncio.to_thread(fetch_slack_channel_context,
+            bot_token=SLACK_TWIN_BOT_TOKEN, channel_id=ingress.channel_id, latest_ts=ingress.latest_ts)
+    except SlackHistoryUnavailable as exc:
+        _logger.warning("Slack channel history unavailable: %s", exc.code)
+    if asks_about_prior_context(ingress.question) and (slack_context is None or not slack_context.message_count):
+        return SlackReply(text="我已接入 Twin，但目前读不到当前 Slack 会话的历史消息，不能可靠地总结前文。请确认 Bot 的历史读取权限。")
+    request = ChatRequest(owner_id=ingress.owner_id, student_name=ingress.user_id,
+        student_email=email, question=ingress.question, visitor_profile=role,
+        course_context={"command": "Slack /twin", "message": "Slack DM", "mention": "Slack @twin"}[ingress.kind],
+        slack_channel_context=slack_context.text if slack_context else None,
+        conversation_id=ingress.request_id, deep_thinking=False, deep_thinking_explicit=False, web_search=False)
+    response = await asyncio.wait_for(service.answer(request, delivery=ingress.delivery),
+                                      timeout=SLACK_TWIN_RESPONSE_TIMEOUT_SECONDS)
+    # Recovery renders this same immutable canonical answer; transient channel
+    # history is never stored in the ingress or used to regenerate a committed turn.
+    return SlackReply(text=_render_slack_reply(response, ingress))
 
 
-async def _answer_slack_twin_command(
-    *,
-    response_url: str,
-    question: str,
-    user_id: str,
-    owner_id: str,
-    user_name: str | None,
-    user_email: str | None = None,
-    visitor_profile: str = "lab_member",
-    slack_channel_id: str | None = None,
-    slack_latest_ts: str | None = None,
-) -> None:
-    def deliver(text: str) -> bool:
-        return _safe_post_slack_response(response_url, text, response_type="ephemeral")
-
-    await _answer_slack_twin_question(
-        question=question,
-        user_id=user_id,
-        owner_id=owner_id,
-        user_name=user_name,
-        user_email=user_email,
-        visitor_profile=visitor_profile,
-        course_context="Slack /twin",
-        slack_channel_id=slack_channel_id,
-        slack_latest_ts=slack_latest_ts,
-        delivery_callback=deliver,
-    )
+def _create_slack_workflow(state):
+    return SlackWorkflow(state, authorize=_authorize_slack_ingress,
+        recover=SlackAnswerRecovery(state, render=_render_slack_reply),
+        answer=_produce_slack_reply, deliver=_deliver_slack_reply)
 
 
-async def _answer_slack_twin_dm(
-    *,
-    channel_id: str,
-    question: str,
-    user_id: str,
-    owner_id: str,
-    user_name: str | None,
-    user_email: str | None = None,
-    visitor_profile: str = "lab_member",
-    thread_ts: str | None = None,
-    course_context: str = "Slack DM",
-) -> None:
-    def deliver(text: str) -> bool:
-        return _safe_post_slack_message(channel_id, text, thread_ts=thread_ts)
-
-    await _answer_slack_twin_question(
-        question=question,
-        user_id=user_id,
-        owner_id=owner_id,
-        user_name=user_name,
-        user_email=user_email,
-        visitor_profile=visitor_profile,
-        course_context=course_context,
-        delivery_callback=deliver,
-    )
+async def _admit_slack(ingress, *, notice=None):
+    _require_slack_destination(ingress.team_id)
+    if slack_workflow is None:
+        raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+    try:
+        if notice is not None:
+            await slack_workflow.submit_notice(ingress, SlackReply(text=notice))
+        else:
+            await slack_workflow.submit(ingress)
+    except ValueError as exc:
+        if str(exc) == "journal_commit_conflict":
+            raise HTTPException(status_code=409, detail="Slack request identity conflict.") from None
+        raise
 
 
 def frontend_asset(filename: str) -> FileResponse:
@@ -1801,7 +1711,6 @@ def _slack_conversation_owner(team_id: str, user_id: str, channel_id: str) -> st
 @llm_app.post("/slack/commands/twin", include_in_schema=False)
 async def slack_twin_command(
     raw_request: Request,
-    background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     raw_body = await raw_request.body()
     _verify_slack_signature(raw_body, raw_request)
@@ -1812,10 +1721,10 @@ async def slack_twin_command(
     }
     user_id = form.get("user_id", "").strip()
     team_id = form.get("team_id", "").strip()
-    owner_id = _slack_conversation_owner(team_id, user_id,
-                                          form.get("channel_id", "").strip())
+    channel_id = form.get("channel_id", "").strip()
+    _slack_conversation_owner(team_id, user_id, channel_id)
+    _require_slack_destination(team_id)
     question = form.get("text", "").strip()
-    response_url = form.get("response_url", "").strip()
     if not question:
         return JSONResponse(
             {
@@ -1823,29 +1732,21 @@ async def slack_twin_command(
                 "text": "用法：`/twin 你的问题`",
             }
         )
-    if not response_url:
-        raise HTTPException(status_code=400, detail="Slack request missing response_url.")
 
     bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
     if bind_reply is not None:
         return JSONResponse({"response_type": "ephemeral", "text": bind_reply})
 
-    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
+    _, _, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
     if denial_message is not None:
         return JSONResponse({"response_type": "ephemeral", "text": denial_message})
 
-    background_tasks.add_task(
-        _answer_slack_twin_command,
-        response_url=response_url,
-        question=question,
-        user_id=user_id or "slack-user",
-        owner_id=owner_id,
-        user_name=form.get("user_name") or user_id or None,
-        user_email=user_email,
-        visitor_profile=visitor_profile,
-        slack_channel_id=form.get("channel_id", "").strip(),
-        slack_latest_ts=raw_request.headers.get("x-slack-request-timestamp", ""),
-    )
+    try:
+        ingress = SlackIngress(team_id=team_id, user_id=user_id, channel_id=channel_id,
+            transport_id=form.get("trigger_id", "").strip(), kind="command", question=question)
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Slack request missing valid transport identity.") from None
+    await _admit_slack(ingress)
     question_preview = question if len(question) <= 80 else f"{question[:77]}..."
     return JSONResponse(
         {
@@ -1858,7 +1759,6 @@ async def slack_twin_command(
 @llm_app.post("/slack/events", include_in_schema=False)
 async def slack_events(
     raw_request: Request,
-    background_tasks: BackgroundTasks,
 ) -> JSONResponse:
     raw_body = await raw_request.body()
     _verify_slack_signature(raw_body, raw_request)
@@ -1870,8 +1770,6 @@ async def slack_events(
     if payload.get("type") == "url_verification":
         return JSONResponse({"challenge": payload.get("challenge", "")})
 
-    if raw_request.headers.get("x-slack-retry-num"):
-        return JSONResponse({"ok": True})
     if payload.get("type") != "event_callback":
         return JSONResponse({"ok": True})
 
@@ -1899,40 +1797,58 @@ async def slack_events(
     if not user_id or not channel_id:
         return JSONResponse({"ok": True})
     team_id = str(payload.get("team_id") or "").strip()
-    owner_id = _slack_conversation_owner(team_id, user_id, channel_id)
+    _slack_conversation_owner(team_id, user_id, channel_id)
+    _require_slack_destination(team_id)
+    try:
+        ingress = SlackIngress(team_id=team_id, user_id=user_id, channel_id=channel_id,
+            transport_id=str(payload.get("event_id") or "").strip(),
+            kind="mention" if is_public_mention else "message",
+            question=question or "Slack usage", thread_ts=thread_ts,
+            latest_ts=str(event.get("ts") or "").strip())
+    except ValidationError:
+        raise HTTPException(status_code=400, detail="Slack event missing valid transport identity.") from None
+    if question.split()[:1] and question.split()[0].lower() == "bind":
+        ingress = ingress.model_copy(update={"question": "Slack binding status", "private_reply": is_public_mention})
+    if slack_workflow is None:
+        raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+    try:
+        if await slack_workflow.resume_if_admitted(ingress):
+            return JSONResponse({"ok": True})
+    except ValueError as exc:
+        if str(exc) == "journal_commit_conflict":
+            raise HTTPException(status_code=409, detail="Slack request identity conflict.") from None
+        raise
     if not question:
         usage_text = "用法：`@twin 你的问题`、`/twin 你的问题`，或者直接给 twin 发私信。"
-        background_tasks.add_task(_safe_post_slack_message, channel_id, usage_text, thread_ts=thread_ts)
+        await _admit_slack(ingress, notice=usage_text)
         return JSONResponse({"ok": True})
 
     bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
     if bind_reply is not None:
-        background_tasks.add_task(_safe_post_slack_message, channel_id, bind_reply, thread_ts=thread_ts)
+        # Never persist a one-time binding credential in the request journal.
+        await _admit_slack(ingress, notice=bind_reply)
         return JSONResponse({"ok": True})
 
-    visitor_profile, user_email, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
+    _, _, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
     if denial_message is not None:
-        background_tasks.add_task(_safe_post_slack_message, channel_id, denial_message, thread_ts=thread_ts)
+        await _admit_slack(ingress, notice=denial_message)
         return JSONResponse({"ok": True})
 
-    background_tasks.add_task(
-        _answer_slack_twin_dm,
-        channel_id=channel_id,
-        question=question,
-        user_id=user_id,
-        user_name=str(event.get("username") or user_id or "").strip() or None,
-        owner_id=owner_id,
-        user_email=user_email,
-        visitor_profile=visitor_profile,
-        thread_ts=thread_ts,
-        course_context="Slack @twin" if is_public_mention else "Slack DM",
-    )
+    await _admit_slack(ingress)
     return JSONResponse({"ok": True})
 
 
 async def startup_event() -> None:
+    global slack_workflow
+    if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
+        identity = await asyncio.to_thread(_post_slack_api, "auth.test", {})
+        if identity.get("team_id") != SLACK_TWIN_TEAM_ID:
+            raise RuntimeError("slack_bot_workspace_mismatch")
     instance = await asyncio.to_thread(service.ensure_initialized)
     await asyncio.to_thread(instance.start_background_work)
+    if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
+        slack_workflow = _create_slack_workflow(instance._conversation_store.state_store)
+        await slack_workflow.start()
     if settings.warm_service_on_startup:
         try:
             # The model-side warmup is opportunistic.  A slow or stalled model
@@ -1946,6 +1862,10 @@ async def startup_event() -> None:
 
 
 async def shutdown_event() -> None:
+    global slack_workflow
+    if slack_workflow is not None:
+        await slack_workflow.aclose()
+        slack_workflow = None
     if service.is_initialized():
         await service.aclose()
 

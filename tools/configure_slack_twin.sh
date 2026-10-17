@@ -2,15 +2,15 @@
 set -euo pipefail
 
 repo_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-signing_secret="${1:-}"
+signing_secret="${SLACK_TWIN_SIGNING_SECRET:-}"
+team_id="${SLACK_TWIN_TEAM_ID:-}"
 # Entries must be workspace-qualified: T123:U456. Empty means binding required.
 allowed_user_ids="${SLACK_TWIN_ALLOWED_USER_IDS:-}"
 visitor_profile="${SLACK_TWIN_VISITOR_PROFILE:-lab_member}"
 request_url="${SLACK_TWIN_REQUEST_URL:-https://twin.sage.org.ai/slack/commands/twin}"
 
-if [[ -z "$signing_secret" ]]; then
-    echo "Usage: ./manage.sh configure-slack-twin <slack-signing-secret>" >&2
-    echo "Find it in Slack app: Basic Information -> App Credentials -> Signing Secret." >&2
+if [[ $# -ne 0 || -z "$signing_secret" || ! "$team_id" =~ ^[A-Za-z0-9]+$ ]]; then
+    echo "Set SLACK_TWIN_SIGNING_SECRET and SLACK_TWIN_TEAM_ID in the secure environment, then run ./manage.sh configure-slack-twin without arguments." >&2
     exit 2
 fi
 
@@ -20,15 +20,17 @@ if [[ ! -f "$env_file" ]]; then
     exit 1
 fi
 
-"${PYTHON_BIN:-python3}" - "$env_file" "$signing_secret" "$allowed_user_ids" "$visitor_profile" <<'PY'
+"${PYTHON_BIN:-python3}" - "$env_file" "$team_id" "$allowed_user_ids" "$visitor_profile" <<'PY'
 from __future__ import annotations
 
 import sys
+import os
 from pathlib import Path
 
 env_path = Path(sys.argv[1])
 updates = {
-    "SLACK_TWIN_SIGNING_SECRET": sys.argv[2],
+    "SLACK_TWIN_SIGNING_SECRET": os.environ["SLACK_TWIN_SIGNING_SECRET"],
+    "SLACK_TWIN_TEAM_ID": sys.argv[2],
     "SLACK_TWIN_ALLOWED_USER_IDS": sys.argv[3],
     "SLACK_TWIN_VISITOR_PROFILE": sys.argv[4],
 }

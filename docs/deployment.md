@@ -427,7 +427,7 @@ binary. No automatic workspace assignment or legacy authorization fallback is
 provided. Verify both signed command and event paths, and confirm that the same
 user ID in another workspace cannot reuse the binding or allowlist entry.
 
-### Durable Slack workflow qualification (transport cutover pending)
+### Durable Slack workflow and transport
 
 `slack_workflow.SlackWorkflow` admits answer and delivery intents together into
 SAGE's journal. Its strict `SlackIngress` accepts verified destination IDs,
@@ -444,8 +444,30 @@ can cause duplicates. A success response is not proof that an ephemeral message
 was seen. The event loop, shared state and async clients must outlive successful
 workflow drain.
 
-This module is qualified in isolated tests but is not yet connected to the HTTP
-Slack routes. Release is blocked on replacing their `BackgroundTasks` path,
-wiring startup recovery/shutdown drain, preserving ephemeral visibility without
-persisting callback credentials, and end-to-end transport/restart acceptance.
-Do not advertise durable Slack delivery based on module tests alone.
+The signed command/event routes now admit this workflow before acknowledging a
+question. Commands require Slack's `trigger_id`; events require `event_id`.
+Retries resume the same durable record, including events bearing a retry header.
+Startup recovers the journal and shutdown drains it before closing model clients
+or state. The old request-local `BackgroundTasks` answer/callback path is removed.
+
+Configure `SLACK_TWIN_TEAM_ID` together with the bot token and signing secret in
+the service environment. Startup uses `auth.test` to reject a token from another
+workspace before starting the service. Without workspace credentials the Slack
+routes return 503 rather than acknowledging work they cannot deliver. The helper
+`manage.sh configure-slack-twin` reads the signing secret from its environment,
+not command arguments, and requires the workspace ID. It must be run with a
+securely populated environment; never paste credentials into command history.
+
+Slash replies use `chat.postEphemeral` with the original user and channel; DM and
+mention answers use `chat.postMessage` and preserve thread identity. Binding
+notices in public channels are ephemeral, and one-time binding codes are not
+stored in the work journal. Binding itself still commits in its separate binding
+store: a crash between that commit and admission of the notice can lose the
+success notice, but does not undo a successful binding. Check link status before
+reissuing a code. This is not a cross-store atomic transaction.
+
+As documented by [Slack](https://docs.slack.dev/reference/methods/chat.postEphemeral/),
+ephemeral visibility requires an active channel member and is not guaranteed.
+Receipts prove API acceptance, not viewing. Live deployment, real Slack delivery,
+capacity/retention and recovery under production traffic still require acceptance;
+isolated transport tests do not establish those results.
