@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import weakref
+from threading import RLock
 import time
 from collections import Counter
 from dataclasses import dataclass, field
@@ -329,6 +331,9 @@ class NeuroMemConversationStore:
         self._conversation_collection_dir = self._collections_dir / "conversation-memory"
         self._profile_collection_dir = self._collections_dir / "conversation-profile-memory"
         self._conversation_collection_type = self._resolve_conversation_collection_type()
+        self._memory_write_lock = RLock()
+        self._durable_memory = None
+        self._memory_state_runtime = None
         self._records: dict[str, ConversationMemoryRecord] = {}
         self._profiles: dict[str, ProfileMemoryRecord] = {}
         self._conversation_timelines: dict[str, list[str]] = {}
@@ -521,6 +526,10 @@ class NeuroMemConversationStore:
         )
 
     def persist_exchange(self, record: ConversationMemoryRecord) -> ConversationMemoryRecord:
+        with self._memory_write_lock:
+            return self._persist_exchange_locked(record)
+
+    def _persist_exchange_locked(self, record: ConversationMemoryRecord) -> ConversationMemoryRecord:
         """Persist the supplied identity/time, never regenerate them during replay.
 
         Stable input is a prerequisite, not a claim of exactly-once collection
@@ -531,8 +540,11 @@ class NeuroMemConversationStore:
         existing = self._records.get(record.memory_id)
         if existing is not None and existing.to_dict() != record.to_dict():
             raise ValueError("conversation_memory_identity_conflict")
+        if existing is not None and self._durable_memory is not None:
+            return existing
         self._store_conversation_entry(record)
-        self._persist_collection(self._conversation_collection, self._conversation_collection_dir)
+        if self._durable_memory is None:
+            self._persist_collection(self._conversation_collection, self._conversation_collection_dir)
         # Publish to history only after persistence succeeds. A failed write
         # must not become visible as a committed exchange in the timeline.
         self._records[record.memory_id] = record
@@ -1104,6 +1116,49 @@ class NeuroMemConversationStore:
         return collection
 
     def _load_or_create_collection(self, name: str, snapshot_dir: Path, *, collection_role: str):
+        if self._collection_type_for_role(collection_role) == "neural_continual":
+            return self._load_durable_conversation(name, snapshot_dir, collection_role)
+        return self._load_legacy_collection(name, snapshot_dir, collection_role=collection_role)
+
+    def _load_durable_conversation(self, name: str, snapshot_dir: Path, collection_role: str):
+        from sage.neuromem.memory_collection.durable_neural_memory import DurableNeuralMemory
+        from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+
+        runtime = StatefulProcessRuntime(
+            backend="sqlite", sqlite_path=str(self._base_dir / "neural_state.sqlite3")
+        )
+        self._memory_state_runtime = runtime
+        self._memory_state_finalizer = weakref.finalize(self, runtime.close)
+        config = self._build_neural_collection_config()
+        config["collection_type"] = "neural_continual"
+        durable = DurableNeuralMemory(runtime, namespace="conversation", name=name, config=config)
+        existing = durable.load_if_present()
+        if existing is None:
+            legacy = self._load_legacy_collection(name, snapshot_dir, collection_role=collection_role)
+            rebuilt = self._initialize_collection(name, collection_type="neural_continual")
+            # Legacy snapshots stored records, not weights. Reconstruct learning
+            # explicitly in stable chronological order, without dropping text.
+            records = [dict(legacy.storage.get(key)) for key in legacy.storage.keys()]
+            records.sort(key=lambda item: (item.get("created_at", 0), item.get("text", "")))
+            for payload in records:
+                entry_id = rebuilt.insert(payload["text"], payload.get("metadata") or {})
+                current = rebuilt.storage.get(entry_id)
+                for field in ("created_at", "updated_at"):
+                    if field in payload:
+                        current[field] = payload[field]
+                rebuilt.storage.put(entry_id, current)
+            durable.initialize_once("legacy-record-reconstruction-v1", rebuilt.export_state())
+            existing = durable.load()
+            if existing.export_state() != rebuilt.export_state():
+                raise RuntimeError("neural_migration_verification_failed")
+        self._durable_memory = durable
+        # The new store is authoritative. Do not retain a second writable neural
+        # snapshot in the profile database; legacy disk sources remain untouched.
+        with sqlite3.connect(self._sqlite_db_path) as connection:
+            connection.execute("DELETE FROM collection_snapshots WHERE name = ?", (name,))
+        return existing
+
+    def _load_legacy_collection(self, name: str, snapshot_dir: Path, *, collection_role: str):
         if self._sqlite_has_collection_snapshot(name):
             return self._load_collection_from_sqlite(name, collection_role=collection_role)
         if self._has_collection_snapshot(snapshot_dir):
@@ -1282,6 +1337,10 @@ class NeuroMemConversationStore:
 
     def _persist_collection(self, collection: Any, snapshot_dir: Path) -> None:
         del snapshot_dir
+        if self._is_neural_collection(collection) and self._durable_memory is not None:
+            if collection.export_state() != self._durable_memory.load().export_state():
+                raise RuntimeError("uncommitted_neural_view_mutation")
+            return
         raw_data = {
             str(data_id): dict(collection.storage.get(data_id) or {})
             for data_id in collection.storage.keys()
@@ -1353,6 +1412,7 @@ class NeuroMemConversationStore:
 
     def _migrate_legacy_disk_layout(self) -> bool:
         migrated = False
+        imported_paths = []
         for path in self._legacy_conversation_record_paths():
             payload = self._read_json_file(path)
             if payload is None:
@@ -1366,7 +1426,7 @@ class NeuroMemConversationStore:
                 self._prepend_conversation_timeline(record)
                 self._store_conversation_entry(record)
                 migrated = True
-            path.unlink(missing_ok=True)
+            imported_paths.append(path)
 
         for path in self._legacy_profile_record_paths():
             payload = self._read_json_file(path)
@@ -1380,16 +1440,17 @@ class NeuroMemConversationStore:
                 self._profiles[profile.profile_id] = profile
                 self._store_profile_entry(profile)
                 migrated = True
-            path.unlink(missing_ok=True)
-
-        self._cleanup_legacy_directory(self._base_dir / "records")
-        self._cleanup_legacy_directory(self._base_dir / "profiles")
+            imported_paths.append(path)
 
         if migrated:
             self._persist_collection(
                 self._conversation_collection, self._conversation_collection_dir
             )
             self._persist_collection(self._profile_collection, self._profile_collection_dir)
+        for path in imported_paths:
+            path.unlink(missing_ok=True)
+        self._cleanup_legacy_directory(self._base_dir / "records")
+        self._cleanup_legacy_directory(self._base_dir / "profiles")
         return migrated
 
     def _legacy_conversation_record_paths(self) -> list[Path]:
@@ -1684,6 +1745,14 @@ class NeuroMemConversationStore:
 
     def _store_conversation_entry(self, record: ConversationMemoryRecord) -> None:
         entry = self._build_conversation_memory_entry(record)
+        if self._durable_memory is not None:
+            entries = [entry, *self._build_attachment_memory_entries(record)]
+            self._durable_memory.insert_batch_once(
+                f"exchange:{record.memory_id}",
+                [{"text": item.text, "metadata": item.metadata} for item in entries],
+            )
+            self._conversation_collection = self._durable_memory.load()
+            return
         self._insert_collection_entry(self._conversation_collection, entry)
         for attachment_entry in self._build_attachment_memory_entries(record):
             self._insert_collection_entry(self._conversation_collection, attachment_entry)

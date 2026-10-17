@@ -33,16 +33,14 @@ dependencies = [
   "cloudpickle>=2.2",
   "tavily-python>=0.5.0",
   "isage @ git+https://github.com/RIDE-Lab/SAGE.git@5d372702dd196995d87d966a455a98b604eb5d34",
-  "isage-neuromem>=0.2.1.12,<0.2.2",
+  "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@f76a955866c16770df57c7bc5822205e822ef1c7",
   "isage-anns>=0.2.0",
 ]
 
 [project.optional-dependencies]
 sage-stack = [
-  "isage-neuromem>=0.2.1.12",
 ]
 neuromem = [
-  "isage-neuromem>=0.2.1.12",
 ]
 vdb = [
   "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",

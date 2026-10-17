@@ -77,13 +77,11 @@ def test_runtime_dependency_contract_includes_required_neuromem() -> (
 
     assert project["requires-python"] == ">=3.11"
     assert {"isage", "isage-anns", "isage-neuromem"} <= dependencies
-    assert any(
-        dependency.lower().startswith("isage-neuromem")
-        for dependency in project["optional-dependencies"]["neuromem"]
-    )
+    assert any(dependency.startswith("isage-neuromem @ git+")
+               for dependency in project["dependencies"])
     assert not any(
         dependency.lower().startswith("isage-neuromem")
-        for extra in ("vdb", "vdb-anns")
+        for extra in ("neuromem", "vdb", "vdb-anns")
         for dependency in project["optional-dependencies"][extra]
     )
 

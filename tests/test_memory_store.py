@@ -43,7 +43,8 @@ def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tm
 @pytest.mark.parametrize("failure_stage", ["_store_conversation_entry", "_persist_collection"])
 def test_failed_exchange_is_not_published_to_history(tmp_path, monkeypatch, failure_stage):
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
-                           conversation_memory_index_type="segment")
+                           conversation_memory_index_type="segment",
+                           conversation_memory_collection_type="unified")
     store = NeuroMemConversationStore(settings)
     record = store.prepare_exchange(
         ChatRequest(student_name="Alice", question="research question"),
@@ -68,6 +69,98 @@ def test_failed_exchange_is_not_published_to_history(tmp_path, monkeypatch, fail
     assert [item.memory_id for item in store.list_recent_conversation_records("failed-turn")] == [
         record.memory_id
     ]
+
+
+def test_durable_neural_failure_rolls_back_collection_and_history(tmp_path, monkeypatch):
+    from sage.neuromem.memory_collection import NeuralMemoryCollection
+
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment")
+    store = NeuroMemConversationStore(settings)
+    record = store.prepare_exchange(
+        ChatRequest(student_name="Alice", question="research question", attachments=[{
+            "file_name": "research.txt", "media_type": "text/plain",
+            "text_content": "complete attachment evidence",
+        }]),
+        conversation_id="atomic-turn", answer="complete answer",
+        workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+        booking_result=None,
+    )
+    original = NeuralMemoryCollection._online_update
+
+    def fail(self, *args):
+        result = original(self, *args)
+        if self.training_steps == 2:
+            raise OSError("injected after training")
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(NeuralMemoryCollection, "_online_update", fail)
+        with pytest.raises(OSError, match="injected after training"):
+            store.persist_exchange(record)
+    assert store.list_records() == []
+    assert store._durable_memory.load().size() == 0
+    assert store._durable_memory.load().training_steps == 0
+    store.persist_exchange(record)
+    snapshot = store._durable_memory.load().export_state()
+    assert len(snapshot["records"]) == 2
+    assert snapshot["training_steps"] == 2
+    reopened = NeuroMemConversationStore(settings)
+    reopened.persist_exchange(record)
+    assert reopened._durable_memory.load().export_state() == snapshot
+    assert len(reopened.list_records()) == 1
+
+
+def test_legacy_records_migrate_without_losing_history_or_retraining_on_restart(tmp_path):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment",
+                           conversation_memory_collection_type="unified")
+    legacy = NeuroMemConversationStore(settings)
+    record = legacy.add_exchange(
+        ChatRequest(student_name="Alice", question="original question"),
+        conversation_id="migration", answer="original complete answer",
+        workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+        booking_result=None,
+    )
+    settings.conversation_memory_collection_type = "neural_continual"
+    migrated = NeuroMemConversationStore(settings)
+    assert migrated.list_records()[0].to_dict() == record.to_dict()
+    snapshot = migrated._durable_memory.load().export_state()
+    assert snapshot["training_steps"] == 1
+    with sqlite3.connect(migrated._sqlite_db_path) as connection:
+        assert connection.execute(
+            "SELECT count(*) FROM collection_snapshots WHERE name = 'conversation-memory'"
+        ).fetchone()[0] == 0
+    reopened = NeuroMemConversationStore(settings)
+    reopened.persist_exchange(record)
+    assert reopened._durable_memory.load().export_state() == snapshot
+
+
+def test_legacy_migration_preserves_more_records_than_replay_capacity(tmp_path):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment",
+                           conversation_memory_collection_type="unified",
+                           conversation_memory_neural_feature_dim=32,
+                           conversation_memory_neural_replay_buffer_size=16)
+    legacy = NeuroMemConversationStore(settings)
+    expected = []
+    for index in range(18):
+        record = legacy.add_exchange(
+            ChatRequest(student_name="Alice", question=f"research question {index}"),
+            conversation_id="migration", answer=f"complete answer {index}",
+            workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+            booking_result=None,
+        )
+        expected.append(record.to_dict())
+    settings.conversation_memory_collection_type = "neural_continual"
+    migrated = NeuroMemConversationStore(settings)
+    state = migrated._durable_memory.load().export_state()
+    assert len(state["records"]) == 18
+    assert len(state["buffer_order"]) == 16
+    reopened = NeuroMemConversationStore(settings)
+    actual = {record.memory_id: record.to_dict() for record in reopened.list_records()}
+    assert actual == {record["memory_id"]: record for record in expected}
+    assert reopened._durable_memory.load().export_state() == state
 
 
 def test_store_persists_neuromem_collections_without_records_or_profiles_dirs(

@@ -10,9 +10,13 @@ def test_runtime_dependency_is_reproducible_and_not_overridden_by_extras():
     assert len(runtime) == 1
     ref = runtime[0].rsplit("@", 1)[1]
     assert len(ref) == 40 and all(char in "0123456789abcdef" for char in ref)
-    assert any(value.startswith("isage-neuromem") for value in project["dependencies"])
+    memory = [value for value in project["dependencies"] if value.startswith("isage-neuromem @ ")]
+    assert len(memory) == 1
+    memory_ref = memory[0].rsplit("@", 1)[1]
+    assert len(memory_ref) == 40 and all(char in "0123456789abcdef" for char in memory_ref)
     for requirements in project["optional-dependencies"].values():
         assert not any(value.startswith(("isage ", "isage>")) for value in requirements)
+        assert not any(value.startswith("isage-neuromem") for value in requirements)
 
 
 def test_installed_native_runtime_capabilities():
@@ -21,16 +25,18 @@ def test_installed_native_runtime_capabilities():
     from sage.runtime.work_dispatcher import WorkDispatcher
     from sage.runtime.work_journal import WorkJournal
     from sage.neuromem import MemoryEntry
+    from sage.neuromem.memory_collection.durable_neural_memory import DurableNeuralMemory
 
     assert all(callable(symbol) for symbol in (
         RequestCancellation, bind_request_cancellation, bootstrap_runtime,
-        build_runtime_client, WorkDispatcher, WorkJournal, MemoryEntry,
+        build_runtime_client, WorkDispatcher, WorkJournal, MemoryEntry, DurableNeuralMemory,
     ))
 
 
 def test_quickstart_replaces_same_version_runtime_and_checks_capabilities():
     script = (Path(__file__).parents[1] / "quickstart.sh").read_text()
     assert '--no-deps --force-reinstall "$sage_runtime_requirement"' in script
+    assert '--no-deps --force-reinstall "$neuromem_requirement"' in script
     assert '"$repo_root/pyproject.toml"' in script
     assert "from sage.runtime.work_dispatcher import WorkDispatcher" in script
     assert "from sage.runtime.work_journal import WorkJournal" in script

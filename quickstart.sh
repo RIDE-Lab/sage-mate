@@ -632,6 +632,8 @@ else
 	# otherwise keeps an older same-version runtime in an existing environment.
 	sage_runtime_requirement="$("$python_bin" -c 'import sys, tomllib; print(next(value for value in tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"] if value.startswith("isage @ ")))' "$repo_root/pyproject.toml")"
 	run_with_optional_timeout "$python_bin" -m pip install --quiet --no-deps --force-reinstall "$sage_runtime_requirement"
+	neuromem_requirement="$("$python_bin" -c 'import sys, tomllib; print(next(value for value in tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"] if value.startswith("isage-neuromem @ ")))' "$repo_root/pyproject.toml")"
+	run_with_optional_timeout "$python_bin" -m pip install --quiet --no-deps --force-reinstall "$neuromem_requirement"
 	if $mode_skip_vdb_extras; then
 		run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root"
 	elif ! run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root[vdb-anns]"; then
