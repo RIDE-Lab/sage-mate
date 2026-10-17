@@ -29,6 +29,12 @@ from .models import BookingResponse, ChatAttachment, ChatRequest, WebSearchHit
 from .profile_summarizer import ConversationProfileSummarizer
 
 
+def _validate_owner_id(owner_id):
+    if owner_id is not None and (not isinstance(owner_id, str) or
+            re.fullmatch(r"(account|api_token|guest|slack):[A-Za-z0-9_-]{1,128}", owner_id) is None):
+        raise ValueError("invalid_memory_owner_id")
+
+
 @dataclass(slots=True)
 class AttachmentMemoryRecord:
     file_name: str
@@ -72,10 +78,15 @@ class ConversationMemoryRecord:
     created_at: datetime
     attachments: list[AttachmentMemoryRecord] = field(default_factory=list)
     web_search_hits: list[WebSearchHit] = field(default_factory=list)
+    owner_id: str | None = None
+
+    def __post_init__(self):
+        _validate_owner_id(self.owner_id)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "memory_id": self.memory_id,
+            **({"owner_id": self.owner_id} if self.owner_id is not None else {}),
             "conversation_id": self.conversation_id,
             "student_name": self.student_name,
             "student_email": self.student_email,
@@ -95,6 +106,7 @@ class ConversationMemoryRecord:
     def from_dict(cls, payload: dict[str, object]) -> ConversationMemoryRecord:
         return cls(
             memory_id=str(payload["memory_id"]),
+            owner_id=payload.get("owner_id"),
             conversation_id=str(payload["conversation_id"]),
             student_name=str(payload["student_name"]),
             student_email=(str(payload["student_email"]) if payload.get("student_email") else None),
@@ -171,10 +183,15 @@ class ProfileMemoryRecord:
     summary: str
     evidence: str
     updated_at: datetime
+    owner_id: str | None = None
+
+    def __post_init__(self):
+        _validate_owner_id(self.owner_id)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "profile_id": self.profile_id,
+            **({"owner_id": self.owner_id} if self.owner_id is not None else {}),
             "student_key": self.student_key,
             "student_name": self.student_name,
             "student_email": self.student_email,
@@ -188,6 +205,7 @@ class ProfileMemoryRecord:
     def from_dict(cls, payload: dict[str, object]) -> ProfileMemoryRecord:
         return cls(
             profile_id=str(payload["profile_id"]),
+            owner_id=payload.get("owner_id"),
             student_key=str(payload["student_key"]),
             student_name=str(payload["student_name"]),
             student_email=(str(payload["student_email"]) if payload.get("student_email") else None),
@@ -549,6 +567,7 @@ class NeuroMemConversationStore:
         """Prepare once, then serialize this record into the durable task input."""
         return ConversationMemoryRecord(
             memory_id=str(uuid4()),
+            owner_id=request.owner_id,
             conversation_id=conversation_id,
             student_name=request.student_name,
             student_email=request.student_email,
@@ -791,13 +810,13 @@ class NeuroMemConversationStore:
             records = [record for record in records if record.created_at >= since]
         return records
 
-    def list_conversation_records(self, conversation_id: str) -> list[ConversationMemoryRecord]:
+    def list_conversation_records(self, conversation_id: str, *, owner_id: str | None = None) -> list[ConversationMemoryRecord]:
         """Detached complete chronological snapshot for provenance-aware derivation."""
         with self._memory_write_lock:
             source = (self._decode_conversation_records(self._durable_memory.read_records().values())
                       if self._durable_memory is not None else list(self._records.values()))
             records = [record for record in source
-                       if record.conversation_id == conversation_id]
+                       if record.conversation_id == conversation_id and record.owner_id == owner_id]
             return [ConversationMemoryRecord.from_dict(record.to_dict())
                     for record in sorted(records, key=lambda item: (item.created_at, item.memory_id))]
 
@@ -807,6 +826,7 @@ class NeuroMemConversationStore:
         *,
         exclude_question: str | None = None,
         limit: int = 20,
+        owner_id: str | None = None,
     ) -> list[ConversationMemoryRecord]:
         normalized_conversation_id = conversation_id.strip()
         if not normalized_conversation_id or limit <= 0:
@@ -817,7 +837,7 @@ class NeuroMemConversationStore:
         records: list[ConversationMemoryRecord] = []
         for memory_id in timeline:
             record = self._records.get(memory_id)
-            if record is None:
+            if record is None or record.owner_id != owner_id:
                 continue
             if (
                 normalized_excluded_question
@@ -867,12 +887,14 @@ class NeuroMemConversationStore:
         student_name: str,
         student_email: str | None,
         limit: int = 20,
+        owner_id: str | None = None,
     ) -> list[ProfileMemoryRecord]:
-        student_key = self._student_key(student_name, student_email)
+        student_key = self._student_key(student_name, student_email, owner_id=owner_id)
         if student_key is None:
             return []
         profiles = [
-            profile for profile in self._profiles.values() if profile.student_key == student_key
+            profile for profile in self._profiles.values()
+            if profile.student_key == student_key and profile.owner_id == owner_id
         ]
         profiles.sort(key=lambda profile: profile.updated_at, reverse=True)
         return profiles[: max(1, limit)]
@@ -1000,6 +1022,7 @@ class NeuroMemConversationStore:
 
         recent_same_conversation = self.list_recent_conversation_records(
             conversation_id,
+            owner_id=request.owner_id,
             exclude_question=request.question,
             limit=limit,
         )
@@ -1049,7 +1072,7 @@ class NeuroMemConversationStore:
         return hits
 
     def _search_long_term(self, request: ChatRequest, *, limit: int) -> list[ConversationMemoryHit]:
-        student_key = self._student_key(request.student_name, request.student_email)
+        student_key = self._student_key(request.student_name, request.student_email, owner_id=request.owner_id)
         if limit <= 0 or student_key is None or not self._profiles:
             return []
 
@@ -1073,7 +1096,7 @@ class NeuroMemConversationStore:
                 (
                     profile
                     for profile in self._profiles.values()
-                    if profile.student_key == student_key
+                    if profile.student_key == student_key and profile.owner_id == request.owner_id
                     and profile.category in preferred_categories
                 ),
                 key=lambda profile: profile.updated_at,
@@ -1104,7 +1127,7 @@ class NeuroMemConversationStore:
             if not profile_id or profile_id in seen_profile_ids:
                 continue
             profile = self._profiles.get(profile_id)
-            if profile is None or profile.student_key != student_key:
+            if profile is None or profile.student_key != student_key or profile.owner_id != request.owner_id:
                 continue
             seen_profile_ids.add(profile_id)
             hits.append(
@@ -1714,6 +1737,10 @@ class NeuroMemConversationStore:
         request: ChatRequest,
         conversation_id: str,
     ) -> bool:
+        if record.owner_id != request.owner_id:
+            return False
+        if request.owner_id is not None:
+            return True
         if record.conversation_id == conversation_id:
             return True
         if request.student_email and record.student_email == request.student_email:
@@ -1723,14 +1750,15 @@ class NeuroMemConversationStore:
         return record.student_name == request.student_name
 
     def _derive_profiles(self, record: ConversationMemoryRecord) -> list[ProfileMemoryRecord]:
-        student_key = self._student_key(record.student_name, record.student_email)
+        student_key = self._student_key(record.student_name, record.student_email, owner_id=record.owner_id)
         if student_key is None:
             return []
 
         suggestions = self._profile_summarizer.summarize(record)
         return [
             ProfileMemoryRecord(
-                profile_id=self._profile_id(student_key, suggestion.category),
+                profile_id=self._profile_id(student_key, suggestion.category, owner_id=record.owner_id),
+                owner_id=record.owner_id,
                 student_key=student_key,
                 student_name=record.student_name,
                 student_email=record.student_email,
@@ -1769,6 +1797,7 @@ class NeuroMemConversationStore:
     def _build_conversation_memory_entry(self, record: ConversationMemoryRecord):
         metadata = {
             "entry_kind": "conversation_record",
+            **({"owner_id": record.owner_id} if record.owner_id is not None else {}),
             "memory_id": record.memory_id,
             "conversation_id": record.conversation_id,
             "student_name": record.student_name,
@@ -1798,6 +1827,7 @@ class NeuroMemConversationStore:
         for index, attachment in enumerate(record.attachments):
             metadata = {
                 "entry_kind": "attachment_excerpt",
+                **({"owner_id": record.owner_id} if record.owner_id is not None else {}),
                 "memory_id": record.memory_id,
                 "conversation_id": record.conversation_id,
                 "student_name": record.student_name,
@@ -1828,6 +1858,7 @@ class NeuroMemConversationStore:
     def _build_profile_memory_entry(self, profile: ProfileMemoryRecord):
         metadata = {
             "entry_kind": "profile_record",
+            **({"owner_id": profile.owner_id} if profile.owner_id is not None else {}),
             "profile_id": profile.profile_id,
             "student_key": profile.student_key,
             "student_name": profile.student_name,
@@ -1936,6 +1967,7 @@ class NeuroMemConversationStore:
             top_k=max(limit * 3, limit),
             filters={
                 "memory_scope": "short_term",
+                **({"owner_id": request.owner_id} if request.owner_id is not None else {}),
                 "conversation_id": conversation_id,
                 "student_email": request.student_email or "",
             },
@@ -1960,6 +1992,7 @@ class NeuroMemConversationStore:
             top_k=max(limit * 4, limit),
             filters={
                 "memory_scope": "short_term",
+                **({"owner_id": request.owner_id} if request.owner_id is not None else {}),
                 "source": "attachment_excerpt",
             },
             hints={
@@ -1986,6 +2019,7 @@ class NeuroMemConversationStore:
             top_k=max(limit * 3, limit),
             filters={
                 "memory_scope": "long_term",
+                **({"owner_id": request.owner_id} if request.owner_id is not None else {}),
                 "student_key": student_key,
             },
             hints={
@@ -2030,7 +2064,9 @@ class NeuroMemConversationStore:
         timestamp = profile.updated_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
         return f"[{timestamp}] {profile.summary}\n证据：{profile.evidence}"
 
-    def _student_key(self, student_name: str, student_email: str | None) -> str | None:
+    def _student_key(self, student_name: str, student_email: str | None, *, owner_id: str | None = None) -> str | None:
+        if owner_id is not None:
+            return owner_id
         if student_email:
             return student_email.strip().lower()
         normalized_name = student_name.strip().lower()
@@ -2038,7 +2074,13 @@ class NeuroMemConversationStore:
             return None
         return normalized_name
 
-    def _profile_id(self, student_key: str, category: str) -> str:
+    def _profile_id(self, student_key: str, category: str, *, owner_id: str | None = None) -> str:
+        if owner_id is not None:
+            _validate_owner_id(owner_id)
+            # Lossless identity hashing, with a namespace legacy slug IDs cannot
+            # produce. Punctuation replacement would collide a_b with a-b.
+            digest = hashlib.sha256(owner_id.encode()).hexdigest()
+            return f"owner:v1:{digest}:{category}"
         safe_key = re.sub(r"[^a-z0-9]+", "-", student_key.lower()).strip("-") or "profile"
         return f"{safe_key}-{category}"
 

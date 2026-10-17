@@ -62,6 +62,32 @@ not HTTP bearer identity. Ownership checks for retrieval, compression, workflow
 events and cancellation, and an authorized resumable result endpoint remain
 required before deployment of the full delivery design.
 
+### Owner-scoped canonical memory contract (adapter cutover pending)
+
+Conversation and profile records can now carry an immutable `owner_id` scope
+(`account:`, `api_token:`, `guest:` or `slack:` plus an opaque subject). Canonical
+conversation enumeration, recent-turn reads, short/long-term retrieval and
+artifact retrieval require exact scope equality. Index filters are an efficiency
+hint, not the security boundary: returned IDs are checked against canonical
+records even if the index ignores all filters. Profiles use the owner rather
+than display name/email as identity; their IDs hash the complete owner string in
+a namespace legacy slug IDs cannot produce. Punctuation normalization is not
+used for owned IDs. Task capture rejects mismatched request/record ownership.
+
+Missing ownership remains explicitly **unassigned**, not a wildcard and not
+automatically inherited from matching names, emails or conversation UUIDs.
+Legacy payloads retain their representation so existing durable fingerprints
+are not rewritten. Unassigned/internal reads cannot see assigned records; a
+scoped read cannot see unassigned records. Administrative inventory remains a
+separate privileged internal operation.
+
+This contract is not yet activated for HTTP traffic: `ChatIdentity.bind` clears
+any client-provided owner field. The coordinated cutover must establish durable
+guest identity, pass trusted scope through every service/history/digest path,
+and handle legacy ownership explicitly. Until then, the old unassigned-data
+behavior remains; no end-to-end ownership or deployment claim is made. Do not
+expose journal recovery on this intermediate schema alone.
+
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover
 that saved intent, but client retry identity/resumption is not yet implemented.

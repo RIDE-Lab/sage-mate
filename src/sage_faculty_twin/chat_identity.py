@@ -31,6 +31,9 @@ class ChatIdentity:
         elif email is not None or self.account_name is not None:
             raise ValueError("non_account_identity_cannot_claim_personal_account")
         return payload.model_copy(update={
+            # Owner-scoped HTTP cutover requires authenticated guest continuity
+            # and all retrieval/digest ports. Never accept a client owner claim.
+            "owner_id": None,
             "student_email": email,
             "student_name": self.account_name if self.kind == "account" else payload.student_name,
             "visitor_profile": self.visitor_profile,

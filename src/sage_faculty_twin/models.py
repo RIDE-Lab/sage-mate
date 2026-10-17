@@ -14,6 +14,9 @@ class ChatAttachment(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    # Internal memory scope. HTTP adapters must overwrite this client field;
+    # None denotes unassigned legacy/internal data, never a verified identity.
+    owner_id: str | None = Field(default=None, pattern=r"^(account|api_token|guest|slack):[A-Za-z0-9_-]{1,128}$")
     student_name: str = Field(min_length=1, max_length=128)
     student_email: str | None = Field(default=None, max_length=256)
     question: str = Field(min_length=1, max_length=4000)

@@ -91,6 +91,8 @@ class PostAnswerTask(BaseModel):
             raise ValueError("post_answer_conversation_conflict")
         if self.evaluated_at.tzinfo is None or self.evaluated_at.utcoffset() is None:
             raise ValueError("post_answer_evaluation_time_must_be_aware")
+        if any(profile.owner_id != self.request.owner_id for profile in self.profile_snapshot):
+            raise ValueError("post_answer_profile_owner_conflict")
         if self.record is not None:
             if (self.record.memory_id != self.request_id
                     or self.response.exchange_id != self.request_id
@@ -98,6 +100,7 @@ class PostAnswerTask(BaseModel):
                     or self.record.question != self.request.question
                     or self.record.student_name != self.request.student_name
                     or self.record.student_email != self.request.student_email
+                    or self.record.owner_id != self.request.owner_id
                     or self.record.workflow_action != self.response.workflow_action
                     or self.record.answer != self.response.answer):
                 raise ValueError("post_answer_record_identity_conflict")
