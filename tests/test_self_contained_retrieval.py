@@ -71,6 +71,28 @@ def test_memory_stage_applies_result_and_trace_once(tmp_path):
     support._trace_callback.assert_called_once()
 
 
+def test_read_only_knowledge_branch_never_executes_admin_write(tmp_path):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    support._knowledge_store = Mock()
+    context = context_for(InteractionIntent(action="admin_add_knowledge"))
+    context.is_admin_request = True
+    context.workflow_action = "admin_add_knowledge"
+    support.retrieve_knowledge(context)
+    support._knowledge_store.add_document.assert_not_called()
+    assert context.added_knowledge_record is None
+
+
+def test_knowledge_write_stage_requires_authenticated_admin(tmp_path):
+    from sage_faculty_twin.service import KnowledgeWriteStage
+
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    support._knowledge_store = Mock()
+    context = context_for(InteractionIntent(action="admin_add_knowledge"))
+    context.workflow_action = "admin_add_knowledge"
+    assert KnowledgeWriteStage(support).execute(context) is context
+    support._knowledge_store.add_document.assert_not_called()
+
+
 @pytest.mark.parametrize("intent,fields", [
     (InteractionIntent(), {}),
     (InteractionIntent(self_contained=True, domain="research"), {}),

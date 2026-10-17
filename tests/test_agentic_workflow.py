@@ -1161,7 +1161,7 @@ def test_chat_reuses_neuromem_conversation_memory_in_follow_up_prompt(
     health = service.health()
     assert health["conversation_memory_backend"] == "neuromem-layered"
     assert int(health["conversation_memory_profiles"]) >= 1
-    assert health["chat_pipeline_stages"] == "13"
+    assert health["chat_pipeline_stages"] == "14"
     assert health["planner_deterministic_total"] == "2"
     assert health["planner_deterministic_accepted"] == "2"
     assert health["planner_shadow_total"] == "2"

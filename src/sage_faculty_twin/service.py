@@ -857,13 +857,9 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
     return False
 
 
-# Number of user-defined chat-workflow stages (the operator classes derived
-# from `_StageBase`). The DAG pipeline introduced by Task 4 adds two
-# internal `_ChatContextMergeN` co-map operators on top of these stages,
-# but those are infrastructure and are excluded from this count so the
-# `chat_pipeline_stages` runtime telemetry tag stays comparable across
-# the linear and DAG runtime paths.
-_CHAT_PIPELINE_STAGE_COUNT = 13
+# Semantic stages: nine critical stages, response rendering and four
+# post-answer stages. Administrative writes have their own explicit stage.
+_CHAT_PIPELINE_STAGE_COUNT = 14
 # Canonical order of chat-workflow trace keys. The linear pipeline emits
 # them in this order; the DAG pipeline (Task 4 of the Faculty Twin DAG
 # Pipeline plan) parallelises some stages and therefore needs an explicit
@@ -1565,7 +1561,8 @@ class FacultyTwinWorkflowSupport:
             return f"预约请求已记录，并已向 {notification.recipient} 发送提醒邮件。"
         return notification.summary
 
-    def retrieve_knowledge(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+    def execute_knowledge_write(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+        """Execute the authorized write branch outside read-only retrieval."""
         started_at = perf_counter()
         if context.is_admin_request and context.workflow_action == "admin_add_knowledge":
             knowledge_request = self._build_admin_knowledge_request(context.request)
@@ -1596,6 +1593,14 @@ class FacultyTwinWorkflowSupport:
                 detail=detail,
                 duration_ms=self._elapsed_ms(started_at),
             )
+            return context
+        return context
+
+    def retrieve_knowledge(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+        started_at = perf_counter()
+        # The write stage owns this action. A direct retrieval call must never
+        # ingest a document, even when supplied an administrator context.
+        if context.workflow_action == "admin_add_knowledge":
             return context
 
         if context.route == "answer" and is_runtime_identity_query(context.request.question):
@@ -8758,6 +8763,15 @@ class BookingExecutionStage(MapFunction):
         return self._support.execute_booking(data)
 
 
+class KnowledgeWriteStage(MapFunction):
+    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
+        super().__init__()
+        self._support = support
+
+    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
+        return self._support.execute_knowledge_write(data)
+
+
 class KnowledgeRetrievalStage(MapFunction):
     def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
         super().__init__()
@@ -12103,6 +12117,7 @@ class DigitalTwinService:
             BookingPreparationStage,
             BookingExecutionStage,
             MemoryRetrievalStage,
+            KnowledgeWriteStage,
             KnowledgeRetrievalStage,
             PromptBuildStage,
             LlmAnswerStage,
