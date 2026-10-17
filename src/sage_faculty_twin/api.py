@@ -65,6 +65,7 @@ from .models import (
     ChatAttachment,
     ChatFeedbackRequest,
     ChatFeedbackResponse,
+    ChatFeedbackOperationResponse,
     ChatRequest,
     ChatResponse,
     CodeAssistRequest,
@@ -2319,6 +2320,16 @@ async def submit_chat_feedback(request: ChatFeedbackRequest, raw_request: Reques
                                response: Response) -> ChatFeedbackResponse:
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
     result = await asyncio.to_thread(service.submit_chat_feedback, request, owner_id=identity.owner_id)
+    _deliver_guest_cookie(raw_request, response)
+    return result
+
+
+@llm_app.get("/chat/feedback/{operation_id}", response_model=ChatFeedbackOperationResponse)
+async def get_feedback_operation(operation_id: str, raw_request: Request, response: Response,
+                                 exchange_id: str = Query(min_length=1, max_length=128)):
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    result = await asyncio.to_thread(service.get_feedback_operation, operation_id,
+                                    exchange_id=exchange_id, owner_id=identity.owner_id)
     _deliver_guest_cookie(raw_request, response)
     return result
 

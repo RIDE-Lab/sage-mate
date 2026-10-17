@@ -195,6 +195,11 @@ class ConversationAnalyticsStore:
         payload = self._collection(self._state.peek(self._slot))["records"].get(exchange_id)
         return ConversationFeedbackRecord.from_dict(payload) if payload is not None else None
 
+    def get_operation_feedback(self, operation_id: str) -> ConversationFeedbackRecord | None:
+        """Read the immutable receipt, not a possibly newer exchange rating."""
+        receipt = self._collection(self._state.peek(self._slot)).get("receipts", {}).get(operation_id)
+        return ConversationFeedbackRecord.from_dict(receipt["feedback"]) if receipt is not None else None
+
     def count_feedback(self) -> int:
         return len(self._collection(self._state.peek(self._slot))["records"])
 

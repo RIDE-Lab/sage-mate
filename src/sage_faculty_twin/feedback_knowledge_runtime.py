@@ -8,7 +8,10 @@ It borrows canonical state and must drain before its destinations are closed.
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
 
-from .models import KnowledgeDocumentCreate, KnowledgeWriteBackResult
+from .models import (
+    ChatFeedbackOperationResponse, ChatFeedbackResponse,
+    KnowledgeDocumentCreate, KnowledgeWriteBackResult,
+)
 
 
 class FeedbackKnowledgeRuntime:
@@ -49,6 +52,28 @@ class FeedbackKnowledgeRuntime:
 
     def start(self):
         self._service.start()
+
+    def status(self, operation_id, *, exchange_id):
+        """Read saved progress; callers must authorize the exchange first.
+
+        Do not expose task payloads, leases or internal error text. A receipt
+        from another exchange is indistinguishable from a missing operation.
+        Reading never starts work or retries a producer.
+        """
+        feedback = self._analytics.get_operation_feedback(operation_id)
+        if feedback is None or feedback.exchange_id != exchange_id:
+            return None
+        record = self.journal.read(operation_id)
+        if record is None:
+            return None
+        completed = all(task["status"] == "done" for task in record["tasks"].values())
+        results = [KnowledgeWriteBackResult.model_validate(task["result"])
+                   for task in record["tasks"].values() if task["status"] == "done"]
+        return ChatFeedbackOperationResponse(
+            operation_id=operation_id, status="completed" if completed else "pending",
+            feedback=ChatFeedbackResponse(
+                operation_id=operation_id, **feedback.to_dict(), knowledge_write_backs=results),
+        )
 
     def wait(self, operation_id, *, timeout):
         record = self._service.wait(operation_id, timeout=timeout)

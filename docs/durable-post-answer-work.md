@@ -297,8 +297,19 @@ knowledge catalogs close. There is no synchronous knowledge-writing fallback.
 The endpoint waits off the event loop for at most
 `DIGITAL_TWIN_FEEDBACK_WRITEBACK_WAIT_SECONDS` (default 10 seconds); timeout
 returns 503 with `feedback_saved: true`, `feedback_knowledge_pending` and an
-operation ID, without cancelling durable work. Client retry/resumption remains
-an open delivery gate; the operation ID is not an authorization capability.
+operation ID, without cancelling durable work. GET `/chat/feedback/{operation_id}`
+requires `exchange_id` and the original trusted owner identity. It returns
+`pending` or `completed` with the immutable operation feedback and acknowledged
+per-source results. It neither starts work nor reveals task payloads/errors.
+Unknown operations, wrong exchanges and foreign owners all receive the same404.
+The operation ID is not an authorization capability.
+
+POST accepts an optional `request_id` (8–128 URL-safe ASCII letters/digits,
+hyphen or underscore). Clients retain it across retries of the same feedback.
+The server scopes it to trusted owner plus exchange; the same key with changed
+feedback fails409. Replaying an older operation returns its original feedback
+and result without reverting a newer rating. Omitting it creates a fresh intent.
+Browser retry/pending-state integration and reload recovery remain open gates.
 After a lost destination acknowledgement, an upsert may repeat without replacing
 curator edits. `created` describes the acknowledged attempt, not exactly-once
 execution across stores.

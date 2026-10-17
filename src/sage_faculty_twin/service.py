@@ -4969,7 +4969,9 @@ class FacultyTwinWorkflowSupport:
         if self._feedback_runtime_provider is None:
             raise RuntimeError("feedback_runtime_unavailable")
         runtime = self._feedback_runtime_provider()
-        operation_id = uuid4().hex
+        operation_id = (hashlib.sha256(json.dumps(
+            [owner_id, request.exchange_id, request.request_id], ensure_ascii=False,
+            separators=(",", ":")).encode()).hexdigest() if request.request_id else uuid4().hex)
         candidates = self._select_feedback_knowledge(record, request)
         try:
             feedback = runtime.submit(
@@ -4981,6 +4983,10 @@ class FacultyTwinWorkflowSupport:
                 needs_human_followup=request.needs_human_followup,
                 issue_summary=request.issue_summary,
             )
+        except ValueError as exc:
+            if str(exc) not in {"feedback_operation_conflict", "journal_commit_conflict"}:
+                raise
+            raise HTTPException(status_code=409, detail="同一反馈请求编号不能用于不同的反馈内容。") from exc
         except KeyError as exc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -5000,6 +5006,7 @@ class FacultyTwinWorkflowSupport:
             }) from exc
 
         return ChatFeedbackResponse(
+            operation_id=operation_id,
             exchange_id=feedback.exchange_id,
             rating=feedback.rating,
             resolved=feedback.resolved,
@@ -10715,6 +10722,15 @@ class DigitalTwinService:
             else ChatFeedbackRequest.model_validate(request)
         )
         return self._build_support().submit_chat_feedback(normalized_request, owner_id=owner_id)
+
+    def get_feedback_operation(self, operation_id, *, exchange_id, owner_id=None):
+        record = self._conversation_store.get_owned_record(exchange_id, owner_id=owner_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="找不到对应的反馈记录。")
+        result = self._get_feedback_runtime().status(operation_id, exchange_id=exchange_id)
+        if result is None:
+            raise HTTPException(status_code=404, detail="找不到对应的反馈记录。")
+        return result
 
     @staticmethod
     def _build_conversation_title(text: str) -> str:

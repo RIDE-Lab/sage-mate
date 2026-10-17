@@ -487,6 +487,8 @@ class MemoryProfileListResponse(BaseModel):
 
 
 class ChatFeedbackRequest(BaseModel):
+    request_id: str | None = Field(default=None, min_length=8, max_length=128,
+                                   pattern="^[A-Za-z0-9_-]+$")
     exchange_id: str = Field(min_length=1, max_length=128)
     rating: str = Field(pattern="^(up|down)$")
     resolved: bool | None = None
@@ -495,6 +497,7 @@ class ChatFeedbackRequest(BaseModel):
 
 
 class ChatFeedbackResponse(BaseModel):
+    operation_id: str | None = None
     exchange_id: str
     rating: str
     resolved: bool
@@ -503,6 +506,12 @@ class ChatFeedbackResponse(BaseModel):
     knowledge_write_backs: list[KnowledgeWriteBackResult] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+
+
+class ChatFeedbackOperationResponse(BaseModel):
+    operation_id: str
+    status: Literal["pending", "completed"]
+    feedback: ChatFeedbackResponse
 
 
 class AnonymousSuggestionCreate(BaseModel):
