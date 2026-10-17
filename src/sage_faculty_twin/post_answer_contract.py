@@ -26,6 +26,37 @@ class ArtifactDraftIntent(BaseModel):
     provenance_note: str
 
 
+class DigestIntent(BaseModel):
+    """Captured generation policy; conversation identity comes from the owner task."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    threshold: int = Field(ge=1)
+    target_chars: int = Field(ge=1)
+    use_llm: bool
+
+
+class DigestWorkTask(BaseModel):
+    """Manual refresh uses the same durable worker and digest destination."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal[1] = 1
+    task_kind: Literal["context_digest"] = "context_digest"
+    request_id: str = Field(min_length=1)
+    conversation_id: str = Field(min_length=1)
+    intent: DigestIntent
+
+    @model_validator(mode="after")
+    def validate_identity(self):
+        if any(value != value.strip() for value in (self.request_id, self.conversation_id)):
+            raise ValueError("digest_task_identity_not_trimmed")
+        return self
+
+    def journal_inputs(self):
+        snapshot = type(self).model_validate_json(self.model_dump_json()).model_dump(mode="json")
+        return {"result": {"conversation_id": self.conversation_id},
+                "tasks": {"context_digest": snapshot}}
+
+
 class PostAnswerTask(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -46,6 +77,7 @@ class PostAnswerTask(BaseModel):
     skip_profile: bool = False
     skip_follow_up: bool = False
     artifact_draft: ArtifactDraftIntent | None = None
+    digest: DigestIntent | None = None
 
     @model_validator(mode="after")
     def validate_identity(self):
@@ -73,6 +105,8 @@ class PostAnswerTask(BaseModel):
             raise ValueError("post_answer_missing_committed_record")
         if self.artifact_draft is not None and self.record is None:
             raise ValueError("artifact_draft_requires_source_record")
+        if self.digest is not None and self.record is None:
+            raise ValueError("digest_requires_source_record")
         return self
 
     @classmethod
@@ -80,7 +114,7 @@ class PostAnswerTask(BaseModel):
                 evaluate_memory, record=None, interaction_intent=None,
                 memory_hits=(), recent_session_context="", profile_snapshot=(),
                 skip_profile=False, skip_follow_up=False, evaluated_at=None,
-                score_skip_reason="planner", artifact_draft=None):
+                score_skip_reason="planner", artifact_draft=None, digest=None):
         # Use the request's explicit serialization policy, then detach every
         # nested object through JSON before handing it to a durable worker.
         task = cls(
@@ -91,6 +125,7 @@ class PostAnswerTask(BaseModel):
             skip_profile=skip_profile, skip_follow_up=skip_follow_up,
             score_skip_reason=score_skip_reason,
             artifact_draft=artifact_draft,
+            digest=digest,
             evaluated_at=evaluated_at or datetime.now(UTC),
         )
         return cls.model_validate_json(task.model_dump_json())

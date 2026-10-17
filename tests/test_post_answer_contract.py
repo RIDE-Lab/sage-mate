@@ -46,6 +46,11 @@ def test_artifact_intent_cannot_exist_without_stable_source_identity():
                                   "artifact_excerpt_count": 1, "provenance_note": "source"})
 
 
+def test_digest_intent_requires_source_record():
+    with pytest.raises(ValidationError, match="digest_requires_source_record"):
+        make_task(digest={"threshold": 4, "target_chars": 1500, "use_llm": False})
+
+
 @pytest.mark.parametrize("field,value", [
     ("version", 2), ("task_kind", "book_meeting"),
     ("system_prompt", "not permitted"), ("runtime", {}),

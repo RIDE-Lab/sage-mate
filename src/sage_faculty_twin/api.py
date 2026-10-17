@@ -2359,7 +2359,7 @@ async def compress_context(raw_request: Request) -> JSONResponse:
         if parsed_id.version != 4:
             raise HTTPException(status_code=401, detail="请先登录后再压缩该会话上下文。")
 
-    result = service.compress_conversation_context(conversation_id)
+    result = await asyncio.to_thread(service.compress_conversation_context, conversation_id)
     return JSONResponse(content=result)
 
 

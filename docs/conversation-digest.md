@@ -11,9 +11,14 @@ backlogs beyond 64 turns and late-arriving records are not silently omitted.
 Generation receives the previous digest and all new payloads. Model failure
 does not advance coverage. Concurrent publication against an outdated base
 fails and requires regeneration, rather than overwriting the winner. An exact
-plan/output retry has a deterministic operation identity. This is destination
-replay safety, not yet a durable generation task: request-process loss before
-publication still requires the next automatic/manual update.
+plan/output retry has a deterministic operation identity. Automatic and manual
+intents now execute through SAGE WorkService. Generation failure or stale-base
+publication keeps the task retryable; restart recovers admitted tasks without
+re-running the chat. Generation can repeat after an uncertain acknowledgement,
+but persisted coverage prevents repeating the destination update. The task
+refreshes current canonical sources at execution time, not a fixed enqueue-time
+snapshot. The remaining exchange-to-task admission gap needs the whole-turn
+atomic commit cutover.
 
 With `context_digest_llm_enabled=false`, the default remains free of extra model
 calls but now **retains full content**, including the previous state. This is
@@ -38,6 +43,8 @@ The tests exercise actual service methods and persistence: 100 automatic turns,
 legacy-count rejection, complete nested Markdown, stale-generation conflict,
 complete model input/output and failed generation without false coverage.
 Mock model tests prove transport inputs, not semantic output quality. Worker
-integration, deployment rebuild, capacity-aware generation and browser acceptance
-remain separate rollout gates. Source snapshots currently use the local memory
+tests additionally cover restart recovery, failure after destination commit,
+captured-policy stability, nonblocking answer delivery and completion ordering.
+Deployment rebuild, capacity-aware generation and browser acceptance remain
+separate rollout gates. Source snapshots currently use the local memory
 read view; multi-process refresh and paginated large-history access are pending.

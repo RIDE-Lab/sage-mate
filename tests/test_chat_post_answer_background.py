@@ -55,9 +55,31 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
     assert calls == ["drain", "observed", "close", "detach", "llm_close"]
 
 
+def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):
+    import gc
+    import weakref
+    from types import SimpleNamespace
+
+    service = DigitalTwinService.__new__(DigitalTwinService)
+    service._post_answer_runtime_lock = threading.RLock()
+    service._post_answer_runtime = None
+    service._settings = SimpleNamespace(conversation_memory_dir=tmp_path)
+    service._conversation_store = SimpleNamespace(consolidate_profiles=lambda record: 0)
+    service._artifact_memory_draft_store = SimpleNamespace(create_draft=lambda **kwargs: None)
+    runtime = service._get_post_answer_runtime()
+    owner = weakref.ref(service)
+    del service
+    gc.collect()
+    assert owner() is None
+    assert runtime._service._closed
+
+
 class _FastLLMClient:
     """LLM stand-in that replies immediately without booking flow."""
     model_name = "test-model"
+
+    async def aclose(self):
+        pass
 
     def __init__(self, answer_text: str = "已收到，下面给你建议。") -> None:
         self._answer = answer_text
@@ -301,12 +323,90 @@ def test_artifact_intent_is_durable_before_background_destination_finishes(tmp_p
     asyncio.run(driver())
 
 
+def test_digest_is_durable_before_background_generation_finishes(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+        conversation_memory_dir=tmp_path / "memory", context_digest_dir=tmp_path / "digests",
+        context_digest_turn_threshold=2))
+    service._llm_client = _FastLLMClient()
+    first = service._conversation_store.prepare_exchange(
+        ChatRequest(student_name="Alice", question="earlier question"),
+        conversation_id="digest-background", answer="earlier decision", workflow_action="answer",
+        interaction_domain=None, knowledge_hit_count=0, booking_result=None)
+    service._conversation_store.persist_exchange(first)
+    gate, started, completed = threading.Event(), threading.Event(), threading.Event()
+    original = service._refresh_saved_digest
+    traces = []
+    def gated(conversation_id, intent):
+        started.set()
+        if not gate.wait(timeout=5):
+            raise TimeoutError("test digest gate")
+        return original(conversation_id, intent)
+    service._refresh_saved_digest = gated
+
+    async def driver():
+        try:
+            response = await asyncio.wait_for(service.answer(ChatRequest(
+                student_name="Alice", conversation_id="digest-background",
+                question="给我一些下一步建议。"), trace_callback=traces.append,
+                on_post_answer_complete=completed.set), timeout=3)
+            assert await asyncio.to_thread(started.wait, 2)
+            state = service._get_post_answer_runtime().journal.read(response.exchange_id)
+            saved = state["tasks"]["post_answer"]
+            assert saved["payload"]["digest"] == {"threshold": 2, "target_chars": 1500, "use_llm": False}
+            assert saved["status"] != "done"
+            assert service._digest_store.get_digest("digest-background") is None
+            assert not any(step.key == "context_digest" for step in traces)
+            assert not completed.is_set()
+            # A config edit after admission must not change the saved policy.
+            service._settings.context_digest_llm_enabled = True
+            service._settings.context_digest_max_chars = 200
+            gate.set()
+            assert await asyncio.to_thread(completed.wait, 5)
+            assert service._digest_store.get_digest("digest-background").turns_summarized == 2
+            digest_traces = [step for step in traces if step.key == "context_digest"]
+            assert len(digest_traces) == 1 and digest_traces[0].status == "completed"
+        finally:
+            gate.set()
+            await service.aclose()
+    asyncio.run(driver())
+
+
+def test_manual_service_uses_same_journal_worker_and_respects_disabled_mode(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+        conversation_memory_dir=tmp_path / "memory", context_digest_dir=tmp_path / "digests"))
+    service._llm_client = _FastLLMClient()
+    record = service._conversation_store.prepare_exchange(
+        ChatRequest(student_name="Alice", question="manual refresh"), conversation_id="manual",
+        answer="complete answer", workflow_action="answer", interaction_domain=None,
+        knowledge_hit_count=0, booking_result=None)
+    service._conversation_store.persist_exchange(record)
+    caller = threading.get_ident()
+    calls = []
+    original = service._refresh_saved_digest
+    def observe(conversation_id, intent):
+        calls.append(threading.get_ident())
+        return original(conversation_id, intent)
+    service._refresh_saved_digest = observe
+    try:
+        service._settings.context_digest_enabled = False
+        assert not service.compress_conversation_context("manual")["ok"]
+        assert not calls
+        service._settings.context_digest_enabled = True
+        assert not service.compress_conversation_context("")["ok"]
+        result = service.compress_conversation_context("manual")
+        assert result["ok"] and result["turns_incorporated"] == 1
+        assert len(calls) == 1 and calls[0] != caller
+        assert service._digest_store.get_digest("manual").turns_summarized == 1
+    finally:
+        asyncio.run(service.aclose())
+
+
 def test_chat_runs_post_answer_inline_when_no_trace_callback(
     tmp_path: Path,
 ) -> None:
     """Without ``trace_callback`` (test/batch path) the inline post-answer
     runner must execute before ``service.answer`` returns, so the response
-    still carries the canonical 14-step trace and the populated
+    still carries the canonical trace and the populated
     ``follow_up_actions`` / ``exchange_id`` fields."""
 
     settings = AppSettings(knowledge_base_dir=tmp_path)

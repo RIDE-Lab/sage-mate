@@ -305,6 +305,7 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
         "memory_profile_consolidate",
         "follow_up_plan",
         "memory_usefulness_score",
+        "context_digest",
         "response_render",
     ]
     assert response.workflow_trace[1].status == "completed"

@@ -501,6 +501,7 @@ const WORKFLOW_STEP_SHORT_LABELS = {
     llm_answer: "生成回复",
     follow_up_plan: "整理后续",
     memory_usefulness_score: "检查证据",
+    context_digest: "整理上下文",
     memory_persist: "写入记忆",
     artifact_memory_writeback: "记录材料",
     memory_profile_consolidate: "更新画像",
@@ -8137,7 +8138,7 @@ function inferWorkflowPhaseKey(step) {
         return "return";
     }
     if (
-        ["follow_up_plan", "memory_usefulness_score", "memory_persist", "artifact_memory_writeback", "memory_profile_consolidate"].includes(key)
+        ["follow_up_plan", "memory_usefulness_score", "memory_persist", "artifact_memory_writeback", "memory_profile_consolidate", "context_digest"].includes(key)
         || /规划后续|评估记忆|写入对话记忆|记录材料|沉淀长期画像|persist|follow_up|usefulness/.test(normalized)
     ) {
         return "finalize";
@@ -8343,6 +8344,7 @@ const WORKFLOW_RUNTIME_KEY_TO_PARALLEL_GROUP = {
     memory_profile_consolidate: "post_answer",
     follow_up_plan: "post_answer",
     memory_usefulness_score: "post_answer",
+    context_digest: "post_answer",
 };
 
 const WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES = {
@@ -8379,6 +8381,7 @@ const WORKFLOW_DISPLAY_ORDER = [
     "memory_profile_consolidate",
     "follow_up_plan",
     "memory_usefulness_score",
+    "context_digest",
 ];
 
 const WORKFLOW_DISPLAY_ORDER_INDEX = WORKFLOW_DISPLAY_ORDER.reduce((acc, key, index) => {

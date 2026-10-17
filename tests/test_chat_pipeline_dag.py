@@ -145,6 +145,7 @@ CANONICAL_CHAT_TRACE = [
     "memory_profile_consolidate",
     "follow_up_plan",
     "memory_usefulness_score",
+    "context_digest",
     "response_render",
 ]
 
@@ -397,7 +398,7 @@ def test_canonicalize_keeps_unknown_keys_at_the_end_in_relative_order() -> None:
 
 
 def test_canonical_trace_order_matches_published_constant() -> None:
-    # Sanity check: the constant exposed by service.py contains the same 14
+    # Sanity check: the constant exposed by service.py contains the same
     # keys our fixture asserts plus the conditional `artifact_memory_writeback`.
     assert tuple(CANONICAL_CHAT_TRACE) == tuple(
         key for key in _CANONICAL_TRACE_ORDER if key != "artifact_memory_writeback"

@@ -8,12 +8,14 @@ from .post_answer_handler import PostAnswerHandler
 
 
 class PostAnswerRuntime:
-    def __init__(self, path, *, consolidate_profiles, score, create_artifact_draft=None):
+    def __init__(self, path, *, consolidate_profiles, score, create_artifact_draft=None,
+                 refresh_digest=None):
         self._state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(path))
         self.journal = WorkJournal(self._state, namespace="twin-post-answer-v1")
         self._service = WorkService(
             self.journal, PostAnswerHandler(consolidate_profiles=consolidate_profiles, score=score,
-                                          create_artifact_draft=create_artifact_draft),
+                                          create_artifact_draft=create_artifact_draft,
+                                          refresh_digest=refresh_digest),
             max_workers=2, poll_interval=0.05,
         )
 
@@ -26,6 +28,10 @@ class PostAnswerRuntime:
     def wait(self, request_id, *, timeout):
         record = self._service.wait(request_id, timeout=timeout)
         return record["tasks"]["post_answer"]["result"]
+
+    def wait_digest(self, request_id, *, timeout):
+        record = self._service.wait(request_id, timeout=timeout)
+        return record["tasks"]["context_digest"]["result"]
 
     def drain(self):
         """Stop admissions and finish active work, keeping results readable."""

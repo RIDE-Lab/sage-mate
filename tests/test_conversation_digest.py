@@ -41,15 +41,19 @@ def add(support, *records):
     support._conversation_store._records.update({item.memory_id: item for item in records})
 
 
+def refresh(support, *, threshold=1):
+    return support._refresh_conversation_digest("conversation", threshold=threshold)
+
+
 def test_record_round_trip():
     original = ConversationDigestRecord("one", "text", 3, datetime.now(UTC), revision=2)
     assert ConversationDigestRecord.from_dict(original.to_dict()) == original
 
 
-def test_real_automatic_path_continues_after_64_and_preserves_earliest_answer(support):
+def test_refresh_threshold_continues_after_64_and_preserves_earliest_answer(support):
     for index in range(100):
         add(support, record(index))
-        support._update_conversation_digest(SimpleNamespace(conversation_id="conversation"))
+        refresh(support, threshold=4)
         saved = support._digest_store.get_digest("conversation")
         expected = ((index + 1) // 4) * 4
         assert (saved.turns_summarized if saved else 0) == expected
@@ -62,20 +66,20 @@ def test_real_automatic_path_continues_after_64_and_preserves_earliest_answer(su
 
 def test_initial_backlog_manual_and_repeat_do_not_omit_or_duplicate(support):
     add(support, *(record(i) for i in range(100)))
-    result = support.compress_conversation_context("conversation")
+    result = refresh(support)
     assert result["ok"] and result["total_turns"] == result["turns_incorporated"] == 100
     assert result["turns_compressed"] == 0
     assert result["mode"] == "lossless"
-    assert support.compress_conversation_context("conversation")["turns_compressed"] == 0
+    assert refresh(support)["turns_compressed"] == 0
     assert support._digest_store.get_digest("conversation").revision == 1
 
 
 def test_no_truncation_or_markdown_flattening(support):
     answer = "# Heading\n\n- parent\n  - child\n" * 300
     add(support, record(0, answer=answer))
-    support.compress_conversation_context("conversation")
+    refresh(support)
     add(support, record(1, answer="new decision"))
-    support.compress_conversation_context("conversation")
+    refresh(support)
     saved = support._digest_store.get_digest("conversation")
     payloads = [json.loads(line) for line in saved.digest_text.splitlines()]
     assert payloads[0]["answer"] == answer
@@ -91,18 +95,18 @@ def test_legacy_count_cannot_claim_coverage_or_poison_rebuild(support, tmp_path)
     support._digest_store = ConversationDigestStore(path.parent)
     assert support._digest_store.get_digest("conversation") is None
     add(support, record(1))
-    support.compress_conversation_context("conversation")
+    refresh(support)
     assert path.read_text() == legacy
     assert support._digest_store.get_digest("conversation").turns_summarized == 1
 
 
 def test_reopen_and_late_source_are_identity_based(support, tmp_path):
     add(support, record(2))
-    support.compress_conversation_context("conversation")
+    refresh(support)
     support._digest_store.close()
     support._digest_store = ConversationDigestStore(tmp_path / "digests")
     add(support, record(1))
-    assert support.compress_conversation_context("conversation")["turns_incorporated"] == 1
+    assert refresh(support)["turns_incorporated"] == 1
     assert support._digest_store.get_digest("conversation").turns_summarized == 2
 
 
@@ -114,7 +118,7 @@ def test_stale_generation_does_not_overwrite(support):
         store.commit("conversation", plan, "winner")
         return "stale result"
     support._summarize_digest_turns = competing_writer
-    result = support.compress_conversation_context("conversation")
+    result = refresh(support)
     assert not result["ok"] and "retry" in result["error"]
     assert support._digest_store.get_digest("conversation").digest_text == "winner"
 
@@ -128,9 +132,9 @@ def test_full_llm_input_previous_output_and_no_posthoc_clipping(support):
         prompts.append((user, kwargs))
         return "complete summary " * 100
     support._llm_client = SimpleNamespace(answer_question_sync=generate)
-    support.compress_conversation_context("conversation")
+    refresh(support)
     add(support, record(2))
-    support.compress_conversation_context("conversation")
+    refresh(support)
     assert answer in prompts[0][0]
     assert ("complete summary " * 100).strip() in prompts[1][0]
     assert prompts[0][1]["max_tokens"] is None
@@ -143,7 +147,7 @@ def test_model_failure_does_not_advance_coverage(support):
     def fail(*args, **kwargs):
         raise RuntimeError("synthetic failure")
     support._llm_client = SimpleNamespace(answer_question_sync=fail)
-    assert not support.compress_conversation_context("conversation")["ok"]
+    assert not refresh(support)["ok"]
     assert support._digest_store.get_digest("conversation") is None
 
 
@@ -155,13 +159,3 @@ def test_snapshot_detached_chronological_and_conversation_scoped(support):
     assert support._conversation_store._records["turn-0"].answer == "answer-0"
     with pytest.raises(ValueError, match="conversation_mismatch"):
         support._digest_store.prepare("conversation", [record(3, conversation="other")])
-
-
-def test_disabled_or_empty_conversation_does_not_write(support):
-    add(support, record(1))
-    support._settings.context_digest_enabled = False
-    support._update_conversation_digest(SimpleNamespace(conversation_id="conversation"))
-    assert not support.compress_conversation_context("conversation")["ok"]
-    assert support._digest_store.get_digest("conversation") is None
-    support._settings.context_digest_enabled = True
-    assert not support.compress_conversation_context("")["ok"]

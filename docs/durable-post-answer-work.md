@@ -14,8 +14,9 @@ there is no separate best-effort post-answer executor.
    `conversation_memory_dir/post_answer_work.sqlite3`.
 4. SAGE owns bounded dispatch, leases, retries and result publication. The handler
    writes versioned NeuroMem profiles and replay-safe artifact drafts, then
-   computes follow-up suggestions/scoring.
-   It cannot call a model, create a booking or send a notification.
+   computes follow-up suggestions/scoring and refreshes a provenance-aware digest
+   when the captured task requests it. Only the restricted digest projection may
+   use a model under saved policy; there is no generic model, booking or notification port.
 5. Async observers publish only committed task results. Startup starts recovery
    even when model cache warmup is disabled. Shutdown drains workers, permits
    observers to read results, then closes storage.
@@ -98,5 +99,24 @@ background destination to verify that the intent is durable before the response
 returns and the completion event follows the actual write. A failure later in the
 handler may replay creation, but cannot duplicate the draft or undo a review.
 
-The whole-turn atomic switch, digest handling and production deployment remain
-separate acceptance gates.
+## Digest work
+
+Automatic tasks capture a `DigestIntent` only for a persisted source exchange.
+It contains threshold, target size and generation mode, not prompts or arbitrary
+owner IDs. The handler derives conversation identity from the validated record.
+It refreshes the current canonical conversation projection through NeuroMem's
+optimistic source-coverage contract; it does not regenerate the user's answer.
+The source snapshot is taken when work runs, so it may include later committed
+turns. Replays select only still-uncovered IDs. A failed generation or stale
+publication raises and remains retryable, without publishing task completion.
+
+Manual refresh captures `DigestWorkTask` and uses the same journal, bounded
+WorkService and handler port. It cannot execute profiles, scoring, booking or
+chat. The API waits off the event loop; timeout does not cancel saved work.
+Manual and automatic updates no longer have a separate synchronous executor.
+Configured generation mode is captured before commit; later setting changes do
+not rewrite admitted work. Legacy tasks without digest intent do not acquire
+new side effects merely because the worker was upgraded.
+
+The whole-turn atomic switch, capacity-aware semantic generation, authenticated
+delivery recovery and production deployment remain separate acceptance gates.

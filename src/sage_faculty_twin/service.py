@@ -124,7 +124,7 @@ from .knowledge_authority import (
 )
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
-from .post_answer_contract import ArtifactDraftIntent, PostAnswerTask
+from .post_answer_contract import ArtifactDraftIntent, DigestIntent, DigestWorkTask, PostAnswerTask
 from .post_answer_runtime import PostAnswerRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
 from .meeting import MeetingService
@@ -888,6 +888,7 @@ _CANONICAL_TRACE_ORDER: tuple[str, ...] = (
     "memory_profile_consolidate",
     "follow_up_plan",
     "memory_usefulness_score",
+    "context_digest",
     "response_render",
 )
 _CANONICAL_TRACE_INDEX: dict[str, int] = {
@@ -2552,8 +2553,6 @@ class FacultyTwinWorkflowSupport:
             context.prepared_memory_record
         )
         self._prepare_artifact_memory_draft(context, started_at=started_at)
-        # Trigger rolling conversation digest update (V4.1 context compression).
-        self._update_conversation_digest(context)
         self._append_trace(
             context,
             key="memory_persist",
@@ -2601,24 +2600,12 @@ class FacultyTwinWorkflowSupport:
             provenance_note=provenance_note,
         )
 
-    def _update_conversation_digest(self, context: ChatWorkflowContext) -> None:
-        """Update the rolling conversation digest after a new exchange.
-
-        Checks whether enough new turns have accumulated since the last
-        digest update and, if so, asks the LLM to produce a compressed
-        summary that replaces the older history in future prompts.
-        """
-        if self._digest_store is None or not self._settings.context_digest_enabled:
-            return
-        conversation_id = context.conversation_id
-        if not conversation_id:
-            return
-
-        self._refresh_conversation_digest(
-            conversation_id, threshold=self._settings.context_digest_turn_threshold
-        )
-
-    def _refresh_conversation_digest(self, conversation_id: str, *, threshold: int) -> dict[str, object]:
+    def _refresh_conversation_digest(self, conversation_id: str, *, threshold: int,
+                                     target_chars: int | None = None,
+                                     use_llm: bool | None = None) -> dict[str, object]:
+        """Digest projection port; production execution is owned by SAGE work."""
+        if use_llm is None:
+            use_llm = self._settings.context_digest_llm_enabled
         records = self._conversation_store.list_conversation_records(conversation_id)
         plan = self._digest_store.prepare(conversation_id, records)
         pending = plan.sources
@@ -2631,7 +2618,8 @@ class FacultyTwinWorkflowSupport:
         text = self._summarize_digest_turns(
             existing_digest_text=plan.previous,
             new_turns=[ConversationMemoryRecord.from_dict(source["payload"]) for source in pending],
-            max_chars=self._settings.context_digest_max_chars,
+            max_chars=target_chars if target_chars is not None else self._settings.context_digest_max_chars,
+            use_llm=use_llm,
         )
         if not text:
             return {"ok": False, "error": "summarization failed"}
@@ -2643,7 +2631,7 @@ class FacultyTwinWorkflowSupport:
             # Another writer won; never overwrite its newer base. The next
             # threshold check/manual request re-reads and regenerates.
             return {"ok": False, "error": "digest changed during generation; retry required"}
-        semantic = self._settings.context_digest_llm_enabled
+        semantic = use_llm
         return {"ok": True, "turns_compressed": len(pending) if semantic else 0,
                 "turns_incorporated": len(pending),
                 "total_turns": receipt["total_sources"], "digest_chars": len(text),
@@ -2655,6 +2643,7 @@ class FacultyTwinWorkflowSupport:
         existing_digest_text: str,
         new_turns: list[ConversationMemoryRecord],
         max_chars: int,
+        use_llm: bool,
     ) -> str:
         """Ask the LLM to compress conversation turns into a rolling digest.
 
@@ -2690,7 +2679,7 @@ class FacultyTwinWorkflowSupport:
 
         # Until generation is explicitly enabled, preserve evidence without
         # submitting an additional inference request to shared serving.
-        if not getattr(self._settings, "context_digest_llm_enabled", False):
+        if not use_llm:
             return self._retain_digest_sources(new_turns, existing_digest_text)
 
         try:
@@ -2719,20 +2708,6 @@ class FacultyTwinWorkflowSupport:
         lines = [previous] if previous else []
         lines.extend(json.dumps(record.to_dict(), ensure_ascii=False) for record in new_turns)
         return "\n".join(lines)
-
-    def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
-        """Manually trigger context compression for a conversation.
-
-        Unlike the automatic digest update (which requires a turn threshold),
-        this forces compression immediately for all unsummarized turns.
-        Returns a dict with the result: turns compressed and digest text length.
-        """
-        if self._digest_store is None or not self._settings.context_digest_enabled:
-            return {"ok": False, "error": "context compression is disabled"}
-        if not conversation_id:
-            return {"ok": False, "error": "missing conversation_id"}
-
-        return self._refresh_conversation_digest(conversation_id, threshold=1)
 
     def answer_with_llm(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
@@ -9294,7 +9269,8 @@ class DigitalTwinService:
             if trace_callback is not None:
                 for step in final.workflow_trace:
                     if (step.key in {"memory_profile_consolidate", "follow_up_plan", "memory_usefulness_score"}
-                            or (step.key == "artifact_memory_writeback" and task.artifact_draft is not None)):
+                            or (step.key == "artifact_memory_writeback" and task.artifact_draft is not None)
+                            or (step.key == "context_digest" and task.digest is not None)):
                         trace_callback(step)
             if on_post_answer_complete is not None:
                 on_post_answer_complete()
@@ -11584,8 +11560,31 @@ class DigitalTwinService:
         return build_stack_versions_payload()
 
     def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
-        """Compress one conversation through the same SAGE support boundary as chat."""
-        return self._build_support().compress_conversation_context(conversation_id)
+        """Commit manual intent before waiting; timeout does not cancel durable work."""
+        if not self._settings.context_digest_enabled:
+            return {"ok": False, "error": "context compression is disabled"}
+        if not conversation_id:
+            return {"ok": False, "error": "missing conversation_id"}
+        task = DigestWorkTask(request_id=f"digest:{uuid4()}", conversation_id=conversation_id,
+                              intent=self._digest_intent(threshold=1))
+        runtime = self._get_post_answer_runtime()
+        runtime.submit(task)
+        try:
+            return runtime.wait_digest(task.request_id, timeout=self._settings.chat_request_timeout_seconds)
+        except TimeoutError:
+            return {"ok": False, "error": "context work is still pending; retained for recovery"}
+
+    def _digest_intent(self, *, threshold=None):
+        return DigestIntent(
+            threshold=threshold if threshold is not None else self._settings.context_digest_turn_threshold,
+            target_chars=self._settings.context_digest_max_chars,
+            use_llm=self._settings.context_digest_llm_enabled,
+        )
+
+    def _refresh_saved_digest(self, conversation_id, intent):
+        return self._build_support()._refresh_conversation_digest(
+            conversation_id, **intent.model_dump()
+        )
 
     async def aclose(self) -> None:
         if self._post_answer_runtime is not None:
@@ -11629,11 +11628,20 @@ class DigitalTwinService:
     def _get_post_answer_runtime(self):
         with self._post_answer_runtime_lock:
             if self._post_answer_runtime is None:
+                # The runtime finalizer must not retain its service through a
+                # bound-method callback and prevent the owner from being collected.
+                owner_ref = weakref.ref(self)
+                def refresh_digest(conversation_id, intent):
+                    owner = owner_ref()
+                    if owner is None:
+                        raise RuntimeError("digest_owner_unavailable")
+                    return owner._refresh_saved_digest(conversation_id, intent)
                 self._post_answer_runtime = PostAnswerRuntime(
                     self._settings.conversation_memory_dir / "post_answer_work.sqlite3",
                     consolidate_profiles=self._conversation_store.consolidate_profiles,
                     score=_score_saved_post_answer,
                     create_artifact_draft=self._artifact_memory_draft_store.create_draft,
+                    refresh_digest=refresh_digest,
                 )
                 self._post_answer_finalizer = weakref.finalize(self, self._post_answer_runtime.close)
             return self._post_answer_runtime
@@ -11915,6 +11923,8 @@ class DigitalTwinService:
             request_id=response.exchange_id or str(uuid4()), request=context.request, response=response,
             record=context.persisted_memory_record, interaction_intent=context.interaction_intent,
             artifact_draft=context.artifact_draft_intent,
+            digest=(self._digest_intent() if self._settings.context_digest_enabled
+                    and context.persisted_memory_record is not None else None),
             memory_hits=context.memory_hits, recent_session_context=context.recent_session_context,
             profile_snapshot=profiles, availability=self._meeting_service.get_availability_schedule(),
             evaluate_memory=(support._planner_requests_any_step(context, "score_memory_usefulness")
@@ -11935,7 +11945,7 @@ class DigitalTwinService:
         stages mutate ``context``. When post-answer ran inline (test path or
         ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND=false``), this helper folds the
         new context fields back into the response so legacy callers continue
-        to see the canonical 14-step trace, the assigned ``exchange_id``,
+        to see the canonical trace, the assigned ``exchange_id``,
         and the ``follow_up_actions`` list.
         """
         canonical_trace = _canonicalize_workflow_trace(context.workflow_trace)
