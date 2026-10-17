@@ -43,6 +43,9 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
             calls.append("llm_close")
 
         fake = SimpleNamespace(
+            _feedback_runtime_lock=threading.Lock(),
+            _feedback_runtime=SimpleNamespace(close=lambda: calls.append("feedback_close")),
+            _feedback_finalizer=SimpleNamespace(detach=lambda: calls.append("feedback_detach")),
             _post_answer_runtime=SimpleNamespace(
                 drain=lambda: calls.append("drain"), close=lambda: calls.append("close")),
             _post_answer_finalizer=SimpleNamespace(detach=lambda: calls.append("detach")),
@@ -56,7 +59,7 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
         await DigitalTwinService.aclose(fake)
 
     asyncio.run(driver())
-    assert calls == ["drain", "observed", "close", "detach", "chat_close",
+    assert calls == ["feedback_close", "feedback_detach", "drain", "observed", "close", "detach", "chat_close",
                      "retrieval_close", "private_close", "wiki_close", "llm_close"]
 
 
@@ -67,9 +70,10 @@ def test_start_recovers_both_knowledge_sources_before_post_answer_work():
         _knowledge_store=SimpleNamespace(start_background_indexing=lambda: calls.append("private")),
         _wiki_store=SimpleNamespace(start_background_indexing=lambda: calls.append("wiki")),
         _get_post_answer_runtime=lambda: SimpleNamespace(start=lambda: calls.append("post_answer")),
+        _get_feedback_runtime=lambda: SimpleNamespace(start=lambda: calls.append("feedback")),
     )
     DigitalTwinService.start_background_work(fake)
-    assert calls == ["private", "wiki", "post_answer"]
+    assert calls == ["private", "wiki", "post_answer", "feedback"]
 
 
 def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):

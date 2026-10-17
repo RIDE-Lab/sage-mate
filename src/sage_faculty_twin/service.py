@@ -126,6 +126,7 @@ from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
 from .post_answer_contract import ArtifactDraftIntent, DigestIntent, DigestWorkTask, PostAnswerTask
 from .post_answer_runtime import PostAnswerRuntime
+from .feedback_knowledge_runtime import FeedbackKnowledgeRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
 from .meeting import MeetingService
 from .memory_store import (
@@ -192,7 +193,6 @@ from .models import (
     KnowledgeGapSuggestion,
     KnowledgeSearchHit,
     KnowledgeSearchResponse,
-    KnowledgeWriteBackResult,
     MemoryAuditItem,
     MemoryProfileListResponse,
     MemoryProfileRecordResponse,
@@ -1207,6 +1207,7 @@ class FacultyTwinWorkflowSupport:
         shadow_planner_message: str | None = None,
         planner_comparison: WorkflowPlanComparison | None = None,
         knowledge_retriever: KnowledgeSources | None = None,
+        feedback_runtime_provider=None,
     ) -> None:
         self._settings = settings
         self._booking_workflows = booking_workflows
@@ -1214,6 +1215,7 @@ class FacultyTwinWorkflowSupport:
         self._knowledge_retriever = knowledge_retriever or KnowledgeSources(knowledge_store)
         self._conversation_store = conversation_store
         self._analytics_store = analytics_store
+        self._feedback_runtime_provider = feedback_runtime_provider
         self._artifact_memory_draft_store = artifact_memory_draft_store
         self._knowledge_gap_draft_store = knowledge_gap_draft_store
         self._escalation_store = escalation_store
@@ -4964,8 +4966,15 @@ class FacultyTwinWorkflowSupport:
         if record is None:
             # Unknown and foreign records deliberately have the same response.
             raise HTTPException(status_code=404, detail="找不到对应的问答记录。")
+        if self._feedback_runtime_provider is None:
+            raise RuntimeError("feedback_runtime_unavailable")
+        runtime = self._feedback_runtime_provider()
+        operation_id = uuid4().hex
+        candidates = self._select_feedback_knowledge(record, request)
         try:
-            feedback = self._analytics_store.submit_feedback(
+            feedback = runtime.submit(
+                operation_id=operation_id,
+                candidates=candidates,
                 exchange_id=request.exchange_id,
                 rating=request.rating,
                 resolved=request.resolved,
@@ -4978,7 +4987,17 @@ class FacultyTwinWorkflowSupport:
                 detail="找不到对应的问答记录。",
             ) from exc
 
-        knowledge_write_backs = self._write_back_feedback_knowledge(record, feedback)
+        try:
+            knowledge_write_backs = runtime.wait(
+                operation_id, timeout=self._settings.feedback_writeback_wait_seconds)
+        except TimeoutError as exc:
+            # Admission is durable; a response timeout must not cancel it or
+            # falsely claim that the knowledge destination has completed.
+            raise HTTPException(status_code=503, detail={
+                "code": "feedback_knowledge_pending", "feedback_saved": True,
+                "operation_id": operation_id,
+                "message": "反馈已保存，知识写入仍在后台处理中。",
+            }) from exc
 
         return ChatFeedbackResponse(
             exchange_id=feedback.exchange_id,
@@ -4991,19 +5010,20 @@ class FacultyTwinWorkflowSupport:
             updated_at=feedback.updated_at,
         )
 
-    def _write_back_feedback_knowledge(
+    def _select_feedback_knowledge(
         self,
         record: ConversationMemoryRecord,
         feedback,
-    ) -> list[KnowledgeWriteBackResult]:
-        if feedback.rating != "up" or not feedback.resolved:
+    ) -> list[KnowledgeDocumentCreate]:
+        resolved = feedback.rating == "up" if feedback.resolved is None else feedback.resolved
+        if feedback.rating != "up" or not resolved:
             return []
 
         if not record.web_search_hits:
             return []
 
         answer_text = str(record.answer or "")
-        results: list[KnowledgeWriteBackResult] = []
+        results: list[KnowledgeDocumentCreate] = []
         seen_source_names: set[str] = set()
         for index, hit in enumerate(record.web_search_hits, start=1):
             if not self._answer_references_web_hit(answer_text, hit):
@@ -5014,15 +5034,7 @@ class FacultyTwinWorkflowSupport:
             if payload.source_name in seen_source_names:
                 continue
             seen_source_names.add(payload.source_name)
-            stored, created = self._knowledge_store.upsert_document(payload, preserve_existing=True)
-            results.append(
-                KnowledgeWriteBackResult(
-                    document_id=stored.document_id,
-                    title=stored.title,
-                    source_name=stored.source_name,
-                    created=created,
-                )
-            )
+            results.append(payload)
         return results
 
     def submit_anonymous_suggestion(
@@ -8863,6 +8875,10 @@ class DigitalTwinService:
         self._post_answer_runtime_lock = threading.Lock()
         self._post_answer_finalizer = None
         self._post_answer_observers = set()
+        self._feedback_runtime = None
+        self._feedback_runtime_lock = threading.Lock()
+        self._feedback_finalizer = None
+        self._feedback_closing = False
         self._llm_client = VllmChatClient(settings)
         self._deployment_receipt_store = DeploymentReceiptStore(settings)
         self._deployment_receipt_store.sync_inbox()
@@ -11569,6 +11585,12 @@ class DigitalTwinService:
         )
 
     async def aclose(self) -> None:
+        with self._feedback_runtime_lock:
+            self._feedback_closing = True
+        if self._feedback_runtime is not None:
+            await asyncio.to_thread(self._feedback_runtime.close)
+            if self._feedback_finalizer is not None:
+                self._feedback_finalizer.detach()
         if self._post_answer_runtime is not None:
             # Keep the finalizer available if a bounded drain times out; a
             # weakref finalizer itself is consumed even when its callback fails.
@@ -11597,6 +11619,20 @@ class DigitalTwinService:
             if store is not None:
                 store.start_background_indexing()
         self._get_post_answer_runtime().start()
+        self._get_feedback_runtime().start()
+
+    def _get_feedback_runtime(self):
+        with self._feedback_runtime_lock:
+            if self._feedback_closing:
+                raise RuntimeError("feedback_service_closing")
+            if self._feedback_runtime is None:
+                runtime = FeedbackKnowledgeRuntime(
+                    analytics=self._analytics_store, knowledge=self._knowledge_store)
+                self._feedback_runtime = runtime
+                # Nonblocking retirement keeps destination references alive
+                # until SAGE has drained active handlers and acknowledgements.
+                self._feedback_finalizer = weakref.finalize(self, runtime.retire, lambda: None)
+            return self._feedback_runtime
 
     def _project_post_answer_score(self, task, result):
         score = result["memory_usefulness"]
@@ -11715,6 +11751,7 @@ class DigitalTwinService:
             shadow_planner_message=shadow_planner_message,
             planner_comparison=planner_comparison,
             knowledge_retriever=self._knowledge_retriever,
+            feedback_runtime_provider=self._get_feedback_runtime,
         )
 
     def _record_planner_metrics(

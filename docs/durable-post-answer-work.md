@@ -269,9 +269,10 @@ commit; replay cannot overwrite subsequent edits, and changed legacy inputs fail
 explicitly. New feedback never writes JSON. Tests cover rollback, lost commit
 acknowledgement, independent SQLite connections, concurrent writers and interrupted
 archival. The collection is still a full snapshot: bounded retention/indexed
-enumeration remains a scalability gate. Positive-feedback knowledge writeback is
-still a separate synchronous effect, not a durable replay-safe intent; feedback
-and knowledge are **not** an atomic unit yet. No online migration is implied.
+enumeration remains a scalability gate. Feedback and knowledge destination writes
+are not a cross-store atomic unit. Feedback and source-only write intents now
+commit atomically, and SAGE recovers the destination effects. No online migration
+is implied.
 
 The feedback store now accepts a stable `operation_id` and a `commit_work`
 adapter. It supplies a pure destination mutation to the existing SAGE
@@ -280,8 +281,18 @@ operation receipts preserve the original feedback response (including creation
 time) after lost acknowledgements or later feedback edits. Reusing an operation
 ID with different feedback fails; replay never rolls the latest feedback back.
 Tests prove feedback and task admission roll back together, including journal
-conflicts. The HTTP path does not yet use this hook, so this is a qualified
-admission prerequisite, not a completed durable knowledge-writeback workflow.
+conflicts. The HTTP path now uses this hook after the existing owner check and
+pure source selection. One service-owned SAGE consumer runs per-source upserts
+with preserve_existing, starts recovery with background work, and drains before
+knowledge catalogs close. There is no synchronous knowledge-writing fallback.
+The endpoint waits off the event loop for at most
+`DIGITAL_TWIN_FEEDBACK_WRITEBACK_WAIT_SECONDS` (default 10 seconds); timeout
+returns 503 with `feedback_saved: true`, `feedback_knowledge_pending` and an
+operation ID, without cancelling durable work. Client retry/resumption remains
+an open delivery gate; the operation ID is not an authorization capability.
+After a lost destination acknowledgement, an upsert may repeat without replacing
+curator edits. `created` describes the acknowledged attempt, not exactly-once
+execution across stores.
 Receipt retention remains an explicit capacity gate.
 Admission qualification: 9 feedback/provenance tests passed, and the full Twin
 suite passed 1379 tests with 31 existing skips (227.90 s, existing identity-eval
@@ -298,9 +309,9 @@ and changed source material creates another review candidate. The display title
 may be shortened to the UI limit, but the full title remains in evidence content.
 Existing legacy candidates are not rewritten or deleted automatically; they need
 an audited privacy/migration review. Knowledge now uses its canonical SAGE-backed
-catalog and replay-safe projections, not JSON authority. Joining feedback and
-task admission in the HTTP path, then recovering the cross-store knowledge
-effect through that task, remains required; no cross-store atomicity is claimed.
+catalog and replay-safe projections, not JSON authority. The HTTP path joins
+feedback/task admission and delegates cross-store effects to durable tasks;
+no cross-store atomicity is claimed.
 
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover

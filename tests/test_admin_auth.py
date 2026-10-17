@@ -100,6 +100,8 @@ def isolated_availability_store(tmp_path: Path):
     original_settings = service._settings
     original_post_runtime = service._post_answer_runtime
     original_post_finalizer = service._post_answer_finalizer
+    original_feedback_runtime = service._feedback_runtime
+    original_feedback_finalizer = service._feedback_finalizer
     original_meeting_service = service._meeting_service
     original_knowledge_store = service._knowledge_store
     original_conversation_store = service._conversation_store
@@ -125,6 +127,8 @@ def isolated_availability_store(tmp_path: Path):
     service._settings = isolated_settings
     service._post_answer_runtime = None
     service._post_answer_finalizer = None
+    service._feedback_runtime = None
+    service._feedback_finalizer = None
     service._knowledge_store = service._knowledge_store.__class__(isolated_settings)
     service._meeting_service = MeetingService(
         settings.model_copy(
@@ -157,6 +161,11 @@ def isolated_availability_store(tmp_path: Path):
     try:
         yield notifier
     finally:
+        if service._feedback_runtime is not None:
+            service._feedback_runtime.close()
+            service._feedback_finalizer.detach()
+        service._feedback_runtime = original_feedback_runtime
+        service._feedback_finalizer = original_feedback_finalizer
         if service._post_answer_finalizer is not None:
             service._post_answer_finalizer()
         service._post_answer_runtime = original_post_runtime
