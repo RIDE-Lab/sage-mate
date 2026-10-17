@@ -61,12 +61,10 @@ def test_memory_branch_returns_owned_result_without_mutating_context(tmp_path):
 
 
 def test_memory_stage_applies_result_and_trace_once(tmp_path):
-    from sage_faculty_twin.service import MemoryRetrievalStage
-
     support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
     support._trace_callback = Mock()
     context = context_for(InteractionIntent(self_contained=True))
-    assert MemoryRetrievalStage(support).execute(context) is context
+    support.apply_memory_result(context, support.retrieve_memory(support.prepare_memory_retrieval(context)))
     assert [step.key for step in context.workflow_trace] == ["memory_retrieve"]
     support._trace_callback.assert_called_once()
 

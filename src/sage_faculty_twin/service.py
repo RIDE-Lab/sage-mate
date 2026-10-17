@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import weakref
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
@@ -24,6 +25,7 @@ from sage.runtime import FlowNetEnvironment
 
 from . import __version__ as _app_version
 from .analytics_store import ConversationAnalyticsStore
+from .retrieval_runtime import RetrievalRuntime
 from .deployment_receipts import DeploymentReceiptStore
 from .request_context import (
     RequestCancelledError,
@@ -858,7 +860,8 @@ def _answer_is_irrelevant_to_question(question: str, answer: str | None) -> bool
 
 
 # Semantic stages: nine critical stages, response rendering and four
-# post-answer stages. Administrative writes have their own explicit stage.
+# post-answer stages. The two retrieval stages share one physical operator;
+# administrative writes have their own explicit stage.
 _CHAT_PIPELINE_STAGE_COUNT = 14
 # Canonical order of chat-workflow trace keys. The linear pipeline emits
 # them in this order; the DAG pipeline (Task 4 of the Faculty Twin DAG
@@ -2087,6 +2090,14 @@ class FacultyTwinWorkflowSupport:
             ),
             duration_ms=self._elapsed_ms(started_at),
             status="completed",
+        )
+
+    def apply_memory_result(self, context: ChatWorkflowContext, result: MemoryRetrievalResult) -> None:
+        context.memory_hits = list(result.hits)
+        self._append_trace(
+            context, key="memory_retrieve", title="对话记忆检索",
+            summary=result.summary, detail=result.detail,
+            status=result.status, duration_ms=result.duration_ms,
         )
 
     @staticmethod
@@ -8868,30 +8879,24 @@ class KnowledgeWriteStage(MapFunction):
         return self._support.execute_knowledge_write(data)
 
 
-class KnowledgeRetrievalStage(MapFunction):
-    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
+class ParallelRetrievalStage(MapFunction):
+    def __init__(self, support: FacultyTwinWorkflowSupport, runtime: RetrievalRuntime) -> None:
         super().__init__()
         self._support = support
+        self._runtime = runtime
 
     def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        inputs = self._support.prepare_knowledge_retrieval(data)
-        return self._support.apply_knowledge_result(data, self._support.retrieve_knowledge(inputs))
-
-
-class MemoryRetrievalStage(MapFunction):
-    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
-        super().__init__()
-        self._support = support
-
-    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        result = self._support.retrieve_memory(self._support.prepare_memory_retrieval(data))
-        data.memory_hits = list(result.hits)
-        self._support._append_trace(
-            data, key="memory_retrieve", title="对话记忆检索",
-            summary=result.summary, detail=result.detail,
-            status=result.status, duration_ms=result.duration_ms,
+        _raise_if_request_cancelled()
+        remaining = request_remaining_seconds()
+        memory, knowledge = self._runtime.retrieve(
+            self._support,
+            memory=self._support.prepare_memory_retrieval(data),
+            knowledge=self._support.prepare_knowledge_retrieval(data),
+            timeout=remaining if remaining is not None else self._support._settings.chat_request_timeout_seconds,
         )
-        return data
+        _raise_if_request_cancelled()
+        self._support.apply_memory_result(data, memory)
+        return self._support.apply_knowledge_result(data, knowledge)
 
 
 class PromptBuildStage(MapFunction):
@@ -9190,6 +9195,9 @@ class DigitalTwinService:
     ) -> None:
         self._settings = settings
         self._delivery_gate = delivery_gate or ChatDeliveryGate()
+        self._retrieval_runtime = None
+        self._retrieval_runtime_lock = threading.Lock()
+        self._retrieval_finalizer = None
         self._llm_client = VllmChatClient(settings)
         self._deployment_receipt_store = DeploymentReceiptStore(settings)
         self._deployment_receipt_store.sync_inbox()
@@ -11941,7 +11949,16 @@ class DigitalTwinService:
         return self._build_support().compress_conversation_context(conversation_id)
 
     async def aclose(self) -> None:
+        if self._retrieval_finalizer is not None:
+            await asyncio.to_thread(self._retrieval_finalizer)
         await self._llm_client.aclose()
+
+    def _get_retrieval_runtime(self) -> RetrievalRuntime:
+        with self._retrieval_runtime_lock:
+            if self._retrieval_runtime is None:
+                self._retrieval_runtime = RetrievalRuntime()
+                self._retrieval_finalizer = weakref.finalize(self, self._retrieval_runtime.close)
+            return self._retrieval_runtime
 
     def _describe_sage_runtime(self) -> str:
         return self._sage_runtime_class.__name__
@@ -12173,8 +12190,8 @@ class DigitalTwinService:
         :class:`ChatResponse` and the underlying :class:`ChatWorkflowContext`.
 
         All chat callers use this single SAGE execution path.
-        Retrieval is deliberately sequential until each branch returns immutable
-        stage output; the previous fan-out mutated one context from two branches.
+        Retrieval uses a persistent native SAGE endpoint with independent input
+        snapshots and explicit results, merged only after both branches finish.
 
         The four post-answer fan-out stages (``memory_persist``,
         ``memory_profile_consolidate``, ``follow_up_plan``,
@@ -12190,7 +12207,10 @@ class DigitalTwinService:
 
         stream = env.from_batch([request])
         for stage_class in self._chat_critical_stage_types():
-            stream = stream.map(stage_class, support)
+            if stage_class is ParallelRetrievalStage:
+                stream = stream.map(stage_class, support, self._get_retrieval_runtime())
+            else:
+                stream = stream.map(stage_class, support)
         after_render = stream.map(_CaptureContextStage, contexts).map(
             ChatResponseRenderStage, support
         )
@@ -12213,9 +12233,8 @@ class DigitalTwinService:
             InteractionUnderstandingStage,
             BookingPreparationStage,
             BookingExecutionStage,
-            MemoryRetrievalStage,
             KnowledgeWriteStage,
-            KnowledgeRetrievalStage,
+            ParallelRetrievalStage,
             PromptBuildStage,
             LlmAnswerStage,
         )
