@@ -81,7 +81,8 @@ def test_recovery_consumes_pending_native_index_intents(tmp_path):
             result = restarted._catalog.wait_indexing(request, timeout=5)
             task = result["tasks"]["knowledge_index"]
             assert task["status"] == "done"
-            assert task["result"] == {"namespace": "private", "revision": 3}
+            assert task["result"] == {"namespace": "private", "revision": 3,
+                                      "projection_key": restarted._sagevdb_persistence.root.name}
         assert restarted._sagevdb_persistence.source_revision == 3
         assert set(restarted._document_id_to_vector_id) == {latest.document_id}
         assert restarted.get_document(old.document_id) is None
@@ -124,6 +125,46 @@ def test_foreground_reads_other_workers_generation_without_rebuilding(tmp_path, 
     finally:
         other.close()
         first.close()
+
+
+def test_different_configurations_do_not_claim_targeted_tasks(tmp_path):
+    first = store_at(tmp_path)
+    other = LocalKnowledgeStore(first._settings.model_copy(update={"sagevdb_dimension": 64}))
+    add(first)
+    key = first._sagevdb_persistence.root.name
+    request = first._catalog.request_indexing(1, projection_key=key)
+    other_request = other._catalog.request_indexing(
+        1, projection_key=other._sagevdb_persistence.root.name)
+    try:
+        other.start_background_indexing()
+        other._catalog.wait_indexing(other_request, timeout=5)
+        other.close()
+        pending = first._catalog.journal.read(request)["tasks"]["knowledge_index"]
+        assert pending["attempt"] == 0 and pending["status"] == "pending"
+        first.start_background_indexing()
+        done = first._catalog.wait_indexing(request, timeout=5)
+        assert done["tasks"]["knowledge_index"]["result"]["projection_key"] == key
+        assert first._sagevdb_persistence.source_revision == 1
+    finally:
+        other.close()
+        first.close()
+
+
+def test_active_native_writer_tags_atomic_intent_with_projection_identity(tmp_path):
+    store = store_at(tmp_path)
+    try:
+        store.start_background_indexing()
+        add(store)
+        request = operations(store)[0]
+        payload = store._catalog.journal.read(request)["tasks"]["knowledge_index"]["payload"]
+        assert payload["projection_key"] == store._sagevdb_persistence.root.name
+        assert payload["revision"] == store._catalog.snapshot()[0] == 1
+        with pytest.raises(RuntimeError, match="changed_restart_required"):
+            store._catalog.start_indexing(lambda revision: revision, projection_key="wrong")
+        with pytest.raises(ValueError, match="not_committed"):
+            store._catalog.request_indexing(2, projection_key=payload["projection_key"])
+    finally:
+        store.close()
 
 
 def test_failed_projection_is_not_acknowledged_and_recovers_on_restart(tmp_path, monkeypatch):

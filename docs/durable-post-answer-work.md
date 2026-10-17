@@ -67,7 +67,16 @@ When another worker has already published a sufficiently new native generation,
 the caller now refreshes its process-local handle directly from that generation;
 it does not invoke embedding or reconstruct the index. Missing, behind or damaged
 generations do not count as fresh. Explicit task targeting for different projection
-configurations and replacing the remaining foreground build path are still pending.
+configurations now uses SAGE's pre-claim selector: an active native writer records
+the configuration fingerprint with its atomic intent, and only a matching worker
+may lease it. Results identify the actual projection. Unmatched tasks remain
+pending with no lease/attempt churn. A refresh request can be durably admitted
+without editing canonical data; requesting an uncommitted revision is rejected.
+Legacy/standalone intents without a fingerprint remain generic recovery work,
+not proof of any particular configuration's freshness. All consumers sharing a
+journal must be upgraded before targeted producers are deployed; an older worker
+without selection must not run concurrently against that journal. Replacing the
+remaining foreground build path with unlocked targeted waits is still pending.
 Native SageVDB projections now use canonical revisions
 and an isolated `canonical-v1/<configuration-sha256>/` generation root. Backend,
 embedding model/dimension, retrieval format, source namespace and a hash of the

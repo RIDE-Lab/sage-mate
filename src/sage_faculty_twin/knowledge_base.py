@@ -362,7 +362,12 @@ class LocalKnowledgeStore:
                     store._rebuild_backend_indexes()
                 return store._indexed_catalog_revision
 
-        self._catalog.start_indexing(project)
+        projection_key = (
+            self._sagevdb_persistence.root.name
+            if self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+            else None
+        )
+        self._catalog.start_indexing(project, projection_key=projection_key)
 
     def close(self, *, timeout=30):
         self._catalog.close(timeout=timeout)

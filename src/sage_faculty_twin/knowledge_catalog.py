@@ -37,13 +37,14 @@ class KnowledgeCatalog:
         self._finalizer = weakref.finalize(self, _retire_resources, self.state, self._services)
         self._lifecycle_lock = threading.RLock()
         self._index_service = None
+        self._projection_key = None
         self._closed = False
         self._closing = False
         self.catalog = VersionedDocumentCatalog(self.state, namespace=namespace)
         self.journal = WorkJournal(self.state, namespace=f"knowledge-index:{namespace}")
         self._imports_slot = ("twin-knowledge-import-v1", namespace, "files")
 
-    def start_indexing(self, project):
+    def start_indexing(self, project, *, projection_key=None):
         """Recover admitted intents using SAGE's bounded worker lifecycle.
 
         project receives the minimum required revision and returns the actual
@@ -52,13 +53,25 @@ class KnowledgeCatalog:
         """
         with self._lifecycle_lock:
             self._assert_open()
+            if projection_key is not None and (
+                    not isinstance(projection_key, str) or not projection_key
+                    or projection_key != projection_key.strip()):
+                raise ValueError("invalid_knowledge_projection_key")
+            if self._index_service is not None and projection_key != self._projection_key:
+                raise RuntimeError("knowledge_projection_changed_restart_required")
             if self._index_service is None:
                 namespace = self.catalog.namespace
+                self._projection_key = projection_key
+
+                def accepts(task_id, payload):
+                    return (isinstance(payload, dict)
+                            and payload.get("projection_key") in (None, projection_key))
 
                 def handle(lease):
                     payload = lease.payload
                     if (lease.task_id != "knowledge_index" or not isinstance(payload, dict)
-                            or payload.get("namespace") != namespace):
+                            or payload.get("namespace") != namespace
+                            or not accepts(lease.task_id, payload)):
                         raise ValueError("invalid_knowledge_index_task")
                     required = payload.get("revision")
                     if type(required) is not int or required < 0:
@@ -66,10 +79,14 @@ class KnowledgeCatalog:
                     actual = project(required)
                     if type(actual) is not int or actual < required:
                         raise ValueError("knowledge_index_revision_not_reached")
-                    return {"namespace": namespace, "revision": actual}
+                    result = {"namespace": namespace, "revision": actual}
+                    if projection_key is not None:
+                        result["projection_key"] = projection_key
+                    return result
 
                 self._index_service = WorkService(
                     self.journal, handle, max_workers=1, poll_interval=0.05,
+                    accept_task=accepts,
                 )
                 self._services.append(self._index_service)
             self._index_service.start()
@@ -78,6 +95,24 @@ class KnowledgeCatalog:
         if self._index_service is None:
             raise RuntimeError("knowledge_index_service_not_started")
         return self._index_service.wait(operation_id, timeout=timeout)
+
+    def request_indexing(self, revision, *, projection_key):
+        """Admit a refresh intent without editing canonical documents."""
+        with self._lifecycle_lock:
+            self._assert_open()
+            if (not isinstance(projection_key, str) or not projection_key
+                    or projection_key != projection_key.strip()):
+                raise ValueError("invalid_knowledge_projection_key")
+            if type(revision) is not int or revision < 0:
+                raise ValueError("invalid_knowledge_index_revision")
+            if revision > self.snapshot()[0]:
+                raise ValueError("knowledge_index_revision_not_committed")
+            request_id = str(uuid4())
+            admission = self._index_service or self.journal
+            admission.commit(request_id, result={"revision": revision}, tasks={
+                "knowledge_index": {"namespace": self.catalog.namespace,
+                                    "revision": revision, "projection_key": projection_key}})
+            return request_id
 
     def close(self, *, timeout=30):
         # Never hold the lifecycle lock while draining: an active projector may
@@ -132,9 +167,11 @@ class KnowledgeCatalog:
         mutations = dict(extra_mutations or {})
         mutations[slot] = transform
         admission = self._index_service or self.journal
+        payload = {"namespace": self.catalog.namespace, "revision": expected_revision + 1}
+        if self._projection_key is not None:
+            payload["projection_key"] = self._projection_key
         admission.commit(operation_id, result={"revision": expected_revision + 1},
-                            tasks={"knowledge_index": {"namespace": self.catalog.namespace,
-                                                       "revision": expected_revision + 1}},
+                            tasks={"knowledge_index": payload},
                             mutations=mutations)
         return operation_id
 
