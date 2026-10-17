@@ -4795,7 +4795,8 @@ class FacultyTwinWorkflowSupport:
             token_usage=self._build_token_usage(),
         )
 
-    def _evaluate_memory_usefulness(self, context: ChatWorkflowContext) -> tuple[str, str]:
+    def _evaluate_memory_usefulness(self, context: ChatWorkflowContext, *,
+                                    evaluated_at: datetime | None = None) -> tuple[str, str]:
         memory_hits = context.memory_hits
         knowledge_hits = context.knowledge_hits
         recent_session_attached = bool(context.recent_session_context.strip())
@@ -4806,7 +4807,7 @@ class FacultyTwinWorkflowSupport:
             top_memory_score = max(top_memory_score, 2.0)
         latest_memory_at = max((hit.created_at for hit in memory_hits), default=None)
         latest_memory_age_days = (
-            max(0, int((datetime.now(UTC) - latest_memory_at).total_seconds() // 86400))
+            max(0, int(((evaluated_at or datetime.now(UTC)) - latest_memory_at).total_seconds() // 86400))
             if latest_memory_at is not None
             else None
         )
