@@ -32,27 +32,24 @@ dependencies = [
   "uvicorn>=0.30.0,<1.0.0",
   "cloudpickle>=2.2",
   "tavily-python>=0.5.0",
-  "isage>=0.3.2.4",
+  "isage @ git+https://github.com/RIDE-Lab/SAGE.git@5d372702dd196995d87d966a455a98b604eb5d34",
+  "isage-neuromem>=0.2.1.12,<0.2.2",
   "isage-anns>=0.2.0",
 ]
 
 [project.optional-dependencies]
 sage-stack = [
-  "isage>=0.3.2.4",
   "isage-neuromem>=0.2.1.12",
 ]
 neuromem = [
-  "isage>=0.3.2.4",
   "isage-neuromem>=0.2.1.12",
 ]
 vdb = [
-  "isage>=0.3.2.4",
   "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
   "numpy>=1.24.0",
   "sentence-transformers>=3.0.0",
 ]
 vdb-anns = [
-  "isage>=0.3.2.4",
   "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@7f0368b0c6923e8cab0b2d3ee2c46f9e9e02ab7a",
   "isage-anns>=0.2.0",
   "numpy>=1.24.0",

@@ -112,6 +112,7 @@ jobs:
           test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/workflow_policies/faculty-default-2026-05.json"
           test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/workflow_scenarios/v3_preview_scenarios.json"
           test -f "$FACULTY_TWIN_PARENT_DIR/sage-mate-runtime-private/data/capability_plugins/course_advising.json"
+          "$FACULTY_TWIN_VENV/bin/python" -c 'from sage.runtime.cancellation import RequestCancellation; from sage.runtime.work_dispatcher import WorkDispatcher; from sage.runtime.work_journal import WorkJournal; from sage.neuromem import MemoryEntry'
 
   validate-linux-ascend:
     # GitHub-hosted runners do not have Ascend NPUs. Keep this job hardware

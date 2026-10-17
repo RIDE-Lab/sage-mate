@@ -628,6 +628,10 @@ else
 		log "Installing sage-mate (editable, with vdb-anns extras)"
 	fi
 	run_with_optional_timeout "$python_bin" -m pip install --quiet --upgrade pip "setuptools>=77.0.3,<81.0.0" wheel scikit-build-core pybind11
+	# A VCS revision can change without changing the distribution version. pip
+	# otherwise keeps an older same-version runtime in an existing environment.
+	sage_runtime_requirement="$("$python_bin" -c 'import sys, tomllib; print(next(value for value in tomllib.load(open(sys.argv[1], "rb"))["project"]["dependencies"] if value.startswith("isage @ ")))' "$repo_root/pyproject.toml")"
+	run_with_optional_timeout "$python_bin" -m pip install --quiet --no-deps --force-reinstall "$sage_runtime_requirement"
 	if $mode_skip_vdb_extras; then
 		run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root"
 	elif ! run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root[vdb-anns]"; then
@@ -636,6 +640,7 @@ else
 		run_with_optional_timeout "$python_bin" -m pip install --quiet --no-build-isolation -e "$repo_root"
 	fi
 	ensure_neuromem_collection_runtime "$repo_root" "$python_bin"
+	"$python_bin" -c 'from sage.runtime.cancellation import RequestCancellation; from sage.runtime.work_dispatcher import WorkDispatcher; from sage.runtime.work_journal import WorkJournal'
 
 	if [[ -d "$parent_dir/sageVDB" ]]; then
 		log "Repairing sageVDB native extension wiring"
