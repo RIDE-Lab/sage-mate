@@ -1,4 +1,5 @@
 from sage_faculty_twin.models import ChatRequest
+import asyncio
 from sage_faculty_twin.service import DigitalTwinService
 
 
@@ -23,20 +24,21 @@ def test_fast_answer_persists_exchange_for_follow_up(tmp_path) -> None:
 
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     request = ChatRequest(student_name="guest", question="你好", deep_thinking=False)
-    response = service.try_fast_answer(request)
-    assert response is not None
-
-    persisted = service.persist_fast_answer(request, response)
+    persisted = asyncio.run(service.answer(request))
     assert persisted.exchange_id
-    assert persisted.conversation_id == response.conversation_id
+    assert persisted.conversation_id
     record = service._conversation_store.get_record(persisted.exchange_id)
     assert record is not None
     assert record.question == "你好"
     assert persisted.memory_write_back is True
-    assert len(persisted.workflow_trace) == 4
-    assert persisted.token_usage is not None
-    assert response.used_model == "sage-fast-path"
-    assert "课题组" in response.answer
+    keys = [step.key for step in persisted.workflow_trace]
+    assert "memory_persist" in keys
+    assert "response_render" in keys
+    assert next(step for step in persisted.workflow_trace if step.key == "llm_answer").status == "skipped"
+    assert "interaction_understand" in keys
+    assert persisted.used_model == "sage-fast-path"
+    assert persisted.token_usage is None  # No model invocation, no fabricated usage.
+    assert "课题组" in persisted.answer
 
 
 def test_light_request_skips_shadow_only_for_low_risk_questions() -> None:

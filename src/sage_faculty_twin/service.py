@@ -1062,6 +1062,7 @@ class ChatWorkflowContext:
     added_knowledge_record: KnowledgeDocumentRecord | None = None
     follow_up_actions: list[FollowUpAction] = field(default_factory=list)
     persisted_memory_record: ConversationMemoryRecord | None = None
+    prepared_memory_record: ConversationMemoryRecord | None = None
     persisted_artifact_drafts: list[ArtifactMemoryDraftRecord] = field(default_factory=list)
     planner_decision: PlannerDecision | None = None
     shadow_planner_decision: PlannerDecision | None = None
@@ -1316,6 +1317,23 @@ class FacultyTwinWorkflowSupport:
 
     def understand_interaction(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
+        greeting = DigitalTwinService._build_lightweight_chat_response(context.request)
+        if greeting is not None:
+            intent = InteractionIntent(action="answer", domain="general",
+                                       decision_mode="direct_answer", confidence=1.0)
+            context.interaction_intent = intent
+            context.interaction_decision = InteractionDecision(intent=intent, source="deterministic")
+            context.answer = greeting.answer
+            context.used_model = greeting.used_model
+            context.decision_mode = greeting.decision_mode
+            context.route = "done"
+            self._append_trace(
+                context, key="interaction_understand", title="理解用户意图",
+                summary="已识别问候或功能介绍请求。",
+                detail="使用确定性回答，继续统一记忆提交与交付流程，不调用模型。",
+                duration_ms=self._elapsed_ms(started_at),
+            )
+            return context
         direct_session_answer = self._build_recent_session_meta_answer(context.request)
         if direct_session_answer is not None:
             direct_intent = InteractionIntent(
@@ -2514,7 +2532,7 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
-        context.persisted_memory_record = self._conversation_store.add_exchange(
+        context.prepared_memory_record = context.prepared_memory_record or self._conversation_store.prepare_exchange(
             context.request,
             conversation_id=context.conversation_id,
             answer=context.answer,
@@ -2527,6 +2545,9 @@ class FacultyTwinWorkflowSupport:
             knowledge_hit_count=len(context.knowledge_hits),
             booking_result=context.booking_result,
             web_search_hits=context.web_search_hits,
+        )
+        context.persisted_memory_record = self._conversation_store.persist_exchange(
+            context.prepared_memory_record
         )
         self._record_artifact_memory_draft(context, started_at=started_at)
         # Trigger rolling conversation digest update (V4.1 context compression).
@@ -9395,10 +9416,6 @@ class DigitalTwinService:
         if self._settings.app_profile == "auto_scientist":
             return await self._answer_auto_scientist(request)
 
-        fast_response = self._build_lightweight_chat_response(request)
-        if fast_response is not None:
-            return fast_response
-
         fact_response = self._build_lightweight_fact_response(request)
         if fact_response is not None:
             return fact_response
@@ -9795,68 +9812,6 @@ class DigitalTwinService:
         ]
         return all(term in question for term in match_all) and (
             not match_any or any(term in question for term in match_any)
-        )
-
-    def persist_fast_answer(
-        self, request: ChatRequest, response: ChatResponse
-    ) -> ChatResponse:
-        """Persist a deterministic answer before returning it to the client.
-
-        Fast-path responses bypass the workflow DAG, so they do not pass
-        through ``persist_memory``.  Keeping this boundary explicit ensures a
-        subsequent short follow-up can retrieve the same conversation turn
-        without paying for an unnecessary model call.
-        """
-        if response.exchange_id:
-            return response
-        conversation_id = response.conversation_id or request.conversation_id or str(uuid4())
-        prior_records = self._conversation_store.list_recent_conversation_records(
-            conversation_id,
-            exclude_question=request.question,
-            limit=4,
-        )
-        record = self._conversation_store.add_exchange(
-            request,
-            conversation_id=conversation_id,
-            answer=response.answer,
-            workflow_action=response.workflow_action,
-            interaction_domain=None,
-            knowledge_hit_count=len(response.knowledge_hits),
-            booking_result=response.booking_result,
-            web_search_hits=response.web_search_hits,
-        )
-        trace = [
-            WorkflowTraceStep(
-                key="bootstrap", title="接收用户请求", summary="已建立当前会话。",
-                detail="快捷路径已接收请求，未启动完整模型工作流。", status="completed",
-            ),
-            WorkflowTraceStep(
-                key="memory_retrieve", title="找上下文",
-                summary=(f"复用了最近 {len(prior_records)} 条会话记录。" if prior_records else "本轮无历史会话上下文。"),
-                detail=("快捷路径读取了同一会话的历史主题，用于解析追问。" if prior_records else "本轮不需要历史会话上下文。"),
-                status="completed",
-            ),
-            WorkflowTraceStep(
-                key="knowledge_retrieve", title="知识检索",
-                summary=f"命中本地 {len(response.knowledge_hits)} 条公开资料。",
-                detail="快捷证据路径直接使用本地知识库，未调用模型。", status="completed",
-                parallel_group="retrieval",
-            ),
-            WorkflowTraceStep(
-                key="response_render", title="返回结果", summary="已返回快捷路径结果。",
-                detail="回答已通过统一交付边界并写入会话记忆。", status="completed",
-            ),
-        ]
-        max_context = int(getattr(self._llm_client, "model_max_len", 0) or 0)
-        return response.model_copy(
-            update={
-                "conversation_id": conversation_id,
-                "exchange_id": record.memory_id,
-                "memory_write_back": True,
-                "memory_used": bool(prior_records),
-                "workflow_trace": trace,
-                "token_usage": TokenUsage(max_context_length=max_context),
-            }
         )
 
     def _build_lightweight_fact_response(self, request: ChatRequest) -> ChatResponse | None:

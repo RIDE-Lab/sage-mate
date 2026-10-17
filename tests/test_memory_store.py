@@ -17,6 +17,29 @@ from sage_faculty_twin.memory_store import (
 from sage_faculty_twin.models import ChatRequest
 
 
+def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tmp_path):
+    settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
+                           conversation_memory_index_type="segment")
+    store = NeuroMemConversationStore(settings)
+    request = ChatRequest(student_name="Alice", question="research question")
+    prepared = store.prepare_exchange(
+        request, conversation_id="stable-turn", answer="complete answer",
+        workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
+        booking_result=None,
+    )
+    assert store.list_recent_conversation_records("stable-turn") == []
+    serialized = json.loads(json.dumps(prepared.to_dict()))
+    restored = ConversationMemoryRecord.from_dict(serialized)
+    result = store.persist_exchange(restored)
+    assert result.to_dict() == serialized
+    reloaded = NeuroMemConversationStore(settings)
+    assert reloaded.list_recent_conversation_records("stable-turn")[0].to_dict() == serialized
+    restored.answer = "conflicting answer"
+    with pytest.raises(ValueError, match="identity_conflict"):
+        reloaded.persist_exchange(restored)
+    assert reloaded.list_recent_conversation_records("stable-turn")[0].answer == "complete answer"
+
+
 def test_store_persists_neuromem_collections_without_records_or_profiles_dirs(
     tmp_path: Path,
 ) -> None:

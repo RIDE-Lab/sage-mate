@@ -79,7 +79,7 @@ def test_required_memory_failure_prevents_success_and_background_work(tmp_path, 
     def fail(*args, **kwargs):
         raise OSError("injected memory persistence failure")
 
-    monkeypatch.setattr(service._conversation_store, "add_exchange", fail)
+    monkeypatch.setattr(service._conversation_store, "persist_exchange", fail)
     monkeypatch.setattr(service, "_run_post_answer_inline_blocking",
                         lambda *args, **kwargs: post_answer.append(True))
 

@@ -489,8 +489,21 @@ class NeuroMemConversationStore:
         booking_result: BookingResponse | None,
         web_search_hits: list[WebSearchHit] | None = None,
     ) -> ConversationMemoryRecord:
-        started_at = time.time()
-        record = ConversationMemoryRecord(
+        return self.persist_exchange(self.prepare_exchange(
+            request, conversation_id=conversation_id, answer=answer,
+            workflow_action=workflow_action, interaction_domain=interaction_domain,
+            knowledge_hit_count=knowledge_hit_count, booking_result=booking_result,
+            web_search_hits=web_search_hits,
+        ))
+
+    def prepare_exchange(
+        self, request: ChatRequest, *, conversation_id: str, answer: str,
+        workflow_action: str, interaction_domain: str | None,
+        knowledge_hit_count: int, booking_result: BookingResponse | None,
+        web_search_hits: list[WebSearchHit] | None = None,
+    ) -> ConversationMemoryRecord:
+        """Prepare once, then serialize this record into the durable task input."""
+        return ConversationMemoryRecord(
             memory_id=str(uuid4()),
             conversation_id=conversation_id,
             student_name=request.student_name,
@@ -506,6 +519,18 @@ class NeuroMemConversationStore:
             attachments=self._extract_attachment_records(request.attachments),
             web_search_hits=[hit.model_copy(deep=True) for hit in (web_search_hits or [])],
         )
+
+    def persist_exchange(self, record: ConversationMemoryRecord) -> ConversationMemoryRecord:
+        """Persist the supplied identity/time, never regenerate them during replay.
+
+        Stable input is a prerequisite, not a claim of exactly-once collection
+        updates. Destination transaction/receipt ownership belongs to NeuroMem.
+        """
+        started_at = time.time()
+        record = ConversationMemoryRecord.from_dict(record.to_dict())
+        existing = self._records.get(record.memory_id)
+        if existing is not None and existing.to_dict() != record.to_dict():
+            raise ValueError("conversation_memory_identity_conflict")
         self._records[record.memory_id] = record
         self._prepend_conversation_timeline(record)
         self._store_conversation_entry(record)
@@ -515,10 +540,10 @@ class NeuroMemConversationStore:
             collection_name=self._conversation_collection.name,
             duration_ms=(time.time() - started_at) * 1000.0,
             attributes={
-                "conversation_id": conversation_id,
+                "conversation_id": record.conversation_id,
                 "memory_id": record.memory_id,
-                "workflow_action": workflow_action,
-                "student_email_present": bool(request.student_email),
+                "workflow_action": record.workflow_action,
+                "student_email_present": bool(record.student_email),
             },
         )
         return record
