@@ -16,7 +16,6 @@ from fastapi.testclient import TestClient
 
 from sage_faculty_twin import api as api_module
 from sage_faculty_twin.api import app, service
-from sage_faculty_twin.request_context import RequestCancellationController
 from sage_faculty_twin.models import ChatResponse
 
 client = TestClient(app)
@@ -313,17 +312,31 @@ def test_greeting_uses_unified_workflow_and_exposes_request_boundary_timing(tmp_
     assert any(step["key"] == "memory_persist" for step in response.json()["workflow_trace"])
 
 
-def test_explicit_cancel_endpoint_interrupts_registered_request(monkeypatch) -> None:
-    from sage_faculty_twin.chat_identity import ChatIdentity
-    monkeypatch.setattr(api_module, "_resolve_chat_identity", lambda *args: ChatIdentity("anonymous", "cancel-owner", None))
+def test_explicit_cancel_endpoint_interrupts_durable_request(monkeypatch) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
+    token, guest = service._guest_identity_store.issue()
+    client.cookies.set(GUEST_COOKIE_NAME, token)
     request_id = "cancel-endpoint-test"
-    controller = RequestCancellationController()
-    key = api_module._owned_chat_request_key("guest:cancel-owner", request_id)
-    api_module.active_chat_request_registry.register(key, controller)
-
-    response = client.post("/chat/cancel", params={"request_id": request_id})
-
-    assert response.status_code == 200
-    assert response.json() == {"request_id": request_id, "cancelled": True}
-    assert controller.is_cancelled()
-    assert api_module.active_chat_request_registry.cancel(key) is False
+    entered, interrupted = Event(), Event()
+    async def answer(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            interrupted.set()
+    monkeypatch.setattr(service, "answer", answer)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(client.post, "/chat", params={"request_id": request_id},
+                              json={"student_name": "Guest", "question": "cancel me"})
+        assert entered.wait(3)
+        response = client.post("/chat/cancel", params={"request_id": request_id})
+        assert response.status_code == 200
+        assert response.json() == {"request_id": request_id, "cancelled": True}
+        assert interrupted.wait(3)
+        assert pending.result(timeout=3).status_code == 499
+    key = api_module._owned_chat_request_key(f"guest:{guest.subject_id}", request_id)
+    task = api_module.http_workflow.journal.read(key)["tasks"]["answer"]
+    assert task["status"] == "failed" and task["failure_code"] == "request_cancelled"
+    assert client.post("/chat/cancel", params={"request_id": request_id}).json()["cancelled"] is False

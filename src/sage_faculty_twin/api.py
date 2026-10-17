@@ -331,43 +331,6 @@ def _owned_chat_request_key(owner_id: str, request_id: str) -> str:
     return hashlib.sha256(json.dumps([owner_id, request_id], separators=(",", ":")).encode()).hexdigest()
 
 
-class ActiveChatRequestRegistry:
-    """Maps public request IDs to the controller that owns downstream work."""
-
-    def __init__(self) -> None:
-        self._lock = threading.Lock()
-        self._controllers: dict[str, RequestCancellationController] = {}
-
-    def register(self, request_id: str, controller: RequestCancellationController) -> None:
-        with self._lock:
-            previous = self._controllers.get(request_id)
-            self._controllers[request_id] = controller
-        if previous is not None and previous is not controller:
-            previous.cancel()
-
-    def unregister(
-        self,
-        request_id: str,
-        controller: RequestCancellationController,
-    ) -> None:
-        with self._lock:
-            if self._controllers.get(request_id) is controller:
-                self._controllers.pop(request_id, None)
-
-    def cancel(self, request_id: str) -> bool:
-        with self._lock:
-            controller = self._controllers.pop(request_id, None)
-        if controller is None:
-            return False
-        controller.cancel()
-        return True
-
-
-active_chat_request_registry = ActiveChatRequestRegistry()
-
-
-
-
 workflow_event_broker = WorkflowEventBroker(
     lambda: service._conversation_store.state_store,
     heartbeat_provider=lambda: CHAT_SSE_KEEPALIVE_SECONDS,
@@ -405,7 +368,6 @@ def _create_http_workflow(instance):
                   and ingress.request.deep_thinking_explicit else CHAT_REQUEST_TIMEOUT_SECONDS)
         controller = RequestCancellationController()
         key = ingress.delivery.stream_id
-        active_chat_request_registry.register(key, controller)
         try:
             with request_cancellation_scope(controller, deadline_at=time.monotonic() + budget):
                 # Native SAGE worker capacity owns queueing. This budget starts
@@ -435,8 +397,6 @@ def _create_http_workflow(instance):
         except BaseException:
             controller.cancel()
             raise
-        finally:
-            active_chat_request_registry.unregister(key, controller)
 
     return HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer,
                         max_workers=CHAT_MAX_INFLIGHT_REQUESTS)
@@ -1700,9 +1660,11 @@ async def cancel_chat_request(
     request_id: str = Query(min_length=1, max_length=128),
 ) -> dict[str, bool | str]:
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
-    cancelled = active_chat_request_registry.cancel(_owned_chat_request_key(identity.owner_id, request_id))
+    if http_workflow is None:
+        raise HTTPException(status_code=503, detail="工作流尚未就绪，请稍后重试。")
+    outcome = await http_workflow.cancel(owner_id=identity.owner_id, request_id=request_id)
     _deliver_guest_cookie(raw_request, response)
-    return {"request_id": request_id, "cancelled": cancelled}
+    return {"request_id": request_id, "cancelled": outcome == "cancelled"}
 
 
 def _slack_conversation_owner(team_id: str, user_id: str, channel_id: str) -> str:
