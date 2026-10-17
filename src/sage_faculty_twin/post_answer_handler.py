@@ -38,7 +38,7 @@ class PostAnswerHandler:
             task = DigestWorkTask.model_validate(lease.payload)
             if lease.request_id != task.request_id:
                 raise ValueError("digest_lease_identity_conflict")
-            return self._digest(task.conversation_id, task.intent)
+            return self._digest(task.conversation_id, task.intent, task.owner_id)
         task = PostAnswerTask.model_validate(lease.payload)
         if lease.task_id != "post_answer" or lease.request_id != task.request_id:
             raise ValueError("post_answer_lease_identity_conflict")
@@ -105,7 +105,7 @@ class PostAnswerHandler:
 
         digest_result = None
         if task.digest is not None:
-            digest_result = self._digest(task.record.conversation_id, task.digest)
+            digest_result = self._digest(task.record.conversation_id, task.digest, task.record.owner_id)
             changed = digest_result.get("turns_incorporated", 0)
             trace("context_digest", "整理会话上下文",
                   f"已纳入 {changed} 轮来源。" if changed else "暂无需要纳入的新来源。",
@@ -122,10 +122,10 @@ class PostAnswerHandler:
                 "digest": digest_result,
                 "memory_usefulness": {"signal": signal, "reason": reason}}
 
-    def _digest(self, conversation_id, intent):
+    def _digest(self, conversation_id, intent, owner_id):
         if self._refresh_digest is None:
             raise RuntimeError("digest_destination_unavailable")
-        result = self._refresh_digest(conversation_id, intent)
+        result = self._refresh_digest(conversation_id, intent, owner_id=owner_id)
         if not result.get("ok"):
             # Failure is not task completion. Persisted intent remains retryable.
             raise RuntimeError("digest_refresh_incomplete")

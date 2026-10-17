@@ -1,5 +1,6 @@
 """Exercise real publication and service paths, not copied arithmetic."""
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from types import SimpleNamespace
@@ -49,6 +50,31 @@ def refresh(support, *, threshold=1):
 def test_record_round_trip():
     original = ConversationDigestRecord("one", "text", 3, datetime.now(UTC), revision=2)
     assert ConversationDigestRecord.from_dict(original.to_dict()) == original
+
+
+def test_digest_sources_plans_and_restart_are_owner_scoped(support, tmp_path):
+    owners = ("account:a", "account:b", None)
+    for index, owner in enumerate(owners):
+        source = replace(record(index, answer=f"private-{index}"), owner_id=owner)
+        add(support, source)
+        result = support._refresh_conversation_digest("conversation", threshold=1, owner_id=owner)
+        assert result["turns_incorporated"] == 1
+    reopened = ConversationDigestStore(tmp_path / "digests")
+    try:
+        for index, owner in enumerate(owners):
+            saved = reopened.get_digest("conversation", owner_id=owner)
+            assert saved.turns_summarized == 1
+            assert f"private-{index}" in saved.digest_text
+            assert all(f"private-{other}" not in saved.digest_text for other in range(3) if other != index)
+        source = replace(record(4), owner_id="account:a")
+        with pytest.raises(ValueError, match="digest_owner_mismatch"):
+            reopened.prepare("conversation", [source], owner_id="account:b")
+        plan = reopened.prepare("conversation", [replace(record(0, answer="private-0"), owner_id="account:a"), source], owner_id="account:a")
+        with pytest.raises(ValueError):
+            reopened.commit("conversation", plan, "wrong owner publication", owner_id="account:b")
+        assert reopened.get_digest("conversation", owner_id="account:b").turns_summarized == 1
+    finally:
+        reopened.close()
 
 
 def test_refresh_threshold_continues_after_64_and_preserves_earliest_answer(support):

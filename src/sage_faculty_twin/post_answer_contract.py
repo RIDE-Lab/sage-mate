@@ -43,6 +43,7 @@ class DigestWorkTask(BaseModel):
     task_kind: Literal["context_digest"] = "context_digest"
     request_id: str = Field(min_length=1)
     conversation_id: str = Field(min_length=1)
+    owner_id: str | None = Field(default=None, pattern=r"^(account|api_token|guest|slack):[A-Za-z0-9_-]{1,128}$")
     intent: DigestIntent
 
     @model_validator(mode="after")
@@ -53,7 +54,7 @@ class DigestWorkTask(BaseModel):
 
     def journal_inputs(self):
         snapshot = type(self).model_validate_json(self.model_dump_json()).model_dump(mode="json")
-        return {"result": {"conversation_id": self.conversation_id},
+        return {"result": {"conversation_id": self.conversation_id, "owner_id": self.owner_id},
                 "tasks": {"context_digest": snapshot}}
 
 

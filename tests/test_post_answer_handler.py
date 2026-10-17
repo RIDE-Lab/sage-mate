@@ -40,7 +40,7 @@ def test_manual_digest_intent_recovers_without_chat_or_profile_work(tmp_path):
     from sage_faculty_twin.post_answer_contract import DigestIntent, DigestWorkTask
     from sage_faculty_twin.post_answer_runtime import PostAnswerRuntime
 
-    task = DigestWorkTask(request_id="digest:manual", conversation_id="conversation",
+    task = DigestWorkTask(request_id="digest:manual", conversation_id="conversation", owner_id="account:recovered",
                           intent=DigestIntent(threshold=1, target_chars=1400, use_llm=False))
     def forbidden(*args):
         raise AssertionError("manual digest must not execute chat/profile/scoring")
@@ -49,7 +49,8 @@ def test_manual_digest_intent_recovers_without_chat_or_profile_work(tmp_path):
     runtime.journal.commit(task.request_id, **task.journal_inputs())
     runtime.close()
     calls = []
-    def refresh(conversation_id, intent):
+    def refresh(conversation_id, intent, *, owner_id):
+        assert owner_id == "account:recovered"
         calls.append((conversation_id, intent.model_dump()))
         return {"ok": True, "turns_incorporated": 3, "mode": "lossless"}
     runtime = PostAnswerRuntime(path, consolidate_profiles=forbidden, score=forbidden,
@@ -79,11 +80,11 @@ def test_digest_failure_after_destination_commit_retries_without_duplicate(tmp_p
     journal = WorkJournal(runtime, namespace="post-answer")
     journal.commit(task.request_id, **task.journal_inputs())
     attempts = []
-    def refresh(conversation_id, intent):
+    def refresh(conversation_id, intent, *, owner_id):
         attempts.append(intent.model_dump())
-        plan = store.prepare(conversation_id, [task.record])
+        plan = store.prepare(conversation_id, [task.record], owner_id=owner_id)
         if plan.sources:
-            store.commit(conversation_id, plan, task.record.answer)
+            store.commit(conversation_id, plan, task.record.answer, owner_id=owner_id)
         if len(attempts) == 1:
             return {"ok": False, "error": "uncertain acknowledgement"}
         return {"ok": True, "turns_incorporated": len(plan.sources), "mode": "lossless"}

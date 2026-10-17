@@ -2592,15 +2592,15 @@ class FacultyTwinWorkflowSupport:
 
     def _refresh_conversation_digest(self, conversation_id: str, *, threshold: int,
                                      target_chars: int | None = None,
-                                     use_llm: bool | None = None) -> dict[str, object]:
+                                     use_llm: bool | None = None, owner_id: str | None = None) -> dict[str, object]:
         """Digest projection port; production execution is owned by SAGE work."""
         if use_llm is None:
             use_llm = self._settings.context_digest_llm_enabled
-        records = self._conversation_store.list_conversation_records(conversation_id)
-        plan = self._digest_store.prepare(conversation_id, records)
+        records = self._conversation_store.list_conversation_records(conversation_id, owner_id=owner_id)
+        plan = self._digest_store.prepare(conversation_id, records, owner_id=owner_id)
         pending = plan.sources
         if len(pending) < threshold:
-            existing = self._digest_store.get_digest(conversation_id)
+            existing = self._digest_store.get_digest(conversation_id, owner_id=owner_id)
             return {"ok": True, "turns_compressed": 0,
                     "total_turns": existing.turns_summarized if existing else 0,
                     "digest_chars": len(existing.digest_text) if existing else 0,
@@ -2614,7 +2614,7 @@ class FacultyTwinWorkflowSupport:
         if not text:
             return {"ok": False, "error": "summarization failed"}
         try:
-            receipt = self._digest_store.commit(conversation_id, plan, text)
+            receipt = self._digest_store.commit(conversation_id, plan, text, owner_id=owner_id)
         except ValueError as exc:
             if str(exc) != "stale_digest_plan":
                 raise
@@ -5594,12 +5594,13 @@ class FacultyTwinWorkflowSupport:
         # Prepend the rolling digest (compressed older turns) when available.
         digest_text = ""
         if self._digest_store is not None and self._settings.context_digest_enabled:
-            digest_record = self._digest_store.get_digest(conversation_id)
+            digest_record = self._digest_store.get_digest(conversation_id, owner_id=request.owner_id)
             if digest_record is not None and digest_record.digest_text.strip():
                 digest_text = digest_record.digest_text.strip()
 
         recent_records = self._conversation_store.list_recent_conversation_records(
             conversation_id,
+            owner_id=request.owner_id,
             exclude_question=str(getattr(request, "question", "") or ""),
             limit=limit,
         )
@@ -5634,6 +5635,7 @@ class FacultyTwinWorkflowSupport:
 
         recent_records = self._conversation_store.list_recent_conversation_records(
             conversation_id,
+            owner_id=request.owner_id,
             exclude_question=request.question,
             limit=1,
         )
@@ -11559,13 +11561,14 @@ class DigitalTwinService:
     def stack_versions(self) -> dict[str, str]:
         return build_stack_versions_payload()
 
-    def compress_conversation_context(self, conversation_id: str) -> dict[str, object]:
+    def compress_conversation_context(self, conversation_id: str, *, owner_id: str | None = None) -> dict[str, object]:
         """Commit manual intent before waiting; timeout does not cancel durable work."""
         if not self._settings.context_digest_enabled:
             return {"ok": False, "error": "context compression is disabled"}
         if not conversation_id:
             return {"ok": False, "error": "missing conversation_id"}
         task = DigestWorkTask(request_id=f"digest:{uuid4()}", conversation_id=conversation_id,
+                              owner_id=owner_id,
                               intent=self._digest_intent(threshold=1))
         runtime = self._get_post_answer_runtime()
         runtime.submit(task)
@@ -11581,9 +11584,9 @@ class DigitalTwinService:
             use_llm=self._settings.context_digest_llm_enabled,
         )
 
-    def _refresh_saved_digest(self, conversation_id, intent):
+    def _refresh_saved_digest(self, conversation_id, intent, *, owner_id=None):
         return self._build_support()._refresh_conversation_digest(
-            conversation_id, **intent.model_dump()
+            conversation_id, owner_id=owner_id, **intent.model_dump()
         )
 
     async def aclose(self) -> None:
@@ -11637,11 +11640,11 @@ class DigitalTwinService:
                 # The runtime finalizer must not retain its service through a
                 # bound-method callback and prevent the owner from being collected.
                 owner_ref = weakref.ref(self)
-                def refresh_digest(conversation_id, intent):
+                def refresh_digest(conversation_id, intent, *, owner_id):
                     owner = owner_ref()
                     if owner is None:
                         raise RuntimeError("digest_owner_unavailable")
-                    return owner._refresh_saved_digest(conversation_id, intent)
+                    return owner._refresh_saved_digest(conversation_id, intent, owner_id=owner_id)
                 self._post_answer_runtime = PostAnswerRuntime(
                     state=self._conversation_store.state_store,
                     consolidate_profiles=self._conversation_store.consolidate_profiles,
@@ -11919,7 +11922,8 @@ class DigitalTwinService:
                         or support._is_remembered_value_command(context.request.question)
                         or support._detect_recent_session_meta_query(context.request.question) == "remembered_value")
         profiles = self._conversation_store.list_profiles_for_student(
-            student_name=context.request.student_name, student_email=context.request.student_email, limit=10
+            student_name=context.request.student_name, student_email=context.request.student_email,
+            owner_id=context.request.owner_id, limit=10
         )
         if not skip_profile:
             profiles += self._conversation_store._derive_profiles(context.prepared_memory_record)

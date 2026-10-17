@@ -125,6 +125,47 @@ class _FastLLMClient:
         return self._answer
 
 
+def test_owned_answer_keeps_memory_profiles_recent_context_and_digest_together(tmp_path):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path,
+        context_digest_dir=tmp_path / "digests",
+        context_digest_enabled=True, context_digest_turn_threshold=2, context_digest_llm_enabled=False))
+    service._llm_client = _FastLLMClient("当前用户的回答")
+    for index, owner in enumerate(("account:a", "account:b", None)):
+        probe = ChatRequest(owner_id=owner, student_name="Same", student_email="same@example.com",
+                            question=f"private source {index}", conversation_id="shared-id")
+        record = service._conversation_store.prepare_exchange(probe, conversation_id="shared-id",
+            answer=f"private answer {index}", workflow_action="answer", interaction_domain=None,
+            knowledge_hit_count=0, booking_result=None)
+        service._conversation_store.persist_exchange(record)
+        service._conversation_store.consolidate_profiles(record)
+        service.compress_conversation_context("shared-id", owner_id=owner)
+    probe = ChatRequest(owner_id="account:a", student_name="Same", student_email="same@example.com",
+                        question="给我一些下一步建议。", conversation_id="shared-id")
+    pending = service._conversation_store.prepare_exchange(
+        probe.model_copy(update={"question": "another private source"}), conversation_id="shared-id",
+        answer="another private answer", workflow_action="answer", interaction_domain=None,
+        knowledge_hit_count=0, booking_result=None)
+    service._conversation_store.persist_exchange(pending)
+    async def driver():
+        try:
+            context = service._build_support()._format_recent_session_context(probe)
+            assert "private source 0" in context
+            assert "private source 1" not in context and "private source 2" not in context
+            response = await service.answer(probe)
+            state = service._get_post_answer_runtime().journal.read(response.exchange_id)
+            payload = state["tasks"]["post_answer"]["payload"]
+            assert payload["record"]["owner_id"] == "account:a"
+            assert payload["profile_snapshot"]
+            assert all(p["owner_id"] == "account:a" for p in payload["profile_snapshot"])
+            saved = service._digest_store.get_digest("shared-id", owner_id="account:a")
+            assert saved.turns_summarized == 3
+            assert "private source 1" not in saved.digest_text and "private source 2" not in saved.digest_text
+            assert service._digest_store.get_digest("shared-id", owner_id="account:b").turns_summarized == 1
+        finally:
+            await service.aclose()
+    asyncio.run(driver())
+
+
 def test_fact_question_uses_unified_execution_and_commit(tmp_path, monkeypatch):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     service._llm_client = _FastLLMClient("当前证据不足以确认，请查看公开 Wiki。")
@@ -471,11 +512,11 @@ def test_digest_is_durable_before_background_generation_finishes(tmp_path):
     gate, started, completed = threading.Event(), threading.Event(), threading.Event()
     original = service._refresh_saved_digest
     traces = []
-    def gated(conversation_id, intent):
+    def gated(conversation_id, intent, *, owner_id):
         started.set()
         if not gate.wait(timeout=5):
             raise TimeoutError("test digest gate")
-        return original(conversation_id, intent)
+        return original(conversation_id, intent, owner_id=owner_id)
     service._refresh_saved_digest = gated
 
     async def driver():
@@ -518,9 +559,9 @@ def test_manual_service_uses_same_journal_worker_and_respects_disabled_mode(tmp_
     caller = threading.get_ident()
     calls = []
     original = service._refresh_saved_digest
-    def observe(conversation_id, intent):
+    def observe(conversation_id, intent, *, owner_id):
         calls.append(threading.get_ident())
-        return original(conversation_id, intent)
+        return original(conversation_id, intent, owner_id=owner_id)
     service._refresh_saved_digest = observe
     try:
         service._settings.context_digest_enabled = False

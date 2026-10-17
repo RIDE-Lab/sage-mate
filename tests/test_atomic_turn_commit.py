@@ -135,9 +135,9 @@ def test_worker_waits_for_local_publication_and_reads_committed_sources(tmp_path
         assert release.wait(5)
         original(record)
     monkeypatch.setattr(memory, "_prepend_conversation_timeline", gated)
-    def read_sources(conversation_id, intent):
+    def read_sources(conversation_id, intent, *, owner_id):
         worker_entered.set()
-        sources = memory.list_conversation_records(conversation_id)
+        sources = memory.list_conversation_records(conversation_id, owner_id=owner_id)
         assert [item.memory_id for item in sources] == [record.memory_id]
         assert memory.list_recent_conversation_records(conversation_id)[0].memory_id == record.memory_id
         worker_finished.set()

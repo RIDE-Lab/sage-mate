@@ -288,11 +288,14 @@ class ConversationDigestStore:
         )
         self._finalizer = weakref.finalize(self, self._state.close)
 
-    def _memory(self, conversation_id: str) -> DurableDigest:
-        return DurableDigest(self._state, namespace="twin-conversation", name=conversation_id)
+    def _memory(self, conversation_id: str, owner_id: str | None = None) -> DurableDigest:
+        _validate_owner_id(owner_id)
+        namespace = ("twin-conversation" if owner_id is None else
+                     "twin-owned-conversation-v1:" + hashlib.sha256(owner_id.encode()).hexdigest())
+        return DurableDigest(self._state, namespace=namespace, name=conversation_id)
 
-    def get_digest(self, conversation_id: str) -> ConversationDigestRecord | None:
-        state = self._memory(conversation_id).load()
+    def get_digest(self, conversation_id: str, *, owner_id: str | None = None) -> ConversationDigestRecord | None:
+        state = self._memory(conversation_id, owner_id).load()
         if not state["revision"]:
             return None
         return ConversationDigestRecord(
@@ -301,20 +304,22 @@ class ConversationDigestStore:
             revision=state["revision"],
         )
 
-    def prepare(self, conversation_id: str, records: list[ConversationMemoryRecord]) -> DigestPlan:
+    def prepare(self, conversation_id: str, records: list[ConversationMemoryRecord], *, owner_id: str | None = None) -> DigestPlan:
         if any(record.conversation_id != conversation_id for record in records):
             raise ValueError("digest_conversation_mismatch")
-        return self._memory(conversation_id).prepare([
+        if any(record.owner_id != owner_id for record in records):
+            raise ValueError("digest_owner_mismatch")
+        return self._memory(conversation_id, owner_id).prepare([
             {"id": record.memory_id, "payload": record.to_dict()} for record in records
         ])
 
-    def commit(self, conversation_id: str, plan: DigestPlan, text: str) -> dict[str, Any]:
+    def commit(self, conversation_id: str, plan: DigestPlan, text: str, *, owner_id: str | None = None) -> dict[str, Any]:
         # A deterministic operation identity allows retrying the exact plan/output
         # after an uncertain acknowledgement, without resetting newer revisions.
         identity = json.dumps([plan.base_fingerprint, plan.sources_json, text],
                               ensure_ascii=False, separators=(",", ":"))
         operation_id = hashlib.sha256(identity.encode()).hexdigest()
-        return self._memory(conversation_id).commit_once(operation_id, plan, text)
+        return self._memory(conversation_id, owner_id).commit_once(operation_id, plan, text)
 
     def close(self) -> None:
         self._finalizer()

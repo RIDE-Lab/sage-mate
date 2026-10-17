@@ -88,6 +88,21 @@ and handle legacy ownership explicitly. Until then, the old unassigned-data
 behavior remains; no end-to-end ownership or deployment claim is made. Do not
 expose journal recovery on this intermediate schema alone.
 
+Owned service requests now propagate their scope through recent-session context,
+meta recall and saved profile snapshots. Digests use a separate owner-derived
+namespace plus the original conversation ID, so identical conversation IDs
+cannot share a source frontier or text across owners. Preparation rejects
+mixed-owner records and publication rejects a plan from another scope. Missing
+ownership stays in the unassigned namespace, never a wildcard.
+
+Both manual digest tasks and automatic post-answer projection carry scope through
+the same durable worker port. A restart does not infer identity from the current
+request, display name or email. Tests exercise same-ID multi-owner publication,
+reopen, rejected cross-owner plans and an actual owned answer with recent context,
+profile capture and automatic digest. Transport activation and owner-bound
+history/events/cancellation remain pending; these internal service tests do not
+establish online isolation.
+
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover
 that saved intent, but client retry identity/resumption is not yet implemented.
