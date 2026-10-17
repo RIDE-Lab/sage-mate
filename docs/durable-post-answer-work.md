@@ -324,6 +324,15 @@ owned operation and resumes status delivery without a POST. It neither persists
 feedback bodies nor maintains another canonical state in browser storage.
 Node tests execute the actual application functions;
 rendered browser and live-service acceptance remain separate.
+
+Isolated Firefox acceptance now covers a real rendered page and button click:
+POST returns saved/pending, the page reloads, the saved answer is reattached,
+owned status polling resumes, and the completed writeback is displayed with
+disabled feedback buttons. Exactly one POST is asserted across reload. The
+fixture retains server state and does not call the live model or knowledge store;
+it explicitly reattaches the saved answer rather than qualifying the entire
+history-loading endpoint. This is browser delivery acceptance, not production
+end-to-end acceptance. The test saves `feedback-recovered.png` for visual review.
 After a lost destination acknowledgement, an upsert may repeat without replacing
 curator edits. `created` describes the acknowledged attempt, not exactly-once
 execution across stores.

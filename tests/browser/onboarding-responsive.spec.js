@@ -11,6 +11,58 @@ const VIEWPORTS = [
   { name: "desktop-1280", width: 1280, height: 800 },
 ];
 
+test("durable feedback survives reload without another POST", async ({ page }, testInfo) => {
+  let submitted = false;
+  let completed = false;
+  let posts = 0;
+  const feedback = { exchange_id: "browser-feedback", rating: "up", resolved: true,
+    needs_human_followup: false, issue_summary: null,
+    knowledge_write_backs: [{ document_id: "document", title: "Public source", created: true }] };
+  await page.route("https://fonts.**", route => route.abort());
+  await page.route("**/chat/feedback**", async route => {
+    if (route.request().method() === "POST") {
+      const payload = route.request().postDataJSON();
+      expect(payload.request_id).toBeTruthy();
+      posts += 1;
+      submitted = true;
+      await route.fulfill({ status: 503, json: { detail: {
+        code: "feedback_knowledge_pending", feedback_saved: true, operation_id: "browser-operation" } } });
+    } else if (!submitted) {
+      await route.fulfill({ status: 404, json: { detail: "not found" } });
+    } else {
+      await route.fulfill({ json: { operation_id: "browser-operation",
+        status: completed ? "completed" : "pending",
+        feedback: { ...feedback, knowledge_write_backs: completed ? feedback.knowledge_write_backs : [] } } });
+    }
+  });
+  const showSavedAnswer = async () => {
+    await page.waitForFunction(() => typeof renderAssistantMessage === "function");
+    await page.evaluate(() => {
+      const article = appendMessage("assistant", "Twin", "公开研究资料回答");
+      renderAssistantMessage(article, "公开研究资料回答", [], [], [], null, false, "browser-feedback", [], false);
+    });
+  };
+  await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+  await showSavedAnswer();
+  const box = page.locator('[data-feedback-exchange="browser-feedback"]');
+  const up = box.locator('[data-feedback-up]');
+  await expect(up).toBeEnabled();
+  await up.click();
+  await expect(box.locator('.message-feedback-status')).toContainText("后台处理中");
+  await expect(up).toBeDisabled();
+  expect(posts).toBe(1);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  // Reattach the saved answer as history rendering does; all client attempt
+  // state was destroyed by reload. The API fixture retains committed work.
+  await showSavedAnswer();
+  await expect(box.locator('.message-feedback-status')).toContainText("后台处理中");
+  completed = true;
+  await expect(box.locator('.message-feedback-status')).toContainText("已沉淀 1 条", { timeout: 7000 });
+  await expect(up).toBeDisabled();
+  expect(posts).toBe(1);
+  await page.screenshot({ path: testInfo.outputPath("feedback-recovered.png"), fullPage: true });
+});
+
 let fixtureServer;
 let fixtureBaseUrl;
 
