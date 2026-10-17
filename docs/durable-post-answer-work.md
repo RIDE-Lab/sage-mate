@@ -2,14 +2,14 @@
 
 ## SageVDB dependency qualification
 
-The base dependency pins `33866799fd1e4503ceffcfd3b3abce8c521d761b`, which
+The base dependency pins `423a1247461b87bd8a77977790c148febcccf6f4`, which
 provides `VersionedDocumentCatalog`, revision-fenced index generations and
-`rebuild_from_catalog` and revision-qualified read-only `refresh`. An exact Git archive was built offline on A100 after
+`rebuild_from_catalog` and revision-qualified read-only `refresh`. Sources matching this revision were built offline on A100 after
 Git transport/DNS prevented network builds; no shared Git/network configuration
 was changed. The CPython 3.11 Linux x86-64 wheel SHA-256 is
-`f0c607cab7830fe5946a805b0e9baa0464d226f8b3e7a1dfa8ec6f0c78098d94`.
+`36d01615497d99a82a3d685dc9ba2e19cd1798418e78e3402f268a2cfd5b2f75`.
 Installed module hashes match the source commit, exports resolve from the scratch
-venv's site-packages, and all 75 catalog/native-persistence/recovery/refresh/snapshot tests passed
+venv's site-packages, and all 76 catalog/native-persistence/recovery/refresh/snapshot tests passed
 without source overlays. That venv exposes system packages, so this is not a
 clean-room dependency-resolution test. The version number remains 0.2.0.12;
 commit and wheel hash, not the version string alone, identify this qualification.
@@ -21,12 +21,18 @@ read-only refresh and canonical recovery. Sage-ANNS supplies `build_snapshot`
 and explicit empty-index persistence. Tests exercise actual `faiss_hnsw`
 search, restart, deletion to empty and repopulation, as well as failure recovery
 and mode conflicts. Whole-snapshot updates truthfully count every re-embedded
-record; revision-only advances do not re-embed unchanged data. This dependency
-qualification does not yet switch Twin's Sage-ANNS caller: removal of its old
-checkpoint adapter and migration to the shared SAGE projector remain required.
+record; revision-only advances do not re-embed unchanged data. Unreadable UTF-8
+generation pointers enter canonical reconstruction instead of indefinitely
+retrying a decoding error. Twin now uses this same lifecycle for Sage-ANNS:
+the application checkpoint module and foreground batch builder are removed.
+Algorithm, INNER_PRODUCT metric and snapshot mode select a separate configuration
+root; old `sage-anns/` checkpoints stay offline and are never a live fallback.
 
-Twin regression against this installed wheel: 1371 passed, 31 existing skips
-(221.17 s), using the existing `test_identity_eval.py` exclusion. A stale
+Twin regression after this caller cutover: 1372 passed, 31 existing skips
+(223.72 s), using the existing `test_identity_eval.py` exclusion. The 47 focused
+projection tests passed without skips, including real Sage-ANNS worker-only
+embedding, canonical tombstone recovery, empty-index restart and configuration
+isolation. A stale
 revision-rejection fixture initially raced with legitimate startup recovery;
 it now inspects the durable receipt through the catalog alone, then separately
 requires successful recovery. Runtime validation was not weakened. These CPU/hash
@@ -93,8 +99,9 @@ damaged indexes are built/repaired by the same targeted SAGE projector, not a
 second startup builder. A truly empty catalog with no index history uses an empty
 read view without publishing a generation or starting a worker. Failed startup
 retires its consumer nonblockingly; committed data and pending work survive,
-while SAGE releases storage only after active acknowledgements finish. Non-native
-projection cutover remains pending.
+while SAGE releases storage only after active acknowledgements finish. These
+contracts now cover native cpp and Sage-ANNS projections. NeuroMem projection
+cutover remains pending.
 When another worker has already published a sufficiently new native generation,
 the caller now refreshes its process-local handle directly from that generation;
 it does not invoke embedding or reconstruct the index. Missing, behind or damaged
@@ -118,7 +125,7 @@ offline and are never an alternate live read path. Open/sync failures invoke
 SageVDB's reconstruction from the current catalog; namespace/regression conflicts
 remain errors, and embedding failures do not publish a successful generation.
 The indexed revision comes from the committed index, not a potentially newer
-document-cache revision. Sage-ANNS/NeuroMem projection scheduling and version
+document-cache revision. NeuroMem projection scheduling and version
 contracts still need qualification during worker integration. This
 intermediate repository state is not approved for production rollout. Catalog
 snapshot/receipt retention and API-level retry identity also remain open.

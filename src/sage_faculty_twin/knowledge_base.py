@@ -24,7 +24,6 @@ from .models import (
     KnowledgeDocumentRecord,
     KnowledgeSearchHit,
 )
-from .sage_anns_checkpoint import SageANNSCheckpoint, fingerprint
 
 
 logger = logging.getLogger(__name__)
@@ -440,7 +439,7 @@ class LocalKnowledgeStore:
 
         projection_key = (
             self._sagevdb_persistence.root.name
-            if self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+            if self._has_native_projection()
             else None
         )
         self._catalog.start_indexing(project, projection_key=projection_key)
@@ -449,7 +448,7 @@ class LocalKnowledgeStore:
         self._catalog.close(timeout=timeout)
 
     def _has_native_projection(self):
-        return self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+        return self._backend == "sagevdb"
 
     def _wait_for_projection(self, revision, *, operation_id=None, deadline=None, force=False):
         if deadline is None:
@@ -918,13 +917,13 @@ class LocalKnowledgeStore:
             self._initialize_neuromem()
         self._indexed_catalog_revision = (
             self._sagevdb_persistence.source_revision
-            if self._backend == "sagevdb" and not self._uses_sagevdb_anns_backend()
+            if self._has_native_projection()
             else self._catalog_revision
         )
 
     def _refresh_native_projection(self) -> bool:
         """A completed shared worker does not refresh this process's handle."""
-        if self._uses_sagevdb_anns_backend() or self._sagevdb_persistence is None:
+        if self._sagevdb_persistence is None:
             return False
         from sagevdb import PersistenceError
 
@@ -1012,90 +1011,91 @@ class LocalKnowledgeStore:
             database_kwargs["algorithm"] = algorithm
 
         try:
+            persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
+            if persistence_dir is None:
+                persistence_dir = self._base_dir / ".sagevdb-index"
+            # Old unversioned generations remain offline recovery material;
+            # they are never read as an alternate live index.
+
+            def database_factory():
+                return create_database(cfg, **database_kwargs)
+
+            compatibility = {
+                "backend": backend,
+                "catalog_store_id": hashlib.sha256(
+                    str(self._catalog.state_path.resolve()).encode()).hexdigest(),
+                "source_namespace": self._catalog.catalog.namespace,
+                "dimension": int(self._text_embedder.dimension),
+                "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
+                "embedding_model": self._settings.sagevdb_embedding_model,
+                "index_type": "FLAT",
+                "metric": "COSINE",
+                "retrieval_text_format": 1,
+            }
             if self._uses_sagevdb_anns_backend():
-                self._sagevdb = create_database(cfg, **database_kwargs)
-            else:
-                persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
-                if persistence_dir is None:
-                    persistence_dir = self._base_dir / ".sagevdb-index"
-                # Old unversioned generations remain offline recovery material;
-                # they are never read as an alternate live index.
-
-                def database_factory():
-                    return create_database(cfg, **database_kwargs)
-
-                compatibility = {
-                    "backend": backend,
-                    "catalog_store_id": hashlib.sha256(
-                        str(self._catalog.state_path.resolve()).encode()).hexdigest(),
-                    "source_namespace": self._catalog.catalog.namespace,
-                    "dimension": int(self._text_embedder.dimension),
-                    "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
-                    "embedding_model": self._settings.sagevdb_embedding_model,
-                    "index_type": "FLAT",
-                    "metric": "COSINE",
-                    "retrieval_text_format": 1,
-                }
-                configuration_id = hashlib.sha256(
-                    json.dumps(compatibility, sort_keys=True).encode()).hexdigest()
-                persistence_dir = persistence_dir / "canonical-v1" / configuration_id
-                self._sagevdb_persistence = PersistentSageVDB(
-                    persistence_dir,
-                    database_factory,
-                    compatibility=compatibility,
-                    source_namespace=self._catalog.catalog.namespace,
+                compatibility.update(
+                    algorithm=algorithm, metric="INNER_PRODUCT", build_mode="snapshot")
+            configuration_id = hashlib.sha256(
+                json.dumps(compatibility, sort_keys=True).encode()).hexdigest()
+            persistence_dir = persistence_dir / "canonical-v1" / configuration_id
+            self._sagevdb_persistence = PersistentSageVDB(
+                persistence_dir,
+                database_factory,
+                compatibility=compatibility,
+                source_namespace=self._catalog.catalog.namespace,
+                build_mode="snapshot" if self._uses_sagevdb_anns_backend() else "incremental",
+            )
+            if prepare_only:
+                return
+            documents_by_id = {
+                document.document_id: document for document in self.list_documents()
+            }
+            source_revision = self._catalog_revision
+            persistent_records = [
+                PersistentRecord(
+                    key=document.document_id,
+                    content_hash=stable_content_hash(
+                        self._compose_retrieval_text(document)
+                    ),
+                    metadata=self._document_metadata(document),
                 )
-                if prepare_only:
-                    return
-                documents_by_id = {
-                    document.document_id: document for document in self.list_documents()
-                }
-                source_revision = self._catalog_revision
-                persistent_records = [
-                    PersistentRecord(
-                        key=document.document_id,
-                        content_hash=stable_content_hash(
-                            self._compose_retrieval_text(document)
-                        ),
-                        metadata=self._document_metadata(document),
-                    )
-                    for document in documents_by_id.values()
+                for document in documents_by_id.values()
+            ]
+
+            def vector_provider(records):
+                texts = [
+                    self._compose_retrieval_text(documents_by_id[record.key])
+                    for record in records
                 ]
+                return self._embed_documents(texts)
 
-                def vector_provider(records):
-                    texts = [
-                        self._compose_retrieval_text(documents_by_id[record.key])
-                        for record in records
-                    ]
-                    return self._embed_documents(texts)
+            try:
+                self._sagevdb_open_result = self._sagevdb_persistence.open()
+                self._sagevdb_last_sync = self._sagevdb_persistence.sync(
+                    persistent_records, vector_provider, source_revision=source_revision,
+                )
+            except PersistenceError:
+                # Recovery reads the current canonical catalog itself; an
+                # old request's snapshot must not become recovery authority.
+                recovery_texts = {}
+                def build_record(key, payload):
+                    document = KnowledgeDocumentRecord.model_validate(payload)
+                    self._check_source_namespace(document.source_name)
+                    text = self._compose_retrieval_text(document)
+                    recovery_texts[key] = text
+                    return PersistentRecord(key, stable_content_hash(text), self._document_metadata(document))
 
-                try:
-                    self._sagevdb_open_result = self._sagevdb_persistence.open()
-                    self._sagevdb_last_sync = self._sagevdb_persistence.sync(
-                        persistent_records, vector_provider, source_revision=source_revision,
-                    )
-                except PersistenceError:
-                    # Recovery reads the current canonical catalog itself; an
-                    # old request's snapshot must not become recovery authority.
-                    recovery_texts = {}
-                    def build_record(key, payload):
-                        document = KnowledgeDocumentRecord.model_validate(payload)
-                        self._check_source_namespace(document.source_name)
-                        text = self._compose_retrieval_text(document)
-                        recovery_texts[key] = text
-                        return PersistentRecord(key, stable_content_hash(text), self._document_metadata(document))
-
-                    self._sagevdb_last_sync = self._sagevdb_persistence.rebuild_from_catalog(
-                        self._catalog.catalog, build_record,
-                        lambda records: self._embed_documents([recovery_texts[item.key] for item in records]),
-                    )
-                    self._sagevdb_open_result = OpenResult(
-                        loaded=True, recovered=True, generation=self._sagevdb_persistence.generation,
-                        reason="rebuilt_from_canonical_catalog")
-                    self._sagevdb_recovery_count += 1
-                    self._refresh_documents()
-                self._sagevdb = self._sagevdb_persistence.database
-                self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
+                self._sagevdb_last_sync = self._sagevdb_persistence.rebuild_from_catalog(
+                    self._catalog.catalog, build_record,
+                    lambda records: self._embed_documents([recovery_texts[item.key] for item in records]),
+                )
+                self._sagevdb_open_result = OpenResult(
+                    loaded=True, recovered=True, generation=self._sagevdb_persistence.generation,
+                    reason="rebuilt_from_canonical_catalog")
+                self._sagevdb_recovery_count += 1
+                self._refresh_documents()
+            self._sagevdb = self._sagevdb_persistence.database
+            self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         except ImportError as exc:
             if self._uses_sagevdb_anns_backend():
                 raise RuntimeError(
@@ -1106,19 +1106,12 @@ class LocalKnowledgeStore:
         except ValueError as exc:
             raise RuntimeError(f"Failed to initialize sagevdb backend '{backend}': {exc}") from exc
 
-        if not self._uses_sagevdb_anns_backend():
-            logger.info(
-                "SageVDB persistence ready: open=%s sync=%s generation=%s",
-                self._sagevdb_open_result,
-                self._sagevdb_last_sync,
-                self._sagevdb_persistence.generation,
-            )
-            return
-
-        self._document_id_to_vector_id.clear()
-        if self._uses_sagevdb_anns_backend():
-            self._open_or_rebuild_sagevdb_anns_index(stable_content_hash)
-            return
+        logger.info(
+            "SageVDB persistence ready: open=%s sync=%s generation=%s",
+            self._sagevdb_open_result,
+            self._sagevdb_last_sync,
+            self._sagevdb_persistence.generation,
+        )
 
 
     def embedding_backend_name(self) -> str:
@@ -1379,82 +1372,6 @@ class LocalKnowledgeStore:
             "'sentence-transformers', or 'hash'."
         )
 
-    def _open_or_rebuild_sagevdb_anns_index(self, stable_content_hash) -> None:
-        if self._sagevdb is None or self._np is None:
-            return
-
-        documents = self.list_documents()
-        if not documents:
-            return
-
-        persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
-        if persistence_dir is None:
-            persistence_dir = self._base_dir / ".sagevdb-index"
-        # Keep SageANNS snapshots separate from the mutable cpp backend's
-        # generations, including when both use the default persistence path.
-        checkpoint = SageANNSCheckpoint(persistence_dir / "sage-anns")
-        compatibility = {
-            "backend": "sage-anns",
-            "algorithm": self._settings.sagevdb_anns_algorithm.strip(),
-            "dimension": int(self._text_embedder.dimension),
-            "metric": "INNER_PRODUCT",
-            "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
-            "embedding_model": self._settings.sagevdb_embedding_model,
-            "retrieval_text_format": 1,
-        }
-        document_fingerprint = fingerprint(
-            [
-                (
-                    document.document_id,
-                    stable_content_hash(self._compose_retrieval_text(document)),
-                    self._document_metadata(document),
-                )
-                for document in documents
-            ]
-        )
-        with checkpoint.locked():
-            generation = checkpoint.load(
-                self._sagevdb,
-                compatibility=compatibility,
-                documents=document_fingerprint,
-            )
-            if generation is not None:
-                self._document_id_to_vector_id.update(
-                    (document.document_id, vector_id)
-                    for vector_id, document in enumerate(documents)
-                )
-                logger.info(
-                    "Loaded SageVDB SageANNS generation %s with %d documents",
-                    generation,
-                    len(documents),
-                )
-                return
-
-            self._rebuild_sagevdb_anns_index(documents)
-            generation = checkpoint.save(
-                self._sagevdb,
-                compatibility=compatibility,
-                documents=document_fingerprint,
-            )
-            logger.info(
-                "Built and persisted SageVDB SageANNS generation %s with %d documents",
-                generation,
-                len(documents),
-            )
-
-    def _rebuild_sagevdb_anns_index(self, documents) -> None:
-        if self._sagevdb is None or self._np is None:
-            return
-
-        vectors = []
-        metadata_batch = []
-        texts = [self._compose_retrieval_text(document) for document in documents]
-        vectors.extend(self._embed_documents(texts))
-        for vector_id, document in enumerate(documents):
-            metadata_batch.append(self._document_metadata(document))
-            self._document_id_to_vector_id[document.document_id] = int(vector_id)
-
-        self._sagevdb.build_index(self._np.stack(vectors), metadata=metadata_batch)
 
     def _search_sagevdb(
         self,

@@ -35,7 +35,7 @@ dependencies = [
   "isage @ git+https://github.com/RIDE-Lab/SAGE.git@f761e04586ca88699097c1333712f675f7cb92a3",
   "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@baff6c38ac7360dc5862124fa2239a2ff8e825bf",
   "isage-anns>=0.2.0",
-  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@33866799fd1e4503ceffcfd3b3abce8c521d761b",
+  "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@423a1247461b87bd8a77977790c148febcccf6f4",
 ]
 
 [project.optional-dependencies]

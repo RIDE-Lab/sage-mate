@@ -1,4 +1,5 @@
 import json
+import threading
 from importlib import import_module
 from importlib.util import find_spec
 from pathlib import Path
@@ -27,12 +28,60 @@ if missing_symbols:
 
 
 class _FakeANNSSnapshot:
+    def build_snapshot(self, vectors, metadata):
+        self.build_index(vectors, metadata=metadata)
+        return list(range(len(metadata)))
+
     def save(self, path: str) -> None:
         Path(path).write_text(json.dumps(self._metadata), encoding="utf-8")
         Path(f"{path}.sage_anns_adapter.json").write_text("{}", encoding="utf-8")
 
     def load(self, path: str) -> None:
         self._metadata = json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+def test_anns_shared_worker_recovers_latest_catalog_and_persists_empty(tmp_path, monkeypatch):
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash", sagevdb_dimension=128,
+        knowledge_sagevdb_backend="sage-anns", sagevdb_anns_algorithm="faiss_hnsw")
+    original = LocalKnowledgeStore._embed_documents
+    calls = []
+    def embed(self, texts):
+        assert threading.current_thread() is not threading.main_thread()
+        calls.append(len(texts))
+        return original(self, texts)
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", embed)
+    first = LocalKnowledgeStore(settings)
+    old = first.add_document(KnowledgeDocumentCreate(title="old", content="obsolete policy"))
+    root = first._sagevdb_persistence.root
+    first.close()
+    writer = LocalKnowledgeStore(settings)
+    with writer._mutation_lock:
+        writer._commit_documents({old.document_id: None})
+        current = writer._add_document_locked(KnowledgeDocumentCreate(
+            title="current", content="current approved policy"), rebuild_indexes=False)
+    writer.close()
+    (root / "CURRENT").write_bytes(b"\xffinvalid")
+    recovered = LocalKnowledgeStore(settings)
+    try:
+        assert recovered._sagevdb_recovery_count == 1
+        assert recovered._sagevdb_persistence.source_revision == 3
+        assert set(recovered._document_id_to_vector_id) == {current.document_id}
+        assert recovered.search("current approved policy")[0].document_id == current.document_id
+        recovered.delete_documents([current.document_id])
+        assert recovered._sagevdb_persistence.source_revision == 4
+        assert recovered._document_id_to_vector_id == {}
+    finally:
+        recovered.close()
+    before = list(calls)
+    empty = LocalKnowledgeStore(settings)
+    try:
+        assert empty.search("obsolete policy") == []
+        assert empty._sagevdb_persistence.source_revision == 4
+        assert calls == before
+    finally:
+        empty.close()
 
 
 def test_knowledge_sagevdb_backend_can_differ_from_conversation_backend() -> None:
@@ -389,7 +438,9 @@ def test_sagevdb_remote_reranker_reorders_semantic_candidates(
         def rerank(self, query: str, documents: list[str]) -> list[float]:
             assert query == "opaque request"
             assert len(documents) == 2
-            return [0.1, 0.9]
+            # Persistent snapshots order vectors by stable document identity,
+            # not insertion order. Score the actual candidate, like the API.
+            return [0.9 if "Second candidate" in text else 0.1 for text in documents]
 
     monkeypatch.setattr(
         sagevdb_module,
@@ -634,7 +685,8 @@ def test_sage_anns_restart_loads_sagevdb_index_without_reembedding(
             source_name="persistent-anns-note",
         )
     )
-    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    first.close()
+    pointer = first._sagevdb_persistence.root / "CURRENT"
     assert pointer.is_file()
     generation = pointer.read_text(encoding="ascii")
 
@@ -667,10 +719,13 @@ def test_sage_anns_changed_content_rebuilds_stale_index(
     record = first.add_document(
         KnowledgeDocumentCreate(title="First", content="alpha", source_name="changed-note")
     )
-    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    first.close()
+    pointer = first._sagevdb_persistence.root / "CURRENT"
     old_generation = pointer.read_text(encoding="ascii")
-    first.update_document(record.document_id, KnowledgeDocumentCreate(
+    writer = LocalKnowledgeStore(settings)
+    writer.update_document(record.document_id, KnowledgeDocumentCreate(
         title="First", content="beta changed", source_name="changed-note"), rebuild_indexes=False)
+    writer.close()
 
     calls: list[int] = []
     original = LocalKnowledgeStore._embed_documents
@@ -701,9 +756,10 @@ def test_sage_anns_corrupt_generation_is_rebuilt(tmp_path: Path, monkeypatch: py
     )
     first = LocalKnowledgeStore(settings)
     first.add_document(KnowledgeDocumentCreate(title="Index integrity", content="gamma"))
-    root = settings.knowledge_sagevdb_persistence_dir / "sage-anns"
+    first.close()
+    root = first._sagevdb_persistence.root
     old_generation = (root / "CURRENT").read_text(encoding="ascii").strip()
-    (root / "generations" / old_generation / "index").write_bytes(b"corrupt")
+    (root / f"generation-{old_generation}" / "index").write_bytes(b"corrupt")
 
     calls: list[int] = []
     original = LocalKnowledgeStore._embed_documents
@@ -718,7 +774,7 @@ def test_sage_anns_corrupt_generation_is_rebuilt(tmp_path: Path, monkeypatch: py
     assert (root / "CURRENT").read_text(encoding="ascii").strip() != old_generation
 
 
-def test_sage_anns_invalid_current_recovers_valid_generation(
+def test_sage_anns_invalid_current_rebuilds_current_catalog(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -736,17 +792,26 @@ def test_sage_anns_invalid_current_recovers_valid_generation(
     )
     first = LocalKnowledgeStore(settings)
     first.add_document(KnowledgeDocumentCreate(title="Recovery", content="epsilon"))
-    pointer = settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    first.close()
+    pointer = first._sagevdb_persistence.root / "CURRENT"
     generation = pointer.read_text(encoding="ascii")
     pointer.write_bytes(b"\xffinvalid")
 
-    def fail_if_embedded(self, texts):
-        raise AssertionError(f"recovery unexpectedly embedded {len(texts)} documents")
+    calls = []
+    original = LocalKnowledgeStore._embed_documents
+    def count_embeddings(self, texts):
+        calls.append(len(texts))
+        return original(self, texts)
 
-    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", fail_if_embedded)
+    monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", count_embeddings)
     restarted = LocalKnowledgeStore(settings)
-    assert restarted.count_documents() == 1
-    assert pointer.read_text(encoding="ascii") == generation
+    try:
+        assert calls == [1]
+        assert restarted.count_documents() == 1
+        assert restarted._sagevdb_persistence.source_revision == 1
+        assert pointer.read_text(encoding="ascii") != generation
+    finally:
+        restarted.close()
 
 
 @pytest.mark.parametrize(
@@ -775,7 +840,8 @@ def test_sage_anns_incompatible_embedding_config_rebuilds(
     }
     first = LocalKnowledgeStore(AppSettings(**base))
     first.add_document(KnowledgeDocumentCreate(title="Configuration", content="delta"))
-    pointer = first._settings.knowledge_sagevdb_persistence_dir / "sage-anns" / "CURRENT"
+    first.close()
+    pointer = first._sagevdb_persistence.root / "CURRENT"
     old_generation = pointer.read_text(encoding="ascii")
 
     calls: list[int] = []
@@ -786,6 +852,11 @@ def test_sage_anns_incompatible_embedding_config_rebuilds(
         return original(self, texts)
 
     monkeypatch.setattr(LocalKnowledgeStore, "_embed_documents", count_embeddings)
-    LocalKnowledgeStore(AppSettings(**(base | override)))
-    assert calls == [1]
-    assert pointer.read_text(encoding="ascii") != old_generation
+    changed = LocalKnowledgeStore(AppSettings(**(base | override)))
+    try:
+        assert calls == [1]
+        assert changed._sagevdb_persistence.root != first._sagevdb_persistence.root
+        assert changed._sagevdb_persistence.source_revision == 1
+        assert pointer.read_text(encoding="ascii") == old_generation
+    finally:
+        changed.close()
