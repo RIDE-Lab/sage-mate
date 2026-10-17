@@ -2971,12 +2971,15 @@ chatForm.addEventListener("submit", async (event) => {
                 ? await apiStreamRequest(chatPath, chatOptions)
                 : await apiRequest(chatPath, chatOptions);
             activeConversationId = data.conversation_id || activeConversationId;
-            stopWorkflowTraceStream();
-            renderWorkflowTrace(data.workflow_trace || [], {
+            // HTTP completion is not durable worker completion. Keep the SSE
+            // cursor alive until its terminal event, including reconnects.
+            const mergedSteps = new Map((data.workflow_trace || []).map(step => [step.key, step]));
+            for (const step of activeWorkflowSteps) mergedSteps.set(step.key, step);
+            renderWorkflowTrace([...mergedSteps.values()], {
                 workflowAction: data.workflow_action || null,
                 knowledgeHits: Array.isArray(data.knowledge_hits) ? data.knowledge_hits.length : null,
                 webSearchHits: Array.isArray(data.web_search_hits) ? data.web_search_hits.length : null,
-                isStreaming: false,
+                isStreaming: Boolean(activeWorkflowStream),
                 plannerPreview: data.planner_preview || null,
                 shadowPlannerPreview: data.shadow_planner_preview || null,
                 plannerComparison: data.planner_comparison || null,
@@ -3018,14 +3021,12 @@ chatForm.addEventListener("submit", async (event) => {
                 );
                 break;
             }
-            // Retry on transient failures: admission throttling (429), gateway
-            // timeout (504), or network
-            // errors (fetch threw, no HTTP status — common on mobile when
-            // the carrier proxy or Cloudflare tunnel drops the connection).
+            // Only an explicit admission rejection proves it is safe to
+            // submit again. Lost HTTP acknowledgements may hide a committed turn.
             const isTransientNetworkError = error?.status === undefined;
             const canRetry =
                 attempt < maxAttempts &&
-                (error?.status === 429 || error?.status === 504 || isTransientNetworkError) &&
+                error?.status === 429 &&
                 submittedFiles.length === 0;
             if (canRetry) {
                 stopWorkflowTraceStream();
@@ -3034,11 +3035,7 @@ chatForm.addEventListener("submit", async (event) => {
                 const queueHint = Number.isFinite(error?.queuePosition) && error.queuePosition > 0
                     ? `前方约 ${error.queuePosition} 个请求，`
                     : "";
-                const retryLabel = error?.status === 429
-                    ? `${queueHint}预计 ${retrySeconds} 秒后自动重试…`
-                    : error?.status === 504
-                    ? "后端响应超时，正在自动重试…"
-                    : "网络连接中断，正在自动重试…";
+                const retryLabel = `${queueHint}预计 ${retrySeconds} 秒后自动重试…`;
                 renderPendingAssistantMessage(
                     pendingMessage,
                     retryLabel,
@@ -3050,6 +3047,15 @@ chatForm.addEventListener("submit", async (event) => {
                 await openWorkflowTraceStream(workflowRequestIdActive);
                 continue;
             }
+            if ((error?.status === 504 || isTransientNetworkError) && activeWorkflowStream) {
+                if (!streamingDeliveredResponse) {
+                    renderPendingAssistantMessage(pendingMessage,
+                        "请求连接中断，正在恢复原请求的回答；不会自动重复提交。", [],
+                        { deepThinking: explicitDeepMode });
+                }
+                break;
+            }
+            if (streamingDeliveredResponse) break;
             stopWorkflowTraceStream();
             lastFailedQuestion = payload.question;
             renderWorkflowTraceError(error.message);
@@ -9694,6 +9700,7 @@ async function openWorkflowTraceStream(requestId) {
     };
 
     source.onmessage = (event) => {
+        if (activeWorkflowStream !== source) return;
         let payload;
         try {
             payload = JSON.parse(event.data);
@@ -9736,6 +9743,7 @@ function stopWorkflowTraceStream() {
 let streamingAnswerBuffer = "";
 let streamingThinkBuffer = "";
 let streamingFinalResponseApplied = false;
+let streamingDeliveredResponse = null;
 
 function appendStreamingAnswerDelta(delta) {
     if (!delta) return;
@@ -9822,6 +9830,7 @@ function clearStreamingAnswerBuffer() {
     streamingAnswerBuffer = "";
     streamingThinkBuffer = "";
     streamingFinalResponseApplied = false;
+    streamingDeliveredResponse = null;
 }
 
 function handleWorkflowStreamEvent(payload) {
@@ -9874,6 +9883,10 @@ function handleWorkflowStreamEvent(payload) {
 
     if (payload.type === "answer_done") {
         const response = payload.response || {};
+        if (typeof response.answer === "string") {
+            streamingDeliveredResponse = response;
+            activeConversationId = response.conversation_id || activeConversationId;
+        }
         const pending = chatStream && chatStream.querySelector(".message-pending");
         if (pending && response && typeof response.answer === "string") {
             renderAssistantMessage(
@@ -9915,6 +9928,7 @@ function handleWorkflowStreamEvent(payload) {
 
     if (payload.type === "complete") {
         stopWorkflowTraceStream();
+        renderWorkflowTrace(activeWorkflowSteps, { isStreaming: false });
     }
 }
 

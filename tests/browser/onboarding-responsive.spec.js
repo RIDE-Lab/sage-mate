@@ -65,6 +65,44 @@ test("durable feedback survives reload without another POST", async ({ page }, t
 
 let fixtureServer;
 let fixtureBaseUrl;
+let deliveryScenario = null;
+
+for (const lostHttp of [false, true]) {
+  test(`durable delivery reconnects after ${lostHttp ? "lost HTTP" : "HTTP success"}`, async ({ page }, testInfo) => {
+    const answer = { answer: "原请求已恢复，公开研究证据完整保留。", conversation_id: "recovered-conversation",
+      exchange_id: "recovered-turn", workflow_trace: [], answer_basis: [], follow_up_actions: [], knowledge_hits: [] };
+    const scenario = { connections: [], posts: 0, answer };
+    deliveryScenario = scenario;
+    try {
+      await page.route("https://fonts.**", route => route.fulfill({ contentType: "text/css", body: "" }));
+      await page.route("**/chat/feedback**", route => route.fulfill({ status: 404, json: { detail: "not found" } }));
+      await page.route("**/chat?**", async route => {
+        scenario.posts += 1;
+        if (lostHttp) await route.abort("connectionreset");
+        else await route.fulfill({ json: answer });
+      });
+      await page.goto(fixtureBaseUrl, { waitUntil: "domcontentloaded" });
+      await page.evaluate(() => {
+        localStorage.setItem("sageOnboardingCompleted", "true");
+        localStorage.setItem("sageOnboardingDismissed", "true");
+      });
+      await page.reload({ waitUntil: "domcontentloaded" });
+      await page.locator("#chat-question").fill("请根据公开 Wiki 介绍研究工作");
+      await page.getByRole("button", { name: "发送问题" }).click();
+      await expect(page.locator("#chat-stream .message-body").filter({ hasText: answer.answer })).toBeVisible();
+      await expect.poll(() => scenario.connections.length).toBeGreaterThanOrEqual(2);
+      expect(scenario.connections[1]).toBe("1");
+      await expect.poll(() => page.evaluate(() => activeWorkflowStream === null)).toBe(true);
+      expect(await page.evaluate(() => activeWorkflowSteps.some(step => step.key === "memory_usefulness_score"))).toBe(true);
+      expect(scenario.posts).toBe(1);
+      await expect.poll(() => page.evaluate(() => document.fonts.status)).toBe("loaded");
+      await page.locator("#chat-stream").screenshot({ path: testInfo.outputPath("delivery-recovered.png"),
+        animations: "disabled", timeout: 10000 });
+    } finally {
+      deliveryScenario = null;
+    }
+  });
+}
 
 function sendFile(response, filename, contentType) {
   response.writeHead(200, {
@@ -76,6 +114,23 @@ function sendFile(response, filename, contentType) {
 
 function handleFixtureRequest(request, response) {
   const pathname = new URL(request.url, "http://fixture.invalid").pathname;
+  if (pathname === "/chat/workflow-events" && deliveryScenario) {
+    const scenario = deliveryScenario;
+    scenario.connections.push(request.headers["last-event-id"] || null);
+    response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store" });
+    if (scenario.connections.length === 1) {
+      // Actual EventSource reconnect, not an injected/mock browser API.
+      response.end('retry: 100\nid: 1\ndata: {"type":"keepalive"}\n\n');
+    } else {
+      setTimeout(() => {
+        response.write(`id: 2\ndata: ${JSON.stringify({ type: "answer_done", response: scenario.answer })}\n\n`);
+        response.write(`id: 3\ndata: ${JSON.stringify({ type: "trace-step", step: {
+          key: "memory_usefulness_score", title: "后台核验", summary: "恢复后的后台任务已完成", status: "completed" } })}\n\n`);
+        response.end('id: 4\ndata: {"type":"complete"}\n\n');
+      }, 200);
+    }
+    return;
+  }
   if (pathname === "/" || pathname === "/index.html") {
     sendFile(response, "index.html", "text/html; charset=utf-8");
     return;
