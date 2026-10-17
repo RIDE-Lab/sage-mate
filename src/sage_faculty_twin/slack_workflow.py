@@ -96,18 +96,37 @@ class SlackWorkflow:
         self._answer, self._deliver = answer, deliver
         self._work = AsyncWorkService(self.journal, self._handle,
                                       **{"max_workers": 2, "poll_interval": 0.05, **options})
+        self._start_lock = asyncio.Lock()
+        self._started = False
 
     async def start(self):
-        await self._work.start()
+        async with self._start_lock:
+            if not self._started:
+                await asyncio.to_thread(self._upgrade_dependencies)
+                await self._work.start()
+                self._started = True
+
+    def _upgrade_dependencies(self):
+        cursor = 0
+        while True:
+            rows, cursor = self.journal.records(cursor=cursor, limit=100)
+            for row in rows:
+                if set(row["value"]["tasks"]) == {"answer", "deliver"}:
+                    self.journal.upgrade_dependencies(row["key"], {"deliver": ["answer"]})
+            if cursor is None:
+                return
 
     async def submit(self, ingress: SlackIngress):
         captured = SlackIngress.model_validate_json(ingress.model_dump_json())
         payload = captured.model_dump(mode="json")
+        await self.start()
         return await self._work.commit(captured.request_id,
-            result={"owner_id": captured.owner_id}, tasks={"answer": payload, "deliver": payload})
+            result={"owner_id": captured.owner_id}, tasks={"answer": payload, "deliver": payload},
+            dependencies={"deliver": ["answer"]})
 
     async def submit_notice(self, ingress: SlackIngress, reply: SlackReply):
         captured = SlackIngress.model_validate_json(ingress.model_dump_json())
+        await self.start()
         return await self._work.commit(captured.request_id,
             result={"owner_id": captured.owner_id, "notice": SlackReply.model_validate(reply).model_dump(mode="json")},
             tasks={"deliver": captured.model_dump(mode="json")})
@@ -119,6 +138,7 @@ class SlackWorkflow:
         if captured.question != "Slack binding status":
             raise ValueError("binding_credential_must_not_be_persisted")
         notice = SlackReply(text="绑定成功。使用 /twin 时仍会核对当前课题组成员权限。")
+        await self.start()
         await self._work.commit(captured.request_id,
             result={"owner_id": captured.owner_id, "notice": notice.model_dump(mode="json")},
             tasks={"deliver": captured.model_dump(mode="json")},
@@ -127,12 +147,14 @@ class SlackWorkflow:
         return notice
 
     async def resume_if_admitted(self, ingress: SlackIngress):
+        await self.start()
         record = await asyncio.to_thread(self.journal.read, ingress.request_id)
         if record is None:
             return False
         payload = SlackIngress.model_validate_json(ingress.model_dump_json()).model_dump(mode="json")
         tasks = {name: payload for name in record["tasks"]}
-        await self._work.commit(ingress.request_id, result=record["result"], tasks=tasks)
+        await self._work.commit(ingress.request_id, result=record["result"], tasks=tasks,
+                                dependencies=record.get("dependencies"))
         return True
 
     async def _handle(self, lease):
@@ -157,8 +179,6 @@ class SlackWorkflow:
             reply = SlackReply.model_validate(notice)
         else:
             completed = record["tasks"]["answer"]
-            if completed["status"] != "done":
-                raise RuntimeError("slack_answer_not_ready")
             denial = await self._authorize(ingress)
             reply = SlackReply(text=denial) if denial is not None else SlackReply.model_validate(completed["result"])
         receipt = await self._deliver(ingress, reply)

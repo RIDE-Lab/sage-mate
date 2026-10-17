@@ -200,6 +200,8 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     if transport == "mention":
         assert payload["thread_ts"] == "1719200000.000100"
     records, _ = api_module.slack_workflow.journal.records(limit=10)
+    assert records[0]["value"]["dependencies"] == {"deliver": ["answer"]}
+    assert records[0]["value"]["tasks"]["deliver"]["attempt"] == 1
     saved = json.dumps(records)
     assert "private-credential" not in saved
     assert "fixture-token" not in saved

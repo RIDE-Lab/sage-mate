@@ -51,6 +51,7 @@ def test_delivery_retry_does_not_regenerate_answer_and_duplicate_ingress_is_idem
             assert calls == [item.request_id]
             assert deliveries == ["full answer", "full answer"]
             assert result["tasks"]["deliver"]["result"]["message_ts"] == "123.456"
+            assert result["tasks"]["deliver"]["attempt"] == 2  # One real network failure only.
             with pytest.raises(ValueError, match="commit_conflict"):
                 await workflow.submit(SlackIngress.model_validate({**item.model_dump(), "question": "changed"}))
         finally:
@@ -92,7 +93,10 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
                                  deliver=deliver, poll_interval=0.01, retry_delay=0)
         try:
             await workflow.start()
-            await workflow.wait(item.request_id, timeout=3)
+            completed = await workflow.wait(item.request_id, timeout=3)
+            assert completed["version"] == 2
+            assert completed["dependencies"] == {"deliver": ["answer"]}
+            assert completed["tasks"]["deliver"]["attempt"] == 1
             assert sent == ["canonical answer"]
         finally:
             await workflow.aclose()

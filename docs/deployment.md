@@ -445,6 +445,13 @@ committed by the chat service; it does not run a second chat pipeline.
 
 Delivery failures retry separately from an acknowledged answer. Both stages
 recheck authorization; only a validated accepted receipt marks delivery done.
+The journal declares `deliver` depends on `answer`; SAGE only leases delivery
+after answer completion. Dependency waiting is not a failed attempt and does
+not incur transport retry backoff. Startup upgrades old independent Slack task
+records before starting consumers. Stop old workers first: live leases and
+inconsistent completed-child states reject migration, and dependency-unaware
+SAGE versions cannot read the new version-2 graph records. Roll back code and
+the matching consistent state snapshot together, not just the dependency pin.
 External Slack effects are still at-least-once: a lost remote acknowledgement
 can cause duplicates. A success response is not proof that an ephemeral message
 was seen. The event loop, shared state and async clients must outlive successful
