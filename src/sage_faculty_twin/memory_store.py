@@ -1585,7 +1585,11 @@ class NeuroMemConversationStore:
                         self._telemetry_type_counts[removed_type] = next_count
         return payload
 
-    def record_memory_usefulness(
+    def record_memory_usefulness(self, **kwargs) -> dict[str, Any]:
+        with self._memory_write_lock:
+            return self._record_memory_usefulness_locked(**kwargs)
+
+    def _record_memory_usefulness_locked(
         self,
         *,
         conversation_id: str,
@@ -1600,7 +1604,13 @@ class NeuroMemConversationStore:
         top_memory_score: float | None,
         workflow_action: str,
         duration_ms: float | None = None,
+        event_id: str | None = None,
     ) -> dict[str, Any]:
+        if event_id is not None:
+            for event in self._telemetry_events:
+                if (event.get("event_type") == "score_memory_usefulness"
+                        and event.get("attributes", {}).get("event_id") == event_id):
+                    return dict(event)
         return self._record_telemetry_event(
             "score_memory_usefulness",
             collection_name=self._conversation_collection.name,
@@ -1617,6 +1627,7 @@ class NeuroMemConversationStore:
                 "knowledge_hit_count": knowledge_hit_count,
                 "top_memory_score": top_memory_score,
                 "workflow_action": workflow_action,
+                **({"event_id": event_id} if event_id is not None else {}),
             },
         )
 

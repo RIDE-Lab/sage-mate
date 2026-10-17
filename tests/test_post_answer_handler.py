@@ -44,6 +44,10 @@ def test_handler_replay_uses_captured_time_and_preserves_answer():
     lease = SimpleNamespace(task_id="post_answer", request_id="turn", payload=task.model_dump(mode="json"))
     first = handler(lease)
     second = handler(lease)
+    for result in (first, second):
+        for trace in result["response"]["workflow_trace"]:
+            assert trace["duration_ms"] >= 0
+            trace.pop("duration_ms")  # Work duration can change; semantic outputs cannot.
     assert first == second
     assert first["response"]["answer"] == "complete answer"
     assert first["response"]["used_model"] == "fixed-model"
@@ -68,6 +72,43 @@ def test_failure_propagates_and_later_stages_are_not_executed():
     lease.request_id = "another-turn"
     with pytest.raises(ValueError, match="lease_identity_conflict"):
         handler(lease)
+
+
+def test_runtime_recovers_saved_task_without_chat_replay(tmp_path):
+    from sage_faculty_twin.post_answer_runtime import PostAnswerRuntime
+
+    task = make_task()
+    writes = []
+    path = tmp_path / "post-answer.db"
+    runtime = PostAnswerRuntime(path, consolidate_profiles=lambda record: 0, score=score)
+    runtime.journal.commit(task.request_id, **task.journal_inputs())
+    runtime.close()  # Simulate producer ending after commit, before worker start.
+    runtime = PostAnswerRuntime(path,
+        consolidate_profiles=lambda record: writes.append(record.memory_id) or 1, score=score)
+    try:
+        runtime.start()
+        result = runtime.wait(task.request_id, timeout=5)
+        assert result["response"]["answer"] == task.response.answer
+        assert result["response"]["used_model"] == task.response.used_model
+        assert writes == ["turn"]
+        runtime.drain()  # Observers must still be able to read after draining.
+        assert runtime.wait(task.request_id, timeout=0) == result
+        assert writes == ["turn"]
+    finally:
+        runtime.close()
+
+
+def test_skip_reason_is_captured_for_replay():
+    task = make_task().model_copy(update={"evaluate_memory": False, "score_skip_reason": "current_date"})
+
+    def forbidden(task):
+        raise AssertionError("skipped scorer must not run")
+
+    result = PostAnswerHandler(consolidate_profiles=lambda record: 0, score=forbidden)(
+        SimpleNamespace(task_id="post_answer", request_id="turn", payload=task.model_dump(mode="json")))
+    trace = result["response"]["workflow_trace"][-1]
+    assert trace["status"] == "skipped"
+    assert "系统日期回答无需评估记忆证据" in trace["summary"]
 
 
 def test_sage_retry_after_profile_commit_preserves_result_and_profile(tmp_path):

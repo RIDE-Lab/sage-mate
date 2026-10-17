@@ -31,6 +31,7 @@ class PostAnswerTask(BaseModel):
     profile_snapshot: list[ProfileMemoryRecord] = Field(default_factory=list)
     availability: AvailabilitySchedule
     evaluate_memory: bool
+    score_skip_reason: Literal["planner", "current_date"] = "planner"
     evaluated_at: datetime
     skip_profile: bool = False
     skip_follow_up: bool = False
@@ -65,7 +66,8 @@ class PostAnswerTask(BaseModel):
     def capture(cls, *, request_id, request, response, availability,
                 evaluate_memory, record=None, interaction_intent=None,
                 memory_hits=(), recent_session_context="", profile_snapshot=(),
-                skip_profile=False, skip_follow_up=False, evaluated_at=None):
+                skip_profile=False, skip_follow_up=False, evaluated_at=None,
+                score_skip_reason="planner"):
         # Use the request's explicit serialization policy, then detach every
         # nested object through JSON before handing it to a durable worker.
         task = cls(
@@ -74,6 +76,7 @@ class PostAnswerTask(BaseModel):
             record=record, interaction_intent=interaction_intent, memory_hits=list(memory_hits),
             recent_session_context=recent_session_context, profile_snapshot=list(profile_snapshot),
             skip_profile=skip_profile, skip_follow_up=skip_follow_up,
+            score_skip_reason=score_skip_reason,
             evaluated_at=evaluated_at or datetime.now(UTC),
         )
         return cls.model_validate_json(task.model_dump_json())

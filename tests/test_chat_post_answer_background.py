@@ -1,4 +1,4 @@
-"""Regression tests for the post-answer background-execution split.
+"""Regression tests for delivery modes sharing one SAGE durable worker.
 
 The latency split keeps the conversation-memory write on the critical path
 so an immediate follow-up cannot race its preceding turn. The remaining
@@ -7,8 +7,8 @@ post-answer stages (`memory_profile_consolidate`, `follow_up_plan`, and
 ``DIGITAL_TWIN_POST_ANSWER_BACKGROUND=true`` (default) and a trace callback
 attached, ``service.answer`` returns the rendered ``ChatResponse``
 after the durable exchange write and runs the remaining side-effects
-on a background ``asyncio.create_task`` instead of blocking the HTTP
-response.
+on the native SAGE worker instead of blocking the HTTP response. An asyncio
+observer only publishes committed results; it does not execute those stages.
 """
 
 from __future__ import annotations
@@ -24,6 +24,35 @@ from sage_faculty_twin.service import (
     _CANONICAL_TRACE_ORDER,
     DigitalTwinService,
 )
+
+
+def test_shutdown_keeps_journal_open_until_result_observers_finish():
+    from types import SimpleNamespace
+
+    calls = []
+
+    async def driver():
+        async def observe():
+            while "drain" not in calls:
+                await asyncio.sleep(0)
+            assert "close" not in calls
+            calls.append("observed")
+
+        async def close_llm():
+            calls.append("llm_close")
+
+        fake = SimpleNamespace(
+            _post_answer_runtime=SimpleNamespace(
+                drain=lambda: calls.append("drain"), close=lambda: calls.append("close")),
+            _post_answer_finalizer=SimpleNamespace(detach=lambda: calls.append("detach")),
+            _post_answer_observers={asyncio.create_task(observe())},
+            _chat_finalizer=None, _retrieval_finalizer=None,
+            _llm_client=SimpleNamespace(aclose=close_llm),
+        )
+        await DigitalTwinService.aclose(fake)
+
+    asyncio.run(driver())
+    assert calls == ["drain", "observed", "close", "detach", "llm_close"]
 
 
 class _FastLLMClient:
@@ -100,7 +129,7 @@ def test_required_memory_failure_prevents_success_and_background_work(tmp_path, 
         raise OSError("injected memory persistence failure")
 
     monkeypatch.setattr(service._conversation_store, "persist_exchange", fail)
-    monkeypatch.setattr(service, "_run_post_answer_inline_blocking",
+    monkeypatch.setattr(service, "_get_post_answer_runtime",
                         lambda *args, **kwargs: post_answer.append(True))
 
     async def run():
@@ -122,8 +151,8 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     tmp_path: Path,
 ) -> None:
     """With background mode + trace_callback, ``service.answer`` resolves
-    while the three non-critical post-answer stages are still in flight on a background
-    ``asyncio.create_task``. The interim response carries the critical-path
+    while the three post-answer stages are still in flight on the SAGE worker.
+    The interim response carries the critical-path
     trace (10 keys) and an empty ``follow_up_actions`` list."""
 
     settings = AppSettings(knowledge_base_dir=tmp_path)
@@ -134,20 +163,21 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     # whether ``service.answer`` resolves before the side-effects finish.
     persist_gate = threading.Event()
 
-    original_run_post_answer = service._run_post_answer_inline_blocking
+    original_run_post_answer = service._conversation_store.consolidate_profiles
     started_event = threading.Event()
     finished_event = threading.Event()
+    committed_event = threading.Event()
 
-    def gated_run(context, support, **kwargs):
+    def gated_run(record):
         started_event.set()
         # Wait until the test releases the gate or 5s budget elapses.
         persist_gate.wait(timeout=5.0)
         try:
-            return original_run_post_answer(context, support, **kwargs)
+            return original_run_post_answer(record)
         finally:
             finished_event.set()
 
-    service._run_post_answer_inline_blocking = gated_run  # type: ignore[method-assign]
+    service._conversation_store.consolidate_profiles = gated_run  # type: ignore[method-assign]
 
     captured_steps: list[str] = []
 
@@ -161,6 +191,7 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
                 question="给我一些下一步建议。",
             ),
             trace_callback=lambda step: captured_steps.append(step.key),
+            on_post_answer_complete=committed_event.set,
         )
         # Give the asyncio.create_task a chance to start the background
         # post-answer thread before we assert on it.
@@ -187,10 +218,11 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
         # post-answer steps.
         persist_gate.set()
         for _ in range(50):
-            if finished_event.is_set():
+            if committed_event.is_set():
                 break
             await asyncio.sleep(0.05)
         assert finished_event.is_set()
+        assert committed_event.is_set()
         # Give the background callback a final tick to flush trace events.
         await asyncio.sleep(0.05)
         return response

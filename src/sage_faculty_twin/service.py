@@ -125,6 +125,8 @@ from .knowledge_authority import (
 )
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
 from .light_agent import LightweightActionPlanner
+from .post_answer_contract import PostAnswerTask
+from .post_answer_runtime import PostAnswerRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
 from .meeting import MeetingService
 from .memory_store import (
@@ -2809,54 +2811,6 @@ class FacultyTwinWorkflowSupport:
             "digest_chars": len(new_digest_text),
         }
 
-    def consolidate_profile_memory(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
-        started_at = perf_counter()
-        if self._is_remembered_value_command(
-            context.request.question
-        ) or self._detect_recent_session_meta_query(context.request.question) == "remembered_value":
-            self._append_trace(
-                context,
-                key="memory_profile_consolidate",
-                title="沉淀长期画像记忆",
-                summary="临时标识不写入长期画像。",
-                detail="该值仅用于当前会话连续性，不代表稳定用户画像或偏好。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-        if context.persisted_memory_record is None:
-            self._append_trace(
-                context,
-                key="memory_profile_consolidate",
-                title="沉淀长期画像记忆",
-                summary="未沉淀长期画像记忆。",
-                detail="当前流程没有新的对话记忆可供画像归纳。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-        profile_count = self._conversation_store.consolidate_profiles(
-            context.persisted_memory_record
-        )
-        self._append_trace(
-            context,
-            key="memory_profile_consolidate",
-            title="沉淀长期画像记忆",
-            summary=(
-                f"已沉淀 {profile_count} 条长期画像记忆。"
-                if profile_count
-                else "本轮未形成新的长期画像记忆。"
-            ),
-            detail=(
-                f"已根据本轮对话提炼 {profile_count} 条用户画像/偏好摘要，并写入 NeuroMem 长期层。"
-                if profile_count
-                else "本轮对话没有提炼出新的稳定用户画像信息。"
-            ),
-            duration_ms=self._elapsed_ms(started_at),
-        )
-        return context
-
     def answer_with_llm(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
         if context.route != "answer" or context.answer is not None:
@@ -4554,143 +4508,6 @@ class FacultyTwinWorkflowSupport:
 
         return True
 
-    def plan_follow_up_actions(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
-        started_at = perf_counter()
-        if context.is_admin_request and context.workflow_action == "admin_add_knowledge":
-            self._append_trace(
-                context,
-                key="follow_up_plan",
-                title="规划后续动作",
-                summary="管理员知识入库不生成后续动作。",
-                detail="当前对话已经完成知识写入，不再生成学生侧后续建议。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-        if context.answer is None:
-            self._append_trace(
-                context,
-                key="follow_up_plan",
-                title="规划后续动作",
-                summary="未生成后续动作。",
-                detail="当前流程没有可规划的后续动作。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-        profiles = self._conversation_store.list_profiles_for_student(
-            student_name=context.request.student_name,
-            student_email=context.request.student_email,
-            limit=10,
-        )
-        context.follow_up_actions = self._action_planner.plan_chat_actions(
-            workflow_action=context.workflow_action,
-            question=context.request.question,
-            interaction_intent=context.interaction_intent,
-            knowledge_hits=context.knowledge_hits,
-            student_profiles=profiles,
-            availability_schedule=self._meeting_service.get_availability_schedule(),
-        )
-        action_count = len(context.follow_up_actions)
-        self._append_trace(
-            context,
-            key="follow_up_plan",
-            title="规划后续动作",
-            summary=(
-                f"已生成 {action_count} 条后续动作建议。"
-                if action_count
-                else "未生成额外后续动作。"
-            ),
-            detail=(
-                "已基于知识命中、学生画像和当前问题生成后续阅读/待办/资源建议。"
-                if action_count
-                else "当前问题没有额外的阅读、待办或资源推荐。"
-            ),
-            duration_ms=self._elapsed_ms(started_at),
-        )
-        return context
-
-    def score_memory_usefulness(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
-        started_at = perf_counter()
-        if context.answer is None:
-            self._append_trace(
-                context,
-                key="memory_usefulness_score",
-                title="评估记忆证据有效性",
-                summary="未评估本轮记忆证据有效性。",
-                detail="当前流程没有生成回答，无法判断记忆和检索证据是否有帮助。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-        if self._build_current_time_meta_answer(context.request.question) is not None:
-            self._append_trace(
-                context,
-                key="memory_usefulness_score",
-                title="评估记忆证据有效性",
-                summary="系统日期回答无需评估记忆证据。",
-                detail="本轮答案来自服务配置时区的系统日期，不依赖对话记忆或检索材料。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-
-        if not self._planner_requests_any_step(context, "score_memory_usefulness"):
-            self._append_trace(
-                context,
-                key="memory_usefulness_score",
-                title="评估记忆证据有效性",
-                summary="当前工作流规划跳过记忆证据评估。",
-                detail="deterministic planner 已接受当前规划，且本轮执行不需要 score_memory_usefulness。",
-                status="skipped",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-            return context
-
-        signal, reason = self._evaluate_memory_usefulness(context)
-        context.memory_usefulness_signal = signal
-        context.memory_usefulness_reason = reason
-        recent_session_attached = bool(context.recent_session_context.strip())
-        short_term_hit_count = sum(
-            1 for hit in context.memory_hits if hit.memory_type == "short_term"
-        )
-        if recent_session_attached and short_term_hit_count == 0:
-            short_term_hit_count = 1
-        long_term_hit_count = sum(
-            1 for hit in context.memory_hits if hit.memory_type == "long_term"
-        )
-        top_memory_score = max((hit.score for hit in context.memory_hits), default=None)
-        if top_memory_score is None and recent_session_attached:
-            top_memory_score = 2.0
-        duration_ms = self._elapsed_ms(started_at)
-        self._conversation_store.record_memory_usefulness(
-            conversation_id=context.conversation_id,
-            signal=signal,
-            reason=reason,
-            memory_used=bool(context.memory_hits) or recent_session_attached,
-            knowledge_used=bool(context.knowledge_hits),
-            memory_hit_count=len(context.memory_hits) + (1 if recent_session_attached else 0),
-            short_term_hit_count=short_term_hit_count,
-            long_term_hit_count=long_term_hit_count,
-            knowledge_hit_count=len(context.knowledge_hits),
-            top_memory_score=top_memory_score,
-            workflow_action=context.workflow_action,
-            duration_ms=float(duration_ms or 0),
-        )
-        self._append_trace(
-            context,
-            key="memory_usefulness_score",
-            title="评估记忆证据有效性",
-            summary=f"已完成本轮记忆证据评估：{self._memory_usefulness_label(signal)}。",
-            detail=reason,
-            duration_ms=duration_ms,
-        )
-        return context
-
     def render_chat_response(self, context: ChatWorkflowContext) -> ChatResponse:
         if context.answer is None:
             # A planner may legitimately finish a fact request without routing
@@ -4860,15 +4677,6 @@ class FacultyTwinWorkflowSupport:
             "helpful",
             "本轮主要由知识材料完成 grounding，记忆层没有形成强命中，但现有证据仍足以支撑回答。",
         )
-
-    def _memory_usefulness_label(self, signal: str) -> str:
-        mapping = {
-            "helpful": "有帮助",
-            "stale": "可能过时",
-            "low_confidence": "低置信度",
-            "review_worthy": "建议复核",
-        }
-        return mapping.get(signal, signal)
 
     def _build_token_usage(self) -> TokenUsage | None:
         """Return per-request token usage from the LLM client, or None."""
@@ -8949,33 +8757,6 @@ class MemoryPersistStage(MapFunction):
         return self._support.persist_memory(data)
 
 
-class MemoryProfileConsolidationStage(MapFunction):
-    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
-        super().__init__()
-        self._support = support
-
-    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.consolidate_profile_memory(data)
-
-
-class FollowUpPlanningStage(MapFunction):
-    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
-        super().__init__()
-        self._support = support
-
-    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.plan_follow_up_actions(data)
-
-
-class MemoryUsefulnessScoringStage(MapFunction):
-    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
-        super().__init__()
-        self._support = support
-
-    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
-        return self._support.score_memory_usefulness(data)
-
-
 class ChatResponseRenderStage(MapFunction):
     def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
         super().__init__()
@@ -9188,6 +8969,18 @@ class _ChatContextMerge4(ChatContextMergeFunction):
         return self._on_branch(3, data)
 
 
+def _score_saved_post_answer(task):
+    context = ChatWorkflowContext(
+        request=task.request, conversation_id=task.response.conversation_id,
+        owner_name=task.response.owner_name, used_model=task.response.used_model,
+        answer=task.response.answer, memory_hits=task.memory_hits,
+        knowledge_hits=task.response.knowledge_hits, recent_session_context=task.recent_session_context,
+    )
+    return FacultyTwinWorkflowSupport._evaluate_memory_usefulness(
+        None, context, evaluated_at=task.evaluated_at
+    )
+
+
 class DigitalTwinService:
     def __init__(
         self,
@@ -9203,6 +8996,10 @@ class DigitalTwinService:
         self._chat_runtime = None
         self._chat_runtime_lock = threading.Lock()
         self._chat_finalizer = None
+        self._post_answer_runtime = None
+        self._post_answer_runtime_lock = threading.Lock()
+        self._post_answer_finalizer = None
+        self._post_answer_observers = set()
         self._llm_client = VllmChatClient(settings)
         self._deployment_receipt_store = DeploymentReceiptStore(settings)
         self._deployment_receipt_store.sync_inbox()
@@ -9557,57 +9354,41 @@ class DigitalTwinService:
         # Persistence failure must propagate, never masquerade as a committed turn.
         await asyncio.to_thread(MemoryPersistStage(support).execute, context)
         response = self._patch_response_with_post_answer(response, context)
+        task = self._capture_post_answer_task(context, response, support)
+        runtime = self._get_post_answer_runtime()
+        # Both delivery modes commit the same result/task and use the same
+        # SAGE worker. Asyncio only observes committed results, never executes
+        # post-answer stages or owns their recovery.
+        await asyncio.to_thread(runtime.submit, task)
+
+        async def observe_result():
+            result = await asyncio.to_thread(
+                runtime.wait, task.request_id, timeout=self._settings.chat_request_timeout_seconds
+            )
+            final = ChatResponse.model_validate(result["response"])
+            self._project_post_answer_score(task, result)
+            final.workflow_trace = _canonicalize_workflow_trace(final.workflow_trace)
+            if trace_callback is not None:
+                for step in final.workflow_trace:
+                    if step.key in {"memory_profile_consolidate", "follow_up_plan", "memory_usefulness_score"}:
+                        trace_callback(step)
+            if on_post_answer_complete is not None:
+                on_post_answer_complete()
+            return final
 
         if should_background:
-            # The current exchange must be durable before the HTTP response is
-            # returned. Otherwise an immediate follow-up can race the
-            # background task and miss the turn that the user just saw. Keep
-            # the slower profile consolidation, follow-up planning, and
-            # usefulness scoring off the critical path.
-            # Production fast path: ship the rendered response immediately,
-            # run non-critical post-answer side-effects on a background task. The trace
-            # callback inside ``_run_post_answer_inline_blocking`` keeps the
-            # workflow-events SSE stream populated; ``on_post_answer_complete``
-            # lets the caller (api.py) defer ``publish_complete`` until the
-            # background task finishes so SSE consumers see the post-answer
-            # trace steps before the stream closes.
-            async def _run_post_answer_background() -> None:
+            async def observe_background():
                 try:
-                    await asyncio.to_thread(
-                        self._run_post_answer_inline_blocking,
-                        context,
-                        support,
-                        include_memory_persist=False,
-                    )
-                except Exception:  # pragma: no cover - defensive log
-                    _logger.exception(
-                        "post-answer background task failed (conversation_id=%s)",
-                        getattr(context, "conversation_id", None),
-                    )
-                finally:
-                    if on_post_answer_complete is not None:
-                        try:
-                            on_post_answer_complete()
-                        except Exception:  # pragma: no cover
-                            _logger.exception(
-                                "post-answer complete callback failed (conversation_id=%s)",
-                                getattr(context, "conversation_id", None),
-                            )
+                    await observe_result()
+                except Exception:
+                    _logger.exception("post-answer result observation failed; durable work retained")
 
-            asyncio.create_task(_run_post_answer_background())
+            observer = asyncio.create_task(observe_background())
+            self._post_answer_observers.add(observer)
+            observer.add_done_callback(self._post_answer_observers.discard)
             self._persist_planner_comparison_background(request, response)
             return response
-
-        # Inline path (DAG runtime, no background flag or no trace callback):
-        # mirror the legacy semantics so direct callers (tests, batch jobs,
-        # benchmark adapter) still see the canonical 14-step trace and the
-        # populated post-answer fields.
-        await asyncio.to_thread(
-            self._run_post_answer_inline_blocking, context, support, include_memory_persist=False
-        )
-        final_response = self._patch_response_with_post_answer(response, context)
-        if on_post_answer_complete is not None:
-            on_post_answer_complete()
+        final_response = await observe_result()
         self._persist_planner_comparison_result(request, final_response)
         return final_response
 
@@ -11883,11 +11664,52 @@ class DigitalTwinService:
         return self._build_support().compress_conversation_context(conversation_id)
 
     async def aclose(self) -> None:
+        if self._post_answer_runtime is not None:
+            # Keep the finalizer available if a bounded drain times out; a
+            # weakref finalizer itself is consumed even when its callback fails.
+            await asyncio.to_thread(self._post_answer_runtime.drain)
+        if self._post_answer_observers:
+            await asyncio.gather(*self._post_answer_observers, return_exceptions=True)
+        if self._post_answer_runtime is not None:
+            await asyncio.to_thread(self._post_answer_runtime.close)
+            if self._post_answer_finalizer is not None:
+                self._post_answer_finalizer.detach()
         if self._chat_finalizer is not None:
             await asyncio.to_thread(self._chat_finalizer)
         if self._retrieval_finalizer is not None:
             await asyncio.to_thread(self._retrieval_finalizer)
         await self._llm_client.aclose()
+
+    def start_background_work(self):
+        self._get_post_answer_runtime().start()
+
+    def _project_post_answer_score(self, task, result):
+        score = result["memory_usefulness"]
+        if score["signal"] is None:
+            return
+        recent = bool(task.recent_session_context.strip())
+        short_count = sum(hit.memory_type == "short_term" for hit in task.memory_hits)
+        self._conversation_store.record_memory_usefulness(
+            conversation_id=task.response.conversation_id, signal=score["signal"], reason=score["reason"],
+            memory_used=bool(task.memory_hits) or recent, knowledge_used=bool(task.response.knowledge_hits),
+            memory_hit_count=len(task.memory_hits) + int(recent),
+            short_term_hit_count=short_count or int(recent),
+            long_term_hit_count=sum(hit.memory_type == "long_term" for hit in task.memory_hits),
+            knowledge_hit_count=len(task.response.knowledge_hits),
+            top_memory_score=max((hit.score for hit in task.memory_hits), default=2.0 if recent else None),
+            workflow_action=task.response.workflow_action, event_id=f"post-answer:{task.request_id}",
+        )
+
+    def _get_post_answer_runtime(self):
+        with self._post_answer_runtime_lock:
+            if self._post_answer_runtime is None:
+                self._post_answer_runtime = PostAnswerRuntime(
+                    self._settings.conversation_memory_dir / "post_answer_work.sqlite3",
+                    consolidate_profiles=self._conversation_store.consolidate_profiles,
+                    score=_score_saved_post_answer,
+                )
+                self._post_answer_finalizer = weakref.finalize(self, self._post_answer_runtime.close)
+            return self._post_answer_runtime
 
     def _get_retrieval_runtime(self) -> RetrievalRuntime:
         with self._retrieval_runtime_lock:
@@ -12151,40 +11973,29 @@ class DigitalTwinService:
             timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds,
         )
 
-    def _run_post_answer_inline_blocking(
-        self,
-        context: ChatWorkflowContext,
-        support: FacultyTwinWorkflowSupport,
-        *,
-        include_memory_persist: bool = True,
-    ) -> ChatWorkflowContext:
-        """Run the four post-answer side-effect stages on ``context``.
-
-        This runs synchronously on whatever thread the caller is on. The
-        stages mutate ``context`` in place (memory writes, follow-up
-        planning, profile consolidation, usefulness scoring) and emit trace
-        steps via the support's ``trace_callback``. Non-critical stages are wrapped in
-        a try/except so a failure in one stage does not cancel the others;
-        the chat answer has already been delivered to the user, so this
-        layer is best-effort.
-        """
-        post_answer_stages: list[tuple[str, type[MapFunction]]] = [
-            ("memory_profile_consolidate", MemoryProfileConsolidationStage),
-            ("follow_up_plan", FollowUpPlanningStage),
-            ("memory_usefulness_score", MemoryUsefulnessScoringStage),
-        ]
-        if include_memory_persist:
-            MemoryPersistStage(support).execute(context)
-        for stage_key, stage_cls in post_answer_stages:
-            try:
-                stage_cls(support).execute(context)
-            except Exception:  # pragma: no cover - logged for ops review
-                _logger.exception(
-                    "post-answer stage %s failed (conversation_id=%s)",
-                    stage_key,
-                    getattr(context, "conversation_id", None),
-                )
-        return context
+    def _capture_post_answer_task(self, context, response, support):
+        skip_profile = (context.persisted_memory_record is None
+                        or support._is_remembered_value_command(context.request.question)
+                        or support._detect_recent_session_meta_query(context.request.question) == "remembered_value")
+        profiles = self._conversation_store.list_profiles_for_student(
+            student_name=context.request.student_name, student_email=context.request.student_email, limit=10
+        )
+        if not skip_profile:
+            profiles += self._conversation_store._derive_profiles(context.persisted_memory_record)
+        entries = self._conversation_store._versioned_profile_entries(profiles)
+        profiles = [ProfileMemoryRecord.from_dict(entry["payload"]) for entry in entries]
+        return PostAnswerTask.capture(
+            request_id=response.exchange_id or str(uuid4()), request=context.request, response=response,
+            record=context.persisted_memory_record, interaction_intent=context.interaction_intent,
+            memory_hits=context.memory_hits, recent_session_context=context.recent_session_context,
+            profile_snapshot=profiles, availability=self._meeting_service.get_availability_schedule(),
+            evaluate_memory=(support._planner_requests_any_step(context, "score_memory_usefulness")
+                             and support._build_current_time_meta_answer(context.request.question) is None),
+            score_skip_reason=("current_date" if support._build_current_time_meta_answer(context.request.question)
+                               is not None else "planner"),
+            skip_profile=skip_profile,
+            skip_follow_up=context.is_admin_request and context.workflow_action == "admin_add_knowledge",
+        )
 
     @staticmethod
     def _patch_response_with_post_answer(

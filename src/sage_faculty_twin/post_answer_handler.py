@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from time import perf_counter
 
 from .light_agent import LightweightActionPlanner
 from .memory_store import ConversationMemoryRecord
 from .models import WorkflowTraceStep
 from .post_answer_contract import PostAnswerTask
+
+
+def memory_usefulness_label(signal):
+    return {"helpful": "有帮助", "stale": "可能过时", "low_confidence": "低置信度",
+            "review_worthy": "建议复核"}.get(signal, signal)
 
 
 class PostAnswerHandler:
@@ -29,12 +35,16 @@ class PostAnswerHandler:
         if lease.task_id != "post_answer" or lease.request_id != task.request_id:
             raise ValueError("post_answer_lease_identity_conflict")
         traces = []
+        started = perf_counter()
 
         def trace(key, title, summary, detail, *, skipped=False):
+            nonlocal started
             traces.append(WorkflowTraceStep(
                 key=key, title=title, summary=summary, detail=detail,
                 status="skipped" if skipped else "completed", parallel_group="post_answer",
+                duration_ms=max(0, round((perf_counter() - started) * 1000)),
             ))
+            started = perf_counter()
 
         if task.skip_profile or task.record is None:
             profile_count = 0
@@ -60,9 +70,14 @@ class PostAnswerHandler:
         signal = reason = None
         if task.evaluate_memory:
             signal, reason = self._score(task)
+        skip_summary, skip_detail = (
+            ("系统日期回答无需评估记忆证据。", "本轮答案来自服务配置时区的系统日期，不依赖对话记忆或检索材料。")
+            if task.score_skip_reason == "current_date"
+            else ("当前工作流规划跳过记忆证据评估。", "遵循已保存的评估决策。")
+        )
         trace("memory_usefulness_score", "评估记忆证据有效性",
-              "已完成本轮记忆证据评估。" if task.evaluate_memory else "本轮跳过记忆证据评估。",
-              reason or "遵循已保存的评估决策。", skipped=not task.evaluate_memory)
+              f"已完成本轮记忆证据评估：{memory_usefulness_label(signal)}。" if task.evaluate_memory else skip_summary,
+              reason or skip_detail, skipped=not task.evaluate_memory)
 
         keys = {item.key for item in traces}
         response = task.response.model_copy(deep=True, update={

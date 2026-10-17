@@ -23,7 +23,8 @@ def test_slow_cache_warmup_does_not_block_startup(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module,
         "service",
-        SimpleNamespace(ensure_initialized=lambda: SimpleNamespace(warm_fixed_prefix_cache=warmup)),
+        SimpleNamespace(ensure_initialized=lambda: SimpleNamespace(
+            warm_fixed_prefix_cache=warmup, start_background_work=lambda: None)),
     )
 
     async def verify() -> None:
@@ -35,3 +36,13 @@ def test_slow_cache_warmup_does_not_block_startup(monkeypatch) -> None:
         release_warmup.set()
 
     asyncio.run(verify())
+
+
+def test_recovery_starts_even_when_model_warmup_is_disabled(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api_module.settings, "warm_service_on_startup", False)
+    monkeypatch.setattr(api_module, "service", SimpleNamespace(
+        ensure_initialized=lambda: SimpleNamespace(start_background_work=lambda: calls.append("recover"))
+    ))
+    asyncio.run(api_module.startup_event())
+    assert calls == ["recover"]

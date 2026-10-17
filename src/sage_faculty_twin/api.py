@@ -1969,8 +1969,9 @@ async def slack_events(
 
 
 async def startup_event() -> None:
+    instance = await asyncio.to_thread(service.ensure_initialized)
+    await asyncio.to_thread(instance.start_background_work)
     if settings.warm_service_on_startup:
-        instance = await asyncio.to_thread(service.ensure_initialized)
         try:
             # The model-side warmup is opportunistic.  A slow or stalled model
             # must not hold the HTTP listener offline after the KB is ready.

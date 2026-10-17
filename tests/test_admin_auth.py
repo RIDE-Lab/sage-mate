@@ -90,6 +90,9 @@ class FakeRuntimeManager:
 
 @pytest.fixture
 def isolated_availability_store(tmp_path: Path):
+    original_settings = service._settings
+    original_post_runtime = service._post_answer_runtime
+    original_post_finalizer = service._post_answer_finalizer
     original_meeting_service = service._meeting_service
     original_knowledge_store = service._knowledge_store
     original_conversation_store = service._conversation_store
@@ -110,6 +113,11 @@ def isolated_availability_store(tmp_path: Path):
             "knowledge_gap_draft_dir": tmp_path / "knowledge-gap-drafts",
         }
     )
+    # The persistent worker owns a bound memory destination. Isolate its
+    # lifecycle and journal together with the per-test replacement store.
+    service._settings = isolated_settings
+    service._post_answer_runtime = None
+    service._post_answer_finalizer = None
     service._knowledge_store = service._knowledge_store.__class__(isolated_settings)
     service._meeting_service = MeetingService(
         settings.model_copy(
@@ -142,6 +150,11 @@ def isolated_availability_store(tmp_path: Path):
     try:
         yield notifier
     finally:
+        if service._post_answer_finalizer is not None:
+            service._post_answer_finalizer()
+        service._post_answer_runtime = original_post_runtime
+        service._post_answer_finalizer = original_post_finalizer
+        service._settings = original_settings
         service._meeting_service = original_meeting_service
         service._knowledge_store = original_knowledge_store
         service._conversation_store = original_conversation_store

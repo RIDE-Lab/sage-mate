@@ -17,6 +17,20 @@ from sage_faculty_twin.memory_store import (
 from sage_faculty_twin.models import ChatRequest
 
 
+def test_score_observation_is_deduplicated_in_current_telemetry_window(tmp_path):
+    store = NeuroMemConversationStore(AppSettings(conversation_memory_dir=tmp_path / "memory",
+                                                 conversation_memory_index_type="segment"))
+    kwargs = dict(conversation_id="conversation", signal="helpful", reason="saved result",
+                  memory_used=True, knowledge_used=False, memory_hit_count=1,
+                  short_term_hit_count=1, long_term_hit_count=0, knowledge_hit_count=0,
+                  top_memory_score=2.0, workflow_action="answer", event_id="post-answer:turn")
+    first = store.record_memory_usefulness(**kwargs)
+    assert store.record_memory_usefulness(**kwargs) == first
+    events = [event for event in store._telemetry_events if event["event_type"] == "score_memory_usefulness"]
+    assert len(events) == 1
+    assert store._telemetry_type_counts["score_memory_usefulness"] == 1
+
+
 def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tmp_path):
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
                            conversation_memory_index_type="segment")
