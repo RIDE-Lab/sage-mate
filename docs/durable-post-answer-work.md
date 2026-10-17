@@ -58,7 +58,7 @@ Names and conversation IDs are not authorization keys. Anonymous contact
 details cannot double as verified history ownership; contact/booking flows need
 an explicit separate policy. Slack uses its existing verified account-link path,
 not HTTP bearer identity; its owner adapter is still pending. Workflow events,
-cancellation, feedback and an authorized resumable result endpoint remain
+cancellation and an authorized resumable result endpoint remain
 required before deployment of the full delivery design.
 
 ### Owner-scoped canonical memory and HTTP binding
@@ -113,8 +113,17 @@ the same durable worker port. A restart does not infer identity from the current
 request, display name or email. Tests exercise same-ID multi-owner publication,
 reopen, rejected cross-owner plans and an actual owned answer with recent context,
 profile capture and automatic digest. HTTPS transport tests verify cookie
-delivery/continuity and isolation across clients. Event/cancel/feedback ownership,
+delivery/continuity and isolation across clients. Event/cancel ownership,
 Slack cutover and online acceptance remain pending.
+
+Feedback resolves the trusted HTTP owner and checks the canonical source record
+before any analytics or knowledge writeback. Missing, foreign and unassigned
+records return the same 404 to scoped callers. The checked record is passed into
+knowledge writeback rather than re-read from a stale cache. Canonical lookup
+supports commits made by another store instance. Feedback storage itself still
+uses the prior synchronous JSON implementation and a cached existence check;
+its atomic migration, stale-cache availability and recovery semantics are not
+yet qualified. Do not interpret the authorization fix as crash-safe feedback.
 
 Memory and answer/task intent share one transaction. A lost acknowledgement may
 leave a committed turn even though the caller receives an error; workers recover

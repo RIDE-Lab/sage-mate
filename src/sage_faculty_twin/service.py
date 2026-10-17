@@ -4959,7 +4959,11 @@ class FacultyTwinWorkflowSupport:
             ],
         )
 
-    def submit_chat_feedback(self, request: ChatFeedbackRequest) -> ChatFeedbackResponse:
+    def submit_chat_feedback(self, request: ChatFeedbackRequest, *, owner_id=None) -> ChatFeedbackResponse:
+        record = self._conversation_store.get_owned_record(request.exchange_id, owner_id=owner_id)
+        if record is None:
+            # Unknown and foreign records deliberately have the same response.
+            raise HTTPException(status_code=404, detail="找不到对应的问答记录。")
         try:
             feedback = self._analytics_store.submit_feedback(
                 exchange_id=request.exchange_id,
@@ -4974,7 +4978,7 @@ class FacultyTwinWorkflowSupport:
                 detail="找不到对应的问答记录。",
             ) from exc
 
-        knowledge_write_backs = self._write_back_feedback_knowledge(feedback.exchange_id, feedback)
+        knowledge_write_backs = self._write_back_feedback_knowledge(record, feedback)
 
         return ChatFeedbackResponse(
             exchange_id=feedback.exchange_id,
@@ -4989,14 +4993,13 @@ class FacultyTwinWorkflowSupport:
 
     def _write_back_feedback_knowledge(
         self,
-        exchange_id: str,
+        record: ConversationMemoryRecord,
         feedback,
     ) -> list[KnowledgeWriteBackResult]:
         if feedback.rating != "up" or not feedback.resolved:
             return []
 
-        record = self._conversation_store.get_record(exchange_id)
-        if record is None or not record.web_search_hits:
+        if not record.web_search_hits:
             return []
 
         answer_text = str(record.answer or "")
@@ -10718,14 +10721,14 @@ class DigitalTwinService:
         )
 
     def submit_chat_feedback(
-        self, request: ChatFeedbackRequest | dict[str, Any]
+        self, request: ChatFeedbackRequest | dict[str, Any], *, owner_id: str | None = None
     ) -> ChatFeedbackResponse:
         normalized_request = (
             request
             if isinstance(request, ChatFeedbackRequest)
             else ChatFeedbackRequest.model_validate(request)
         )
-        return self._build_support().submit_chat_feedback(normalized_request)
+        return self._build_support().submit_chat_feedback(normalized_request, owner_id=owner_id)
 
     @staticmethod
     def _build_conversation_title(text: str) -> str:

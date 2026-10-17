@@ -2315,8 +2315,12 @@ async def stream_chat(
 
 
 @llm_app.post("/chat/feedback", response_model=ChatFeedbackResponse)
-async def submit_chat_feedback(request: ChatFeedbackRequest) -> ChatFeedbackResponse:
-    return service.submit_chat_feedback(request)
+async def submit_chat_feedback(request: ChatFeedbackRequest, raw_request: Request,
+                               response: Response) -> ChatFeedbackResponse:
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    result = service.submit_chat_feedback(request, owner_id=identity.owner_id)
+    _deliver_guest_cookie(raw_request, response)
+    return result
 
 
 @llm_app.get("/admin/conversation-traces")

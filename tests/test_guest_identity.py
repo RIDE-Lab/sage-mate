@@ -72,6 +72,16 @@ def test_guest_cookie_precedes_delivery_and_preserves_owner(tmp_path, monkeypatc
         assert outsider.status_code == 200
         other_owner = service._conversation_store.get_record(outsider.json()["exchange_id"]).owner_id
         assert other_owner != owner
+        feedback = {"exchange_id": body["exchange_id"], "rating": "down", "resolved": False}
+        before = service._analytics_store.count_feedback()
+        forbidden = second.post("/chat/feedback", json={**feedback, "owner_id": owner})
+        missing = second.post("/chat/feedback", json={**feedback, "exchange_id": "unknown"})
+        assert forbidden.status_code == missing.status_code == 404
+        assert forbidden.json() == missing.json()
+        assert service._analytics_store.count_feedback() == before
+        accepted = first.post("/chat/feedback", json=feedback)
+        assert accepted.status_code == 200
+        assert service._analytics_store.count_feedback() == before + 1
         compressed = first.post("/context/compress", json={"conversation_id": "shared-client-id"})
         assert compressed.status_code == 200
         digest = service._digest_store.get_digest("shared-client-id", owner_id=owner)

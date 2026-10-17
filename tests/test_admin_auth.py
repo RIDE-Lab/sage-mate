@@ -19,9 +19,16 @@ from sage_faculty_twin.models import ChatRequest
 from sage_faculty_twin.models import InteractionIntent
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 from sage_faculty_twin.meeting import MeetingService
+from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
 
 
 client = TestClient(app)
+
+
+def _feedback_guest_owner():
+    token, session = service._guest_identity_store.issue()
+    client.cookies.set(GUEST_COOKIE_NAME, token)
+    return f"guest:{session.subject_id}"
 
 
 class RecordingNotifier:
@@ -1032,6 +1039,7 @@ def test_admin_can_view_question_analytics_report(
     isolated_availability_store: RecordingNotifier,
 ) -> None:
     client.cookies.clear()
+    owner_id = _feedback_guest_owner()
     service._llm_client = CollaborationMemoryLLMClient()
 
     first = asyncio.run(
@@ -1041,6 +1049,7 @@ def test_admin_can_view_question_analytics_report(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-analytics-1",
+                owner_id=owner_id,
                 question="和老师约时间前，我应该先准备什么？",
             )
         )
@@ -1052,6 +1061,7 @@ def test_admin_can_view_question_analytics_report(
                 student_email="bob@example.com",
                 course_context="科研指导",
                 conversation_id="conv-analytics-2",
+                owner_id=owner_id,
                 question="和老师约时间前，我应该先准备什么？",
             )
         )
@@ -1063,6 +1073,7 @@ def test_admin_can_view_question_analytics_report(
                 student_email="carol@example.com",
                 course_context="科研指导",
                 conversation_id="conv-analytics-3",
+                owner_id=owner_id,
                 question="FlowRAG 主要做什么？",
             )
         )
@@ -1193,6 +1204,7 @@ def test_admin_can_generate_and_publish_gap_draft(
     isolated_availability_store: RecordingNotifier,
 ) -> None:
     client.cookies.clear()
+    owner_id = _feedback_guest_owner()
     service._llm_client = CollaborationMemoryLLMClient()
 
     exchange_ids: list[str] = []
@@ -1204,6 +1216,7 @@ def test_admin_can_generate_and_publish_gap_draft(
                     student_email=f"{student_name.lower()}@example.com",
                     course_context="科研指导",
                     conversation_id=f"conv-gap-{student_name}",
+                    owner_id=owner_id,
                     question="和老师约时间前，我应该先准备什么？",
                 )
             )

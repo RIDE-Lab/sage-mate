@@ -81,6 +81,16 @@ def test_legacy_roundtrip_is_not_implicitly_claimed_and_owner_is_validated(tmp_p
             ConversationMemoryRecord.from_dict({**legacy, "owner_id": invalid})
 
 
+def test_owned_lookup_reads_canonical_record_without_local_publication(tmp_path):
+    stale = make_store(tmp_path)
+    writer = make_store(tmp_path)
+    source = persist(writer, "account:owner")
+    assert stale.get_record(source.memory_id) is None
+    assert stale.get_owned_record(source.memory_id, owner_id="account:owner").to_dict() == source.to_dict()
+    assert stale.get_owned_record(source.memory_id, owner_id="account:other") is None
+    assert stale.get_owned_record(source.memory_id, owner_id=None) is None
+
+
 def test_client_owner_claim_is_overwritten_by_trusted_identity():
     probe = request("account:victim")
     bound = ChatIdentity("anonymous", "trusted-guest", "general_visitor").bind(probe)
