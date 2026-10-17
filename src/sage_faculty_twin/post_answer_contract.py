@@ -8,6 +8,8 @@ not task inputs. The already validated response is the immutable answer source.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -58,6 +60,18 @@ class DigestWorkTask(BaseModel):
                 "tasks": {"context_digest": snapshot}}
 
 
+class DeliveryIntent(BaseModel):
+    """Server-captured channel identity, never accepted from a chat body."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    owner_id: str = Field(pattern=r"^(account|api_token|guest|slack):[A-Za-z0-9_-]{1,128}$")
+    request_id: str = Field(min_length=1)
+
+    @property
+    def stream_id(self):
+        return hashlib.sha256(json.dumps([self.owner_id, self.request_id], separators=(",", ":")).encode()).hexdigest()
+
+
 class PostAnswerTask(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -79,11 +93,14 @@ class PostAnswerTask(BaseModel):
     skip_follow_up: bool = False
     artifact_draft: ArtifactDraftIntent | None = None
     digest: DigestIntent | None = None
+    delivery: DeliveryIntent | None = None
 
     @model_validator(mode="after")
     def validate_identity(self):
         if self.request_id != self.request_id.strip():
             raise ValueError("post_answer_request_id_not_trimmed")
+        if self.delivery is not None and self.delivery.owner_id != self.request.owner_id:
+            raise ValueError("post_answer_delivery_owner_conflict")
         if not self.response.conversation_id:
             raise ValueError("post_answer_missing_conversation")
         if self.request.slack_channel_context is not None:
@@ -118,7 +135,7 @@ class PostAnswerTask(BaseModel):
                 evaluate_memory, record=None, interaction_intent=None,
                 memory_hits=(), recent_session_context="", profile_snapshot=(),
                 skip_profile=False, skip_follow_up=False, evaluated_at=None,
-                score_skip_reason="planner", artifact_draft=None, digest=None):
+                score_skip_reason="planner", artifact_draft=None, digest=None, delivery=None):
         # Use the request's explicit serialization policy, then detach every
         # nested object through JSON before handing it to a durable worker.
         task = cls(
@@ -130,6 +147,7 @@ class PostAnswerTask(BaseModel):
             score_skip_reason=score_skip_reason,
             artifact_draft=artifact_draft,
             digest=digest,
+            delivery=delivery,
             evaluated_at=evaluated_at or datetime.now(UTC),
         )
         return cls.model_validate_json(task.model_dump_json())

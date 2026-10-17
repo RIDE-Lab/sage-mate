@@ -14,11 +14,11 @@ def runtime_for(memory, **kwargs):
                              score=lambda task: (None, None), **kwargs)
 
 
-def setup_turn(tmp_path):
+def setup_turn(tmp_path, owner_id=None):
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
                            conversation_memory_index_type="segment")
     memory = NeuroMemConversationStore(settings)
-    request = ChatRequest(student_name="Alice", question="research question", attachments=[{
+    request = ChatRequest(owner_id=owner_id, student_name="Alice", question="research question", attachments=[{
         "file_name": "research.txt", "media_type": "text/plain", "size_bytes": len(EVIDENCE.encode()),
         "text_content": EVIDENCE,
     }])

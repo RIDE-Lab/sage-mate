@@ -3,9 +3,12 @@
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
+from sage.runtime.event_journal import EventJournal
 
 from .post_answer_handler import PostAnswerHandler
 from .memory_store import ConversationMemoryRecord
+from .post_answer_contract import PostAnswerTask
+from .chat_delivery import ChatDeliveryGate
 
 
 class PostAnswerRuntime:
@@ -17,18 +20,61 @@ class PostAnswerRuntime:
         self._state = state if state is not None else StatefulProcessRuntime(
             backend="sqlite", sqlite_path=str(path))
         self.journal = WorkJournal(self._state, namespace="twin-post-answer-v1")
+        self.events = EventJournal(self._state, namespace="twin-workflow-events-v1")
         self._service = WorkService(
             self.journal, PostAnswerHandler(consolidate_profiles=consolidate_profiles, score=score,
                                           create_artifact_draft=create_artifact_draft,
                                           refresh_digest=refresh_digest),
             max_workers=2, poll_interval=0.05,
+            completion_mutations=self._completion_events,
         )
 
     def start(self):
         self._service.start()
 
     def submit(self, task):
-        return self._service.commit(task.request_id, **task.journal_inputs())
+        inputs = task.journal_inputs()
+        payload = inputs["tasks"].get("post_answer")
+        return self._service.commit(task.request_id, **inputs,
+            mutations=self._answer_event(payload) if payload is not None else None)
+
+    def _answer_event(self, payload):
+        task = PostAnswerTask.model_validate(payload)
+        if task.delivery is None:
+            return {}
+        response = ChatDeliveryGate().deliver(response=task.response, original_question=task.request.question)
+        if response.answer != task.response.answer:
+            raise ValueError("delivery_answer_must_be_normalized_before_commit")
+        prepared = self.events.prepare_append(task.delivery.stream_id, event_id="answer_done",
+            payload={"type": "answer_done", "response": response.model_dump(mode="json")})
+        return {prepared.slot: prepared.transform}
+
+    def _completion_events(self, lease, result):
+        if lease.task_id != "post_answer":
+            return {}
+        task = PostAnswerTask.model_validate(lease.payload)
+        if task.delivery is None:
+            return {}
+        # The handler may enrich projections, but may not replace the committed
+        # answer. All completion events share the fenced acknowledgement.
+        response = result["response"]
+        if response["answer"] != task.response.answer:
+            raise ValueError("post_answer_cannot_replace_committed_answer")
+        initial = task.response.model_dump(mode="json")["workflow_trace"]
+        mutations = []
+        for index, step in enumerate(response["workflow_trace"]):
+            if step not in initial:
+                mutations.append(self.events.prepare_append(task.delivery.stream_id,
+                    event_id=f"post_answer:{index}:{step['key']}", payload={"type": "trace-step", "step": step}))
+        mutations.append(self.events.prepare_append(task.delivery.stream_id, event_id="terminal",
+                         terminal=True, payload={"type": "complete"}))
+
+        def apply(old):
+            for prepared in mutations:
+                old = prepared.transform(old)
+            return old
+
+        return {mutations[0].slot: apply}
 
     def submit_turn(self, task, memory):
         """Atomically admit canonical memory and intent on their shared store."""
@@ -37,13 +83,14 @@ class PostAnswerRuntime:
         inputs = task.journal_inputs()
         payload = inputs["tasks"]["post_answer"]
         request_id = payload["request_id"]
+        delivery_mutations = self._answer_event(payload)
         record = (ConversationMemoryRecord.from_dict(payload["record"])
                   if payload["record"] is not None else None)
         if record is None:
-            self._service.commit(request_id, **inputs)
+            self._service.commit(request_id, **inputs, mutations=delivery_mutations)
             return None
         return memory.persist_exchange(record, commit_work=lambda mutations:
-            self._service.commit(request_id, **inputs, mutations=mutations))
+            self._service.commit(request_id, **inputs, mutations={**mutations, **delivery_mutations}))
 
     def wait(self, request_id, *, timeout):
         record = self._service.wait(request_id, timeout=timeout)
