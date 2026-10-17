@@ -411,16 +411,22 @@ requires account binding. The configuration helper no longer grants a default
 user access. Keep signing secrets and bot tokens in the deployment's secret
 environment; do not put them in test fixtures or migration reports.
 
-The SAGE-backed `bindings.sqlite3` state upgrades to schema version 2. Old links
+The legacy SAGE-backed `bindings.sqlite3` state upgrades to schema version 2. Old links
 without verified workspace identity are retained under `unscoped_links`, but
 cannot authorize requests. Users must generate a new code in the authenticated
 Twin web UI and bind again in their intended workspace. One website account has
 one active Slack binding; rebinding revokes its previous identity atomically.
 Current account membership is still checked for every authorized request.
 
-Before release, stop old binding writers and snapshot the entire binding
-directory consistently, including SQLite sidecars. Validate upgrade on a copy
-first; do not run old and new writers concurrently. Legacy JSON originals are
+At startup its snapshot migrates once into the conversation service's shared
+SAGE state, which also owns the Slack work journal. The original database remains
+a rollback source, not a second active binding store. A stored source digest
+prevents a later startup from overwriting newer canonical bindings; a changed
+legacy source fails closed and requires operator review.
+
+Before release, stop old binding writers and snapshot both the binding directory
+and shared conversation state consistently, including SQLite sidecars. Validate
+upgrade on a copy first; do not run old and new writers concurrently. Legacy JSON originals are
 archived under `legacy-imported`, not deleted. Rollback requires the matching
 pre-upgrade code and consistent storage snapshot, not just an older application
 binary. No automatic workspace assignment or legacy authorization fallback is
@@ -461,10 +467,13 @@ securely populated environment; never paste credentials into command history.
 Slash replies use `chat.postEphemeral` with the original user and channel; DM and
 mention answers use `chat.postMessage` and preserve thread identity. Binding
 notices in public channels are ephemeral, and one-time binding codes are not
-stored in the work journal. Binding itself still commits in its separate binding
-store: a crash between that commit and admission of the notice can lose the
-success notice, but does not undo a successful binding. Check link status before
-reissuing a code. This is not a cross-store atomic transaction.
+stored in the work journal. Consuming a code, replacing its binding and admitting
+the success notice now share a single SAGE state transaction. A replay receipt
+stores only the code digest and verified identity; retries cannot consume again
+or restore an obsolete binding. Failure rolls back both binding and intent.
+Lost acknowledgement after commit leaves the notice recoverable at startup.
+Slash commands acknowledge the durable binding request; the result is sent by
+the same notification worker as events, rather than a separate inline path.
 
 As documented by [Slack](https://docs.slack.dev/reference/methods/chat.postEphemeral/),
 ephemeral visibility requires an active channel member and is not guaranteed.

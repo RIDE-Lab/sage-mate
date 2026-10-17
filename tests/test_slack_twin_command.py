@@ -346,15 +346,14 @@ def test_bind_success_and_event_retry_do_not_persist_code(harness, transport):
         headers["x-slack-retry-num"] = "1"
         assert harness.client.post(endpoint, content=body, headers=headers).status_code == 200
     harness.flush()
-    text = response.json()["text"] if transport == "command" else harness.sent[0][1]["text"]
-    assert "绑定成功" in text
+    assert "绑定成功" in harness.sent[0][1]["text"]
     assert harness.links.get_link_for_slack_user("UOTHER", team_id="T123").user_id == "account"
     rows, _ = api_module.slack_workflow.journal.records(limit=10)
     assert code.code not in json.dumps(rows)
 
 
 def test_invalid_bind_and_usage(harness):
-    for text, expected in [("bind BADCODE", "无效或已过期"), ("bind", "用法"), ("", "用法")]:
+    for text, expected in [("bind BADCODE", "收到绑定请求"), ("bind", "用法"), ("", "用法")]:
         body = command(text=text)
         response = harness.client.post("/slack/commands/twin", content=body, headers=signed(body))
         assert response.status_code == 200
@@ -362,7 +361,45 @@ def test_invalid_bind_and_usage(harness):
     body = event(type="app_mention", text="<@BOT>", channel_type="channel")
     assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
     harness.flush()
-    assert "用法" in harness.sent[0][1]["text"]
+    assert any("无效或已过期" in item[1]["text"] for item in harness.sent)
+    assert any("用法" in item[1]["text"] for item in harness.sent)
+
+
+def test_binding_lost_commit_ack_recovers_notice_after_restart(harness, monkeypatch):
+    harness.accept = False
+    harness.accounts["account"] = SimpleNamespace(visitor_profile="lab_member", email="member@example.com")
+    code = harness.links.create_code(user_id="account", email="member@example.com", visitor_profile="lab_member")
+    body = event(user="UOTHER", text=f"bind {code.code}")
+    original = harness.state.update_many
+    def lose_ack(*args, **kwargs):
+        original(*args, **kwargs)
+        raise ConnectionError("injected lost transaction acknowledgement")
+    with monkeypatch.context() as patch:
+        patch.setattr(harness.state, "update_many", lose_ack)
+        with pytest.raises(ConnectionError):
+            harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True))
+    assert harness.links.get_link_for_slack_user("UOTHER", team_id="T123") is not None
+    harness.client.portal.call(api_module.shutdown_event)
+    harness.accept = True
+    harness.client.portal.call(api_module.startup_event)
+    harness.flush()
+    assert len(harness.sent) == 1
+    assert "绑定成功" in harness.sent[0][1]["text"]
+    assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
+    harness.flush()
+    assert len(harness.sent) == 1
+
+
+def test_invalid_binding_retry_replays_same_notice(harness):
+    body = event(user="UOTHER", text="bind INVALID")
+    headers = signed(body, json_body=True)
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    harness.flush()
+    headers["x-slack-retry-num"] = "1"
+    assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
+    harness.flush()
+    assert len(harness.sent) == 1
+    assert "无效或已过期" in harness.sent[0][1]["text"]
 
 
 def test_url_verification(harness):

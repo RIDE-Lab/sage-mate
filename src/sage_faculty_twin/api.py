@@ -785,23 +785,27 @@ def _normalize_slack_twin_question(text: str) -> str:
     return " ".join(words).strip()
 
 
-def _handle_slack_twin_bind_text(*, team_id: str, user_id: str, text: str) -> str | None:
-    normalized_text = _normalize_slack_twin_question(text)
-    words = normalized_text.split()
-    if not words or words[0].lower() != "bind":
-        return None
-    if len(words) < 2:
-        return "用法：`/twin bind 你的绑定码`"
-    link = slack_link_store.consume_code(words[1], slack_user_id=user_id, team_id=team_id)
-    if link is None:
-        return "绑定码无效或已过期。请回到 twin 网页端重新生成 Slack 绑定码。"
-    account = service.get_slack_link_account(link.user_id)
-    if account is None or account.visitor_profile != "lab_member":
-        return "这个账号还不是课题组成员，需要邀请码升级为课题组成员后才能使用 Slack /twin。"
-    return (
-        "绑定成功。以后可以直接输入 `/twin 你的问题`，"
-        f"或者直接给 twin 发私信。已绑定账号：{account.email}"
-    )
+async def _bind_slack_ingress(ingress, code):
+    if slack_workflow is None:
+        raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+    try:
+        await slack_workflow.bind(ingress, slack_link_store, code)
+    except ValueError as exc:
+        if str(exc) == "slack_binding_code_invalid":
+            await _admit_slack(ingress, notice="绑定码无效或已过期。请回到 twin 网页端重新生成 Slack 绑定码。")
+        elif str(exc) == "journal_commit_conflict":
+            # A previously rejected code has a durable failure notice. Replay
+            # that immutable decision; do not turn the retry into a new bind.
+            try:
+                if await slack_workflow.resume_if_admitted(ingress):
+                    return
+            except ValueError:
+                pass
+            raise HTTPException(status_code=409, detail="Slack binding request conflict.") from None
+        elif str(exc) == "slack_binding_operation_conflict":
+            raise HTTPException(status_code=409, detail="Slack binding request conflict.") from None
+        else:
+            raise
 
 
 def _resolve_slack_twin_identity(user_id: str, *, team_id: str) -> tuple[str, str | None, str | None]:
@@ -1733,9 +1737,17 @@ async def slack_twin_command(
             }
         )
 
-    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
-    if bind_reply is not None:
-        return JSONResponse({"response_type": "ephemeral", "text": bind_reply})
+    words = question.split()
+    if words[0].lower() == "bind":
+        if len(words) < 2:
+            return JSONResponse({"response_type": "ephemeral", "text": "用法：`/twin bind 你的绑定码`"})
+        try:
+            ingress = SlackIngress(team_id=team_id, user_id=user_id, channel_id=channel_id,
+                transport_id=form.get("trigger_id", "").strip(), kind="command", question="Slack binding status")
+        except ValidationError:
+            raise HTTPException(status_code=400, detail="Slack request missing valid transport identity.") from None
+        await _bind_slack_ingress(ingress, words[1])
+        return JSONResponse({"response_type": "ephemeral", "text": "收到绑定请求，结果稍后发回这里。"})
 
     _, _, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
     if denial_message is not None:
@@ -1811,6 +1823,13 @@ async def slack_events(
         ingress = ingress.model_copy(update={"question": "Slack binding status", "private_reply": is_public_mention})
     if slack_workflow is None:
         raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
+    words = question.split()
+    if words and words[0].lower() == "bind":
+        if len(words) < 2:
+            await _admit_slack(ingress, notice="用法：`/twin bind 你的绑定码`")
+        else:
+            await _bind_slack_ingress(ingress, words[1])
+        return JSONResponse({"ok": True})
     try:
         if await slack_workflow.resume_if_admitted(ingress):
             return JSONResponse({"ok": True})
@@ -1821,12 +1840,6 @@ async def slack_events(
     if not question:
         usage_text = "用法：`@twin 你的问题`、`/twin 你的问题`，或者直接给 twin 发私信。"
         await _admit_slack(ingress, notice=usage_text)
-        return JSONResponse({"ok": True})
-
-    bind_reply = await asyncio.to_thread(_handle_slack_twin_bind_text, team_id=team_id, user_id=user_id, text=question)
-    if bind_reply is not None:
-        # Never persist a one-time binding credential in the request journal.
-        await _admit_slack(ingress, notice=bind_reply)
         return JSONResponse({"ok": True})
 
     _, _, denial_message = await asyncio.to_thread(_resolve_slack_twin_identity, user_id, team_id=team_id)
@@ -1845,6 +1858,7 @@ async def startup_event() -> None:
         if identity.get("team_id") != SLACK_TWIN_TEAM_ID:
             raise RuntimeError("slack_bot_workspace_mismatch")
     instance = await asyncio.to_thread(service.ensure_initialized)
+    await asyncio.to_thread(slack_link_store.migrate_to, instance._conversation_store.state_store)
     await asyncio.to_thread(instance.start_background_work)
     if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
         slack_workflow = _create_slack_workflow(instance._conversation_store.state_store)

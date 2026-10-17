@@ -87,6 +87,56 @@ class SlackUserLinkStore:
         self._slot = ("twin-slack-bindings-v1", "bindings", "state")
         self._import_legacy()
 
+    @property
+    def state_store(self):
+        return self._state
+
+    def migrate_to(self, state):
+        """Move the authoritative snapshot to the shared SAGE state, once.
+
+        Stop old writers before migration. The original database is retained
+        for rollback, never merged over newer target bindings on later starts.
+        Changed legacy sources fail closed instead of silently losing updates.
+        The target state is borrowed and remains owned by the service.
+        """
+        if state is self._state:
+            return
+        if self._finalizer is None:
+            raise ValueError("slack_binding_store_already_borrowed")
+        snapshot = self._snapshot()
+        marker = {"digest": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
+                  "source": hashlib.sha256(str(self._root_dir.resolve()).encode()).hexdigest()}
+        def migrate(old):
+            if old is not None:
+                self._validated(old)
+                if old.get("source_migration") != marker:
+                    raise ValueError("slack_binding_migration_conflict")
+                return old
+            return {**snapshot, "source_migration": marker}
+        state.update(self._slot, migrate)
+        self._finalizer()
+        self._finalizer = None
+        self._state = state
+
+    def prepare_code_consumption(self, code, *, slack_user_id, team_id, operation_id):
+        """Pure, replay-safe binding mutation for a same-state work commit."""
+        identity = self._identity(team_id, slack_user_id)
+        key, now = self._code_key(code), datetime.now(UTC)
+        receipt = {"identity": identity, "code_digest": key}
+        def consume(old):
+            value = self._validated(old)
+            receipts = value.setdefault("binding_receipts", {})
+            if operation_id in receipts:
+                if receipts[operation_id] != receipt:
+                    raise ValueError("slack_binding_operation_conflict")
+                return value
+            value, link = self._consume_value(value, key, now, team_id, slack_user_id)
+            if link is None:
+                raise ValueError("slack_binding_code_invalid")
+            value["binding_receipts"][operation_id] = receipt
+            return value
+        return {self._slot: consume}
+
     @staticmethod
     def _empty():
         return {"version": 2, "links": {}, "codes": {}, "unscoped_links": {}}
@@ -154,25 +204,26 @@ class SlackUserLinkStore:
         raise RuntimeError("Unable to generate a unique Slack link code.")
 
     def consume_code(self, code: str, *, slack_user_id: str, team_id: str) -> SlackUserLinkRecord | None:
-        identity_key = self._identity(team_id, slack_user_id)
+        self._identity(team_id, slack_user_id)
         now, key, consumed = datetime.now(UTC), self._code_key(code), []
         def consume(old):
-            value = self._validated(old)
-            record = value["codes"].get(key)
-            if record is None:
-                return value
-            del value["codes"][key]
-            if datetime.fromisoformat(record["expires_at"]) <= now:
-                return value
-            link = SlackUserLinkRecord(slack_user_id=slack_user_id.strip(), user_id=record["user_id"],
-                email=record["email"], visitor_profile=record["visitor_profile"], linked_at=now, team_id=team_id)
-            value["links"] = {identity: existing for identity, existing in value["links"].items()
-                              if existing["user_id"] != link.user_id and identity != identity_key}
-            value["links"][identity_key] = link.to_dict()
+            value, link = self._consume_value(self._validated(old), key, now, team_id, slack_user_id)
             consumed.append(link)
             return value
         self._state.update(self._slot, consume)
         return consumed[0] if consumed else None
+
+    def _consume_value(self, value, key, now, team_id, slack_user_id):
+        record = value["codes"].pop(key, None)
+        if record is None or datetime.fromisoformat(record["expires_at"]) <= now:
+            return value, None
+        identity_key = self._identity(team_id, slack_user_id)
+        link = SlackUserLinkRecord(slack_user_id=slack_user_id, user_id=record["user_id"],
+            email=record["email"], visitor_profile=record["visitor_profile"], linked_at=now, team_id=team_id)
+        value["links"] = {identity: existing for identity, existing in value["links"].items()
+                          if existing["user_id"] != link.user_id and identity != identity_key}
+        value["links"][identity_key] = link.to_dict()
+        return value, link
 
     def prune_expired_codes(self) -> None:
         now = datetime.now(UTC)
@@ -246,4 +297,5 @@ class SlackUserLinkStore:
                 path.replace(target)
 
     def close(self):
-        self._finalizer()
+        if self._finalizer is not None:
+            self._finalizer()

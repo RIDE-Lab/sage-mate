@@ -91,6 +91,7 @@ class SlackWorkflow:
         The borrowed state and all ports must outlive aclose's successful drain.
         """
         self.journal = WorkJournal(state, namespace="twin-slack-workflow-v1")
+        self._state = state
         self._authorize, self._recover = authorize, recover
         self._answer, self._deliver = answer, deliver
         self._work = AsyncWorkService(self.journal, self._handle,
@@ -110,6 +111,20 @@ class SlackWorkflow:
         return await self._work.commit(captured.request_id,
             result={"owner_id": captured.owner_id, "notice": SlackReply.model_validate(reply).model_dump(mode="json")},
             tasks={"deliver": captured.model_dump(mode="json")})
+
+    async def bind(self, ingress, bindings, code):
+        if bindings.state_store is not self._state:
+            raise ValueError("slack_binding_and_work_must_share_state")
+        captured = SlackIngress.model_validate_json(ingress.model_dump_json())
+        if captured.question != "Slack binding status":
+            raise ValueError("binding_credential_must_not_be_persisted")
+        notice = SlackReply(text="绑定成功。使用 /twin 时仍会核对当前课题组成员权限。")
+        await self._work.commit(captured.request_id,
+            result={"owner_id": captured.owner_id, "notice": notice.model_dump(mode="json")},
+            tasks={"deliver": captured.model_dump(mode="json")},
+            mutations=bindings.prepare_code_consumption(code, slack_user_id=captured.user_id,
+                team_id=captured.team_id, operation_id=captured.request_id))
+        return notice
 
     async def resume_if_admitted(self, ingress: SlackIngress):
         record = await asyncio.to_thread(self.journal.read, ingress.request_id)

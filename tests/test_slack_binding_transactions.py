@@ -5,10 +5,70 @@ from datetime import UTC, datetime
 import pytest
 
 from sage_faculty_twin.slack_link_store import SlackUserLinkRecord, SlackUserLinkStore
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.work_journal import WorkJournal
 
 
 def issue(store, user="account"):
     return store.create_code(user_id=user, email=f"{user}@example.com", visitor_profile="lab_member")
+
+
+def test_binding_and_notice_rollback_together(tmp_path, monkeypatch):
+    store = SlackUserLinkStore(tmp_path / "legacy")
+    state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "shared.db"))
+    store.migrate_to(state)
+    journal = WorkJournal(state, namespace="notices")
+    code = issue(store)
+    mutations = store.prepare_code_consumption(code.code, team_id="T1", slack_user_id="U1", operation_id="event")
+    original = state._backend._put_uncommitted
+    writes = []
+    def fail(*args):
+        original(*args)
+        writes.append(True)
+        if len(writes) == 2:
+            raise OSError("binding write failed")
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(state._backend, "_put_uncommitted", fail)
+            with pytest.raises(OSError):
+                journal.commit("event", result="bound", tasks={"notice": {}}, mutations=mutations)
+        assert journal.read("event") is None
+        assert store.get_link_for_user("account") is None
+        journal.commit("event", result="bound", tasks={"notice": {}}, mutations=mutations)
+        assert store.get_link_for_user("account").slack_user_id == "U1"
+        journal.commit("event", result="bound", tasks={"notice": {}}, mutations=mutations)
+        changed = store.prepare_code_consumption("OTHER", team_id="T1", slack_user_id="U1", operation_id="event")
+        with pytest.raises(ValueError, match="operation_conflict"):
+            journal.commit("event", result="bound", tasks={"notice": {}}, mutations=changed)
+    finally:
+        store.close()
+        state.close()
+
+
+def test_migration_keeps_new_target_state_and_rejects_changed_source(tmp_path):
+    root = tmp_path / "legacy"
+    store = SlackUserLinkStore(root)
+    store.consume_code(issue(store).code, team_id="T1", slack_user_id="U1")
+    state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "shared.db"))
+    try:
+        store.migrate_to(state)
+        store.consume_code(issue(store).code, team_id="T1", slack_user_id="U2")
+        reopened = SlackUserLinkStore(root)
+        reopened.migrate_to(state)
+        assert reopened.get_link_for_user("account").slack_user_id == "U2"
+        reopened.close()
+        assert store.get_link_for_user("account").slack_user_id == "U2"
+        stale_writer = SlackUserLinkStore(root)
+        try:
+            issue(stale_writer, "unexpected")
+            with pytest.raises(ValueError, match="migration_conflict"):
+                stale_writer.migrate_to(state)
+        finally:
+            stale_writer.close()
+        assert store.get_link_for_user("account").slack_user_id == "U2"
+    finally:
+        store.close()
+        state.close()
 
 
 def test_workspace_binding_does_not_grant_other_workspace_access(tmp_path):
