@@ -111,11 +111,6 @@ class AppSettings(BaseSettings):
         description="vLLM repetition penalty for final answers when supported by the backend.",
     )
     fast_answer_concise_guidance_enabled: bool = Field(default=True)
-    chat_runtime_pipeline_enabled: bool = Field(
-        default=False,
-        description="When True, run chat through FlowNetEnvironment DAG runtime. "
-        "When False, use the in-process stage chain to avoid per-request runtime compilation.",
-    )
     post_answer_background: bool = Field(
         default=True,
         description="Run post-answer persistence outside the response critical path when a trace consumer is attached.",

@@ -219,7 +219,6 @@ def test_runtime_question_cites_receipt_and_maintenance_reports_sync(
         runtime_dir=tmp_path / "runtime",
         knowledge_base_dir=tmp_path / "knowledge",
         conversation_memory_dir=tmp_path / "memory",
-        chat_runtime_pipeline_enabled=False,
     )
     inbox = settings.runtime_dir / "data/deployment_receipts/inbox"
     inbox.mkdir(parents=True)
@@ -246,7 +245,7 @@ def test_runtime_question_cites_receipt_and_maintenance_reports_sync(
     )
 
     response = asyncio.run(
-        service.answer_in_process(
+        service.answer(
             ChatRequest(
                 student_name="guest",
                 question="当前部署的模型、NPU 和 speculative 状态是什么？",

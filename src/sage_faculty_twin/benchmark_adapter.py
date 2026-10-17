@@ -1174,14 +1174,10 @@ async def answer_with_service(
     request: ChatRequest,
     *,
     settings: AppSettings,
-    use_runtime_pipeline: bool = True,
 ) -> ChatResponse:
     service = DigitalTwinService(settings)
     try:
-        answer_method = (
-            service.answer if use_runtime_pipeline else service.answer_in_process
-        )
-        return await answer_method(request)
+        return await service.answer(request)
     finally:
         await service.aclose()
 
@@ -1193,7 +1189,7 @@ async def _run_with_benchmark_service(
     service = DigitalTwinService(settings)
 
     async def responder(request: ChatRequest) -> ChatResponse:
-        return await service.answer_in_process(request)
+        return await service.answer(request)
 
     try:
         return await operation(responder)

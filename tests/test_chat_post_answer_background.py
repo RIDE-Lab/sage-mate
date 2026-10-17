@@ -76,7 +76,7 @@ def test_chat_returns_before_post_answer_completes_when_background_enabled(
     ``asyncio.create_task``. The interim response carries the critical-path
     trace (10 keys) and an empty ``follow_up_actions`` list."""
 
-    settings = AppSettings(knowledge_base_dir=tmp_path, chat_runtime_pipeline_enabled=True)
+    settings = AppSettings(knowledge_base_dir=tmp_path)
     service = DigitalTwinService(settings)
     service._llm_client = _FastLLMClient()
 

@@ -448,7 +448,7 @@ async def test_skill_answer_uses_same_support_builder_as_workflow(tmp_path, monk
         skill_id="profile", answer="研究方向是推理系统。", knowledge_hits=[
             hit("研究主页", ["profile", "research"], excerpt="老师的研究方向是推理系统。")
         ]))
-    response = await service.answer_in_process(
+    response = await service.answer(
         ChatRequest(student_name="test", question="请介绍推理系统研究方法。", deep_thinking=False)
     )
     assert response.workflow_action == "skill_answer"

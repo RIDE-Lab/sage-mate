@@ -13,6 +13,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
+
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import (
     ChatRequest,
@@ -158,13 +160,59 @@ def _trace_statuses(response) -> dict[str, str]:
     return {step.key: step.status for step in response.workflow_trace}
 
 
+def test_default_chat_executes_sage_graph_without_alternate_executor(tmp_path, monkeypatch):
+    from sage.runtime import FlowNetEnvironment
+
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _AdviseOnlyLLMClient("建议先复现 baseline，再围绕评估指标做对比实验。")
+    submitted = []
+    original_submit = FlowNetEnvironment.submit
+
+    def track_submit(environment, *args, **kwargs):
+        submitted.append(environment.name)
+        return original_submit(environment, *args, **kwargs)
+
+    monkeypatch.setattr(FlowNetEnvironment, "submit", track_submit)
+    response = asyncio.run(service.answer(ChatRequest(
+        student_name="Alice",
+        question="我想做一个图神经网络相关的研究，下一步该怎么推进？",
+        conversation_id="single-sage-path",
+    )))
+
+    assert response.answer
+    assert submitted == ["faculty-twin-chat"]
+    assert not hasattr(service, "answer_in_process")
+    assert not hasattr(service, "_run_chat_in_process")
+    assert "chat_runtime_pipeline_enabled" not in AppSettings.model_fields
+
+
+def test_sage_stage_failure_is_not_retried_through_another_executor(tmp_path, monkeypatch):
+    from sage_faculty_twin.service import LlmAnswerStage
+
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = _AdviseOnlyLLMClient("unused")
+    executions = []
+
+    def fail(stage, context):
+        executions.append(context.conversation_id)
+        raise OSError("stage unavailable")
+
+    monkeypatch.setattr(LlmAnswerStage, "execute", fail)
+    with pytest.raises(OSError, match="stage unavailable"):
+        asyncio.run(service.answer(ChatRequest(
+            student_name="Alice",
+            question="我想做一个图神经网络相关的研究，下一步该怎么推进？",
+            conversation_id="failed-sage-stage",
+        )))
+    assert executions == ["failed-sage-stage"]
+
+
 def test_greeting_keeps_canonical_trace_order(tmp_path: Path) -> None:
     """A bare greeting produces every canonical trace key in order, with the
     booking stages reporting as skipped placeholders."""
 
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
-        chat_runtime_pipeline_enabled=True,
         fast_intent_classifier_enabled=False,
     )
     service = DigitalTwinService(settings)
@@ -196,7 +244,6 @@ def test_research_question_keeps_canonical_trace_order(tmp_path: Path) -> None:
 
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
-        chat_runtime_pipeline_enabled=True,
         fast_intent_classifier_enabled=False,
     )
     service = DigitalTwinService(settings)
@@ -226,7 +273,6 @@ def test_booking_with_full_details_keeps_canonical_trace_order(
 
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
-        chat_runtime_pipeline_enabled=True,
         fast_intent_classifier_enabled=False,
     )
     service = DigitalTwinService(settings)

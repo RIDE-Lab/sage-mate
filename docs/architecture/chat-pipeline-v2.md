@@ -97,8 +97,9 @@ They cannot alter the answer that was already validated.
 
 ## Current migration state
 
-Both FlowNet and in-process execution now consume the same critical-stage
-registry and enter the same post-answer/delivery logic. Retrieval is sequential
+All chat and benchmark callers now use the FlowNet execution path. The separate
+in-process executor, its public entrypoint and the execution-mode setting have
+been removed. Retrieval is sequential
 for now: the former DAG fan-out allowed two branches to mutate one shared
 `ChatWorkflowContext`. Parallel retrieval may return only after those stages
 produce independent immutable results that can be merged explicitly.

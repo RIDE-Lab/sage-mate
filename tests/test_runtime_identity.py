@@ -292,7 +292,6 @@ def test_end_to_end_chat_uses_runtime_evidence_without_llm_facts(tmp_path: Path)
         knowledge_base_dir=tmp_path / "knowledge",
         conversation_memory_dir=tmp_path / "memory",
         model_name="configured-stale-model",
-        chat_runtime_pipeline_enabled=False,
     )
     service = DigitalTwinService(settings)
     provider = _provider(
@@ -320,7 +319,7 @@ def test_end_to_end_chat_uses_runtime_evidence_without_llm_facts(tmp_path: Path)
     )
 
     response = asyncio.run(
-        service.answer_in_process(
+        service.answer(
             ChatRequest(
                 student_name="guest",
                 question="当前跑的是什么模型，用了几张 NPU？",
@@ -354,7 +353,6 @@ def test_end_to_end_receipt_answer_does_not_claim_live_serving(tmp_path: Path) -
         runtime_dir=tmp_path,
         knowledge_base_dir=tmp_path / "knowledge",
         conversation_memory_dir=tmp_path / "memory",
-        chat_runtime_pipeline_enabled=False,
     )
     service = DigitalTwinService(settings)
     service._runtime_identity_provider = RuntimeIdentityProvider(
@@ -376,7 +374,7 @@ def test_end_to_end_receipt_answer_does_not_claim_live_serving(tmp_path: Path) -
     )
 
     response = asyncio.run(
-        service.answer_in_process(
+        service.answer(
             ChatRequest(
                 student_name="guest",
                 question="当前运行的模型和 NPU 信息是什么？",

@@ -9164,29 +9164,10 @@ class DigitalTwinService:
         on_post_answer_complete: Callable[[], None] | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
     ) -> DeliveredChatResponse:
-        response = await self._answer_with_execution_mode(
+        response = await self._answer_request(
             request,
             admin_session_token=admin_session_token,
             trace_callback=trace_callback,
-            use_runtime_pipeline=self._settings.chat_runtime_pipeline_enabled,
-            on_post_answer_complete=on_post_answer_complete,
-            answer_chunk_callback=answer_chunk_callback,
-        )
-        return self._deliver_chat_response(request, response)
-
-    async def answer_in_process(
-        self,
-        request: ChatRequest,
-        admin_session_token: str | None = None,
-        trace_callback: WorkflowTraceCallback | None = None,
-        on_post_answer_complete: Callable[[], None] | None = None,
-        answer_chunk_callback: Callable[[str], None] | None = None,
-    ) -> DeliveredChatResponse:
-        response = await self._answer_with_execution_mode(
-            request,
-            admin_session_token=admin_session_token,
-            trace_callback=trace_callback,
-            use_runtime_pipeline=False,
             on_post_answer_complete=on_post_answer_complete,
             answer_chunk_callback=answer_chunk_callback,
         )
@@ -9231,13 +9212,12 @@ class DigitalTwinService:
                 ) from exc
             raise
 
-    async def _answer_with_execution_mode(
+    async def _answer_request(
         self,
         request: ChatRequest,
         *,
         admin_session_token: str | None,
         trace_callback: WorkflowTraceCallback | None,
-        use_runtime_pipeline: bool,
         on_post_answer_complete: Callable[[], None] | None = None,
         answer_chunk_callback: Callable[[str], None] | None = None,
     ) -> ChatResponse:
@@ -9416,18 +9396,11 @@ class DigitalTwinService:
             shadow_planner_message=shadow_message,
             planner_comparison=planner_comparison,
         )
-        if use_runtime_pipeline:
-            response, context = await asyncio.to_thread(
-                self._run_chat_dag_pipeline,
-                request,
-                support,
-            )
-        else:
-            response, context = await asyncio.to_thread(
-                self._run_chat_in_process,
-                request,
-                support,
-            )
+        response, context = await asyncio.to_thread(
+            self._run_chat_dag_pipeline,
+            request,
+            support,
+        )
 
         should_background = self._settings.post_answer_background and trace_callback is not None
 
@@ -12055,7 +12028,7 @@ class DigitalTwinService:
         """Run the chat application stages in FlowNet and return both the rendered
         :class:`ChatResponse` and the underlying :class:`ChatWorkflowContext`.
 
-        Runtime and in-process execution share the same critical-stage registry.
+        All chat callers use this single SAGE execution path.
         Retrieval is deliberately sequential until each branch returns immutable
         stage output; the previous fan-out mutated one context from two branches.
 
@@ -12088,18 +12061,6 @@ class DigitalTwinService:
                 "SAGE runtime completed without capturing the chat workflow context."
             )
         return responses[-1], contexts[-1]
-
-    def _run_chat_in_process(
-        self,
-        request: ChatRequest,
-        support: FacultyTwinWorkflowSupport,
-    ) -> tuple[ChatResponse, ChatWorkflowContext]:
-        current: ChatRequest | ChatWorkflowContext = request
-        for stage_class in self._chat_critical_stage_types():
-            current = stage_class(support).execute(current)  # type: ignore[arg-type]
-        if not isinstance(current, ChatWorkflowContext):
-            raise RuntimeError("chat application did not produce a workflow context")
-        return support.render_chat_response(current), current
 
     @staticmethod
     def _chat_critical_stage_types() -> tuple[type[MapFunction], ...]:

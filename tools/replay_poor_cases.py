@@ -337,7 +337,7 @@ async def run_replay(fixtures: list[Fixture], settings: AppSettings, *, max_case
                 deep_thinking=False,
             )
             try:
-                resp = await service.answer_in_process(req)
+                resp = await service.answer(req)
                 fx.answer_after = resp.answer
                 fx.workflow_after = resp.workflow_action
                 fx.kb_hits_after = len(resp.knowledge_hits)

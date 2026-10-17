@@ -507,7 +507,7 @@ def test_run_memory_followup_adapter_with_service_reuses_memory(tmp_path: Path) 
 
     try:
         predictions = __import__("asyncio").run(
-            run_memory_followup_adapter([scenario], service.answer_in_process)
+            run_memory_followup_adapter([scenario], service.answer)
         )
     finally:
         __import__("asyncio").run(service.aclose())
