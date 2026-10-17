@@ -87,6 +87,7 @@ class WorkflowTraceStep(BaseModel):
 
 
 class AnswerBasisItem(BaseModel):
+    source_url: str | None = None
     basis_label: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=256)
     source_label: str = Field(min_length=1, max_length=256)

@@ -7594,7 +7594,7 @@ class FacultyTwinWorkflowSupport:
 
         Design rules:
         - Knowledge hits: deduplicated by source group, generic index pages
-          filtered, max 3 items.
+          filtered; retain all selected chunks and sources.
         - Web search hits: max 2 items.
         - Memory hits: only artifact (uploaded) and long-term profile memory;
           short-term conversation memory is NEVER cited (it is implicit).
@@ -7615,20 +7615,20 @@ class FacultyTwinWorkflowSupport:
                 self._build_added_knowledge_basis_item(context.added_knowledge_record)
             )
 
-        # 2. Knowledge base hits — deduplicated, filtered, max 3
-        seen_source_groups: set[str] = set()
-        knowledge_count = 0
-        for hit in context.knowledge_hits[:6]:
-            source_group = _canonical_source_group(hit.source_name, hit.document_id)
-            if source_group in seen_source_groups:
-                continue
+        # Merge every selected chunk of a source; deduplication must not lose
+        # later evidence or silently hide sources used by the answer.
+        source_groups: dict[str, list[KnowledgeSearchHit]] = {}
+        for hit in context.knowledge_hits:
+            source_group = hit.metadata.get('wiki_page_source') or _canonical_source_group(hit.source_name, hit.document_id)
             if self._is_generic_index_page(hit):
                 continue
-            seen_source_groups.add(source_group)
+            source_groups.setdefault(source_group, []).append(hit)
+        for chunks in source_groups.values():
+            chunks.sort(key=lambda item: int(item.metadata.get('wiki_chunk', '1')))
+            hit = chunks[0].model_copy(update={'source_content': '\n\n'.join(dict.fromkeys(
+                item.source_content or item.excerpt for item in chunks
+            ))})
             basis_items.append(self._build_knowledge_basis_item(hit))
-            knowledge_count += 1
-            if knowledge_count >= 3:
-                break
 
         # 3. Web search hits — max 2
         for hit in context.web_search_hits[:2]:
@@ -7696,7 +7696,7 @@ class FacultyTwinWorkflowSupport:
         return [
             item for item in deduped_items
             if item.basis_label != "近期交流记录"
-        ][:5]
+        ]
 
     @staticmethod
     def _build_direct_web_answer(context: ChatWorkflowContext) -> str:
@@ -7841,6 +7841,7 @@ class FacultyTwinWorkflowSupport:
                 self._format_basis_source_label(hit.source_name), 256
             ),
             detail=self._format_basis_detail(hit.source_content or hit.excerpt),
+            source_url=hit.metadata.get('wiki_url') or None,
         )
 
     def _build_added_knowledge_basis_item(self, record: KnowledgeDocumentRecord) -> AnswerBasisItem:

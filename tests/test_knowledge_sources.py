@@ -46,6 +46,12 @@ def test_explicit_wiki_title_keeps_all_chunks_without_unrelated_padding(tmp_path
     assert all(sources.get_visible_document(h.document_id).content.endswith('TAIL') for h in hits)
 
 
+@pytest.mark.parametrize('profile', ['general_visitor', 'lab_member'])
+def test_missing_explicit_wiki_title_never_pads_with_semantic_neighbours(tmp_path, profile):
+    _, _, _, sources = stores(tmp_path)
+    assert sources.search('请介绍 Wiki《不存在的 quartz research 文档》', visitor_profile=profile) == []
+
+
 @pytest.mark.parametrize('method', ['add_document', 'upsert_document', 'update_document'])
 def test_write_namespaces_are_enforced(tmp_path, method):
     _, private, wiki, _ = stores(tmp_path)

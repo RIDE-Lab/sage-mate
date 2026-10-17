@@ -50,7 +50,7 @@ class KnowledgeSources:
         titles = set(re.findall(r'《([^》]+)》', query))
         named = [d for d in self.public_documents()
                  if d.title.removeprefix('Wiki | ') in titles]
-        if named:
+        if named or (titles and re.search(r'wiki', query, re.IGNORECASE)):
             named.sort(key=lambda d: (d.metadata.get('wiki_page_source', d.title), int(d.metadata.get('wiki_chunk', '1'))))
             return [KnowledgeSearchHit(document_id=d.document_id, title=d.title,
                 source_name=d.source_name, excerpt=d.content, score=1.0,

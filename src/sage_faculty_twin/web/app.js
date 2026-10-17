@@ -7665,35 +7665,49 @@ function restoreHistoryRailState() {
 }
 
 async function repairHistoricalCitationCards(root) {
-    const cards = [...root.querySelectorAll('.message-basis-item:not([data-citation-format])')];
+    const cards = [...root.querySelectorAll('.message-basis-item')];
     for (const card of cards) {
         const detail = card.querySelector('.message-basis-detail');
         if (!detail) continue;
-        // The first source link survived the old preview truncation. Never
-        // infer missing identity from an answer or a fuzzy title match.
-        const sourceUrl = detail.querySelector('a[href]')?.getAttribute('href');
+        // Prefer structured identity. For legacy cards accept only the Wiki
+        // source header, never an arbitrary link appearing inside the document.
+        const header = detail.querySelector('a[href]');
+        const sourceUrl = card.dataset.citationUrl ||
+            (/^Wiki[:：]/i.test(header?.textContent || '') ? header.getAttribute('href') : null);
         if (!sourceUrl) {
+            if (card.dataset.citationFormat) continue;
             const notice = document.createElement('p');
             notice.textContent = '旧引用未保存可核验的来源链接，无法自动恢复完整原文。';
             card.appendChild(notice);
             card.dataset.citationFormat = 'unresolved';
             continue;
         }
+        card.dataset.citationUrl = sourceUrl;
+        let notice = card.querySelector('[data-citation-notice]');
+        if (!notice) {
+            notice = document.createElement('p');
+            notice.dataset.citationNotice = 'true';
+            card.appendChild(notice);
+        }
+        // Revalidate on every history opening, including previously restored
+        // cards; a persisted marker is not a permanent access grant.
+        detail.hidden = true;
+        notice.textContent = '正在核验当前来源…';
         try {
             const result = await apiRequest(`/wiki/citation?source_url=${encodeURIComponent(sourceUrl)}`, { timeoutMs: 10000 });
             if (!root.contains(card)) return; // User switched conversations.
             if (result.status === 'restored') {
                 detail.innerHTML = formatMessageContent(result.content);
-                const notice = document.createElement('p');
                 notice.textContent = result.notice;
-                card.appendChild(notice);
+                detail.hidden = false;
                 card.dataset.citationFormat = 'restored-current';
             } else {
                 detail.textContent = '原来源已移除、不再公开或无法精确定位；无法恢复完整引用。原回答未改动。';
+                notice.textContent = detail.textContent;
                 card.dataset.citationFormat = 'unavailable';
             }
         } catch {
-            // Leave the original snapshot intact and retry on next opening.
+            notice.textContent = '暂时无法核验来源，引用正文已暂时隐藏；再次打开此对话会重试。';
         }
     }
 }
@@ -8498,7 +8512,7 @@ function buildFollowUpActionHtml(action) {
         `
         : `<p class="message-basis-detail">${escapeHtml(card.detail)}</p>`;
     return `
-        <article class="message-basis-item" data-citation-format="full-markdown-v1">
+        <article class="message-basis-item" data-citation-format="follow-up-action">
             <div class="message-basis-head">
                 <span class="message-basis-tag">${escapeHtml(card.label)}</span>
                 ${card.badge ? `<span class="message-basis-source">${escapeHtml(card.badge)}</span>` : ""}
@@ -8513,7 +8527,7 @@ function buildFollowUpActionHtml(action) {
 function buildAnswerBasisItemHtml(item) {
     const card = formatAnswerBasisCard(item);
     return `
-        <article class="message-basis-item">
+        <article class="message-basis-item" data-citation-format="full-markdown-v1" ${item.source_url ? `data-citation-url="${escapeHtml(item.source_url)}"` : ""}>
             <div class="message-basis-head">
                 <span class="message-basis-tag">${escapeHtml(card.label)}</span>
                 ${card.badge ? `<span class="message-basis-source">${escapeHtml(card.badge)}</span>` : ""}
@@ -10785,18 +10799,25 @@ function escapeHtml(value) {
 // line breaks.  HTML is escaped first so the output is XSS-safe.
 function formatMessageContent(rawText) {
     const escaped = escapeHtml(rawText);
+    const codeFragments = [];
+    // Store escaped code outside subsequent Markdown passes, including newline
+    // conversion. Otherwise code comments become headings and URLs become links.
+    const protectCode = (html) => {
+        const token = `\u0000CODE${codeFragments.length}\u0000`;
+        codeFragments.push(html);
+        return token;
+    };
 
     // ── Block-level elements (processed first to avoid inner conflicts) ──
 
     // Fenced code blocks (``` ... ```)
     let formatted = escaped.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, _lang, code) => {
-        return `<pre>${code.trim()}</pre>`;
+        return protectCode(`<pre>${code.replace(/\n$/, '')}</pre>`);
     });
+    formatted = formatted.replace(/`([^`\n]+)`/g, (_, code) => protectCode(`<code>${code}</code>`));
 
     // Headings (### before ## before #)
-    formatted = formatted.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    formatted = formatted.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    formatted = formatted.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+    formatted = formatted.replace(/^(#{1,6}) (.+)$/gm, (_, hashes, text) => `<h${hashes.length}>${text}</h${hashes.length}>`);
 
     // Horizontal rules
     formatted = formatted.replace(/^---$/gm, '<hr>');
@@ -10830,8 +10851,8 @@ function formatMessageContent(rawText) {
     // ── List grouping ──────────────────────────────────────────────────
     // Collect consecutive lines starting with "- " or "* " into <ul>,
     // and consecutive lines starting with "N. " into <ol>.
-    formatted = formatted.replace(/((?:^- .+$\n?)+)/gm, (block) => {
-        const items = block.trim().split('\n').map(l => `<li>${l.replace(/^- /, '')}</li>`).join('');
+    formatted = formatted.replace(/((?:^[-*+] .+$\n?)+)/gm, (block) => {
+        const items = block.trim().split('\n').map(l => `<li>${l.replace(/^[-*+] /, '')}</li>`).join('');
         return `<ul>${items}</ul>`;
     });
     formatted = formatted.replace(/((?:^\d+\. .+$\n?)+)/gm, (block) => {
@@ -10842,7 +10863,6 @@ function formatMessageContent(rawText) {
     // ── Inline formatting (order matters: ** before *) ─────────────────
 
     // Inline code (`...`)
-    formatted = formatted.replace(/`([^`]+)`/g, '<code>$1</code>');
 
     // Bold (**text**)
     formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
@@ -10864,7 +10884,7 @@ function formatMessageContent(rawText) {
     formatted = formatted.replace(/<\/(h[1-6]|pre|ul|ol|blockquote|table|hr)><br>/g, '</$1>');
     formatted = formatted.replace(/<hr><br>/g, '<hr>');
 
-    return formatted;
+    return formatted.replace(/\u0000CODE(\d+)\u0000/g, (_, index) => codeFragments[Number(index)] || '');
 }
 
 function seedBookingDefaults() {
