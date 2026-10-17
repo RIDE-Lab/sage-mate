@@ -127,6 +127,59 @@ def test_normalization_and_owned_memory():
         assert api_module._slack_conversation_owner(*ids) != owner
 
 
+@pytest.mark.parametrize("stop", ["timeout", "cancel", "error"])
+def test_slack_answer_propagates_deadline_and_interrupts_active_io(harness, monkeypatch, stop):
+    from sage_faculty_twin.request_context import (
+        register_request_cancel_callback,
+        request_has_cancellation_controller,
+        request_remaining_seconds,
+    )
+    from sage_faculty_twin.slack_workflow import SlackIngress
+
+    entered, interrupted, finished = Event(), Event(), Event()
+    observed = []
+    monkeypatch.setattr(api_module, "SLACK_TWIN_RESPONSE_TIMEOUT_SECONDS", 0.15)
+
+    def io():
+        unregister = register_request_cancel_callback(interrupted.set)
+        observed.append((request_has_cancellation_controller(), request_remaining_seconds()))
+        entered.set()
+        try:
+            interrupted.wait(2)  # Safety bound if cancellation propagation regresses.
+        finally:
+            unregister()
+            finished.set()
+
+    async def answer(*args, **kwargs):
+        if stop == "error":
+            register_request_cancel_callback(interrupted.set)
+            raise ValueError("fixture failure")
+        await asyncio.to_thread(io)
+        raise AssertionError("cancelled I/O must not return a successful answer")
+
+    monkeypatch.setattr(harness.service, "answer", answer)
+    ingress = SlackIngress(team_id="T123", user_id="U1", channel_id="D123",
+                           transport_id="cancellation", kind="command", question="research")
+
+    async def scenario():
+        task = asyncio.create_task(api_module._produce_slack_reply(ingress))
+        if stop == "cancel":
+            assert await asyncio.to_thread(entered.wait, 1)
+            task.cancel()
+        expected = {"timeout": TimeoutError, "cancel": asyncio.CancelledError, "error": ValueError}[stop]
+        with pytest.raises(expected):
+            await task
+        assert interrupted.is_set()
+        assert not request_has_cancellation_controller()
+        assert request_remaining_seconds() is None
+        if stop != "error":
+            assert await asyncio.to_thread(finished.wait, 1)
+            assert observed[0][0] is True
+            assert 0 < observed[0][1] <= 0.15
+    asyncio.run(scenario())
+    assert harness.sent == []
+
+
 @pytest.mark.parametrize("transport", ["command", "event"])
 def test_bad_signature_never_admits(harness, transport):
     body = command() if transport == "command" else event()

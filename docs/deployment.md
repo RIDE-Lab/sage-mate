@@ -457,6 +457,14 @@ can cause duplicates. A success response is not proof that an ephemeral message
 was seen. The event loop, shared state and async clients must outlive successful
 workflow drain.
 
+Slack answer generation binds the existing request cancellation/deadline context
+used by model I/O and the SAGE pipeline. Its configured answer timeout also
+reaches synchronous I/O; timeout, task cancellation and answer exceptions invoke
+registered resource closers. This is cooperative cancellation, not forced thread
+termination or a guarantee that an external model server stopped computing.
+The timeout configuration and journal retry policy are unchanged; permanent
+failure classification and bounded retry policy still require qualification.
+
 The signed command/event routes now admit this workflow before acknowledging a
 question. Commands require Slack's `trigger_id`; events require `event_id`.
 Retries resume the same durable record, including events bearing a retry header.

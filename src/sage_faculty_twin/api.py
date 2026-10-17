@@ -881,7 +881,21 @@ async def _produce_slack_reply(ingress):
         course_context={"command": "Slack /twin", "message": "Slack DM", "mention": "Slack @twin"}[ingress.kind],
         slack_channel_context=slack_context.text if slack_context else None,
         conversation_id=ingress.request_id, deep_thinking=False, deep_thinking_explicit=False, web_search=False)
-    response = await asyncio.wait_for(service.answer(request, delivery=ingress.delivery),
+    cancellation = RequestCancellationController()
+    deadline_at = time.perf_counter() + SLACK_TWIN_RESPONSE_TIMEOUT_SECONDS
+
+    async def answer_with_context():
+        # Use the same request context consumed by model I/O and the SAGE
+        # pipeline. Cancelling only wait_for's task leaves synchronous I/O
+        # without either a deadline or its registered cancellation signal.
+        with request_cancellation_scope(cancellation, deadline_at=deadline_at):
+            try:
+                return await service.answer(request, delivery=ingress.delivery)
+            except BaseException:
+                cancellation.cancel()
+                raise
+
+    response = await asyncio.wait_for(answer_with_context(),
                                       timeout=SLACK_TWIN_RESPONSE_TIMEOUT_SECONDS)
     # Recovery renders this same immutable canonical answer; transient channel
     # history is never stored in the ingress or used to regenerate a committed turn.
