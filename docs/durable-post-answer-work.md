@@ -2,14 +2,14 @@
 
 ## SageVDB dependency qualification
 
-The base dependency pins `423a1247461b87bd8a77977790c148febcccf6f4`, which
+The base dependency pins `311d65e972fb3cb4e5a2904a4c499a51dafae38d`, which
 provides `VersionedDocumentCatalog`, revision-fenced index generations and
 `rebuild_from_catalog` and revision-qualified read-only `refresh`. Sources matching this revision were built offline on A100 after
 Git transport/DNS prevented network builds; no shared Git/network configuration
 was changed. The CPython 3.11 Linux x86-64 wheel SHA-256 is
-`36d01615497d99a82a3d685dc9ba2e19cd1798418e78e3402f268a2cfd5b2f75`.
+`4758b5491432d8efab1ef3f9c8cea47db93872057faf712a67efd8ae178ede21`.
 Installed module hashes match the source commit, exports resolve from the scratch
-venv's site-packages, and all 76 catalog/native-persistence/recovery/refresh/snapshot tests passed
+venv's site-packages, and all 83 catalog/native-persistence/recovery/refresh/projection tests passed
 without source overlays. That venv exposes system packages, so this is not a
 clean-room dependency-resolution test. The version number remains 0.2.0.12;
 commit and wheel hash, not the version string alone, identify this qualification.
@@ -28,8 +28,8 @@ the application checkpoint module and foreground batch builder are removed.
 Algorithm, INNER_PRODUCT metric and snapshot mode select a separate configuration
 root; old `sage-anns/` checkpoints stay offline and are never a live fallback.
 
-Twin regression after this caller cutover: 1372 passed, 31 existing skips
-(223.72 s), using the existing `test_identity_eval.py` exclusion. The 47 focused
+Twin regression after NeuroMem caller cutover: 1376 passed, 31 existing skips
+(227.05 s), using the existing `test_identity_eval.py` exclusion. The earlier 47 focused
 projection tests passed without skips, including real Sage-ANNS worker-only
 embedding, canonical tombstone recovery, empty-index restart and configuration
 isolation. A stale
@@ -38,6 +38,19 @@ it now inspects the durable receipt through the catalog alone, then separately
 requires successful recovery. Runtime validation was not weakened. These CPU/hash
 embedding tests do not qualify model answer quality, public reachability or CI
 dependency access.
+
+NeuroMem now pins `2b047f316c3fe88774f6ab2e0c64ebd7dfda7e09`; its installed
+wheel SHA-256 is `a216599913ee22ff0070fa4a1b81a5e0ef8c8fa243577c5d93154c9b13ebaed8`.
+Its collection adapter and public batch rebuild passed 172 component tests and
+12 outside-source installed-wheel tests. Twin uses this adapter with SageVDB's
+records mode, sharing the same targeted SAGE worker, revision wait, read-only
+refresh, atomic generation and canonical recovery as cpp/Sage-ANNS. The prior
+foreground NeuroMem initializer, per-document builder and direct BM25 private
+map mutation are deleted. Backend/index/embedding configuration selects a
+separate generation root; changing index types cannot overwrite another root.
+FAISS retains batched embedding. Its new caller tests use real FAISS with a
+deterministic test embedder, not downloaded-model quality or GPU qualification.
+All four new caller tests passed. This remains pre-production qualification.
 
 ## Canonical knowledge cutover
 
@@ -100,8 +113,7 @@ second startup builder. A truly empty catalog with no index history uses an empt
 read view without publishing a generation or starting a worker. Failed startup
 retires its consumer nonblockingly; committed data and pending work survive,
 while SAGE releases storage only after active acknowledgements finish. These
-contracts now cover native cpp and Sage-ANNS projections. NeuroMem projection
-cutover remains pending.
+contracts now cover cpp, Sage-ANNS and NeuroMem projections.
 When another worker has already published a sufficiently new native generation,
 the caller now refreshes its process-local handle directly from that generation;
 it does not invoke embedding or reconstruct the index. Missing, behind or damaged
@@ -125,8 +137,7 @@ offline and are never an alternate live read path. Open/sync failures invoke
 SageVDB's reconstruction from the current catalog; namespace/regression conflicts
 remain errors, and embedding failures do not publish a successful generation.
 The indexed revision comes from the committed index, not a potentially newer
-document-cache revision. NeuroMem projection scheduling and version
-contracts still need qualification during worker integration. This
+document-cache revision. This
 intermediate repository state is not approved for production rollout. Catalog
 snapshot/receipt retention and API-level retry identity also remain open.
 

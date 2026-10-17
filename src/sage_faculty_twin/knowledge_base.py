@@ -303,7 +303,7 @@ def _knowledge_mutation(method):
     @wraps(method)
     def wrapped(self, *args, **kwargs):
         with self._mutation_lock:
-            native = self._has_native_projection()
+            native = self._has_persistent_projection()
             if native:
                 self._catalog.bind_projection(self._sagevdb_persistence.root.name)
                 if kwargs.get("rebuild_indexes", True):
@@ -324,7 +324,7 @@ def _knowledge_search(method):
         deadline = time.monotonic() + self._settings.chat_request_timeout_seconds
         while True:
             with self._mutation_lock:
-                if not self._has_native_projection():
+                if not self._has_persistent_projection():
                     return method(self, *args, **kwargs)
                 self._refresh_documents()
                 if self._indexed_catalog_revision > self._catalog_revision:
@@ -384,11 +384,11 @@ class LocalKnowledgeStore:
         self._link_expansion_enabled = settings.knowledge_link_expansion_enabled
         self._load_documents_from_disk()
         self._rebuild_link_graph()
-        if self._has_native_projection():
+        if self._has_persistent_projection():
             try:
-                self._initialize_sagevdb(prepare_only=True)
+                self._initialize_projection(prepare_only=True)
                 self._catalog.bind_projection(self._sagevdb_persistence.root.name)
-                self._open_native_projection()
+                self._open_projection()
                 self._wait_for_projection(self._catalog_revision)
             except BaseException:
                 # A worker may still be finishing a durable acknowledgement.
@@ -398,7 +398,7 @@ class LocalKnowledgeStore:
         else:
             self._rebuild_backend_indexes()
 
-    def _open_native_projection(self):
+    def _open_projection(self):
         """Startup only reads a committed generation; it never builds one."""
         from sagevdb import PersistenceError
         try:
@@ -418,7 +418,7 @@ class LocalKnowledgeStore:
             if revision > self._catalog_revision:
                 raise RuntimeError("knowledge_projection_ahead_of_catalog")
         self._sagevdb_open_result = result
-        self._sagevdb = self._sagevdb_persistence.database
+        self._adopt_projection_database()
         self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         self._indexed_catalog_revision = revision
 
@@ -432,14 +432,14 @@ class LocalKnowledgeStore:
                 raise RuntimeError("knowledge_projector_unavailable")
             with store._mutation_lock:
                 store._refresh_documents()
-                if (store._has_native_projection()
+                if (store._has_persistent_projection()
                         or store._indexed_catalog_revision != store._catalog_revision):
                     store._rebuild_backend_indexes()
                 return store._indexed_catalog_revision
 
         projection_key = (
             self._sagevdb_persistence.root.name
-            if self._has_native_projection()
+            if self._has_persistent_projection()
             else None
         )
         self._catalog.start_indexing(project, projection_key=projection_key)
@@ -447,8 +447,8 @@ class LocalKnowledgeStore:
     def close(self, *, timeout=30):
         self._catalog.close(timeout=timeout)
 
-    def _has_native_projection(self):
-        return self._backend == "sagevdb"
+    def _has_persistent_projection(self):
+        return self._backend in {"sagevdb", "neuromem"}
 
     def _wait_for_projection(self, revision, *, operation_id=None, deadline=None, force=False):
         if deadline is None:
@@ -465,7 +465,7 @@ class LocalKnowledgeStore:
                 if not force:
                     if self._indexed_catalog_revision >= required:
                         return
-                    if self._refresh_native_projection() and self._indexed_catalog_revision >= required:
+                    if self._refresh_projection() and self._indexed_catalog_revision >= required:
                         return
                 self.start_background_indexing()
                 request = operation_id or self._catalog.request_indexing(
@@ -497,7 +497,7 @@ class LocalKnowledgeStore:
             created_at=datetime.now(UTC),
         )
         self._commit_documents({record.document_id: record})
-        if rebuild_indexes and not self._has_native_projection():
+        if rebuild_indexes and not self._has_persistent_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
@@ -542,7 +542,7 @@ class LocalKnowledgeStore:
             created_at=existing.created_at,
         )
         self._commit_record_and_duplicates(updated_record)
-        if rebuild_indexes and not self._has_native_projection():
+        if rebuild_indexes and not self._has_persistent_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
@@ -572,7 +572,7 @@ class LocalKnowledgeStore:
             created_at=existing.created_at,
         )
         self._commit_record_and_duplicates(updated_record)
-        if rebuild_indexes and not self._has_native_projection():
+        if rebuild_indexes and not self._has_persistent_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()
         self._clear_search_cache()
@@ -625,7 +625,7 @@ class LocalKnowledgeStore:
             for key in changes:
                 self._document_id_to_vector_id.pop(key, None)
 
-        if removed and rebuild_indexes and not self._has_native_projection():
+        if removed and rebuild_indexes and not self._has_persistent_projection():
             self._rebuild_backend_indexes()
         if removed:
             self._rebuild_link_graph()
@@ -636,7 +636,7 @@ class LocalKnowledgeStore:
         with self._mutation_lock:
             self._refresh_documents()
             revision = self._catalog_revision
-            native = self._has_native_projection()
+            native = self._has_persistent_projection()
             if not native:
                 self._rebuild_backend_indexes()
             self._clear_search_cache()
@@ -652,7 +652,7 @@ class LocalKnowledgeStore:
         visitor_profile: str | None = None,
         admin_role: str | None = None,
     ) -> list[KnowledgeSearchHit]:
-        if not self._has_native_projection():
+        if not self._has_persistent_projection():
             self._refresh_documents()
             if self._indexed_catalog_revision != self._catalog_revision:
                 self._rebuild_backend_indexes()
@@ -910,18 +910,16 @@ class LocalKnowledgeStore:
         return len(changes)
 
     def _rebuild_backend_indexes(self) -> None:
-        if self._backend == "sagevdb":
-            if not self._refresh_native_projection():
-                self._initialize_sagevdb()
-        elif self._backend == "neuromem":
-            self._initialize_neuromem()
+        if self._has_persistent_projection():
+            if not self._refresh_projection():
+                self._initialize_projection()
         self._indexed_catalog_revision = (
             self._sagevdb_persistence.source_revision
-            if self._has_native_projection()
+            if self._has_persistent_projection()
             else self._catalog_revision
         )
 
-    def _refresh_native_projection(self) -> bool:
+    def _refresh_projection(self) -> bool:
         """A completed shared worker does not refresh this process's handle."""
         if self._sagevdb_persistence is None:
             return False
@@ -940,7 +938,7 @@ class LocalKnowledgeStore:
             raise RuntimeError("knowledge_projection_ahead_of_catalog")
         self._sagevdb_open_result = result
         self._sagevdb_last_sync = None  # This read did not synchronize or embed.
-        self._sagevdb = self._sagevdb_persistence.database
+        self._adopt_projection_database()
         self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         self._indexed_catalog_revision = self._sagevdb_persistence.source_revision
         return True
@@ -969,7 +967,7 @@ class LocalKnowledgeStore:
             "source_name": document.source_name or "",
         }
 
-    def _initialize_sagevdb(self, *, prepare_only=False) -> None:
+    def _initialize_projection(self, *, prepare_only=False) -> None:
         try:
             import numpy as np
             from sagevdb import (
@@ -985,56 +983,24 @@ class LocalKnowledgeStore:
             )
         except ImportError as exc:
             raise RuntimeError(
-                "DIGITAL_TWIN_KNOWLEDGE_BACKEND is set to 'sagevdb' but sagevdb is not available. "
+                "Persistent knowledge projections require sagevdb, which is not available. "
                 "Install isage-vdb or expose the local sageVDB checkout on PYTHONPATH."
             ) from exc
 
         self._np = np
-        self._text_embedder = self._build_text_embedder(np)
-        cfg = DatabaseConfig(int(self._text_embedder.dimension))
-        backend = self._normalize_sagevdb_backend()
-        cfg.metric = (
-            DistanceMetric.INNER_PRODUCT
-            if self._uses_sagevdb_anns_backend()
-            else DistanceMetric.COSINE
-        )
-        cfg.index_type = IndexType.FLAT
-
-        database_kwargs = {"backend": backend}
-        if self._uses_sagevdb_anns_backend():
-            algorithm = self._settings.sagevdb_anns_algorithm.strip()
-            if not algorithm:
-                raise RuntimeError(
-                    "DIGITAL_TWIN_SAGEVDB_BACKEND is set to 'sage-anns' but "
-                    "DIGITAL_TWIN_SAGEVDB_ANNS_ALGORITHM is empty."
-                )
-            database_kwargs["algorithm"] = algorithm
-
+        database_factory, compatibility, build_mode = self._prepare_projection_backend(
+            np, DatabaseConfig, DistanceMetric, IndexType, create_database)
+        backend = compatibility["backend"]
         try:
             persistence_dir = self._settings.knowledge_sagevdb_persistence_dir
             if persistence_dir is None:
                 persistence_dir = self._base_dir / ".sagevdb-index"
-            # Old unversioned generations remain offline recovery material;
-            # they are never read as an alternate live index.
-
-            def database_factory():
-                return create_database(cfg, **database_kwargs)
-
-            compatibility = {
-                "backend": backend,
-                "catalog_store_id": hashlib.sha256(
+            compatibility.update(
+                catalog_store_id=hashlib.sha256(
                     str(self._catalog.state_path.resolve()).encode()).hexdigest(),
-                "source_namespace": self._catalog.catalog.namespace,
-                "dimension": int(self._text_embedder.dimension),
-                "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
-                "embedding_model": self._settings.sagevdb_embedding_model,
-                "index_type": "FLAT",
-                "metric": "COSINE",
-                "retrieval_text_format": 1,
-            }
-            if self._uses_sagevdb_anns_backend():
-                compatibility.update(
-                    algorithm=algorithm, metric="INNER_PRODUCT", build_mode="snapshot")
+                source_namespace=self._catalog.catalog.namespace,
+                retrieval_text_format=1,
+            )
             configuration_id = hashlib.sha256(
                 json.dumps(compatibility, sort_keys=True).encode()).hexdigest()
             persistence_dir = persistence_dir / "canonical-v1" / configuration_id
@@ -1043,7 +1009,7 @@ class LocalKnowledgeStore:
                 database_factory,
                 compatibility=compatibility,
                 source_namespace=self._catalog.catalog.namespace,
-                build_mode="snapshot" if self._uses_sagevdb_anns_backend() else "incremental",
+                build_mode=build_mode,
             )
             if prepare_only:
                 return
@@ -1063,11 +1029,7 @@ class LocalKnowledgeStore:
             ]
 
             def vector_provider(records):
-                texts = [
-                    self._compose_retrieval_text(documents_by_id[record.key])
-                    for record in records
-                ]
-                return self._embed_documents(texts)
+                return self._projection_payloads([documents_by_id[record.key] for record in records])
 
             try:
                 self._sagevdb_open_result = self._sagevdb_persistence.open()
@@ -1077,24 +1039,24 @@ class LocalKnowledgeStore:
             except PersistenceError:
                 # Recovery reads the current canonical catalog itself; an
                 # old request's snapshot must not become recovery authority.
-                recovery_texts = {}
+                recovery_documents = {}
                 def build_record(key, payload):
                     document = KnowledgeDocumentRecord.model_validate(payload)
                     self._check_source_namespace(document.source_name)
                     text = self._compose_retrieval_text(document)
-                    recovery_texts[key] = text
+                    recovery_documents[key] = document
                     return PersistentRecord(key, stable_content_hash(text), self._document_metadata(document))
 
                 self._sagevdb_last_sync = self._sagevdb_persistence.rebuild_from_catalog(
                     self._catalog.catalog, build_record,
-                    lambda records: self._embed_documents([recovery_texts[item.key] for item in records]),
+                    lambda records: self._projection_payloads([recovery_documents[item.key] for item in records]),
                 )
                 self._sagevdb_open_result = OpenResult(
                     loaded=True, recovered=True, generation=self._sagevdb_persistence.generation,
                     reason="rebuilt_from_canonical_catalog")
                 self._sagevdb_recovery_count += 1
                 self._refresh_documents()
-            self._sagevdb = self._sagevdb_persistence.database
+            self._adopt_projection_database()
             self._document_id_to_vector_id = self._sagevdb_persistence.vector_ids
         except ImportError as exc:
             if self._uses_sagevdb_anns_backend():
@@ -1104,7 +1066,7 @@ class LocalKnowledgeStore:
                 ) from exc
             raise
         except ValueError as exc:
-            raise RuntimeError(f"Failed to initialize sagevdb backend '{backend}': {exc}") from exc
+            raise RuntimeError(f"Failed to initialize projection backend '{backend}': {exc}") from exc
 
         logger.info(
             "SageVDB persistence ready: open=%s sync=%s generation=%s",
@@ -1123,137 +1085,73 @@ class LocalKnowledgeStore:
             return "none"
         return self._settings.sagevdb_embedding_backend.lower()
 
-    def _initialize_neuromem(self) -> None:
-        try:
-            from sage.neuromem import UnifiedCollection
-        except ImportError as exc:
-            raise RuntimeError(
-                "DIGITAL_TWIN_KNOWLEDGE_BACKEND is set to 'neuromem' but isage-neuromem is not available. "
-                "Install with: python -m pip install -e ."
-            ) from exc
+    def _adopt_projection_database(self):
+        database = self._sagevdb_persistence.database
+        if self._backend == "neuromem":
+            self._neuromem_collection = database.collection
+        else:
+            self._sagevdb = database
 
-        collection_name = f"{self._base_dir.name}-owner-materials"
-        self._neuromem_collection = UnifiedCollection(collection_name)
-        if self._neuromem_index_type == "faiss":
-            try:
-                import numpy as np
-            except ImportError as exc:
-                raise RuntimeError(
-                    "neuromem 'faiss' index requires numpy."
-                ) from exc
-            self._np = np
-            self._neuromem_embedder = NeuromemBgeEmbedder(self._settings, np)
-            dim = int(self._neuromem_embedder.dimension)
-            self._neuromem_collection.add_index(
-                "search",
-                "faiss",
-                {"dim": dim, "metric": "cosine"},
-            )
-            self._batch_index_documents_with_faiss()
-            return
+    def _prepare_projection_backend(self, np, DatabaseConfig, DistanceMetric, IndexType, create_database):
+        if self._backend == "neuromem":
+            from sage.neuromem.memory_collection.collection_projection import CollectionProjection
 
-        self._neuromem_collection.add_index(
-            "search",
-            self._neuromem_index_type,
-            (
-                {"backend": "numpy", "csc_backend": "numpy"}
-                if self._neuromem_index_type == "bm25"
-                else {}
-            ),
-        )
-        if self._build_neuromem_search_index_batch():
-            return
-        for document in self.list_documents():
-            self._add_to_neuromem(document)
+            index_type = self._neuromem_index_type
+            index_config = {"backend": "numpy", "csc_backend": "numpy"} if index_type == "bm25" else {}
+            embedding_model = "none"
+            if index_type == "faiss":
+                self._neuromem_embedder = NeuromemBgeEmbedder(self._settings, np)
+                index_config = {"dim": int(self._neuromem_embedder.dimension), "metric": "cosine"}
+                embedding_model = self._settings.neuromem_embedding_model
+            def factory():
+                return CollectionProjection(index_type=index_type, index_config=index_config)
+            return factory, {
+                "backend": "neuromem", "index_type": index_type, "index_config": index_config,
+                "embedding_model": embedding_model, "build_mode": "records",
+            }, "records"
 
-    def _batch_index_documents_with_faiss(self) -> None:
-        """Encode all documents in a single batch and add them to the FAISS index.
-
-        Sequential per-document encoding is ~50x slower than batched encode
-        when the model runs on CPU, so we precompute every vector up-front and
-        feed each (data_id, text, metadata-with-vector) triple to the index.
-        """
-        if (
-            self._neuromem_collection is None
-            or self._neuromem_embedder is None
-        ):
-            return
-        documents = self.list_documents()
-        if not documents:
-            return
-        texts = [
-            self._expand_retrieval_text(self._compose_retrieval_text(document))
-            for document in documents
-        ]
-        # Single batched forward pass; sentence-transformers picks a sensible
-        # default batch size internally.
-        batch_vectors = self._neuromem_embedder._model.encode(
-            texts,
-            convert_to_numpy=True,
-            normalize_embeddings=True,
-            show_progress_bar=False,
-        )
-        np = self._np
-        for document, text, vector in zip(documents, texts, batch_vectors):
-            array = np.asarray(vector, dtype=np.float32).reshape(-1)
-            metadata: dict[str, object] = {
-                "document_id": document.document_id,
-                "title": document.title,
-                "tags": document.tags,
-                "source_name": document.source_name or "",
-                "vector": array.tolist(),
-            }
-            self._neuromem_collection.insert(text, metadata, index_names=["search"])
-
-    def _build_neuromem_search_index_batch(self) -> bool:
-        if self._neuromem_collection is None:
-            return False
-
-        search_index = self._neuromem_collection.indexes.get("search")
-        if search_index is None or not hasattr(search_index, "_rebuild_index"):
-            return False
-
-        texts: list[str] = []
-        data_ids: list[str] = []
-        for document in self.list_documents():
-            text = self._expand_retrieval_text(self._compose_retrieval_text(document))
-            data_id = self._neuromem_collection.insert(
-                text,
-                {
-                    "document_id": document.document_id,
-                    "title": document.title,
-                    "tags": document.tags,
-                    "source_name": document.source_name or "",
-                },
-                index_names=[],
-            )
-            texts.append(text)
-            data_ids.append(data_id)
-
-        search_index.texts = texts
-        search_index.id_to_idx = {data_id: index for index, data_id in enumerate(data_ids)}
-        search_index.idx_to_id = {index: data_id for index, data_id in enumerate(data_ids)}
-        search_index._rebuild_index()
-        return True
-
-    def _add_to_neuromem(self, document: KnowledgeDocumentRecord) -> None:
-        if self._neuromem_collection is None:
-            return
-
-        text = self._expand_retrieval_text(self._compose_retrieval_text(document))
-        metadata: dict[str, object] = {
-            "document_id": document.document_id,
-            "title": document.title,
-            "tags": document.tags,
-            "source_name": document.source_name or "",
+        self._text_embedder = self._build_text_embedder(np)
+        cfg = DatabaseConfig(int(self._text_embedder.dimension))
+        backend = self._normalize_sagevdb_backend()
+        anns = self._uses_sagevdb_anns_backend()
+        cfg.metric = DistanceMetric.INNER_PRODUCT if anns else DistanceMetric.COSINE
+        cfg.index_type = IndexType.FLAT
+        kwargs = {"backend": backend}
+        compatibility = {
+            "backend": backend, "dimension": int(self._text_embedder.dimension),
+            "embedding_backend": self._settings.sagevdb_embedding_backend.lower(),
+            "embedding_model": self._settings.sagevdb_embedding_model,
+            "index_type": "FLAT", "metric": "COSINE",
         }
-        if self._neuromem_index_type == "faiss" and self._neuromem_embedder is not None:
-            metadata["vector"] = self._neuromem_embedder.encode(text).tolist()
-        self._neuromem_collection.insert(
-            text,
-            metadata,
-            index_names=["search"],
-        )
+        if anns:
+            algorithm = self._settings.sagevdb_anns_algorithm.strip()
+            if not algorithm:
+                raise RuntimeError("DIGITAL_TWIN_SAGEVDB_ANNS_ALGORITHM is empty.")
+            kwargs["algorithm"] = algorithm
+            compatibility.update(algorithm=algorithm, metric="INNER_PRODUCT", build_mode="snapshot")
+        def factory():
+            return create_database(cfg, **kwargs)
+        return factory, compatibility, "snapshot" if anns else "incremental"
+
+    def _projection_payloads(self, documents):
+        texts = [self._compose_retrieval_text(document) for document in documents]
+        if self._backend != "neuromem":
+            return self._embed_documents(texts)
+        texts = [self._expand_retrieval_text(text) for text in texts]
+        payloads = [{
+            "text": text, "metadata": {
+                "document_id": document.document_id, "title": document.title,
+                "tags": document.tags, "source_name": document.source_name or "",
+            },
+        } for document, text in zip(documents, texts)]
+        if self._neuromem_index_type == "faiss" and texts:
+            vectors = self._neuromem_embedder._model.encode(
+                texts, convert_to_numpy=True, normalize_embeddings=True, show_progress_bar=False)
+            if len(vectors) != len(payloads):
+                raise ValueError("neuromem_projection_embedding_count_mismatch")
+            for payload, vector in zip(payloads, vectors):
+                payload["metadata"]["vector"] = self._np.asarray(vector, dtype=self._np.float32).reshape(-1).tolist()
+        return payloads
 
     def _search_neuromem(
         self,

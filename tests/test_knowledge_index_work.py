@@ -126,7 +126,7 @@ def test_foreground_reads_other_workers_generation_without_rebuilding(tmp_path, 
             other._catalog.wait_indexing(request, timeout=5)
         def forbidden():
             pytest.fail("already committed worker projection must not be rebuilt")
-        monkeypatch.setattr(first, "_initialize_sagevdb", forbidden)
+        monkeypatch.setattr(first, "_initialize_projection", forbidden)
         hits = first.search("new research evidence")
         assert hits and hits[0].document_id == new.document_id
         assert old.document_id not in first._document_id_to_vector_id
@@ -317,11 +317,11 @@ def test_native_wait_timeout_retains_committed_body_and_never_serves_old_index(t
 def test_search_waits_for_its_configuration_not_another_workers_receipt(tmp_path, monkeypatch):
     writer = store_at(tmp_path)
     reader = LocalKnowledgeStore(writer._settings.model_copy(update={"sagevdb_dimension": 64}))
-    original = reader._initialize_sagevdb
+    original = reader._initialize_projection
     def build():
         assert threading.current_thread().name.startswith("sage-work")
         original()
-    monkeypatch.setattr(reader, "_initialize_sagevdb", build)
+    monkeypatch.setattr(reader, "_initialize_projection", build)
     try:
         record = writer.add_document(KnowledgeDocumentCreate(
             title="evidence", content="shared canonical evidence", source_name="evidence"))
@@ -377,14 +377,14 @@ def test_native_cold_start_builds_only_through_sage_worker(tmp_path, monkeypatch
     record = seed.add_document(KnowledgeDocumentCreate(
         title="cold evidence", content="cold research evidence", source_name="cold"))
     seed.close()
-    original = LocalKnowledgeStore._initialize_sagevdb
+    original = LocalKnowledgeStore._initialize_projection
     builds = []
     def initialize(self, *, prepare_only=False):
         if not prepare_only:
             assert threading.current_thread().name.startswith("sage-work")
             builds.append(threading.current_thread().name)
         return original(self, prepare_only=prepare_only)
-    monkeypatch.setattr(LocalKnowledgeStore, "_initialize_sagevdb", initialize)
+    monkeypatch.setattr(LocalKnowledgeStore, "_initialize_projection", initialize)
     store = store_at(tmp_path)
     try:
         assert builds
