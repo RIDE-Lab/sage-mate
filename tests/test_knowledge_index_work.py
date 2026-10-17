@@ -4,6 +4,7 @@ import pytest
 
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
+from sage_faculty_twin.knowledge_catalog import KnowledgeCatalog
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
 
@@ -225,6 +226,7 @@ def test_close_timeout_keeps_canonical_state_available_for_active_worker(tmp_pat
 def test_projection_must_prove_required_revision_before_acknowledgement(tmp_path, actual):
     store = store_at(tmp_path)
     stage_without_consumption(store)
+    request = operations(store)[0]
     called = threading.Event()
     def project(required):
         called.set()
@@ -234,9 +236,19 @@ def test_projection_must_prove_required_revision_before_acknowledgement(tmp_path
         assert called.wait(5)
     finally:
         store.close()
+    # Inspect the durable receipt without starting a valid recovery worker.
+    # Opening LocalKnowledgeStore here can legitimately complete this task
+    # before the assertion, hiding the rejected projector's outcome.
+    catalog = KnowledgeCatalog(store._base_dir, namespace=store._catalog.catalog.namespace)
+    try:
+        assert catalog.journal.read(request)["tasks"]["knowledge_index"]["status"] != "done"
+    finally:
+        catalog.close()
     reopened = store_at(tmp_path)
     try:
-        assert reopened._catalog.journal.read(operations(reopened)[0])["tasks"]["knowledge_index"]["status"] != "done"
+        reopened._catalog.wait_indexing(request, timeout=10)
+        assert reopened._sagevdb_persistence.source_revision == 1
+        assert reopened._catalog.journal.read(request)["tasks"]["knowledge_index"]["status"] == "done"
     finally:
         reopened.close()
 

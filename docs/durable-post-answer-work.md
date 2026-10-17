@@ -2,18 +2,36 @@
 
 ## SageVDB dependency qualification
 
-The base dependency pins `c1b38311109fbe65dfe7ef203be7938231587c54`, which
+The base dependency pins `33866799fd1e4503ceffcfd3b3abce8c521d761b`, which
 provides `VersionedDocumentCatalog`, revision-fenced index generations and
 `rebuild_from_catalog` and revision-qualified read-only `refresh`. An exact Git archive was built offline on A100 after
 Git transport/DNS prevented network builds; no shared Git/network configuration
 was changed. The CPython 3.11 Linux x86-64 wheel SHA-256 is
-`d7113cce263c3cb3a923f71045a13789c5511654197a18e50071bcf5d126fdad`.
+`f0c607cab7830fe5946a805b0e9baa0464d226f8b3e7a1dfa8ec6f0c78098d94`.
 Installed module hashes match the source commit, exports resolve from the scratch
-venv's site-packages, and all 58 catalog/native-persistence/recovery/refresh tests passed
+venv's site-packages, and all 75 catalog/native-persistence/recovery/refresh/snapshot tests passed
 without source overlays. That venv exposes system packages, so this is not a
 clean-room dependency-resolution test. The version number remains 0.2.0.12;
 commit and wheel hash, not the version string alone, identify this qualification.
 The installed-package qualification does not imply a production cutover.
+
+This component revision adds snapshot build mode to the existing
+`PersistentSageVDB` lifecycle, including revision fencing, atomic publication,
+read-only refresh and canonical recovery. Sage-ANNS supplies `build_snapshot`
+and explicit empty-index persistence. Tests exercise actual `faiss_hnsw`
+search, restart, deletion to empty and repopulation, as well as failure recovery
+and mode conflicts. Whole-snapshot updates truthfully count every re-embedded
+record; revision-only advances do not re-embed unchanged data. This dependency
+qualification does not yet switch Twin's Sage-ANNS caller: removal of its old
+checkpoint adapter and migration to the shared SAGE projector remain required.
+
+Twin regression against this installed wheel: 1371 passed, 31 existing skips
+(221.17 s), using the existing `test_identity_eval.py` exclusion. A stale
+revision-rejection fixture initially raced with legitimate startup recovery;
+it now inspects the durable receipt through the catalog alone, then separately
+requires successful recovery. Runtime validation was not weakened. These CPU/hash
+embedding tests do not qualify model answer quality, public reachability or CI
+dependency access.
 
 ## Canonical knowledge cutover
 
