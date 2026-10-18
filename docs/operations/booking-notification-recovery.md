@@ -50,5 +50,25 @@ properties or complete the overall native workflow migration.
 sides of commit, reopen recovery, retry, atomic admission failure and destination
 validation before transport. All 26 admin API tests passed with isolated booking
 stores and actual background notification completion checks. Agentic workflow
-tests previously passed56 and lifecycle tests25; the complete candidate suite is
-still pending and must be rerun against the final frozen revision.
+tests previously passed56 and lifecycle tests25. The frozen `eef22b7` release
+with SAGE `d256189e` completed 1,627 tests with 31 skips in 405.95 seconds.
+These skips are not successful qualifications; the run also excluded the existing
+`test_identity_eval.py` suite. This is component/regression evidence, not proof
+of production SMTP delivery or of the remaining conversational-plan guarantees.
+
+The subsequent `ea724d3` release includes identity-specific public Wiki starters
+and additional migration CLI/frontend tests. In an isolated preview, a real
+public Wiki request completed in 9.15 seconds on `eef22b7`, with full source
+blocks, a terminal SSE completion frame and cross-guest isolation. After stopping
+that preview and starting `ea724d3` against the same synthetic runtime, readiness
+was checked before replaying the same request: replay took 0.15 seconds and
+preserved the exchange ID, complete answer and source blocks. No production
+application or inference engine was restarted for this qualification.
+
+The final `ea724d3` regression is still pending. Its initial collection attempt
+selected an unavailable `cpp` memory index because the isolated test index was
+not specified. The corrected test run explicitly uses an isolated runtime,
+local knowledge, hash embeddings and BM25 memory indexing. This neither changes
+production indexing nor qualifies the unavailable backend. Do not deploy an old
+frontend when promoting the backend: the release must retain `ea724d3` or newer
+identity-specific Wiki question pools.
