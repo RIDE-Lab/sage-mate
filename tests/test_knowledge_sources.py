@@ -1,7 +1,7 @@
 import pytest
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
-from sage_faculty_twin.knowledge_sources import KnowledgeSources, wiki_index_settings
+from sage_faculty_twin.knowledge_sources import KnowledgeSources, SourceSelection, wiki_index_settings
 from sage_faculty_twin.models import KnowledgeDocumentCreate
 
 
@@ -32,6 +32,44 @@ def test_guest_only_wiki_member_both_and_full_evidence(tmp_path):
     assert sources.get_visible_document(private.list_documents()[0].document_id) is None
     assert sources.search('quartz', admin_role='super_admin')
     assert len(private.list_documents()) == len(wiki.list_documents()) == 1
+
+
+@pytest.mark.parametrize('role', [None, 'manager', 'super_admin'])
+def test_requested_wiki_scope_blocks_private_search_and_hydration(tmp_path, monkeypatch, role):
+    _, private, _, sources = stores(tmp_path)
+    private_id = 'private::' + private.list_documents()[0].document_id
+    def forbidden(*args, **kwargs):
+        pytest.fail('Unrequested private source was accessed')
+    monkeypatch.setattr(private, 'search', forbidden)
+    monkeypatch.setattr(private, 'get_visible_document', forbidden)
+    selection = SourceSelection(frozenset({'wiki'}))
+    hits = sources.search('quartz', visitor_profile='lab_member', admin_role=role, selection=selection)
+    assert hits and all(hit.document_id.startswith('wiki::') for hit in hits)
+    assert sources.get_visible_document(private_id, visitor_profile='lab_member',
+                                        admin_role=role, selection=selection) is None
+
+
+def test_requested_private_scope_never_grants_guest_access(tmp_path):
+    _, private, _, sources = stores(tmp_path)
+    selection = SourceSelection(frozenset({'private'}))
+    assert sources.search('quartz', visitor_profile='general_visitor', selection=selection) == []
+    assert sources.get_visible_document('private::' + private.list_documents()[0].document_id,
+                                        visitor_profile='general_visitor', selection=selection) is None
+    assert sources.public_documents(selection=selection) == []
+
+
+def test_empty_selection_is_not_a_default_or_named_title_override(tmp_path):
+    _, _, _, sources = stores(tmp_path)
+    selection = SourceSelection(frozenset())
+    assert sources.search('quartz', admin_role='super_admin', selection=selection) == []
+    assert sources.search('Wiki《quartz research》', admin_role='super_admin', selection=selection) == []
+    assert sources.public_documents(selection=selection) == []
+
+
+@pytest.mark.parametrize('origins', [{'unknown'}, {'wiki', 'unknown'}, 'wiki'])
+def test_source_selection_rejects_unknown_or_scalar_origins(origins):
+    with pytest.raises(ValueError):
+        SourceSelection(origins)
 
 
 def test_explicit_wiki_title_keeps_all_chunks_without_unrelated_padding(tmp_path):

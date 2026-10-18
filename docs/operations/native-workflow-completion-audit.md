@@ -26,6 +26,21 @@ not establish a typed retrieval constraint or native parallel execution contract
 Additionally, the malformed query exposed relative README links resolving under
 the Twin host; qualify source-relative URL resolution separately.
 
+### Source-selection contract: adapter qualification, not deployed
+
+`KnowledgeSources` now accepts immutable validated `SourceSelection` on search,
+public enumeration and full-record reads. Requested origins intersect existing
+ACLs; requesting private never grants guest access. Empty selection means none,
+unknown origins fail, and even a manager/super-admin cannot bypass Wiki-only
+selection. Poison-store tests prove the unrequested private store is never called,
+including hydration of previously retrieved private IDs. Twenty source tests
+passed in 1.74s in an isolated candidate package using production dependencies.
+
+This is the adapter contract only. Intent/request propagation, supplemental
+retrieval and identity-floor consistency, native Wiki/private parallel execution,
+full regression and authenticated browser revalidation are still required. No
+production change or claim that the observed source-scope bug is fixed yet.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.

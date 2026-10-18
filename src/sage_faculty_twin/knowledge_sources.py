@@ -1,10 +1,36 @@
 """Read-only retrieval across public Wiki and an independently managed private KB."""
 from __future__ import annotations
 import re
+from dataclasses import dataclass
+from typing import Literal
 
 from .config import AppSettings
 from .source_ownership import SOURCE_OWNERSHIP
 from .models import KnowledgeSearchHit
+
+
+KnowledgeOrigin = Literal['wiki', 'private']
+
+
+@dataclass(frozen=True)
+class SourceSelection:
+    """Requested evidence origins, independent of the caller's authorization.
+
+    Empty means no source is requested, never 'use defaults'. This is a business
+    constraint, not a permission grant or a runtime execution policy.
+    """
+    origins: frozenset[KnowledgeOrigin] = frozenset({'wiki', 'private'})
+
+    def __post_init__(self):
+        if isinstance(self.origins, str):
+            raise ValueError('source origins must be a collection')
+        origins = frozenset(self.origins)
+        if not origins <= {'wiki', 'private'}:
+            raise ValueError('unknown knowledge source origin')
+        object.__setattr__(self, 'origins', origins)
+
+    def allows(self, origin: str) -> bool:
+        return origin in self.origins
 
 
 def wiki_index_settings(settings: AppSettings) -> AppSettings:
@@ -43,12 +69,13 @@ class KnowledgeSources:
             'metadata': {**hit.metadata, 'retrieval_source': origin},
         })
 
-    def search(self, query, top_k=None, *, visitor_profile=None, admin_role=None):
+    def search(self, query, top_k=None, *, visitor_profile=None, admin_role=None,
+               selection: SourceSelection = SourceSelection()):
         # An explicitly named public document is a source request, not an
         # invitation to pad top-k with unrelated semantic neighbours. Include
         # every stored chunk of each exact title, retaining its public ACL.
         titles = set(re.findall(r'《([^》]+)》', query))
-        named = [d for d in self.public_documents()
+        named = [d for d in self.public_documents(selection=selection)
                  if d.title.removeprefix('Wiki | ') in titles]
         if named or (titles and re.search(r'wiki', query, re.IGNORECASE)):
             named.sort(key=lambda d: (d.metadata.get('wiki_page_source', d.title), int(d.metadata.get('wiki_chunk', '1'))))
@@ -57,9 +84,9 @@ class KnowledgeSources:
                 tags=d.tags, metadata=d.metadata) for d in named]
         limit = top_k or self.top_k
         lanes = []
-        if self.wiki is not None:
+        if self.wiki is not None and selection.allows('wiki'):
             lanes.append(('wiki', self.wiki.search(query, top_k=limit, visitor_profile='general_visitor')))
-        if self._private_allowed(visitor_profile, admin_role):
+        if selection.allows('private') and self._private_allowed(visitor_profile, admin_role):
             lanes.append(('private', [hit for hit in self.private.search(query, top_k=limit,
                 visitor_profile=visitor_profile, admin_role=admin_role)
                 if not (hit.source_name or '').startswith('wiki:') and hit.source_name not in SOURCE_OWNERSHIP]))
@@ -72,9 +99,10 @@ class KnowledgeSources:
                     merged.append(self._label(hits[rank], origin))
         return merged[:limit]
 
-    def get_visible_document(self, document_id, *, visitor_profile=None, admin_role=None):
+    def get_visible_document(self, document_id, *, visitor_profile=None, admin_role=None,
+                             selection: SourceSelection = SourceSelection()):
         origin, separator, local_id = document_id.partition('::')
-        if not separator:
+        if not separator or not selection.allows(origin):
             return None
         if origin == 'wiki' and self.wiki is not None:
             document = self.wiki.get_visible_document(local_id, visitor_profile='general_visitor')
@@ -92,8 +120,8 @@ class KnowledgeSources:
             'metadata': {**document.metadata, 'retrieval_source': origin},
         })
 
-    def public_documents(self):
-        if self.wiki is None:
+    def public_documents(self, *, selection: SourceSelection = SourceSelection()):
+        if self.wiki is None or not selection.allows('wiki'):
             return []
         return [d.model_copy(update={'document_id': f'wiki::{d.document_id}',
             'metadata': {**d.metadata, 'retrieval_source': 'wiki'}})
