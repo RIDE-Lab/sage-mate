@@ -16,6 +16,23 @@ def context_for(intent, **request_fields):
     )
 
 
+@pytest.mark.parametrize('requested,inferred,expected', [
+    (None, ['wiki'], ['wiki']), (['wiki'], ['private'], []),
+    ([], ['wiki', 'private'], []), (['wiki'], None, ['wiki']),
+])
+def test_intent_source_constraint_only_narrows_request(tmp_path, monkeypatch, requested, inferred, expected):
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    support = service._build_support()
+    context = context_for(None, knowledge_sources=requested)
+    context.request.question = '根据公开资料评审研究系统的设计'
+    monkeypatch.setattr(support, '_resolve_interaction_intent', lambda ctx: (
+        InteractionIntent(domain='research', knowledge_sources=inferred), 'test'))
+    support.understand_interaction(context)
+    assert context.request.knowledge_sources == expected
+    branch = support.prepare_knowledge_retrieval(context)
+    assert ChatRequest.model_validate_json(branch.request_json).knowledge_sources == expected
+
+
 @pytest.mark.parametrize("background", [None, "初次来访", "计算机课程"])
 def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, background):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))

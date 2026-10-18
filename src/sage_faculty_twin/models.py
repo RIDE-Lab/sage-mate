@@ -20,6 +20,8 @@ class ChatRequest(BaseModel):
     student_name: str = Field(min_length=1, max_length=128)
     student_email: str | None = Field(default=None, max_length=256)
     question: str = Field(min_length=1, max_length=4000)
+    # Requested origins narrow authorization; [] deliberately retrieves nothing.
+    knowledge_sources: list[Literal['wiki', 'private']] | None = None
     course_context: str | None = Field(default=None, max_length=512)
     # Ephemeral request-local evidence. Excluded from serialized requests and
     # conversation/artifact memory; never treat channel messages as an upload.
@@ -54,6 +56,7 @@ class OnlinePresenceHeartbeatResponse(BaseModel):
 
 
 class InteractionIntent(BaseModel):
+    knowledge_sources: list[Literal['wiki', 'private']] | None = None
     self_contained: bool = False
     action: str = Field(
         default="answer",

@@ -202,6 +202,7 @@ class EmptyStreamingResponseError(RuntimeError):
 
 
 class _InteractionIntentPayload(BaseModel):
+    knowledge_sources: list[Literal['wiki', 'private']] | None = None
     self_contained: bool = False
     action: Literal["answer", "book_meeting", "ask_followup", "review_queue", "human_handoff"] = (
         "answer"
@@ -1115,7 +1116,10 @@ class VllmChatClient:
         # ask_followup is reserved for genuinely unintelligible inputs.
         system_prompt = (
             "Classify the student's request for a faculty digital twin. "
-            "Return JSON only with keys: action, domain, self_contained, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "Include knowledge_sources: null when no source restriction is requested, or an array containing wiki and/or private. "
+            "A request to answer according to/from the public Wiki selects [\"wiki\"]; a request using only the private knowledge base selects [\"private\"]. "
+            "If both are explicitly requested select both. Distinguish the requested evidence source from a topic mentioning Wiki; do not invent a source restriction for a mere topic mention. "
+            "Return JSON only with keys: action, domain, self_contained, knowledge_sources, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
             "Set self_contained=true ONLY when the complete request can be answered from the current message alone, without external facts or previous conversation: greetings, acknowledgements, literal echo/format instructions, or rewriting/translating supplied text. In that case use action=answer, domain=general, retrieval_scopes=[]. "
             "Set self_contained=false for Wiki/source lookups, owner/lab/course facts, research questions, missing text, references to previous turns, or any uncertainty. Short questions are NOT automatically self-contained; an output-format instruction does not remove the need to look up facts. "
             'Allowed action values: "answer", "book_meeting", "ask_followup", "review_queue", "human_handoff". '
@@ -2180,7 +2184,8 @@ class VllmChatClient:
         system_prompt = (
             "You repair JSON emitted by an interaction-intent classifier. "
             "Preserve the original intent meaning, but return valid JSON only. "
-            "The JSON object must include exactly these keys: action, domain, self_contained, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "The JSON object must include exactly these keys: action, domain, self_contained, knowledge_sources, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "knowledge_sources is null or an array containing wiki and/or private; preserve explicit source restrictions and never change an empty array to null. "
             "self_contained is a boolean; use false when absent or uncertain. "
             "retrieval_scopes and exclude_scopes must be JSON arrays of strings."
         )
@@ -2243,6 +2248,7 @@ class VllmChatClient:
                 action if action in {"review_queue", "human_handoff"} else "direct_answer"
             )
         normalized_payload = {
+            "knowledge_sources": payload.knowledge_sources,
             "self_contained": payload.self_contained,
             "action": action,
             "domain": domain,

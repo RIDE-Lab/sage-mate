@@ -41,6 +41,20 @@ retrieval and identity-floor consistency, native Wiki/private parallel execution
 full regression and authenticated browser revalidation are still required. No
 production change or claim that the observed source-scope bug is fixed yet.
 
+Typed propagation follow-up: ChatRequest and InteractionIntent now preserve
+nullable origin arrays (empty differs from unspecified); classifier coercion and
+JSON repair retain them. Intent can only narrow an explicit request selection.
+The primary knowledge branch, method/comparison supplements and full-source
+hydration receive the constraint; the public identity floor is suppressed when
+Wiki is excluded. Ninety-nine classifier/evidence/branch tests passed in 8.59s.
+The first two isolated runs failed because the copied tree lacked fixture/policy
+assets; after copying tests, deps and release seeds, the same tests passed.
+
+Production remains unchanged. Fast-intent bypass/fallback and other shortcut
+retrieval entrypoints still require audit before claiming every natural-language
+restriction is honored. Source-lane parallelism and authenticated real-model
+browser acceptance are also outstanding; this is not a release qualification.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.

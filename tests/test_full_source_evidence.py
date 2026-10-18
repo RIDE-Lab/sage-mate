@@ -65,6 +65,14 @@ def test_private_evidence_rechecks_role(tmp_path):
     assert support._resolve_knowledge_evidence(member_request, [hit])[0].source_content == record.content
 
 
+def test_member_wiki_constraint_rejects_previously_retrieved_private_hit(tmp_path):
+    service, record, hit, request = fixture(tmp_path, audience='lab_member')
+    support = service._build_support()
+    scoped = request.model_copy(update={'visitor_profile': 'lab_member', 'knowledge_sources': ['wiki']})
+    assert support._resolve_knowledge_evidence(scoped, [hit]) == []
+    assert record.content not in support._build_student_prompt(scoped, [hit], [], [])
+
+
 def test_updated_source_refreshes_preview_and_full_evidence(tmp_path):
     service, record, hit, request = fixture(tmp_path)
     hit = hit.model_copy(update={'excerpt':'STALE_REMOVED_FACT'})

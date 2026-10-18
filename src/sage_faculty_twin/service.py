@@ -92,7 +92,7 @@ from .code_agent_backends import (
 )
 from .code_workbench import CODE_WORKBENCH_PROFILES, CodeWorkbench
 from .config import AppSettings
-from .knowledge_sources import KnowledgeSources, wiki_index_settings
+from .knowledge_sources import KnowledgeSources, SourceSelection, wiki_index_settings
 from .escalation_store import EscalationQueueStore
 from .evidence_policy import (
     comparison_subjects,
@@ -1412,6 +1412,14 @@ class FacultyTwinWorkflowSupport:
         context.interaction_intent = intent
         context.decision_mode = intent.decision_mode
 
+        # Source preference can only narrow an explicit request constraint.
+        # Persist it in the typed request used by both retrieval and hydration.
+        if intent.knowledge_sources is not None:
+            origins = set(intent.knowledge_sources)
+            if context.request.knowledge_sources is not None:
+                origins.intersection_update(context.request.knowledge_sources)
+            context.request = context.request.model_copy(update={'knowledge_sources': sorted(origins)})
+
         if intent.action == "ask_followup" and intent.needs_clarification:
             # Task 3: defer clarification. Stash the planned message but keep
             # route="answer" so KB retrieval still runs. retrieve_knowledge will
@@ -1806,6 +1814,7 @@ class FacultyTwinWorkflowSupport:
                 retrieval_query,
                 visitor_profile=context.request.visitor_profile,
                 admin_role=context.admin_role,
+                **self._knowledge_selection_kwargs(context.request),
             )
             method_hits = []
             for method_query in self._owner_method_retrieval_queries(context.request):
@@ -1815,6 +1824,7 @@ class FacultyTwinWorkflowSupport:
                         top_k=2,
                         visitor_profile=context.request.visitor_profile,
                         admin_role=context.admin_role,
+                        **self._knowledge_selection_kwargs(context.request),
                     )
                 )
             if method_hits:
@@ -1832,6 +1842,7 @@ class FacultyTwinWorkflowSupport:
                     top_k=6,
                     visitor_profile=context.request.visitor_profile,
                     admin_role=context.admin_role,
+                    **self._knowledge_selection_kwargs(context.request),
                 ))
             if subject_hits:
                 raw_hits = list({hit.document_id: hit for hit in subject_hits + raw_hits}.values())
@@ -1867,7 +1878,9 @@ class FacultyTwinWorkflowSupport:
             # canonical public profile sections. Keep these in the response
             # evidence as well as in the prompt so every stated research
             # direction has a visible source.
-            floor_hits = self._identity_floor_hits(context.request.question)
+            floor_hits = (self._identity_floor_hits(context.request.question)
+                          if context.request.knowledge_sources is None or 'wiki' in context.request.knowledge_sources
+                          else [])
             if floor_hits:
                 seen_ids = {hit.document_id for hit in floor_hits}
                 context.knowledge_hits = floor_hits + [
@@ -6058,6 +6071,12 @@ class FacultyTwinWorkflowSupport:
             return UserSessionResponse(is_authenticated=False, mode="guest")
         return UserSessionResponse(is_authenticated=True, mode="user", account=account)
 
+    @staticmethod
+    def _knowledge_selection_kwargs(request: ChatRequest) -> dict:
+        if request.knowledge_sources is None:
+            return {}
+        return {'selection': SourceSelection(frozenset(request.knowledge_sources))}
+
     def _resolve_knowledge_evidence(
         self, request: ChatRequest, hits: list[KnowledgeSearchHit],
         *, admin_role: Any = ...,
@@ -6072,6 +6091,7 @@ class FacultyTwinWorkflowSupport:
             document = self._knowledge_retriever.get_visible_document(
                 hit.document_id, visitor_profile=getattr(request, 'visitor_profile', None),
                 admin_role=self._resolve_admin_role() if admin_role is ... else admin_role,
+                **self._knowledge_selection_kwargs(request),
             )
             if document is None or document.source_name != hit.source_name:
                 continue

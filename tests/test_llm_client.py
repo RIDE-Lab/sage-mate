@@ -113,6 +113,13 @@ def test_coerce_interaction_intent_removes_conflicting_excluded_scopes() -> None
     assert intent.exclude_scopes == ["courseware"]
 
 
+@pytest.mark.parametrize('origins', [None, [], ['wiki'], ['private'], ['wiki', 'private']])
+def test_intent_coercion_preserves_requested_source_origins(origins):
+    client = object.__new__(VllmChatClient)
+    intent = client._coerce_interaction_intent(_InteractionIntentPayload(knowledge_sources=origins))
+    assert intent.knowledge_sources == origins
+
+
 def test_normalize_interaction_intent_for_explicit_teaching_question() -> None:
     client = object.__new__(VllmChatClient)
     raw_intent = InteractionIntent(
