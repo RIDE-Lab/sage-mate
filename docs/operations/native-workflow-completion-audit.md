@@ -27,6 +27,24 @@ requirement-by-requirement audit remain open. Earlier real Slack delivery proves
 only its recorded sample, not a new formatting acceptance. The current deployment
 used read-only auth.test and did not send new Slack messages.
 
+### Cross-store cancellation foundation — not yet adopted by Twin
+
+SAGE main `236bcc7b` now provides destination-local `EffectFences` and native
+`CancellationService` seal tasks/dependencies. It acknowledges origin cancellation
+only after every declared destination is sealed, and rechecks persisted store
+identities after restart so an old acknowledgement cannot cover a remapped store.
+Its 242 source and 242 installed-package protocol tests passed, including real
+process death after seal/before acknowledgement, local write/seal races, partial
+destination outages, lost origin acknowledgements and canonical-answer protection.
+
+This is foundation qualification, not a Twin cancellation fix or deployment.
+Twin still pins SAGE `8f7535f7`. Booking capture/book/settle and knowledge creation
+must all adopt local guards; the HTTP workflow must use the one native coordinator,
+recover its intents at startup and distinguish pending from acknowledged
+cancellation. Sealed-effect exceptions must not publish premature terminal events.
+Then real Twin ownership/race/restart tests, full regression and release acceptance
+are required. Already committed booking/index/outbox effects are not silently undone.
+
 ## Historical qualification records
 
 ### 2026-10-18 personal Slack binding and real delivery
