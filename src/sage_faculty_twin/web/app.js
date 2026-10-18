@@ -2599,6 +2599,9 @@ accountViewBody?.addEventListener("click", (e) => {
     if (e.target.closest("[data-close-view]")) closeAccountView();
 });
 document.getElementById("close-account-view")?.addEventListener("click", closeAccountView);
+document.getElementById("open-slack-account-link")?.addEventListener("click", () => {
+    openAccountView("login");
+});
 document.getElementById("open-user-register")?.addEventListener("click", () => {
     prepareUserRegistrationForm();
     closeSettingsDrawer();

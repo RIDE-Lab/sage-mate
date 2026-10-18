@@ -14,6 +14,17 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_authenticated_account_has_slack_binding_entry():
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    panel = html.split('id="user-session-panel"', 1)[1].split('class="drawer-separator"', 1)[0]
+    assert 'id="open-slack-account-link"' in panel
+    script = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    handler = script.split('getElementById("open-slack-account-link")', 1)[1].split('});', 1)[0]
+    assert 'openAccountView("login")' in handler
+    account_view = script.split('function openAccountView(', 1)[1].split('function switchAccountTab', 1)[0]
+    assert 'refreshSlackTwinLinkStatus()' in account_view
+
+
 def test_no_evidence_answer_explains_absence_instead_of_hiding_support() -> None:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     renderer = app_js[app_js.index("function renderAssistantMessage("):]
