@@ -146,6 +146,7 @@ def _isolate_conversation_memory(tmp_path, monkeypatch):
     pollute the live production SQLite memory store."""
     isolated = tmp_path / "conversation_memory"
     monkeypatch.setenv("DIGITAL_TWIN_CONVERSATION_MEMORY_DIR", str(isolated))
+    monkeypatch.setenv("DIGITAL_TWIN_BOOKING_STATE_PATH", str(tmp_path / "bookings.sqlite3"))
 
 
 @pytest.fixture

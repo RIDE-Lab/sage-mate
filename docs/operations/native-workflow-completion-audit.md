@@ -55,6 +55,24 @@ Automatic storage alerts and a measured long-term growth budget remain open.
 
 ### Remaining goal evidence
 
+Booking candidate now replaces `_bookings` with a single SAGE SQLite destination
+at `booking_state_path` (default runtime `data/bookings/state.sqlite3`). Its pure
+transition checks conflicts and commits records plus OperationReceipts atomically.
+Confirm/reject transitions also serialize against current state. The chat write
+stage passes the server-captured owner/request digest; replay returns the original
+receipt without undoing a later confirmation. Availability remains an explicitly
+captured file-policy snapshot; advisory suggestions are not reservations.
+
+42 booking/pipeline/admin-auth tests passed (14.11s). Expanded durability suite:
+nine passed (1.98s), including real child-process exit before commit and after commit
+before acknowledgement, independent connections racing, and confirm/reject races.
+The isolated two-invariant qualifier now exits 0 (two knowledge attempts, one
+document; accepted booking survives close/reopen). **This does not establish
+end-to-end booking recovery:** conversational booking-plan capture, notification
+outbox and external acknowledgement boundaries remain open. No production code
+switch has been made. Before cutover, recheck live bookings and losslessly migrate
+any records created since the earlier zero-record observation.
+
 Knowledge-write candidate now pins SAGE a848792 and uses native
 `OperationReceipts`: the document, immutable result, and knowledge-index intent
 commit in one destination transaction. The graph receives the server-captured

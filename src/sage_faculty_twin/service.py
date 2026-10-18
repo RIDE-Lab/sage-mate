@@ -1574,7 +1574,9 @@ class FacultyTwinWorkflowSupport:
                 topic=state.topic or request.course_context or "会议沟通",
                 preferred_start=state.preferred_start,
                 preferred_end=state.preferred_end,
-            )
+            ),
+            operation_id=(f"booking-create:{self._delivery.stream_id}"
+                          if self._delivery is not None else None),
         )
         context.booking_result = booking_response
 
@@ -11616,6 +11618,7 @@ class DigitalTwinService:
                 await asyncio.to_thread(store.close)
         if getattr(self, "_digest_store", None) is not None:
             await asyncio.to_thread(self._digest_store.close)
+        await asyncio.to_thread(self._meeting_service.close)
         await self._llm_client.aclose()
 
     def start_background_work(self):

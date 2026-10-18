@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import threading
+import weakref
 from uuid import uuid4
+
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.operation_receipts import OperationReceipts
 
 from .availability import WeeklyAvailabilityStore
 from .config import AppSettings
@@ -11,10 +16,60 @@ from .models import AvailabilitySchedule, BookingRecord, BookingRequest, Booking
 class MeetingService:
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
-        self._bookings: list[BookingRecord] = []
+        self._state = None
+        self._state_lock = threading.RLock()
+        self._closed = False
+        self._slot = ("twin-bookings-v1", "calendar", "records")
         self._availability_store = WeeklyAvailabilityStore(settings)
 
-    def book(self, request: BookingRequest) -> BookingResponse:
+    def _storage(self):
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("booking_store_closed")
+            if self._state is None:
+                path = self._settings.booking_state_path
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(path))
+                self._finalizer = weakref.finalize(self, self._state.close)
+            return self._state
+
+    def close(self):
+        with self._state_lock:
+            if not self._closed:
+                if self._state is not None:
+                    self._finalizer()
+                self._closed = True
+
+    def _commit(self, operation_id, inputs, decide):
+        """The pure decision sees current bookings under the SAGE transaction.
+
+        Authentication belongs to ingress on every invocation. Caller-supplied
+        operation IDs must be captured, owner-scoped identities, not body fields.
+        Receipts do not fence another database's lease or external email.
+        """
+        with self._state_lock:
+            state = self._storage()
+            receipts = OperationReceipts(state, namespace="twin-booking-effects-v1")
+            def apply(values):
+                bookings = [BookingRecord.model_validate(row) for row in (values[self._slot] or [])]
+                response = decide(bookings)
+                return response.model_dump(mode="json"), {
+                    self._slot: [row.model_dump(mode="json") for row in bookings]}
+            saved = receipts.commit(operation_id or str(uuid4()), inputs=inputs,
+                                    slots=(self._slot,), transition=apply)
+            return BookingResponse.model_validate(saved)
+
+    def book(self, request: BookingRequest, *, operation_id: str | None = None) -> BookingResponse:
+        # Availability is a captured file-policy snapshot. It is not claimed to
+        # be transactionally coupled to concurrent calendar-policy edits.
+        slot_start = request.preferred_start.replace(second=0, microsecond=0)
+        slot_end = slot_start + timedelta(minutes=self._settings.meeting_duration_minutes)
+        available = self._availability_store.is_available(slot_start, slot_end)
+        suggestions = self._suggest_slots(slot_start)
+        return self._commit(operation_id, {"action": "book", "request": request.model_dump(mode="json")},
+            lambda bookings: self._decide_booking(request, bookings, available, suggestions))
+
+    def _decide_booking(self, request, bookings, available, suggestions):
         requested_minutes = (request.preferred_end - request.preferred_start).total_seconds() / 60
         if requested_minutes < self._settings.meeting_duration_minutes:
             return BookingResponse(
@@ -31,22 +86,22 @@ class MeetingService:
             return BookingResponse(
                 accepted=False,
                 message="所选时间不在可预约时段内。",
-                alternative_slots=self._suggest_slots(slot_start),
+                alternative_slots=suggestions,
             )
 
-        if not self._availability_store.is_available(slot_start, slot_end):
+        if not available:
             return BookingResponse(
                 accepted=False,
                 message="所选时间不在本周开放预约时段内。",
-                alternative_slots=self._suggest_slots(slot_start),
+                alternative_slots=suggestions,
             )
 
-        conflicting_booking = self._find_conflicting_booking(slot_start, slot_end)
+        conflicting_booking = self._find_conflicting_booking(slot_start, slot_end, bookings)
         if conflicting_booking is not None:
             return BookingResponse(
                 accepted=False,
                 message=self._build_conflict_message(conflicting_booking),
-                alternative_slots=self._suggest_slots(slot_start),
+                alternative_slots=suggestions,
             )
 
         booking = BookingRecord(
@@ -59,7 +114,7 @@ class MeetingService:
             status="待确认",
             rejection_reason=None,
         )
-        self._bookings.append(booking)
+        bookings.append(booking)
         return BookingResponse(
             accepted=True,
             message="预约请求已提交，等待管理员确认。",
@@ -67,12 +122,19 @@ class MeetingService:
         )
 
     def list_bookings(self, status: str | None = None) -> list[BookingRecord]:
+        with self._state_lock:
+            bookings = [BookingRecord.model_validate(row)
+                        for row in (self._storage().peek(self._slot) or [])]
         if status is None:
-            return list(self._bookings)
-        return [booking for booking in self._bookings if booking.status == status]
+            return bookings
+        return [booking for booking in bookings if booking.status == status]
 
-    def confirm_booking(self, booking_id: str) -> BookingResponse:
-        booking = next((item for item in self._bookings if item.booking_id == booking_id), None)
+    def confirm_booking(self, booking_id: str, *, operation_id=None) -> BookingResponse:
+        return self._commit(operation_id, {"action": "confirm", "booking_id": booking_id},
+                            lambda bookings: self._confirm(booking_id, bookings))
+
+    def _confirm(self, booking_id, bookings):
+        booking = next((item for item in bookings if item.booking_id == booking_id), None)
         if booking is None:
             return BookingResponse(accepted=False, message="未找到对应的预约请求。")
 
@@ -97,8 +159,14 @@ class MeetingService:
             booking=booking,
         )
 
-    def reject_booking(self, booking_id: str, rejection_reason: str | None = None) -> BookingResponse:
-        booking = next((item for item in self._bookings if item.booking_id == booking_id), None)
+    def reject_booking(self, booking_id: str, rejection_reason: str | None = None,
+                       *, operation_id=None) -> BookingResponse:
+        return self._commit(operation_id, {"action": "reject", "booking_id": booking_id,
+                            "rejection_reason": rejection_reason},
+                            lambda bookings: self._reject(booking_id, rejection_reason, bookings))
+
+    def _reject(self, booking_id, rejection_reason, bookings):
+        booking = next((item for item in bookings if item.booking_id == booking_id), None)
         if booking is None:
             return BookingResponse(accepted=False, message="未找到对应的预约请求。")
 
@@ -145,8 +213,9 @@ class MeetingService:
             and self._settings.booking_start_hour < end_at.hour <= self._settings.booking_end_hour
         )
 
-    def _find_conflicting_booking(self, start_at: datetime, end_at: datetime) -> BookingRecord | None:
-        for booking in self._bookings:
+    def _find_conflicting_booking(self, start_at: datetime, end_at: datetime,
+                                  bookings: list[BookingRecord]) -> BookingRecord | None:
+        for booking in bookings:
             if booking.status == "已拒绝":
                 continue
             if start_at < booking.end_at and end_at > booking.start_at:
@@ -159,10 +228,11 @@ class MeetingService:
         return "所选时间已被其他学生预约，请更换时间。"
 
     def _suggest_slots(self, anchor: datetime) -> list[str]:
+        bookings = [booking for booking in self.list_bookings() if booking.status != "已拒绝"]
         weekly_suggestions = self._availability_store.suggest_slots(
             anchor,
             self._settings.meeting_duration_minutes,
-            [(booking.start_at, booking.end_at) for booking in self._bookings],
+            [(booking.start_at, booking.end_at) for booking in bookings],
         )
         if weekly_suggestions:
             return weekly_suggestions
@@ -174,6 +244,7 @@ class MeetingService:
             if self._is_within_booking_hours(candidate, end_at) and self._find_conflicting_booking(
                 candidate,
                 end_at,
+                bookings,
             ) is None:
                 suggestions.append(candidate.isoformat())
         return suggestions

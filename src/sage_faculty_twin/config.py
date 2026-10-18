@@ -226,6 +226,7 @@ class AppSettings(BaseSettings):
     booking_end_hour: int = Field(default=18, ge=1, le=24)
     meeting_duration_minutes: int = Field(default=30, ge=15, le=120)
     availability_schedule_path: Path = Field(default=Path("data/availability/current_week.json"))
+    booking_state_path: Path = Field(default=Path("data/bookings/state.sqlite3"))
     booking_notification_email: str = Field(default="faculty@example.edu")
     calendar_bridge_enabled: bool = Field(
         default=False,
@@ -539,6 +540,7 @@ class AppSettings(BaseSettings):
         defaults: dict[str, Path] = {
             "homepage_dir": runtime_root / "data/homepage",
             "availability_schedule_path": runtime_root / "data/availability/current_week.json",
+            "booking_state_path": runtime_root / "data/bookings/state.sqlite3",
             "knowledge_base_dir": runtime_root / "data/knowledge_base",
             "conversation_memory_dir": runtime_root / "data/conversation_memory",
             "code_session_dir": runtime_root / "data/code_sessions",

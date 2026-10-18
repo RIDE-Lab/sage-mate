@@ -5,6 +5,8 @@ knowledge storage are used; generation is replaced by an injected failure after
 the write. Everything is confined to a fresh temporary directory. No model,
 email, Slack, or production knowledge call is made. Exit 1 means a required
 side-effect invariant is not satisfied; do not count the observation as a pass.
+Exit 0 covers only duplicate knowledge writes and booking reconstruction, not
+persisted conversational plans, cross-database cancellation, or email delivery.
 """
 import asyncio
 from datetime import datetime
@@ -63,8 +65,13 @@ async def qualify(root):
         preferred_end=datetime(2030, 1, 7, 11))
     first = meeting.book(request)
     result["booking_initially_accepted"] = first.accepted
-    result["booking_survives_reconstruction"] = bool(first.booking and any(
-        b.booking_id == first.booking.booking_id for b in MeetingService(settings).list_bookings()))
+    meeting.close()
+    reopened = MeetingService(settings)
+    try:
+        result["booking_survives_reconstruction"] = bool(first.booking and any(
+            b.booking_id == first.booking.booking_id for b in reopened.list_bookings()))
+    finally:
+        reopened.close()
     return result
 
 
