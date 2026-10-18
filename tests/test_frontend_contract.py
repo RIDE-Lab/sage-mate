@@ -14,6 +14,43 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_wiki_starters_cover_all_profiles_and_failed_load_fallback():
+    import subprocess
+    script = r'''
+const fs = require('fs');
+const vm = require('vm');
+const assert = require('assert');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const start = source.indexOf('async function renderSeedChips(');
+const end = source.indexOf('// --- Beginner-friendly', start);
+const node = () => ({dataset:{}, append(){}, addEventListener(){}});
+(async () => {
+  for (const profile of ['general_visitor','hust_undergraduate','paper_writing_student','lab_member']) {
+    for (const available of [true, false]) {
+      let loaded = 0;
+      const container = {children:[], replaceChildren(...items){this.children=items;}, querySelectorAll(){return this.children;}};
+      const wiki = {label:'Wiki 系统概览',question:'根据公开 Wiki 介绍 ECPA 与 StateAxis，附完整来源链接。',context:'公开 Wiki 导读'};
+      const fallback = {label:'Wiki 导览',question:'Wiki 里有哪些公开资料？',context:'公开 Wiki 导读'};
+      const context = {document:{getElementById:()=>container,createElement:node},
+        visitorProfileInput:{value:profile},publicWikiQuestions:available?[wiki]:[],
+        WIKI_QUESTION_FALLBACK:[fallback],SEED_CHIP_COUNT:3,uiIconSvg:()=>'',
+        loadPublicWikiQuestions:async()=>{loaded++;}};
+      vm.createContext(context);
+      vm.runInContext(source.slice(start,end), context);
+      await context.renderSeedChips(profile);
+      assert.equal(loaded,1);
+      assert.equal(container.children.length,1);
+      assert.equal(container.children[0].dataset.seedQuestion,(available?wiki:fallback).question);
+      assert.equal(container.children[0].dataset.seedContext,'公开 Wiki 导读');
+    }
+  }
+})().catch(error=>{console.error(error);process.exit(1);});
+'''
+    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
+    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert "SEED_CHIP_POOL" not in source
+
+
 def test_authenticated_account_has_slack_binding_entry():
     html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
     panel = html.split('id="user-session-panel"', 1)[1].split('class="drawer-separator"', 1)[0]

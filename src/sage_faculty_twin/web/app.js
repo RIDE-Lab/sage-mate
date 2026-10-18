@@ -1418,37 +1418,8 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
     return candidates;
 }
 
-// --- Seed chip pool: random starter questions per profile ---
-// 3 are randomly picked on each page load to give variety.
-const SEED_CHIP_POOL = {
-    general_visitor: [
-        ...VISITOR_PROFILE_CONFIGS.general_visitor.quickActions,
-    ],
-    hust_undergraduate: [
-        { label: "推理引擎 Tutorial", question: "大模型推理引擎 Tutorial 7 主要讲了什么，我应该先看哪部分？", context: "大模型推理引擎课程答疑" },
-        { label: "数据库实验", question: "数据库实验课开始前，我应该先准备哪些环境和材料？", context: "数据库实验课答疑" },
-        { label: "约 office hour", question: "如果我想约 office hour 讨论课程或实验问题，需要先带哪些材料？", context: "本科课程答疑" },
-        { label: "实验报错", question: "我在做实验时遇到了报错，应该怎么排查和解决？", context: "本科课程答疑" },
-        { label: "知识点梳理", question: "帮我梳理一下 KV cache 的基本原理和在推理引擎中的作用。", context: "大模型推理引擎课程答疑" },
-        { label: "实验进度", question: "我目前的实验进度比较慢，有什么高效的方法可以加快进度？", context: "本科课程答疑" },
-    ],
-    paper_writing_student: [
-        { label: "问课程讲次", question: "论文写作课第 7 讲主要讲什么？", context: "论文写作课" },
-        { label: "问写作卡点", question: "我在写 related work，通常应该先检查哪些问题？", context: "论文写作课" },
-        { label: "约论文讨论", question: "我想约时间讨论论文提纲，需要先准备哪些材料？", context: "论文写作课" },
-        { label: "introduction 写作", question: "写 introduction 时最常见的问题有哪些，怎么避免？", context: "论文写作课" },
-        { label: "投稿前自查", question: "投稿前自查时，最值得优先检查的三件事是什么？", context: "论文写作课" },
-        { label: "提纲整理", question: "如果我现在只有一个粗略想法，应该怎么把它整理成论文提纲？", context: "论文写作课" },
-    ],
-    lab_member: [
-        { label: "接着上次进展", question: "我上次提到的研究主题和 blocker 是什么？", context: "科研指导" },
-        { label: "问组会准备", question: "下次组会前我应该准备哪些材料？", context: "组会准备" },
-        { label: "梳理研究重点", question: "帮我梳理一下这周的研究推进重点。", context: "科研指导" },
-        { label: "实验分析", question: "如果实验结果一般，怎么组织分析才更有说服力？", context: "科研指导" },
-        { label: "优先级建议", question: "如果我这周只能推进一件事，最应该优先解决哪个 blocker？", context: "科研指导" },
-        { label: "文献建议", question: "基于我目前的研究方向，有哪些最新的相关工作值得一看？", context: "科研指导" },
-    ],
-};
+// Public Wiki discovery is shared by guests and signed-in members alike.
+const WIKI_QUESTION_FALLBACK = VISITOR_PROFILE_CONFIGS.general_visitor.quickActions;
 
 const SEED_CHIP_COUNT = 3;
 const UI_ICON_NAMES = new Set([
@@ -1479,10 +1450,9 @@ async function renderSeedChips(profile) {
     const container = document.getElementById("seed-chips-list");
     if (!container) return;
     const requestedProfile = profile;
-    if (profile === 'general_visitor') await loadPublicWikiQuestions();
+    await loadPublicWikiQuestions();
     if ((visitorProfileInput?.value || 'general_visitor') !== requestedProfile) return;
-    const pool = profile === 'general_visitor' && publicWikiQuestions.length
-        ? publicWikiQuestions : (SEED_CHIP_POOL[profile] || SEED_CHIP_POOL.general_visitor);
+    const pool = publicWikiQuestions.length ? publicWikiQuestions : WIKI_QUESTION_FALLBACK;
     // Shuffle and pick SEED_CHIP_COUNT items
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const picked = shuffled.slice(0, SEED_CHIP_COUNT);
@@ -2190,7 +2160,7 @@ function getLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 
 function pickLuckyQuestion(profile = visitorProfileInput?.value) {
     if (profile === 'general_visitor') {
-        const candidates = publicWikiQuestions.length ? publicWikiQuestions : SEED_CHIP_POOL.general_visitor;
+        const candidates = publicWikiQuestions.length ? publicWikiQuestions : WIKI_QUESTION_FALLBACK;
         const fresh = candidates.filter((item) => !luckyQuestionHistory.includes(item.question));
         const pool = fresh.length ? fresh : candidates;
         return pool[Math.floor(Math.random() * pool.length)] || null;
