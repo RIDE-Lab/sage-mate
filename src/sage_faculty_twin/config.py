@@ -50,18 +50,6 @@ class AppSettings(BaseSettings):
         "and uses an ordinary chat completion for synthesis; 'native' requires the upstream "
         "OpenAI-compatible server to be launched with tool-call parsing enabled.",
     )
-    skill_tool_parallelism: int = Field(
-        default=4,
-        ge=1,
-        le=16,
-        description="Maximum parallel read-only tool calls within one agent skill.",
-    )
-    skill_answer_max_tokens: int = Field(
-        default=768,
-        ge=128,
-        le=2048,
-        description="Maximum completion tokens for one agent-skill answer.",
-    )
     llm_policy_enabled: bool = Field(default=True)
     llm_policy_variant_kind: str = Field(default="ablation")
     llm_policy_variant_name: str = Field(default="adaptive-controller")
@@ -399,11 +387,6 @@ class AppSettings(BaseSettings):
     capability_plugin_dir: Path = Field(
         default=DEFAULT_RUNTIME_SEED_DATA_DIR / "capability_plugins"
     )
-    skill_dir: Path = Field(default=Path("data/skills"))
-    legacy_skill_shortcut_enabled: bool = Field(
-        default=False,
-        description="Allow legacy matched skills to bypass the grounded chat pipeline.",
-    )
     changelog_path: Path = Field(default=Path("data/changelog.json"))
     # --- Context Digest (rolling conversation compression) ---
     context_digest_enabled: bool = Field(default=True)
@@ -554,7 +537,6 @@ class AppSettings(BaseSettings):
             "suggestion_board_dir": runtime_root / "data/suggestions",
             "user_account_store_dir": runtime_root / "data/user_accounts",
             "slack_user_link_dir": runtime_root / "data/slack_user_links",
-            "skill_dir": runtime_root / "data/skills",
             "changelog_path": runtime_root / "data/changelog.json",
             "context_digest_dir": runtime_root / "data/conversation_memory/digests",
             "installed_skill_prompt_path": runtime_root

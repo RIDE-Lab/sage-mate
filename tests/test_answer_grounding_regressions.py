@@ -25,7 +25,7 @@ from sage_faculty_twin.request_context import (
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.skill_runner import SkillRunner
 from sage_faculty_twin.skill_tools import SkillToolRegistry
-from sage_faculty_twin.skills import SkillContext, SkillDefinition, SkillResult, SkillToolDefinition, SkillToolParameter
+from sage_faculty_twin.skills import SkillContext, SkillDefinition, SkillToolDefinition, SkillToolParameter
 from sage_faculty_twin.service import (
     ChatWorkflowContext, DigitalTwinService, FacultyTwinWorkflowSupport,
     _answer_does_not_complete_requested_task,
@@ -428,28 +428,3 @@ def test_skill_tool_provenance_survives_both_transports(native):
     assert result.success
     assert [h.document_id for h in result.knowledge_hits] == ["paper"]
     assert result.knowledge_hits[0].metadata == {"visibility": "public"}
-
-
-@pytest.mark.asyncio
-async def test_skill_answer_uses_same_support_builder_as_workflow(tmp_path, monkeypatch):
-    service = DigitalTwinService(
-        AppSettings(
-            _env_file=None,
-            knowledge_base_dir=tmp_path,
-            legacy_skill_shortcut_enabled=True,
-        )
-    )
-    monkeypatch.setattr(service, "_build_lightweight_chat_response", lambda _: None)
-    monkeypatch.setattr(service, "_is_light_request", lambda _: False)
-    skill = SimpleNamespace(skill_id="profile")
-    service._skill_router = SimpleNamespace(match=lambda _: skill)
-    service._skill_runner = SimpleNamespace(run=lambda *_: SkillResult(
-        skill_id="profile", answer="研究方向是推理系统。", knowledge_hits=[
-            hit("研究主页", ["profile", "research"], excerpt="老师的研究方向是推理系统。")
-        ]))
-    response = await service.answer(
-        ChatRequest(student_name="test", question="请介绍推理系统研究方法。", deep_thinking=False)
-    )
-    assert response.workflow_action == "skill_answer"
-    assert response.knowledge_hits
-    assert response.answer_basis[0].title == "研究主页"

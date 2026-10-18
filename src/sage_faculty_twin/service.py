@@ -268,10 +268,6 @@ from .workflow_eval import (
     evaluate_workflow_replay_scenarios,
     load_workflow_replay_scenarios,
 )
-from .skill_router import SkillRouter
-from .skill_runner import SkillRunner
-from .skill_tools import SkillToolRegistry
-from .skills import SkillContext
 from .workflow_planner import DeterministicWorkflowPlanner, PlannerDecision
 from .query_routing_catalog import (
     OWNER_CONTEXT_MARKERS,
@@ -8924,22 +8920,6 @@ class DigitalTwinService:
         self._workflow_planner = DeterministicWorkflowPlanner(
             policy_path=settings.workflow_policy_path
         )
-        # Agent skill system (V4.0)
-
-        self._skill_tool_registry = SkillToolRegistry(
-            knowledge_store=self._knowledge_retriever,
-            memory_store=self._conversation_store,
-        )
-        self._skill_router = SkillRouter(
-            skill_dir=settings.skill_dir,
-            current_version=_app_version,
-        )
-        self._skill_runner = SkillRunner(
-            llm_client=self._llm_client,
-            tool_registry=self._skill_tool_registry,
-            max_parallel_tools=settings.skill_tool_parallelism,
-            answer_max_tokens=settings.skill_answer_max_tokens,
-        )
         self._sage_runtime_class = ChatRuntime
         self._fixed_prefix_cache_warmup_attempted = False
         self._fixed_prefix_cache_warmup_lock = threading.Lock()
@@ -9121,83 +9101,6 @@ class DigitalTwinService:
             if self._question_needs_recent_context(request.question)
             else ""
         )
-
-        # Explicit deep-thinking requests use the grounded SAGE pipeline
-        # directly. Skill runners have their own answer-generation/retry
-        # budget; routing through them first can spend the entire chat
-        # deadline before the deep answer stage even starts (and is especially
-        # costly on the current low-throughput NPU backend).
-        skip_skill_for_light_request = self._is_light_request(request)
-        matched_skill = (
-            None
-            if (
-                not request.skill_routing
-                or not self._settings.legacy_skill_shortcut_enabled
-                or skip_skill_for_light_request
-                or (
-                    bool(getattr(request, "deep_thinking_explicit", False))
-                    and bool(getattr(request, "deep_thinking", True))
-                )
-            )
-            else self._skill_router.match(request.question)
-        )
-        if matched_skill is not None:
-            _logger.info(
-                "Skill router matched '%s' for question (len=%d)",
-                matched_skill.skill_id,
-                len(request.question),
-            )
-            skill_context = SkillContext(
-                question=request.question,
-                visitor_profile=request.visitor_profile or "general_visitor",
-                pre_fetched_context=recent_session_context,
-                session_identity=request.conversation_id or "anonymous",
-                course_context=getattr(request, "course_context", None),
-            )
-            try:
-                skill_result = await asyncio.to_thread(
-                    self._skill_runner.run,
-                    matched_skill,
-                    skill_context,
-                )
-                if skill_result.success:
-                    support = self._build_support()
-                    intent = support._build_fallback_interaction_intent(request)
-                    hits = support._filter_knowledge_hits_by_intent(
-                        skill_result.knowledge_hits, intent, question=request.question
-                    )
-                    evidence_context = ChatWorkflowContext(
-                        request=request,
-                        conversation_id=request.conversation_id or str(uuid4()),
-                        owner_name=self._settings.owner_name,
-                        used_model=self._llm_client.model_name,
-                        answer=skill_result.answer,
-                        knowledge_hits=hits,
-                        interaction_intent=intent,
-                    )
-                    return ChatResponse(
-                        answer=skill_result.answer,
-                        owner_name=self._settings.owner_name,
-                        used_model=self._llm_client.model_name,
-                        conversation_id=evidence_context.conversation_id,
-                        knowledge_hits=hits,
-                        answer_basis=support._build_answer_basis(evidence_context),
-                        workflow_action="skill_answer",
-                        decision_mode=f"skill:{matched_skill.skill_id}",
-                    )
-                _logger.warning(
-                    "Skill '%s' failed: %s; falling through to standard pipeline",
-                    matched_skill.skill_id,
-                    skill_result.error,
-                )
-            except Exception as exc:
-                if isinstance(exc, RequestCancelledError):
-                    raise
-                _logger.warning(
-                    "Skill '%s' raised exception: %s; falling through to standard pipeline",
-                    matched_skill.skill_id,
-                    exc,
-                )
 
         workflow_context = WorkflowRequestContext.from_chat_request(
             request,

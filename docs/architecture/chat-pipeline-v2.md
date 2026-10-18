@@ -97,9 +97,35 @@ They cannot alter the answer that was already validated.
 
 ## Current migration state
 
-All chat and benchmark callers now use the FlowNet execution path. The separate
-in-process executor, its public entrypoint and the execution-mode setting have
-been removed. Retrieval is sequential
-for now: the former DAG fan-out allowed two branches to mutate one shared
-`ChatWorkflowContext`. Parallel retrieval may return only after those stages
-produce independent immutable results that can be merged explicitly.
+The grounded chat and benchmark pipeline uses one resident SAGE `ChatRuntime`.
+The separate in-process executor, public entrypoint and execution-mode setting
+have been removed. `RetrievalRuntime` runs independent memory and knowledge
+operators on a resident native graph; request-scoped input/result envelopes are
+merged only after both branches finish. They do not mutate a shared
+`ChatWorkflowContext` in parallel. Barrier-based tests establish actual overlap,
+request isolation and endpoint reuse, including peer failure, cancellation and
+late-result rejection. This is same-process native scheduling, not a claim of
+distributed execution or forced termination of uncooperative external calls.
+
+The opt-in legacy SkillRunner chat shortcut and its enable/configuration fields
+are removed, not merely disabled. A matching old manifest or a stale environment
+variable cannot re-enable pre-pipeline generation or early return. The request
+field `skill_routing` does not select another executor; grounded chat uses the
+same native retrieval, answer validation, canonical turn commit and background
+work path. Standalone skill utilities remain independently tested library code,
+not an application service entrypoint. Explicit invitation/security and separate
+code-workbench/auto-scientist actions still pass the common delivery boundary;
+they must not be mislabeled as completed grounded-chat graph executions.
+
+Canonical answer/task admission uses the existing SAGE state/work/event journal
+transaction; post-answer and index work use native resident workers, leases and
+recovery. HTTP and Slack transport adapters do not own a second chat executor.
+Slack delivery captures bounded complete Markdown frames before answer-task ACK,
+then resumes the same immutable plan through SAGE `DeliverySequence` with current
+authorization and recipient/method checks. External unknown acceptance remains
+at-least-once, not exactly-once.
+
+Implementation and source tests are not production acceptance. See
+[completion audit](../operations/native-workflow-completion-audit.md) and
+[Slack delivery qualification](../slack-delivery-scope.md) for exact release and
+remaining real-client/cutover gates.

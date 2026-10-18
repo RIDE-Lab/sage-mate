@@ -8,7 +8,6 @@ from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatRequest, InteractionIntent, KnowledgeSearchHit
 from sage_faculty_twin.persona import build_system_prompt
 from sage_faculty_twin.service import DigitalTwinService, FacultyTwinWorkflowSupport
-from sage_faculty_twin.skills import SkillResult
 from sage_faculty_twin.web_search import WebSearchClient, WebSearchResult
 
 
@@ -78,8 +77,9 @@ def _settings(tmp_path: Path, **overrides) -> AppSettings:
     return AppSettings(**defaults)
 
 
-def test_legacy_skill_match_does_not_bypass_grounded_pipeline_by_default(
-    tmp_path: Path,
+@pytest.mark.parametrize("skill_routing", [True, False])
+def test_legacy_skill_match_cannot_bypass_native_pipeline(
+    tmp_path: Path, monkeypatch, skill_routing,
 ) -> None:
     skill_dir = tmp_path / "skills"
     skill_dir.mkdir()
@@ -99,21 +99,25 @@ def test_legacy_skill_match_does_not_bypass_grounded_pipeline_by_default(
         }""",
         encoding="utf-8",
     )
-    service = DigitalTwinService(_settings(tmp_path, skill_dir=skill_dir))
+    monkeypatch.setenv("DIGITAL_TWIN_LEGACY_SKILL_SHORTCUT_ENABLED", "true")
+    monkeypatch.setenv("DIGITAL_TWIN_SKILL_DIR", str(skill_dir))
+    assert not {"legacy_skill_shortcut_enabled", "skill_dir", "skill_tool_parallelism",
+                "skill_answer_max_tokens"} & AppSettings.model_fields.keys()
+    service = DigitalTwinService(_settings(tmp_path))
+    assert not hasattr(service, "_skill_runner")
+    assert not hasattr(service, "_skill_router")
     llm = _RecordingLLM(answer="来自标准检索与记忆管线的回答")
     service._llm_client = llm
-    service._skill_runner.run = lambda *args, **kwargs: SkillResult(
-        skill_id="research_mentoring",
-        answer="旧技能短路回答",
-        success=True,
-    )
 
     response = asyncio.run(
         service.answer(
             ChatRequest(
                 student_name="Alice",
+                owner_id="guest:skillregression",
                 conversation_id="conv-skill-grounding",
                 question="请介绍一下你的研究方向。",
+                skill_routing=skill_routing,
+                deep_thinking=False,
             )
         )
     )
@@ -121,6 +125,13 @@ def test_legacy_skill_match_does_not_bypass_grounded_pipeline_by_default(
     assert response.answer != "旧技能短路回答"
     assert response.workflow_action != "skill_answer"
     assert response.workflow_trace
+    assert response.execution_events
+    assert {event.state for event in response.execution_events} == {"started", "completed"}
+    assert response.memory_write_back
+    canonical = service._conversation_store.get_owned_record(
+        response.exchange_id, owner_id="guest:skillregression")
+    assert canonical is not None
+    assert canonical.answer == response.answer
 
 
 def test_grounded_attachment_question_cannot_be_overridden_into_review_queue(

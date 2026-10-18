@@ -26,6 +26,60 @@ requirement-by-requirement audit remain open. Earlier real Slack delivery proves
 only its recorded sample, not a new formatting acceptance. The current deployment
 used read-only auth.test and did not send new Slack messages.
 
+### Current candidate versus production
+
+The immutable `c0cae2b` / SAGE `4c4abffe` candidate completed 1726 tests with 31
+unchanged skips and no failures/errors (470.248 seconds). Same-release isolated
+Wiki delivery (9.63 seconds), native foreground/background acknowledgement,
+owner isolation, actual service-restart canonical replay (0.24 seconds), and
+cross-store cancellation (0.43 seconds, source499, both destination seals and no
+canonical answer) passed. Served JavaScript matches that candidate. A reusable
+real-embedding/SageVDB qualifier passed seed/update/delete/reopen in three OS
+processes: revision4, four completed index tasks and no cold-load rebuild.
+Tool and qualification records are on main `28161d5`.
+
+Final retirement audit found an opt-in pre-pipeline SkillRunner return despite
+its default-off setting. The service construction/imports/early-return branch
+and obsolete settings are now removed, rather than retaining a second selectable
+chat path. Installed persona guidance and standalone skill library tests remain;
+no replacement executor, model switch or lower answer budget is introduced.
+Two routing-input cases now require actual native start/completion events and
+the same owner-bound canonical answer even with the obsolete environment setting
+present. Against the old candidate both cases failed; the corrected eight-file
+source gate passed 158 tests with 10 existing skips (21.80 seconds). This new
+runtime delta needs its own frozen full regression and preview acceptance before
+promotion; the earlier candidate's full results must not be reused for it.
+
+A fresh read-only production audit verified final legacy archive hashes and
+private modes; preserved counts remain 189/329 conversation entries (including
+attachments) and 76/58 profiles for test-labelled/unknown-origin groups. Live
+canonical state has 47 conversations and 75 profiles, zero unowned records,
+no legacy import/disk-layout files, and SQLite quick-check passes. The Slack
+journal has two requests/four done tasks/no active old-format tasks. These are
+point-in-time aggregates, not a future drain guarantee. No private bodies,
+identifiers, credentials, assignments, deletions or production writes were used.
+
+Before eventual promotion:
+
+1. Complete real-client Slack Markdown/multipart display and browser visual
+   acceptance against the exact qualified runtime. Do not equate an accepted
+   API receipt, source fixture or served-asset hash with visible client delivery.
+2. Pause admission and old workers through the actual service lifecycle, then
+   recheck old-format work under quiescence. The new version refuses pending or
+   running old-format Slack work; never mutate it into a new plan or keep an old
+   sender beside the new sender.
+3. Preserve unit/release configuration and make consistent canonical SQLite
+   backups with integrity checks. Keep quarantine outside every serving root.
+4. After new-format work has been admitted, an older binary is not a qualified
+   reader/worker for those records. Do not blindly switch back or restore a
+   pre-cutover database over new owned writes. Recovery needs a separately
+   qualified compatible artifact and preservation of the current authoritative
+   state, not a snapshot rewind.
+5. Verify public new/restored answers, source integrity, owner isolation, native
+   work status, restart replay, dependency readiness and Wiki incremental work
+   after switching. Retained release/backup artifacts are not active alternative
+   execution paths. Inference/GPU services remain untouched.
+
 ### Cross-store cancellation — deployed with destination guards
 
 SAGE `b7355905` provides destination-local `EffectFences` and native
