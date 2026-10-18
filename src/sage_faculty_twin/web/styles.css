@@ -1,4 +1,4 @@
-.native-execution, .native-work {
+.native-execution, .native-work, .native-work-current {
     color: var(--ink);
     background: var(--surface-inset);
     border: 1px solid var(--line-strong);

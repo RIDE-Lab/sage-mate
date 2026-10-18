@@ -110,6 +110,9 @@ class SlackWorkflow:
         self._start_lock = asyncio.Lock()
         self._started = False
 
+    def work_status(self):
+        return self._work.status()
+
     def _classify_failure(self, lease, error):
         if isinstance(error, ModelRequestRejected):
             return WorkFailure(error.code)

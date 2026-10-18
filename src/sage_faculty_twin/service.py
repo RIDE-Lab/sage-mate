@@ -11322,6 +11322,16 @@ class DigitalTwinService:
             return self._runtime_manager.restart()
         raise ValueError(f"Unsupported service action: {action}")
 
+    def background_work_status(self):
+        """Compose native lifecycle observations, never inspect private threads."""
+        return {
+            "post_answer": self._post_answer_runtime.work_status() if self._post_answer_runtime is not None else None,
+            "feedback": self._feedback_runtime.work_status() if self._feedback_runtime is not None else None,
+            "knowledge_index": self._knowledge_store.index_work_status(),
+            "wiki_index": self._wiki_store.index_work_status() if self._wiki_store is not None else None,
+            "booking_notifications": self._meeting_service.notification_work_status(),
+        }
+
     def health(self) -> dict[str, str]:
         runtime_identity = self._runtime_identity_provider.snapshot()
         due_follow_ups = self._follow_up_store.list_due_actions()
@@ -11338,8 +11348,17 @@ class DigitalTwinService:
             iter((planner_metrics.get("rejection_reasons") or {}).keys()), ""
         )
         top_rejected_step = next(iter((planner_metrics.get("rejected_steps") or {}).keys()), "")
+        workers = self.background_work_status()
+        unavailable = [key for key, status in workers.items() if status is not None
+                       and status.phase in {"failed", "stopped", "draining", "closed"}]
+        background_readiness = ("degraded" if unavailable else "ready" if (
+            workers["post_answer"] is not None and workers["feedback"] is not None
+            and all(status.ready for status in workers.values() if status is not None)) else "not_started")
         payload = {
-            "status": "ok",
+            "status": "degraded" if unavailable else "ok",
+            "background_readiness": background_readiness,
+            "background_work_states": json.dumps({key: status.to_dict() if status is not None else None
+                                                 for key, status in workers.items()}, ensure_ascii=False),
             "app_version": _app_version,
             "owner_name": self._settings.owner_name,
             "owner_role": self._settings.owner_role,

@@ -60,3 +60,6 @@ class BookingNotifications:
     def close(self):
         if self.service is not None:
             self.service.close()
+
+    def work_status(self):
+        return self.service.status() if self.service is not None else None

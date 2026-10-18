@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sage.runtime.source_answer_plan import SourceAnswerBlock
 from sage.runtime.execution_observation import ExecutionEvent
 from sage.runtime.work_observation import WorkEvent
+from sage.runtime.work_status import WorkRequestStatus
 
 
 class ChatAttachment(BaseModel):
@@ -293,6 +294,8 @@ class ExchangeExecutionResponse(BaseModel):
     request_id: str | None = None
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
     work_events: list[WorkEvent] = Field(default_factory=list)
+    work_status: WorkRequestStatus | None = None
+    stream_closed: bool | None = None
 
 
 class ConversationHistoryItemResponse(BaseModel):

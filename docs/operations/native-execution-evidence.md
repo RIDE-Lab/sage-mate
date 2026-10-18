@@ -136,3 +136,39 @@ authoritative current task/stream state, avoiding closed-history stream replay,
 removal of the unreachable old phase renderer, Slack presentation and browser
 visual acceptance. Missing native attempt evidence must remain unknown, never
 inferred completion.
+
+## Native continuous lifecycle and current task snapshots
+
+The next candidate pins SAGE `34f65c41`. Native `WorkService.status` and
+`AsyncWorkService.status` expose lifecycle/admission and owner-loop status without
+business payloads or exception text. `WorkJournal.status` reads actual task state,
+attempt, due/lease state and dependencies; expired running work remains running
+until reclaimed. Claimability uses the native claim predicate, not a second Twin
+scheduler. A historical failure code does not override a later successful state.
+
+Twin composes these public ports for post-answer, feedback, Wiki/private indexing,
+booking notification, HTTP ingress/cancellation and Slack execution/verification.
+Known application or HTTP/cancellation worker failure makes `/health` return 503
+with degraded readiness. Optional Slack worker failure has its own readiness and
+admission gate; it does not label a healthy web ingress unavailable. Unstarted
+application workers are explicitly `not_started`, not certified ready. Lifecycle
+readiness is not a handler-progress heartbeat or an external-delivery receipt.
+Detailed native lifecycle/error type is in authorized diagnostics, not public
+health responses. Health reads do not dispatch work.
+
+Owner-authorized exchange metadata now carries native current task status and
+actual stream closure. The browser shows snapshot state separately from attempt
+history and opens no SSE replay for an already-closed stream. New attempt events
+trigger metadata reads, never another model call or poller. Request/view/identity
+guards discard late reads. The unused phase rail, phase classifier and associated
+step-name-derived renderer have been deleted; legacy cache migration still removes
+their previously saved markup without changing answers or citations.
+
+Failure injection also exposed a foundation retirement boundary: a failed but
+explicitly drained supervisor must be able to release resources once while its
+failure remains observable. SAGE now separates `drained` from failure phase;
+undrained work still prevents retirement. Twin does not catch and conceal that
+failure to bypass native drain.
+
+This section describes the candidate contract; matching full regression, preview,
+production and visual gates must be recorded before promotion is claimed.

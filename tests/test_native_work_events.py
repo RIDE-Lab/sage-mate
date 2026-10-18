@@ -42,7 +42,9 @@ def test_answer_return_is_not_background_ack_and_owner_view_refreshes_without_re
             started = client.get(url)
             assert started.status_code == 200, started.text
             assert started.headers["cache-control"] == "no-store"
-            assert set(started.json()) == {"exchange_id", "request_id", "execution_events", "work_events"}
+            assert set(started.json()) == {"exchange_id", "request_id", "execution_events", "work_events", "work_status", "stream_closed"}
+            assert started.json()["stream_closed"] is False
+            assert started.json()["work_status"]["tasks"][0]["status"] == "running"
             assert [e["state"] for e in started.json()["work_events"]] == ["started"]
             runtime = service._get_post_answer_runtime()
             task = runtime.journal.read(exchange)["tasks"]["post_answer"]
@@ -65,6 +67,10 @@ def test_answer_return_is_not_background_ack_and_owner_view_refreshes_without_re
             finished = client.get(url)
             assert finished.status_code == 200
             assert [e["state"] for e in finished.json()["work_events"]] == ["started", "completed"]
+            assert finished.json()["stream_closed"] is True
+            assert finished.json()["work_status"]["tasks"][0]["status"] == "done"
+            assert "payload" not in finished.json()["work_status"]["tasks"][0]
+            assert "token" not in finished.json()["work_status"]["tasks"][0]
             assert finished.json()["execution_events"] == started.json()["execution_events"]
             assert service._conversation_store.get_canonical_record(exchange).to_dict() == canonical
             replay = client.post("/chat?request_id=work-evidence", json=body)
@@ -127,7 +133,8 @@ def test_completion_event_and_task_ack_roll_back_together_and_reopen_exactly(tmp
             assert evidence["request_id"] == "public-request"
             with pytest.raises(PermissionError):
                 work_evidence_for_exchange(state, record.memory_id, owner_id="account:other")
-            assert work_evidence_for_exchange(state, "legacy-unrecorded", owner_id="account:alice") == {"request_id": None, "work_events": []}
+            assert work_evidence_for_exchange(state, "legacy-unrecorded", owner_id="account:alice") == {
+                "request_id": None, "work_events": [], "work_status": None, "stream_closed": None}
         finally:
             state.close()
     finally:

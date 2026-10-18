@@ -194,6 +194,9 @@ class HttpWorkflow:
                 await self._work.start()
                 self._started = True
 
+    def work_status(self):
+        return {"ingress": self._work.status(), "cancellation": self._cancellations.work_status()}
+
     def _upgrade_finalizers(self):
         # Offline graph migration uses SAGE's guarded native transition. Old
         # workers must be drained; a live legacy lease rejects this upgrade.

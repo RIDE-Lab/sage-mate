@@ -709,7 +709,10 @@ def _slack_configuration():
 
 def _slack_dependency_ready():
     return (slack_dependency is not None
+            and slack_workflow is not None
             and _slack_verified_configuration == _slack_configuration()
+            and slack_dependency.work_status().ready
+            and slack_workflow.work_status().ready
             and slack_dependency.ready())
 
 
@@ -720,7 +723,20 @@ def _slack_readiness():
         return "not_started"
     if _slack_verified_configuration != _slack_configuration():
         return "configuration_changed"
+    if (not slack_dependency.work_status().ready
+            or (slack_workflow is not None and not slack_workflow.work_status().ready)):
+        return "worker_unavailable"
     return slack_dependency.status()["state"]
+
+
+def _http_readiness():
+    if http_workflow is None:
+        return "not_started"
+    workers = tuple(http_workflow.work_status().values())
+    if any(status.phase in {"failed", "stopped", "draining", "closed"}
+           or status.execution_context_running is False for status in workers):
+        return "degraded"
+    return "ready" if all(status.ready for status in workers) else "not_started"
 
 
 def _create_slack_dependency(state, **options):
@@ -1561,7 +1577,7 @@ async def user_logout(response: Response) -> UserSessionResponse:
 
 
 @llm_app.get("/health")
-async def health() -> dict[str, object]:
+async def health(response: Response) -> dict[str, object]:
     if not service.is_initialized():
         return {
             "status": "starting",
@@ -1572,10 +1588,16 @@ async def health() -> dict[str, object]:
             "owner_role": settings.owner_role,
             "homepage_public_url": settings.homepage_public_url,
         }
-    snapshot = service.health()
+    snapshot = await asyncio.to_thread(service.health)
+    http_readiness = _http_readiness()
+    degraded = snapshot.get("status") == "degraded" or http_readiness == "degraded"
+    if degraded:
+        response.status_code = 503
     return {
-        "status": snapshot.get("status", "ok"),
-        "readiness": "ready",
+        "status": "degraded" if degraded else snapshot.get("status", "ok"),
+        "readiness": "degraded" if degraded else "ready",
+        "background_readiness": snapshot.get("background_readiness", "unknown"),
+        "http_readiness": http_readiness,
         "app_version": snapshot.get("app_version", __version__),
         "owner_name": snapshot.get("owner_name", settings.owner_name),
         "owner_role": snapshot.get("owner_role", settings.owner_role),

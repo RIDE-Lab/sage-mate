@@ -478,16 +478,8 @@ const MAX_CHAT_UPLOAD_BYTES = 5 * 1024 * 1024;
 const DEFAULT_COMPOSER_UPLOAD_HINT = "支持 PDF、TXT、MD、CSV、JSON、PY、YAML、LOG，最多 4 个文件。";
 const SUPPORTED_CHAT_UPLOAD_SUFFIXES = new Set([".pdf", ".txt", ".md", ".csv", ".json", ".py", ".yaml", ".yml", ".log"]);
 // Keep a compact, durable workflow summary with each completed answer. The
-// dedicated DAG remains available as an optional advanced view.
+// native execution evidence remains available in the collapsed details.
 const INLINE_WORKFLOW_TRACE_ENABLED = true;
-const WORKFLOW_PHASE_DEFINITIONS = [
-    { key: "intake", label: "接入", icon: "inbox" },
-    { key: "decide", label: "判断", icon: "branch" },
-    { key: "retrieve", label: "检索", icon: "search" },
-    { key: "answer", label: "回答", icon: "message" },
-    { key: "finalize", label: "收尾", icon: "checklist" },
-    { key: "return", label: "返回", icon: "send" },
-];
 const WORKFLOW_STEP_SHORT_LABELS = {
     bootstrap: "接收问题",
     workflow_plan_preview: "预览路径",
@@ -7966,14 +7958,6 @@ function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
     if (pendingMessage) {
         pendingMessage.dataset.lastStageAt = String(performance.now());
     }
-    const pendingRail = chatStream?.querySelector(".message-pending .thinking-phase-rail");
-    if (pendingRail) {
-        pendingRail.innerHTML = buildWorkflowPhaseRailHtml({
-            currentStage,
-            workflowSteps,
-            complete: false,
-        });
-    }
     if (INLINE_WORKFLOW_TRACE_ENABLED) {
         syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
     }
@@ -8112,12 +8096,13 @@ function renderAssistantMessage(
     }
     if (exchangeId && !isError) {
         attachFeedbackHandlers(container, exchangeId);
+        if (container === activeWorkflowMessage) void refreshActiveWorkStatus();
     }
     chatStream.scrollTop = chatStream.scrollHeight;
 }
 
-function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = []) {
-    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length) {
+function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null) {
+    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length && !workStatus) {
         return "";
     }
 
@@ -8138,7 +8123,7 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], wor
             </button>
             <div class="message-section-content" hidden>
                 <div class="message-native-execution">${buildNativeExecutionHtml(executionEvents)}
-                    <div class="native-work-events">${buildWorkAttemptHtml(workEvents)}</div>
+                    <div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>
                 </div>
                 <p>业务记录（不代表节点执行或后台任务确认）</p>
                 <div class="message-workflow-chip-row">
@@ -8200,7 +8185,39 @@ function mergeWorkEvents(events) {
     activeWorkEvents = mergeWorkEventLists(activeWorkEvents, events);
 }
 
-function buildWorkAttemptHtml(events = []) {
+async function refreshActiveWorkStatus() {
+    const message = activeWorkflowMessage;
+    const exchange = message?.dataset.exchangeId;
+    const requestId = activeWorkflowRequestId, generation = executionHistoryGeneration;
+    if (!exchange) return;
+    try {
+        const snapshot = await apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000});
+        if (generation !== executionHistoryGeneration || requestId !== activeWorkflowRequestId
+                || message !== activeWorkflowMessage || !chatStream?.contains(message)) return;
+        mergeWorkEvents(snapshot.work_events || []);
+        updateMessageExecutionEvidence(message,activeExecutionEvents,activeWorkEvents,snapshot.work_status);
+        persistActiveConversationSnapshot();
+    } catch {
+        // Keep real attempt events visible; do not invent a current task state.
+    }
+}
+
+function buildWorkStatusHtml(status) {
+    if (!status || status.version !== 1 || !Array.isArray(status.tasks)) return "";
+    const labels = {pending:"等待调度",running:"执行中",done:"已持久化完成",failed:"失败",blocked:"前置任务失败，已阻止"};
+    return `<div class="native-work-current"><p>原生任务状态快照 · ${escapeHtml(String(status.observed_at))}</p><ul>${status.tasks.map(task=>{
+        let label = labels[task.status] || "未知";
+        if (task.status === "running" && task.lease_expired) label = "租约过期，等待回收";
+        if (task.status === "pending" && !task.dependencies_ready) label = "等待前置任务";
+        else if (task.status === "pending" && !task.claimable) label = "等待重试时间";
+        if (task.status === "failed" && task.last_failure_code === "request_cancelled") label = "已取消";
+        const name = task.task_id === "post_answer" ? "答后处理" : task.task_id;
+        return `<li data-task-status="${escapeHtml(task.status)}">${escapeHtml(name)} · ${escapeHtml(label)} · 第 ${escapeHtml(String(task.attempt))} 次</li>`;
+    }).join("")}</ul></div>`;
+}
+
+function buildWorkAttemptHtml(events = [], workStatus = null) {
+    const current = buildWorkStatusHtml(workStatus);
     const attempts = new Map();
     for (const event of events) {
         if (event?.version !== 1 || typeof event.task_id !== "string") continue;
@@ -8211,9 +8228,9 @@ function buildWorkAttemptHtml(events = []) {
             attempts.set(key, {...event,state:"unknown"});
         } else attempts.set(key,event);
     }
-    if (!attempts.size) return '<p>尚无后台任务执行记录；不推断已经完成。</p>';
+    if (!attempts.size) return current + '<p>尚无后台任务执行记录；不推断已经完成。</p>';
     const labels = {started:"后台处理中",completed:"已持久化确认",retrying:"等待重试",failed:"后台任务失败",unknown:"状态冲突，需核对"};
-    return `<div class="native-work"><p>后台任务确认 · 与原生租约状态原子提交；不代表外部邮件或其他系统已送达。</p><ol>${[...attempts.values()].map(event=>{
+    return `${current}<div class="native-work"><p>后台任务确认 · 与原生租约状态原子提交；不代表外部邮件或其他系统已送达。</p><ol>${[...attempts.values()].map(event=>{
         const name = event.task_id === "post_answer" ? "答后处理" : event.task_id;
         const detail = JSON.stringify({namespace:event.namespace,request_id:event.request_id,task_id:event.task_id,
             attempt:event.attempt,dependency_task_ids:event.dependency_task_ids,dependency_mode:event.dependency_mode,
@@ -8222,11 +8239,11 @@ function buildWorkAttemptHtml(events = []) {
     }).join("")}</ol></div>`;
 }
 
-function updateMessageExecutionEvidence(message, executionEvents, workEvents) {
+function updateMessageExecutionEvidence(message, executionEvents, workEvents, workStatus = null) {
     if (!message) return;
     let summary = message.querySelector(".message-workflow-summary");
-    if (!summary && (executionEvents.length || workEvents.length)) {
-        message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents));
+    if (!summary && (executionEvents.length || workEvents.length || workStatus)) {
+        message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents,workStatus));
         summary = message.querySelector(".message-workflow-summary");
     }
     const content = summary?.querySelector(".message-section-content");
@@ -8238,7 +8255,7 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents) {
         content.prepend(native);
     }
     native.innerHTML = buildNativeExecutionHtml(executionEvents)
-        + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents)}</div>`;
+        + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>`;
     summary.dataset.executionFormat = "native-v1";
 }
 
@@ -8278,8 +8295,8 @@ async function hydrateExecutionEvidence(root) {
             if (generation !== executionHistoryGeneration || !root.contains(message)) return;
             const foreground = snapshot.execution_events || [];
             let work = snapshot.work_events || [];
-            updateMessageExecutionEvidence(message,foreground,work);
-            if (!snapshot.request_id || typeof EventSource !== "function") continue;
+            updateMessageExecutionEvidence(message,foreground,work,snapshot.work_status);
+            if (snapshot.stream_closed !== false || !snapshot.request_id || typeof EventSource !== "function") continue;
             const stream = new EventSource(`${origin}/chat/workflow-events?request_id=${encodeURIComponent(snapshot.request_id)}`,{withCredentials:true});
             restoredExecutionStreams.add(stream);
             stream.onmessage = event => {
@@ -8292,6 +8309,14 @@ async function hydrateExecutionEvidence(root) {
                     work = mergeWorkEventLists(work,[payload.event]);
                     updateMessageExecutionEvidence(message,foreground,work);
                     persistActiveConversationSnapshot();
+                    // Event-driven refresh of the native journal view, not a
+                    // second poller or a state guessed from attempt events.
+                    void apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000})
+                        .then(fresh=>{
+                            if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+                            work = mergeWorkEventLists(work,fresh.work_events || []);
+                            updateMessageExecutionEvidence(message,foreground,work,fresh.work_status);
+                        }).catch(()=>{}); // Actual events remain visible; no fabricated state.
                 }
                 if (payload.type === "complete" || payload.type === "error") {
                     stream.close(); restoredExecutionStreams.delete(stream);
@@ -8303,83 +8328,6 @@ async function hydrateExecutionEvidence(root) {
             if (summary) summary.textContent = "执行状态暂时无法核验；原回答未改动";
         }
     }
-}
-
-function buildWorkflowPhaseRailHtml({ currentStage = "", workflowSteps = [], complete = false } = {}) {
-    const phases = deriveWorkflowPhaseStates({ currentStage, workflowSteps, complete });
-    return `
-        <div class="workflow-phase-rail" aria-label="当前处理阶段">
-            ${phases.map((phase, index) => `
-                <div class="workflow-phase-item workflow-phase-item-${escapeHtml(phase.state)}" data-phase-key="${escapeHtml(phase.key)}" title="${escapeHtml(phase.statusLabel)}" aria-label="${escapeHtml(phase.label)}：${escapeHtml(phase.statusLabel)}">
-                    <span class="workflow-phase-icon" aria-hidden="true">${buildWorkflowPhaseIconSvg(phase.icon)}</span>
-                    <span class="workflow-phase-label">${escapeHtml(phase.label)}<small class="workflow-phase-status">${escapeHtml(phase.statusLabel)}</small></span>
-                    ${index < phases.length - 1 ? '<span class="workflow-phase-link" aria-hidden="true"></span>' : ""}
-                </div>
-            `).join("")}
-        </div>
-    `;
-}
-
-function buildWorkflowPhaseIconSvg(iconName) {
-    const symbolName = {
-        inbox: "inbox",
-        branch: "branch",
-        search: "search",
-        message: "message-spark",
-        checklist: "checklist",
-        send: "send",
-    }[iconName] || "message-spark";
-    return uiIconSvg(symbolName);
-}
-
-function deriveWorkflowPhaseStates({ currentStage = "", workflowSteps = [], complete = false } = {}) {
-    const visibleSteps = buildVisibleWorkflowSteps(workflowSteps, currentStage, { includeCurrentStage: !complete });
-    // Arrival at a later phase (or answer delivery) is not evidence that earlier
-    // work completed. In particular, durable background work can still be queued.
-    const latestByKey = new Map(visibleSteps.map(step => [step.key, step]));
-    const labels = {pending: "未确认", active: "执行中", queued: "待执行",
-        failed: "失败", skipped: "已跳过", completed: "已报告步骤完成"};
-    return WORKFLOW_PHASE_DEFINITIONS.map((definition) => {
-        const steps = [...latestByKey.values()].filter(step => inferWorkflowPhaseKey(step) === definition.key);
-        const statuses = steps.map(step => step.status);
-        let state = "pending";
-        if (statuses.some(status => ["failed", "error"].includes(status))) state = "failed";
-        else if (statuses.some(status => ["active", "running", "retrying"].includes(status))) state = "active";
-        else if (statuses.some(status => ["queued", "pending"].includes(status))) state = "queued";
-        else if (statuses.length && statuses.every(status => status === "skipped")) state = "skipped";
-        else if (statuses.length && statuses.every(status => ["completed", "skipped"].includes(status))) state = "completed";
-        return {
-            ...definition,
-            state,
-            statusLabel: labels[state],
-        };
-    });
-}
-
-function inferWorkflowPhaseKey(step) {
-    const key = String(step?.key || "");
-    const normalized = `${key} ${String(step?.title || "")}`.toLowerCase();
-
-    if (key === "response_render" || /返回结果|return|response/.test(normalized)) {
-        return "return";
-    }
-    if (
-        ["follow_up_plan", "memory_usefulness_score", "memory_persist", "artifact_memory_writeback", "memory_profile_consolidate", "context_digest"].includes(key)
-        || /规划后续|评估记忆|写入对话记忆|记录材料|沉淀长期画像|persist|follow_up|usefulness/.test(normalized)
-    ) {
-        return "finalize";
-    }
-    if (["prompt_build", "llm_answer"].includes(key) || /构造回答上下文|生成回答|回答|回复|answer|prompt|llm/.test(normalized)) {
-        return "answer";
-    }
-    if (["knowledge_retrieve", "memory_retrieve"].includes(key) || /检索|记忆|资料|上下文|retrieve|memory|knowledge|search/.test(normalized)) {
-        return "retrieve";
-    }
-    if (["workflow_plan_preview", "interaction_understand", "booking_prepare", "booking_execute", "knowledge_write", "current_stage"].includes(key)
-        || /预览|理解用户意图|预约|知识入库|当前处理中|plan|intent|booking/.test(normalized)) {
-        return "decide";
-    }
-    return "intake";
 }
 
 function buildVisibleWorkflowSteps(workflowSteps = [], currentStage = "", options = {}) {
@@ -9669,6 +9617,7 @@ function handleWorkflowStreamEvent(payload) {
     if (payload.type === "work-event" && payload.event?.version === 1) {
         mergeWorkEvents([payload.event]);
         syncNativeExecutionDisplay();
+        void refreshActiveWorkStatus();
         return;
     }
 

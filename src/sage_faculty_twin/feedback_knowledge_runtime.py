@@ -53,6 +53,9 @@ class FeedbackKnowledgeRuntime:
     def start(self):
         self._service.start()
 
+    def work_status(self):
+        return self._service.status()
+
     def status(self, operation_id, *, exchange_id):
         """Read saved progress; callers must authorize the exchange first.
 

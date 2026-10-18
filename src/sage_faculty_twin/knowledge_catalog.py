@@ -106,6 +106,10 @@ class KnowledgeCatalog:
             raise RuntimeError("knowledge_index_service_not_started")
         return self._index_service.wait(operation_id, timeout=timeout)
 
+    def work_status(self):
+        with self._lifecycle_lock:
+            return self._index_service.status() if self._index_service is not None else None
+
     def request_indexing(self, revision, *, projection_key):
         """Admit a refresh intent without editing canonical documents."""
         with self._lifecycle_lock:

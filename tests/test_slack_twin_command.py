@@ -145,6 +145,29 @@ def harness(monkeypatch, tmp_path):
     state.close()
 
 
+@pytest.mark.parametrize("kind", ["verification", "delivery"])
+def test_slack_worker_failure_preserves_web_readiness_and_stops_new_admission(harness, monkeypatch, kind):
+    native = (api_module.slack_dependency._work if kind == "verification"
+              else api_module.slack_workflow._work._service)
+
+    def fail(**kwargs):
+        raise OSError("private fixture diagnostic")
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(native.journal, "active_records", fail)
+            assert native._stopped.wait(5)
+        assert api_module._slack_dependency_ready() is False
+        response = harness.client.get("/health")
+        assert response.status_code == 200 and response.json()["readiness"] == "ready"
+        assert response.json()["slack_readiness"] == "worker_unavailable"
+        assert "private" not in response.text and "OSError" not in response.text
+        assert harness.sent == [] and harness.calls == []
+    finally:
+        with pytest.raises(RuntimeError, match="work_service_failed"):
+            native.close()
+
+
 def test_normalization_and_owned_memory():
     assert api_module._normalize_slack_twin_question("<@BOT> <@BOT> question") == "question"
     owner = api_module._slack_conversation_owner("T1", "U1", "C1")

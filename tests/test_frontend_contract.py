@@ -27,8 +27,8 @@ const context={escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
     EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
 vm.createContext(context);
-vm.runInContext('let activeWorkEvents=[]; let activeWorkflowMessage=null; const restoredExecutionStreams=new Set(); let executionHistoryGeneration=0;',context);
-vm.runInContext(source.slice(source.indexOf('function mergeWorkEventLists('),source.indexOf('function buildWorkflowPhaseRailHtml(')),context);
+vm.runInContext('let activeWorkEvents=[]; let activeExecutionEvents=[]; let activeWorkflowRequestId=null; let activeWorkflowMessage=null; const restoredExecutionStreams=new Set(); let executionHistoryGeneration=0;',context);
+vm.runInContext(source.slice(source.indexOf('function mergeWorkEventLists('),source.indexOf('function buildVisibleWorkflowSteps(')),context);
 const event=(state,id=state)=>({version:1,event_id:id,namespace:'post',request_id:'owned',task_id:'post_answer',attempt:1,state,dependency_task_ids:[],dependency_mode:'success'});
 assert(context.buildWorkAttemptHtml([]).includes('不推断已经完成'));
 assert(context.buildWorkAttemptHtml([event('started')]).includes('后台处理中'));
@@ -39,6 +39,13 @@ assert(context.buildWorkAttemptHtml([{...event('started'),task_id:'<script>'}]).
 assert(!context.buildWorkAttemptHtml([{...event('started'),task_id:'<script>'}]).includes('<script>'));
 assert(context.buildWorkAttemptHtml([event('completed')]).includes('不代表外部邮件'));
 assert.equal(context.mergeWorkEventLists([event('started')],[event('started'),event('completed')]).length,2);
+const status=(task)=>({version:1,observed_at:123,tasks:[{task_id:'post_answer',attempt:1,dependencies_ready:true,claimable:false,...task}]});
+assert(context.buildWorkStatusHtml(status({status:'pending',dependencies_ready:false})).includes('等待前置任务'));
+assert(context.buildWorkStatusHtml(status({status:'pending'})).includes('等待重试时间'));
+assert(context.buildWorkStatusHtml(status({status:'running',lease_expired:true})).includes('租约过期，等待回收'));
+assert(!context.buildWorkStatusHtml(status({status:'running',lease_expired:true})).includes('已持久化完成'));
+assert(context.buildWorkStatusHtml(status({status:'failed',last_failure_code:'request_cancelled'})).includes('已取消'));
+assert(context.buildWorkStatusHtml(status({status:'done',last_failure_code:'temporarily_unavailable'})).includes('已持久化完成'));
 const native={innerHTML:''},content={querySelector:()=>native};
 const summary={dataset:{},querySelector:selector=>selector==='.message-section-content'?content:null};
 const message={dataset:{exchangeId:'exchange'},answer:'original answer',citations:'original complete citations',
@@ -48,7 +55,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
     const hydrated=context.hydrateExecutionEvidence(root);
     await turn();
-    releaseSnapshot({execution_events:[],work_events:[event('started')],request_id:'public'});
+    releaseSnapshot({execution_events:[],work_events:[event('started')],request_id:'public',stream_closed:false});
     await hydrated;
     assert.equal(streams.length,1);
     assert(native.innerHTML.includes('后台处理中'));
@@ -63,9 +70,24 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
     assert.equal(native.innerHTML,saved);
     const stale=context.hydrateExecutionEvidence(root);
     await turn();context.stopRestoredExecutionStreams();
-    releaseSnapshot({execution_events:[],work_events:[event('failed')],request_id:'old'});
+    releaseSnapshot({execution_events:[],work_events:[event('failed')],request_id:'old',stream_closed:false});
     await stale;
     assert.equal(streams.length,1);assert.equal(native.innerHTML,saved);
+    const closed=context.hydrateExecutionEvidence(root);
+    await turn();releaseSnapshot({execution_events:[],work_events:[event('completed')],work_status:status({status:'done'}),request_id:'closed',stream_closed:true});
+    await closed;
+    assert.equal(streams.length,1); // No redundant replay of a closed answer stream.
+    assert(native.innerHTML.includes('已持久化完成'));
+    context.chatStream=root;context.message=message;
+    vm.runInContext('activeWorkflowMessage=message; activeWorkflowRequestId="one";',context);
+    const oldActive=context.refreshActiveWorkStatus();await turn();
+    vm.runInContext('activeWorkflowRequestId="two";',context);
+    const savedCurrent=native.innerHTML;
+    releaseSnapshot({work_events:[event('failed')],work_status:status({status:'failed'})});await oldActive;
+    assert.equal(native.innerHTML,savedCurrent);
+    const current=context.refreshActiveWorkStatus();await turn();
+    releaseSnapshot({work_events:[event('completed')],work_status:status({status:'done'})});await current;
+    assert(native.innerHTML.includes('已持久化完成'));
 })().catch(error=>{console.error(error);process.exitCode=1;});
 '''
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
@@ -114,7 +136,7 @@ assert(context.buildNativeExecutionHtml([event('x','cancelled','safe')]).include
 const started = event('out-of-order','started','safe'), ended = event('out-of-order','completed','safe');
 assert(context.buildNativeExecutionHtml([ended,started]).includes('data-execution-state="completed"'));
 vm.runInContext('let activeExecutionEvents = []',context);
-vm.runInContext(source.slice(source.indexOf('function mergeNativeExecutionEvents('),source.indexOf('function buildWorkflowPhaseRailHtml(')),context);
+vm.runInContext(source.slice(source.indexOf('function mergeNativeExecutionEvents('),source.indexOf('function buildVisibleWorkflowSteps(')),context);
 context.mergeNativeExecutionEvents([started]);
 context.mergeNativeExecutionEvents([started,ended]);
 assert.equal(vm.runInContext('activeExecutionEvents.length',context),2);
@@ -126,31 +148,17 @@ assert(source.includes('exchange.execution_events || []'));
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 
 
-def test_phase_status_requires_actual_events_not_answer_completion():
+def test_business_notes_cannot_reintroduce_inferred_phase_topology():
     import subprocess
     script = r'''
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const source = fs.readFileSync(process.argv[1], 'utf8');
 const context = {};
 vm.createContext(context);
-vm.runInContext(source.slice(source.indexOf('const WORKFLOW_PHASE_DEFINITIONS ='),
-    source.indexOf('const WORKFLOW_STEP_SHORT_LABELS =')), context);
-vm.runInContext(source.slice(source.indexOf('function deriveWorkflowPhaseStates('),
-    source.indexOf('function buildCollapsibleSupportSectionHtml(')), context);
-const states = (steps, complete=true) => Object.fromEntries(context.deriveWorkflowPhaseStates({workflowSteps:steps,complete}).map(p=>[p.key,p.state]));
-const step = (key,status) => ({key,status});
-let result = states([step('response_render','completed')]);
-assert.equal(result.return,'completed');
-for (const phase of ['intake','decide','retrieve','answer','finalize']) assert.equal(result[phase],'pending');
-result = states([step('memory_persist','queued'),step('response_render','completed')]);
-assert.equal(result.finalize,'queued');
-assert.equal(states([step('knowledge_retrieve','skipped')]).retrieve,'skipped');
-assert.equal(states([step('knowledge_retrieve','failed'),step('memory_retrieve','completed')]).retrieve,'failed');
-assert.equal(states([step('knowledge_retrieve','running'),step('memory_retrieve','completed')]).retrieve,'active');
-assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retrieve','skipped')]).retrieve,'completed');
-assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retrieve','unknown')]).retrieve,'pending');
-assert.equal(states([step('knowledge_retrieve','running'),step('knowledge_retrieve','completed')]).retrieve,'completed');
-assert.equal(states([],false).intake,'pending');
+assert(!source.includes('WORKFLOW_PHASE_DEFINITIONS'));
+assert(!source.includes('function buildWorkflowPhaseRailHtml('));
+assert(!source.includes('function deriveWorkflowPhaseStates('));
+assert(!source.includes('function inferWorkflowPhaseKey('));
 vm.runInContext(source.slice(source.indexOf('function normalizeWorkflowStepStatus('),
     source.indexOf('function stripNotificationText(')), context);
 assert.equal(context.normalizeWorkflowStepStatus('failed'),'failed');
@@ -429,7 +437,8 @@ def test_interface_icons_share_one_accessible_svg_system() -> None:
     assert 'href="#icon-globe-search"' in html
     assert 'href="#icon-dice"' in html
     assert "function uiIconSvg(name, className = \"\")" in js
-    assert 'return uiIconSvg(symbolName);' in js
+    assert 'uiIconSvg("copy", "ui-icon-sm")' in js
+    assert 'function buildWorkflowPhaseIconSvg(' not in js
     assert ".ui-icon {" in css
     assert ".ui-icon-dot {" in css
     assert "@media (prefers-reduced-motion: reduce)" in css
@@ -672,7 +681,7 @@ def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     assert "const INLINE_WORKFLOW_TRACE_ENABLED = true;" in js
     summary_fn = js[
         js.index("function buildWorkflowStatusSummaryHtml"):
-        js.index("function buildWorkflowPhaseRailHtml")
+        js.index("function buildVisibleWorkflowSteps")
     ]
     assert 'class="message-workflow-summary message-section"' in summary_fn
     assert 'aria-expanded="false"' in summary_fn

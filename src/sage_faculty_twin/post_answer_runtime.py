@@ -19,16 +19,20 @@ def work_events_for_exchange(state, exchange_id, *, owner_id):
 
 def work_evidence_for_exchange(state, exchange_id, *, owner_id):
     """Read the committed task's owner-bound delivery, never guess it by email."""
-    record = WorkJournal(state, namespace="twin-post-answer-v1").read(exchange_id)
+    journal = WorkJournal(state, namespace="twin-post-answer-v1")
+    record = journal.read(exchange_id)
     if record is None:
-        return {"request_id": None, "work_events": []}  # No invented legacy evidence.
+        return {"request_id": None, "work_events": [], "work_status": None,
+                "stream_closed": None}  # No invented legacy evidence.
     task = PostAnswerTask.model_validate(record["tasks"]["post_answer"]["payload"])
     if task.request.owner_id != owner_id or task.request_id != exchange_id:
         raise PermissionError("post_answer_observation_owner_conflict")
     if task.delivery is None:
-        return {"request_id": None, "work_events": []}
+        return {"request_id": None, "work_events": [], "work_status": journal.status(exchange_id),
+                "stream_closed": None}
     return {"request_id": task.delivery.request_id,
-            "work_events": WorkflowEventBroker(lambda: state).read_work_events(task.delivery.stream_id)}
+            **WorkflowEventBroker(lambda: state).read_work_evidence(task.delivery.stream_id),
+            "work_status": journal.status(exchange_id)}
 
 
 class PostAnswerRuntime:
@@ -61,6 +65,9 @@ class PostAnswerRuntime:
 
     def start(self):
         self._service.start()
+
+    def work_status(self):
+        return self._service.status()
 
     def submit(self, task):
         inputs = task.journal_inputs()

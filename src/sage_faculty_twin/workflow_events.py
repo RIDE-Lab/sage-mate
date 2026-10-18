@@ -21,6 +21,9 @@ class WorkflowEventBroker:
         self._journal().read(request_id, after=after, limit=1)
 
     def read_work_events(self, request_id):
+        return self.read_work_evidence(request_id)["work_events"]
+
+    def read_work_evidence(self, request_id):
         """Read typed native metadata from the one existing authorized stream.
 
         This is a view, not a second store or a reason to regenerate an answer.
@@ -36,7 +39,8 @@ class WorkflowEventBroker:
             result.extend(frame["payload"]["event"] for frame in page["events"]
                           if frame["payload"].get("type") == "work-event")
             if page["caught_up"]:
-                return TypeAdapter(list[WorkEvent]).validate_python(result)
+                return {"work_events": TypeAdapter(list[WorkEvent]).validate_python(result),
+                        "stream_closed": page["closed"]}
             cursor = page["cursor"]
 
     async def stream(self, request_id, *, after=0):

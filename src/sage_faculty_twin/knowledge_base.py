@@ -447,6 +447,9 @@ class LocalKnowledgeStore:
         )
         self._catalog.start_indexing(project, projection_key=projection_key)
 
+    def index_work_status(self):
+        return self._catalog.work_status()
+
     def close(self, *, timeout=30):
         self._catalog.close(timeout=timeout)
 

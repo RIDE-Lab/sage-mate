@@ -62,6 +62,10 @@ class MeetingService:
             self._storage()
             self._notifications.start(notifier, admin_recipient=self._settings.booking_notification_email.strip())
 
+    def notification_work_status(self):
+        with self._state_lock:
+            return self._notifications.work_status() if self._notifications is not None else None
+
     @property
     def effect_fences(self):
         with self._state_lock:
