@@ -1,5 +1,31 @@
 # Native workflow completion audit
 
+## Browser acceptance findings requiring follow-up (2026-10-18)
+
+Chrome extension tab binding timed out after 15s, but native Chrome accessibility
+and screenshots worked after raising the existing Twin window. Native typeText
+dropped Chinese characters; that first malformed request is not quality evidence.
+The second request was set with AX setValue, and its complete Chinese text was
+verified before sending: ask public Wiki for IntelliStream directions and roles
+of ECPA/StateAxis, preserving source links.
+
+The logged-in browser returned in 27.4s. The answer was visibly readable, with
+rendered headings/table/list, and process/support sections initially collapsed.
+Expanding support worked. However, it selected both the correct public Wiki
+overview and a private-KB-labelled personal-homepage record without a source URL.
+This does not prove an authorization leak (the caller was logged in), but fails
+the explicit public-Wiki source preference and reveals a missing provenance link.
+Guest-only API checks did not cover this member-context case.
+
+Source inspection confirms `KnowledgeSources.search` gates private access by
+role only; there is no independent requested-source constraint except exact named
+Wiki titles. Its Wiki/private search calls are also sequential. Existing native
+parallel tests cover memory versus knowledge, not those two inner source lanes.
+These requirements remain incomplete; adding a keyword-only answer filter would
+not establish a typed retrieval constraint or native parallel execution contract.
+Additionally, the malformed query exposed relative README links resolving under
+the Twin host; qualify source-relative URL resolution separately.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.
