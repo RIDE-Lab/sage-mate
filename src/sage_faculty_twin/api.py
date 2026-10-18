@@ -771,8 +771,10 @@ async def _deliver_slack_reply(ingress, reply):
     # Enforce the audience at the final transport boundary on every retry.
     payload = {"channel": ingress.channel_id, "user": ingress.user_id,
                "text": reply.text, "link_names": False, "parse": "none"}
-    if ingress.thread_ts:
-        payload["thread_ts"] = ingress.thread_ts
+    # A mention can be the root of a thread that does not yet exist. Slack only
+    # displays ephemeral thread replies in an already active thread. Keep the
+    # thread identity in durable ingress, but deliver in the same channel so
+    # an initial mention does not become an accepted-but-invisible reply.
     result = await asyncio.to_thread(_post_slack_api, "chat.postEphemeral", payload)
     return {"accepted": True, "message_ts": result.get("ts") or result.get("message_ts")}
 

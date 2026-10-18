@@ -375,8 +375,7 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     assert method == "chat.postEphemeral"
     assert "完整的研究回答。" in payload["text"]
     assert payload["user"] == "UOTHER"
-    if transport == "mention":
-        assert payload["thread_ts"] == "1719200000.000100"
+    assert "thread_ts" not in payload
     records, _ = api_module.slack_workflow.journal.records(limit=10)
     assert records[0]["value"]["dependencies"] == {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
     assert records[0]["value"]["tasks"]["deliver"]["attempt"] == 1
@@ -410,7 +409,9 @@ def test_member_mention_recovery_never_widens_answer_audience(harness, channel):
     assert method == "chat.postEphemeral"
     assert payload["user"] == "UOTHER"
     assert payload["channel"] == channel
-    assert payload["thread_ts"] == "1719200000.000100"
+    # A newly mentioned message need not have an active Slack thread. Reply at
+    # channel level to the same user, without creating a public placeholder.
+    assert "thread_ts" not in payload
     assert "完整的研究回答。" in payload["text"]
     assert payload["link_names"] is False
     assert payload["parse"] == "none"
