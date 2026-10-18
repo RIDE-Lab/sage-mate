@@ -8858,8 +8858,8 @@ class ListBookingsStage(MapFunction):
         super().__init__()
         self._support = support
 
-    def execute(self, status: str | None) -> list[BookingRecord]:
-        return self._support.list_bookings(status=status)
+    def execute(self, query: dict[str, str | None]) -> list[BookingRecord]:
+        return self._support.list_bookings(status=query["status"])
 
 
 class ChatContextMergeFunction(BaseCoMapFunction):
@@ -10582,7 +10582,7 @@ class DigitalTwinService:
         support = self._build_support()
         return self._run_pipeline_blocking(
             "faculty-twin-booking-list",
-            [status],
+            [{"status": status}],
             [(ListBookingsStage, support)],
             "SAGE runtime completed without producing a booking list.",
         )

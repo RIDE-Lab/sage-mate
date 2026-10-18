@@ -1865,6 +1865,14 @@ async def slack_events(
 
 async def startup_event() -> None:
     global slack_workflow, http_workflow
+    slack_configuration = {
+        "SLACK_TWIN_SIGNING_SECRET": SLACK_TWIN_SIGNING_SECRET,
+        "SLACK_TWIN_TEAM_ID": SLACK_TWIN_TEAM_ID,
+        "SLACK_TWIN_BOT_TOKEN": SLACK_TWIN_BOT_TOKEN,
+    }
+    if any(slack_configuration.values()) and not all(slack_configuration.values()):
+        missing = ",".join(key for key, value in slack_configuration.items() if not value)
+        raise RuntimeError(f"slack_configuration_incomplete:{missing}")
     if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
         identity = await asyncio.to_thread(_post_slack_api, "auth.test", {})
         if identity.get("team_id") != SLACK_TWIN_TEAM_ID:

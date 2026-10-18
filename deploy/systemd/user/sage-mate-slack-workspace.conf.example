@@ -1,0 +1,4 @@
+# Install as sage-mate-app.service.d/slack-workspace.conf after verifying
+# the existing bot's auth.test team_id. Keep tokens in the protected env file.
+[Service]
+Environment=SLACK_TWIN_TEAM_ID=YOUR_VERIFIED_WORKSPACE_ID

@@ -401,6 +401,20 @@ def test_unconfigured_workspace_cannot_admit(harness, monkeypatch):
     assert harness.calls == []
 
 
+@pytest.mark.parametrize("missing", [
+    "SLACK_TWIN_SIGNING_SECRET", "SLACK_TWIN_TEAM_ID", "SLACK_TWIN_BOT_TOKEN",
+])
+def test_partial_slack_configuration_fails_before_service_start(harness, monkeypatch, missing):
+    harness.client.portal.call(api_module.shutdown_event)
+    starts = harness.lifecycle.count("service-start")
+    with monkeypatch.context() as patch:
+        patch.setattr(api_module, missing, "")
+        with pytest.raises(RuntimeError, match=f"slack_configuration_incomplete:{missing}"):
+            harness.client.portal.call(api_module.startup_event)
+        assert harness.lifecycle.count("service-start") == starts
+    harness.client.portal.call(api_module.startup_event)
+
+
 def test_wrong_bot_workspace_is_rejected_before_service_start(harness, monkeypatch):
     harness.client.portal.call(api_module.shutdown_event)
     starts = harness.lifecycle.count("service-start")

@@ -9,6 +9,30 @@ shortcut removal, native inner-source parallelism, and transactional HTTP/Slack
 admission limits of eight are deployed. Browser visual acceptance is complete
 for the recorded public Wiki sample. Real Slack delivery is still unverified.
 
+### Real Slack command acceptance: configuration repaired, identity gate remains
+
+The user authorized the operator to send the exact Wiki acceptance question from
+the native Slack client to Twin's DM. At 21:10 (Asia/Shanghai), Slack displayed
+`app did not respond`; the production access log confirmed POST commands/twin 503.
+The running process had signing secret and bot token but no workspace ID, so the
+native Slack worker was never started. Secret-free auth.test checks confirmed
+that the configured bot and workspace matched the visible Slack app.
+
+Added a workspace-only systemd drop-in, then restarted the unchanged c659c2f
+release. Before restart all three authenticated booking-status queries returned
+zero, and durable work contained 88 done / one historical failed / no active tasks.
+The unfiltered booking endpoint unexpectedly returned 500 because its batch
+source item was None (end-of-stream); the candidate now wraps the optional filter
+in an explicit query object and tests the real FlowNet path.
+
+At 21:15 the same real slash command received Twin's account-binding instructions.
+This proves command ingress and immediate Slack acknowledgement, **not** answer
+generation or final delivery. Do not bypass ownership/link checks. User confirmation
+for binding their verified Twin account is pending. The candidate also rejects
+partial Slack configuration at startup rather than presenting an apparently healthy
+but permanently disabled integration. 52 Slack/booking-pipeline tests passed
+in 7.55s; Ruff passed. These code changes are not yet deployed.
+
 ### Explicit non-destructive retention policy
 
 Canonical conversations, completed work, event replay and isolated legacy data
