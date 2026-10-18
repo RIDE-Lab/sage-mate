@@ -70,3 +70,15 @@ Validation remains strict; there is no JSON repair or alternate free-text path.
 The comparison then passed in13.65s with separate safety/performance proposals;
 onboarding passed in4.27s. Focused155passed/5skips and native authority/wire tests
 26passed. SAGE schema commit0ac1e92 is pinned for the final clean qualification.
+
+Final inference-scope follow-up: a repeated real question still conflated latency
+regression with safety falsification. SAGE f3ecd85 now restricts suggestions to
+prospective hypothetical experiments and source-scoped unknowns, not retrospective
+project validation verdicts. A proposed experiment includes its own claim,
+matched control, fixed variables, measurement and falsifier. Correctness and
+performance conditions are separated; nonsignificance alone is not falsification.
+The final isolated sample returned research questions in9.17s/9.58s, the expanded
+comparison in15.38s and full onboarding in4.21s. Source originals passed independent
+read-only catalog comparison. Suggested numerical thresholds are hypothetical
+acceptance criteria, not reported measurements. Scientific proposals still require
+human review; this is not proof of universal model reasoning correctness.
