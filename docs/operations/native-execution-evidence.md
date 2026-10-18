@@ -45,6 +45,15 @@ nested Wiki/private fanout parentage. Six existing Node regression groups and
 three frontend contract groups pass. Full frozen regression and deployment are
 separate gates; none of these results claims production cutover.
 
+The dd2f76c full gate completed with 1629 passes, 31 unchanged skips and 36
+failures. Thirty-four failures were caused by an unsupported `local` SageVDB
+backend in the operator test environment; the next gate uses the real `cpp`
+backend, not a new alias or fallback. Two obsolete frontend assertions now verify
+the native summary remains collapsed and the pending view is singular, without
+invented phase/completion totals. The affected frontend/knowledge/recovery groups
+pass 139 tests with five existing skips (48.80 seconds). A fresh full gate remains
+required; resource exhaustion did not recur in the completed failing gate.
+
 This foreground evidence is not a durable background task acknowledgement. Native
 WorkService claim/lease/retry/recovery/finish events and their atomic publication
 still need qualification before the overall workflow visualization is complete.

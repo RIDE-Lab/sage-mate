@@ -600,8 +600,10 @@ def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     assert '<strong class="message-section-title">处理过程</strong>' in summary_fn
     assert '<div class="message-section-content" hidden>' in summary_fn
     assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
-        "buildWorkflowPhaseRailHtml"
+        "buildNativeExecutionHtml(executionEvents)"
     )
+    assert "buildWorkflowPhaseRailHtml({" not in summary_fn
+    assert "原生执行状态未记录" in summary_fn
 
 
 def test_live_progress_uses_one_compact_surface_inside_the_message() -> None:
@@ -618,7 +620,11 @@ def test_live_progress_uses_one_compact_surface_inside_the_message() -> None:
     assert 'aria-label="实时处理进度"' in pending_fn
     assert "thinking-phase-rail" not in pending_fn
     assert "thinking-trace-chip-row" not in compact_fn
-    assert "已完成 ${completedSteps.length} 步" in compact_fn
+    assert "业务记录" in compact_fn
+    assert "已完成 ${completedSteps.length} 步" not in compact_fn
+    native_sync = js[js.index("function syncNativeExecutionDisplay("):js.index("function mergeNativeExecutionEvents(")]
+    assert '.message-pending .thinking-trace-list' in native_sync
+    assert 'buildNativeExecutionHtml(activeExecutionEvents)' in native_sync
 
 
 def test_compact_process_summary_hides_details_until_requested() -> None:
