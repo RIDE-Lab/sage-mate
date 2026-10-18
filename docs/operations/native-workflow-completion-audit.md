@@ -46,9 +46,23 @@ no replacement executor, model switch or lower answer budget is introduced.
 Two routing-input cases now require actual native start/completion events and
 the same owner-bound canonical answer even with the obsolete environment setting
 present. Against the old candidate both cases failed; the corrected eight-file
-source gate passed 158 tests with 10 existing skips (21.80 seconds). This new
-runtime delta needs its own frozen full regression and preview acceptance before
-promotion; the earlier candidate's full results must not be reused for it.
+source gate passed 158 tests with 10 existing skips (21.80 seconds).
+
+The new `e86c5c0` runtime then passed its own independent frozen environment:
+1726 passed, 31 unchanged skips, one existing framework warning, 458.29 seconds,
+explicit exit0. JUnit was independently counted as 1757 cases, zero failures,
+zero errors and 31 skips. Critical installed SAGE hashes, exact producer revision
+and the unchanged 1024 descriptor limit were verified before that run.
+The same fixed runtime passed isolated Wiki delivery (10.90 seconds), complete
+source blocks/links, 30 native execution frames for 15 attempts before answer
+commit, atomic background acknowledgement, owner isolation, served-asset hash,
+and real service-restart canonical replay (0.25 seconds). Cancellation passed
+both same-process replay (0.40 seconds) and actual restart replay (initial cancel
+0.37 seconds), with source499, two sealed destination databases and no canonical
+answer. The three-process real-embedding/SageVDB qualifier passed again against
+this release. No inference-speed benchmark, real Slack display or production
+promotion is inferred from those results. The owned preview was stopped; its
+data and failed earlier reports remain retained. Production is unchanged.
 
 A fresh read-only production audit verified final legacy archive hashes and
 private modes; preserved counts remain 189/329 conversation entries (including

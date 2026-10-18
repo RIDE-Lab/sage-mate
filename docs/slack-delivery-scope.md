@@ -152,3 +152,11 @@ no cold-start synchronization. All three phases passed against the candidate's
 installed dependencies and actual embedding configuration. The tool never opens
 the production corpus or changes services; it retains its own audit artifacts.
 This qualifies knowledge persistence/incremental processing, not Slack rendering.
+
+The subsequent legacy-chat-shortcut retirement runtime `e86c5c0` has its own
+frozen result: 1726 passed, 31 unchanged skips, no failures/errors, exit0 in
+458.29 seconds. Exact-version isolated full Wiki/native task/owner/asset checks,
+actual answer restart replay, cancellation restart replay and the real-embedding
+knowledge qualifier passed again. These do not close the outstanding real Slack
+Markdown/multipart client-display or browser visual gates. Production remains
+unchanged; no real Slack message was sent during this qualification.
