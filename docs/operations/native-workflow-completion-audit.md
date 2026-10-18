@@ -23,6 +23,22 @@ for the exercised boundary, not forced interruption: SAGE deadlines are cooperat
 and uncooperative blocking I/O still needs its own bounded transport timeout.
 No production process, document or runtime code changed for this qualification.
 
+### Retrieval transport fault qualification
+
+`test_retrieval_transport_timeout.py` passed two real loopback-socket tests in
+3.40s using the installed d3fa3fb source/dependencies. Embedding and reranking
+each used the configured one-second test timeout (all four httpx phases checked).
+A server accepted the first request but held its response: the actual client
+raised ReadTimeout, then a second call on the same client succeeded while the
+old server handler remained blocked. Exactly two server requests were observed;
+there was no hidden retry/fallback. Synthetic inputs only; no live model service,
+production settings or documents were changed.
+
+The production configuration schema defaults both timeouts to 60 seconds with
+a validated 1–300 second range. That is a per-network-phase timeout, not an
+absolute end-to-end deadline. These tests do not qualify slow trickling responses,
+DNS resolution bounds, or aggregate latency across multiple model calls.
+
 ## Previous status: source-plan production acceptance (2026-10-18)
 
 Production code is Twin `50306a7` with SAGE `f3ecd85`. The full receipt is
