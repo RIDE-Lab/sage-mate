@@ -65,7 +65,18 @@ was checked before replaying the same request: replay took 0.15 seconds and
 preserved the exchange ID, complete answer and source blocks. No production
 application or inference engine was restarted for this qualification.
 
-The final `ea724d3` regression is still pending. Its initial collection attempt
+The final `ea724d3` regression completed with 1,631 passes, 31 skips and one
+failure: two independent booking connections could fail at their first SQLite
+WAL negotiation with `database is locked`. SAGE `b5abaa80` fixes that startup race
+with a bounded retry of SQLite lock codes and connection cleanup on failed
+initialization; Twin pins that exact dependency. Deterministic tests fail on the
+old package and pass with the repair, including an actual held database lock,
+deadline exhaustion and eight independent cold connections with 80 updates.
+The related SAGE runtime suite passed 202 tests, and Twin's booking, notification
+and migration group passed 21 tests against the repaired source. Qualification
+of the new installed release remains required before production promotion.
+
+The initial collection attempt for `ea724d3`
 selected an unavailable `cpp` memory index because the isolated test index was
 not specified. The corrected test run explicitly uses an isolated runtime,
 local knowledge, hash embeddings and BM25 memory indexing. This neither changes
