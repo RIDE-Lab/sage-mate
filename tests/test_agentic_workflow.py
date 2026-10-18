@@ -729,7 +729,7 @@ def test_chat_uses_llm_intent_to_avoid_false_booking_positive(tmp_path: Path) ->
     assert booking_prepare_step.summary == "未进入预约流程。"
 
 
-def test_chat_fast_paths_obvious_research_route_without_llm_classifier(
+def test_chat_fast_paths_explicitly_scoped_research_route_without_llm_classifier(
     tmp_path: Path,
 ) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path)
@@ -746,6 +746,7 @@ def test_chat_fast_paths_obvious_research_route_without_llm_classifier(
                 student_email="alice@example.com",
                 visitor_profile="general_visitor",
                 question="这个课题组的研究路线和一般企业 R&D 有什么区别？",
+                knowledge_sources=['wiki'],
                 deep_thinking=False,
             )
         )
@@ -758,7 +759,7 @@ def test_chat_fast_paths_obvious_research_route_without_llm_classifier(
     assert "heuristic-fast" in interaction_step.detail
 
 
-def test_chat_fast_paths_obvious_teaching_route_without_llm_classifier(
+def test_chat_fast_paths_explicitly_scoped_teaching_route_without_llm_classifier(
     tmp_path: Path,
 ) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path)
@@ -775,6 +776,7 @@ def test_chat_fast_paths_obvious_teaching_route_without_llm_classifier(
                 student_email="alice@example.com",
                 visitor_profile="general_visitor",
                 question="这门课如果我基础一般，应该先补哪些内容？",
+                knowledge_sources=['wiki'],
                 deep_thinking=False,
             )
         )

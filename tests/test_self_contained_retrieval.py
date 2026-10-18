@@ -33,6 +33,42 @@ def test_intent_source_constraint_only_narrows_request(tmp_path, monkeypatch, re
     assert ChatRequest.model_validate_json(branch.request_json).knowledge_sources == expected
 
 
+def test_topic_fast_path_does_not_bypass_source_classification(tmp_path, monkeypatch):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    context = context_for(None)
+    context.request.question = '根据公开 Wiki 介绍系统研究方向'
+    monkeypatch.setattr(support, '_build_fast_path_interaction_intent', lambda ctx: InteractionIntent(domain='research'))
+    classifier = Mock(return_value=InteractionIntent(domain='research', knowledge_sources=['wiki']))
+    support._llm_client = Mock(supports_fast_intent_bypass=True, classify_interaction_intent_sync=classifier)
+    intent, source = support._resolve_interaction_intent(context)
+    classifier.assert_called_once()
+    assert intent.knowledge_sources == ['wiki']
+    assert source.startswith('llm')
+
+
+def test_failed_source_classification_does_not_silently_widen(tmp_path, monkeypatch):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    context = context_for(None)
+    context.request.question = '根据公开 Wiki 介绍系统研究方向'
+    monkeypatch.setattr(support, '_build_fast_path_interaction_intent', lambda ctx: InteractionIntent(domain='research'))
+    support._llm_client = Mock(supports_fast_intent_bypass=True,
+        classify_interaction_intent_sync=Mock(side_effect=TimeoutError('synthetic classifier timeout')))
+    with pytest.raises(RuntimeError, match='knowledge_source_selection_unresolved'):
+        support._resolve_interaction_intent(context)
+
+
+def test_explicit_source_constraint_allows_topic_fast_path(tmp_path, monkeypatch):
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    context = context_for(None, knowledge_sources=['wiki'])
+    context.request.question = '介绍系统研究方向'
+    monkeypatch.setattr(support, '_build_fast_path_interaction_intent', lambda ctx: InteractionIntent(domain='research'))
+    classifier = Mock(side_effect=AssertionError('Explicit selection needs no reclassification'))
+    support._llm_client = Mock(supports_fast_intent_bypass=True, classify_interaction_intent_sync=classifier)
+    support.understand_interaction(context)
+    classifier.assert_not_called()
+    assert context.request.knowledge_sources == ['wiki']
+
+
 @pytest.mark.parametrize("background", [None, "初次来访", "计算机课程"])
 def test_semantic_self_contained_skips_both_stores_and_basis(tmp_path, background):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))

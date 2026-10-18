@@ -6961,9 +6961,13 @@ class FacultyTwinWorkflowSupport:
             )
 
         fast_intent = self._build_fast_path_interaction_intent(context)
+        source_selection_known = (
+            context.request.knowledge_sources is not None
+            or (fast_intent is not None and fast_intent.self_contained)
+        )
         if fast_intent is not None and bool(
             getattr(self._llm_client, "supports_fast_intent_bypass", False)
-        ):
+        ) and source_selection_known:
             guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)
             return guarded_intent, "heuristic-fast+policy" if guarded else "heuristic-fast"
 
@@ -6984,8 +6988,11 @@ class FacultyTwinWorkflowSupport:
                     intent = InteractionIntent.model_validate(intent)
                 guarded_intent, guarded = self._apply_policy_guardrails(context.request, intent)
                 return guarded_intent, "llm+policy" if guarded else "llm"
-            except Exception:
-                pass
+            except Exception as exc:
+                if not source_selection_known:
+                    # A topic-only fallback cannot recover a lost source
+                    # restriction. Fail before retrieval instead of widening it.
+                    raise RuntimeError("knowledge_source_selection_unresolved") from exc
 
         if fast_intent is not None:
             guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)

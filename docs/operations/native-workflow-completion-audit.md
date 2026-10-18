@@ -55,6 +55,18 @@ retrieval entrypoints still require audit before claiming every natural-language
 restriction is honored. Source-lane parallelism and authenticated real-model
 browser acceptance are also outstanding; this is not a release qualification.
 
+Fast-topic bypass follow-up: a retrieval intent without explicit source selection
+now goes through the semantic classifier even if the client supports fast bypass.
+Classifier failure raises `knowledge_source_selection_unresolved` before retrieval,
+rather than using a topic-only fallback that loses the restriction. Explicitly
+scoped requests and self-contained fast intents retain bypass. Three added tests
+cover semantic selection, failure, and safe explicit bypass; the two old tests
+that assumed unscoped fallback now explicitly select Wiki. The original run
+failed those two assertions as expected; updated regression passed 78 in 48.29s.
+Production is unchanged. Repository search also found `try_fast_answer` referenced
+only by legacy tests, not production callers; remove obsolete alternate entrypoints
+and their misleading comments as part of the single-workflow cleanup.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.
