@@ -29,18 +29,22 @@ const node = () => ({dataset:{}, append(){}, addEventListener(){}});
     for (const available of [true, false]) {
       let loaded = 0;
       const container = {children:[], replaceChildren(...items){this.children=items;}, querySelectorAll(){return this.children;}};
-      const wiki = {label:'Wiki 系统概览',question:'根据公开 Wiki 介绍 ECPA 与 StateAxis，附完整来源链接。',context:'公开 Wiki 导读'};
-      const fallback = {label:'Wiki 导览',question:'Wiki 里有哪些公开资料？',context:'公开 Wiki 导读'};
+      const wiki = {label:{general_visitor:'系统研究概览',hust_undergraduate:'推理入门',paper_writing_student:'论文写作',lab_member:'开放研究问题'}[profile],source_name:'wiki:fixture',url:'https://example.test/wiki'};
       const context = {document:{getElementById:()=>container,createElement:node},
         visitorProfileInput:{value:profile},publicWikiQuestions:available?[wiki]:[],
-        WIKI_QUESTION_FALLBACK:[fallback],SEED_CHIP_COUNT:3,uiIconSvg:()=>'',
+        SEED_CHIP_COUNT:3,uiIconSvg:()=>'',
         loadPublicWikiQuestions:async()=>{loaded++;}};
       vm.createContext(context);
+      vm.runInContext(source.slice(source.indexOf('const WIKI_QUESTION_PROFILES ='),source.indexOf('const SEED_CHIP_COUNT =')), context);
       vm.runInContext(source.slice(start,end), context);
       await context.renderSeedChips(profile);
       assert.equal(loaded,1);
-      assert.equal(container.children.length,1);
-      assert.equal(container.children[0].dataset.seedQuestion,(available?wiki:fallback).question);
+      assert.equal(container.children.length,available?1:3);
+      assert(container.children[0].dataset.seedQuestion.includes('公开 Wiki'));
+      assert(container.children[0].dataset.seedQuestion.includes('完整原文链接'));
+      if(available) assert(container.children[0].dataset.seedQuestion.includes(wiki.label));
+      const selected = context.wikiStarterQuestions(profile,available?[wiki]:[]);
+      if(available) assert.equal(selected[0].url,wiki.url);
       assert.equal(container.children[0].dataset.seedContext,'公开 Wiki 导读');
     }
   }

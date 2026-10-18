@@ -1420,6 +1420,41 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 
 // Public Wiki discovery is shared by guests and signed-in members alike.
 const WIKI_QUESTION_FALLBACK = VISITOR_PROFILE_CONFIGS.general_visitor.quickActions;
+const WIKI_QUESTION_PROFILES = {
+    general_visitor: {
+        topics: /系统研究概览|公开研究与教学|使用边界|推荐阅读|科研入门/,
+        focus: "用面向初次来访者的语言说明主题、课题组相关工作与下一步阅读入口",
+        fallback: ["课题组有哪些公开研究方向？", "有哪些适合初次来访者阅读的公开资料？", "分身系统可以帮助我做什么，有哪些边界？"],
+    },
+    hust_undergraduate: {
+        topics: /推理入门|环境搭建|工具与框架|Prompt Engineering 实践|论文阅读路径|科研入门/,
+        focus: "面向本科生解释前置知识、核心概念与可从资料中找到的入门练习；没有练习则明确说明",
+        fallback: ["大模型推理的 Prefill 和 Decode 有什么区别？", "开始学习推理系统需要哪些前置知识和工具？", "如何安排推理系统的入门阅读顺序？"],
+    },
+    paper_writing_student: {
+        topics: /论文写作|写作能力|高质量论文|论文问题诊断|综述写作|论文修改/,
+        focus: "面向论文写作课同学梳理写作方法、自查问题与修改步骤；不要假定我已提供稿件",
+        fallback: ["论文写作的公开课程资料应该按什么顺序阅读？", "如何检查论文的研究问题与论证结构？", "中文综述和系统论文各有哪些写作规范？"],
+    },
+    lab_member: {
+        topics: /开放研究问题|Benchmark|研究问题|系统研究概览|RAG 系统|端到端验收|分布式推理|KV Cache/,
+        focus: "面向组内研究者梳理问题定义、设计权衡与验证边界；将资料事实与额外研究建议明确分开",
+        fallback: ["推理状态管理有哪些公开的研究问题和验证边界？", "如何设计可复核的推理系统 Benchmark？", "SAGE、ECPA 与 StateAxis 分别承担什么角色？"],
+    },
+};
+
+function wikiStarterQuestions(profile, questions) {
+    const design = WIKI_QUESTION_PROFILES[profile] || WIKI_QUESTION_PROFILES.general_visitor;
+    const matching = questions.filter((item) => design.topics.test(item.label));
+    if (!matching.length) {
+        return design.fallback.map((question) => ({label: question,
+            question: `请依据公开 Wiki 回答：${question}请附完整原文链接；资料未覆盖的内容请明确说明。`,
+            context: '公开 Wiki 导读'}));
+    }
+    return matching.map((item) => ({...item,
+        question: `请依据公开 Wiki《${item.label}》，${design.focus}，并附完整原文链接。`,
+        context: '公开 Wiki 导读'}));
+}
 
 const SEED_CHIP_COUNT = 3;
 const UI_ICON_NAMES = new Set([
@@ -1452,7 +1487,7 @@ async function renderSeedChips(profile) {
     const requestedProfile = profile;
     await loadPublicWikiQuestions();
     if ((visitorProfileInput?.value || 'general_visitor') !== requestedProfile) return;
-    const pool = publicWikiQuestions.length ? publicWikiQuestions : WIKI_QUESTION_FALLBACK;
+    const pool = wikiStarterQuestions(profile, publicWikiQuestions);
     // Shuffle and pick SEED_CHIP_COUNT items
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const picked = shuffled.slice(0, SEED_CHIP_COUNT);
