@@ -284,7 +284,8 @@ class _RecordingMemoryLLM:
         return None
 
     def classify_interaction_intent_sync(
-        self, question: str, course_context: str | None = None
+        self, question: str, course_context: str | None = None,
+        recent_session_context: str | None = None,
     ):
         from sage_faculty_twin.models import InteractionIntent
 
@@ -298,9 +299,12 @@ class _RecordingMemoryLLM:
         )
 
     async def classify_interaction_intent(
-        self, question: str, course_context: str | None = None
+        self, question: str, course_context: str | None = None,
+        recent_session_context: str | None = None,
     ):
-        return self.classify_interaction_intent_sync(question, course_context)
+        return self.classify_interaction_intent_sync(
+            question, course_context, recent_session_context
+        )
 
     def classify_booking_intent_sync(
         self, question: str, course_context: str | None = None

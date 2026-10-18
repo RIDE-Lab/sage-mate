@@ -220,6 +220,7 @@ class AdminKnowledgeIntentLLMClient(CollaborationMemoryLLMClient):
         self,
         question: str,
         course_context: str | None = None,
+        recent_session_context: str | None = None,
     ) -> InteractionIntent:
         return InteractionIntent(
             action="admin_add_knowledge", domain="general", confidence=0.99
@@ -231,6 +232,7 @@ class AttachmentClarificationLLMClient(CollaborationMemoryLLMClient):
         self,
         question: str,
         course_context: str | None = None,
+        recent_session_context: str | None = None,
     ) -> InteractionIntent:
         return InteractionIntent(
             action="ask_followup",
@@ -1321,8 +1323,16 @@ def test_admin_can_generate_and_publish_gap_draft(
 
 def test_admin_can_view_and_resolve_escalations(
     isolated_availability_store: RecordingNotifier,
+    monkeypatch,
 ) -> None:
     client.cookies.clear()
+    # Exercise the real policy/queue path without calling an external model.
+    monkeypatch.setattr(
+        service._llm_client,
+        "classify_interaction_intent_sync",
+        lambda question, course_context=None, recent_session_context=None:
+            InteractionIntent(action="answer", domain="general", confidence=0.9),
+    )
 
     response = client.post(
         "/chat",
