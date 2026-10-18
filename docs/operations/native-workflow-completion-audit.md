@@ -1,6 +1,44 @@
 # Native workflow completion audit
 
-## Open research-answer quality gate
+## Current status: source-plan production acceptance (2026-10-18)
+
+Production code is Twin `50306a7` with SAGE `f3ecd85`. The full receipt is
+[`research-source-plan-acceptance-20261018.md`](../research-source-plan-acceptance-20261018.md).
+Its production receipt supersedes the deployment and research-quality status
+in the historical sections below. Clean regression passed 1557 tests with 31
+existing skips; the existing identity-evaluation exclusion was unchanged.
+Public research probes passed in 10.03s and 7.98s, independently comparing
+complete selected source bodies with the read-only canonical Wiki catalog.
+Advice is separately marked as non-source inference. This qualifies those
+observed cases, not universal research reasoning correctness.
+
+Post-cutover replay preserved the answer and exchange ID. A fresh Mac-origin
+public request passed in 8.08s with terminal SSE and cross-guest denial. An
+A100-origin TLS connection reset is retained as a failed probe, not a pass.
+Real Slack delivery and public visual confirmation remain separate open gates.
+
+### Scheduling audit: still open
+
+Inspection of `WorkJournal`, `WorkService`, `AsyncWorkService` and the dispatcher
+does not establish bounded durable admission. Worker concurrency is bounded,
+but it is not a bound on pending persisted requests. An observer wait timeout
+also is not proof of a capacity rejection. Do not describe this as qualified
+queue backpressure.
+
+Any capacity contract must be SAGE-owned and transactional with request admission:
+concurrent processes must not over-admit; identical replay must remain available
+at capacity; rejected admission must not partially publish destination state;
+terminal completion must release capacity while retaining canonical results;
+restart must reconstruct the same accounting. Existing admitted finalizers and
+recovery must not be blocked by new-request limits. Prepared multi-slot commits
+must obey the same rule as direct journal commits.
+
+No retention/deletion policy has been deployed. Completed answers, replay records
+and quarantined legacy data are not disposable queue entries. Capacity work must
+not silently introduce a TTL or delete them. These are remaining requirements,
+not claims about implemented behavior.
+
+## Historical research-answer failure (resolved by the receipt above)
 
 A public StateAxis review question requesting sourced facts, unknowns and
 controlled experiments returned 503 in 7.94 seconds on `9ff9fa0`. An isolated
@@ -105,12 +143,12 @@ effects or every possible crash point. The reusable test is
 | Independent parallel authorized retrieval | `test_retrieval_runtime.py` checks persistent graph concurrency, request scopes, failed-branch recovery and cancellation; real Wiki/embedding/reranker requests passed | Controlled multi-source latency/fault check against the final installed environment |
 | Atomic turn commit and replay | `test_post_answer_delivery.py` checks transaction rollback, owned result/event commit, recovered worker completion; production same-request replay retained answer and exchange ID after restart | None for the observed HTTP replay; do not infer external exactly-once delivery |
 | Persistent background execution | Production journal audit plus isolated real worker-kill/recovery with the default lease, unchanged canonical record and unique delivery events | External side-effect crash boundaries must not be inferred from this test |
-| Bounded scheduling and recovery | Native WorkService/AsyncWorkService adapters and existing failure/capacity tests | Explicit matched admission/queue/retention qualification; no unbounded-throughput claim |
+| Bounded scheduling and recovery | Native worker concurrency, failure and recovery tests; no durable admission bound established | Transactional cross-process admission and restart qualification; explicit non-destructive retention policy |
 | Versioned knowledge updates | `test_knowledge_index_work.py` checks running worker updates, pending-intent recovery, failed projection, revision fences and config isolation; `test_knowledge_projection_recovery.py` checks deleted/latest records and damaged-index recovery; real-embedding isolated canary verified update/delete/restart and six completed native tasks | No production-document mutation needed; unchanged Wiki sync is not used alone as proof |
 | Reliable delivery | Production/public HTTP, answer_done plus complete SSE, cross-guest denial, restart replay passed | Real Slack acknowledgement/delivery; public browser visual confirmation remains pending |
-| Ownership migration | Final lossless grouped archive, old memory/traces isolated, old shared-store writer stopped; fresh live store has two owned records/four owned profiles and no legacy-import directory | Keep quarantined records excluded; do not auto-claim |
-| Preserve quality and evidence | Source-constrained SAGE plan preserves complete sources; real multipart questions, links, citation selection and isolated browser history passed | Public visual check and requested research-inference quality cases |
-| Submit changes to main | SAGE main `babd891`, Twin runtime main `56f4281`, cutover documentation main `d8d29d7`; clean source trees verified | Subsequent changes must retain this rule |
+| Ownership migration | Final lossless grouped archive, old memory/traces isolated, old shared-store writer stopped; latest receipt snapshot has 8 owned records/14 profiles, zero unowned, integrity OK and no legacy-import directory | Counts are snapshots; keep quarantined records excluded and never auto-claim |
+| Preserve quality and evidence | Source-constrained SAGE plan preserves complete sources; public research samples and multipart/link checks passed per current receipt | Public visual check; sampled proposals still require human scientific review |
+| Submit changes to main | Deployed Twin `50306a7`, SAGE `f3ecd85`, production receipt `eaf42a0` verified on main | Subsequent changes must retain this rule |
 
 No secrets, identities, private source bodies or raw journal payloads are included
 in the journal audit. Task completion is observed state, not proof of every crash

@@ -1,6 +1,8 @@
 # Research source-plan qualification
 
-Candidate (not yet production): SAGE `33079b9aff5d972d86c2eece85df5fe5211fb871`.
+Current production: Twin `50306a7`, SAGE `f3ecd85`; see the production receipt
+below. Earlier candidate observations are retained as the investigation history,
+not as the current deployment status.
 
 ## Root causes and fixes
 
