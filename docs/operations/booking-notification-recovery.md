@@ -136,5 +136,39 @@ installed SAGE commit was verified as `b5abaa80`. Private state backups remain o
 the service host. No inference engine was restarted for this deployment.
 
 These checks qualify this startup repair and release transition. Conversational
-plan capture, cross-store cancellation fencing and the remaining native workflow
-requirements still need their own implementation and acceptance.
+plan capture is qualified by the subsequent release below; cross-store
+cancellation fencing and the remaining native workflow requirements are still
+separate work.
+
+## Production acceptance for conversational recovery
+
+Release `40f8cd2` removes the process-local draft dictionary and captures booking
+decisions with SAGE receipts. Its frozen complete regression passed 1,644 tests
+with the same 31 skips and existing identity-evaluation exclusion in 364.34
+seconds. Focused booking/chat/trace checks passed 84 tests, including actual
+process exit at three commit boundaries and native-chat recovery after a booking
+commit with its answer not yet delivered.
+
+A real HTTP canary in an isolated preview saved a draft missing email in 4.60
+seconds, then restarted that preview. The same guest session supplied the email
+in 0.80 seconds and retained the original topic/date; canonical replay took 0.05
+seconds. Read-only state inspection found one booking, one notification intent
+and no active draft. SMTP was disabled in this preview. The earlier preview
+failed because an email-only follow-up replaced the topic with contact boilerplate;
+an added regression reproduced this failure before the transactional default-merge
+repair. That failed candidate was not promoted.
+
+Production promotion backed up both affected state databases, verified integrity
+and checked the empty booking receipt schema with writers stopped. A temporary
+DNS failure during Slack's startup `auth.test` delayed readiness until the
+existing supervisor restarted the application and DNS recovered. Identity
+validation was not bypassed. This exposes a separate startup coupling: independent
+web readiness must not depend on transient Slack reachability while Slack itself
+must remain fail-closed until verified.
+
+After readiness, the public pre-switch request replayed in 2.14 seconds with the
+same exchange ID, answer and source blocks. A fresh public Wiki request completed
+in 9.69 seconds, with complete sources, terminal SSE completion, cross-guest
+isolation and 0.85-second canonical replay. The Wiki timer was restored. No
+synthetic booking or email was created in production; booking recovery was
+qualified in the isolated preview and the source/installed regression tests.
