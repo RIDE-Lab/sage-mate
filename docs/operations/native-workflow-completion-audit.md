@@ -1,5 +1,18 @@
 # Native workflow completion audit
 
+## Explicit citation link bases (candidate, not deployed)
+
+New citation cards and historical citation hydration now pass their source URL
+to the shared Markdown renderer. Relative destinations resolve against that
+explicit URL, never against Twin. Unsafe/missing bases leave original Markdown
+readable without an invented clickable target. HTTP/HTTPS/mail destinations are
+validated; executable protocols, control characters and URL credentials are denied.
+The underlying stored source and answer text are unchanged. Tests cover parent,
+root, fragment, bare-file and query links, entity escaping, historical base
+propagation and unsafe bases. Multi-source answer bodies still need typed
+per-source rendering provenance; a single global base is not a valid fix for
+that remaining requirement. No production change for this candidate.
+
 ## Retired research shortcut removal (candidate, not deployed)
 
 Removed the always-false curated-direction compatibility hook and every caller:

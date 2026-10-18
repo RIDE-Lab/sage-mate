@@ -14,7 +14,7 @@ async function run(status, hasLink=true, headerText='Wiki: Source') {
   let calls = 0;
   const sandbox = { document: { createElement: () => ({dataset:{}}) },
     apiRequest: async url => { calls++; assert.ok(url.startsWith('/wiki/citation?')); return {status, content:'# Complete\n\nTail', notice:'current source'}; },
-    formatMessageContent: text => `<rendered>${text}</rendered>` };
+    formatMessageContent: (text, base) => { assert.equal(base, 'https://example.org/wiki'); return `<rendered>${text}</rendered>`; } };
   vm.runInNewContext(source.slice(start, end), sandbox);
   await sandbox.repairHistoricalCitationCards(root);
   assert.equal(root.answer, answer);

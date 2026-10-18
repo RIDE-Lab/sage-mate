@@ -7737,7 +7737,7 @@ async function repairHistoricalCitationCards(root) {
             const result = await apiRequest(`/wiki/citation?source_url=${encodeURIComponent(sourceUrl)}`, { timeoutMs: 10000 });
             if (!root.contains(card)) return; // User switched conversations.
             if (result.status === 'restored') {
-                detail.innerHTML = formatMessageContent(result.content);
+                detail.innerHTML = formatMessageContent(result.content, sourceUrl);
                 notice.textContent = result.notice;
                 detail.hidden = false;
                 card.dataset.citationFormat = 'restored-current';
@@ -8575,7 +8575,7 @@ function buildAnswerBasisItemHtml(item) {
                 ${card.badge ? `<span class="message-basis-source">${escapeHtml(card.badge)}</span>` : ""}
             </div>
             <p class="message-basis-title">${escapeHtml(card.title)}</p>
-            ${card.detail ? `<div class="message-basis-detail message-body">${formatMessageContent(card.detail)}</div>` : ""}
+            ${card.detail ? `<div class="message-basis-detail message-body">${formatMessageContent(card.detail, item.source_url)}</div>` : ""}
         </article>
     `;
 }
@@ -10933,7 +10933,7 @@ function escapeHtml(value) {
 // Markdown formatter: code blocks, inline code, bold, italic, headers,
 // unordered/ordered lists, links, blockquotes, horizontal rules, and
 // line breaks.  HTML is escaped first so the output is XSS-safe.
-function formatMessageContent(rawText) {
+function formatMessageContent(rawText, sourceUrl = null) {
     const escaped = escapeHtml(rawText);
     const codeFragments = [];
     // Store escaped code outside subsequent Markdown passes, including newline
@@ -11024,10 +11024,31 @@ function formatMessageContent(rawText) {
     // Italic (*text*)
     formatted = formatted.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-    // Links: permit web/mail/relative destinations, not executable schemes.
+    // Resolve relative destinations only against explicit source provenance,
+    // never against the Twin page. Keep unresolved/unsafe Markdown readable.
     formatted = formatted.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
-        if (!/^(?:https?:\/\/|mailto:|#|\.{0,2}\/)/i.test(url.trim())) return `[${text}](${url})`;
-        return `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+        const fallback = `[${text}](${url})`;
+        // The input is HTML-escaped already. Decode only entities emitted by
+        // escapeHtml, then escape the final attribute exactly once.
+        const destination = url.trim().replace(/&quot;/g, '"').replace(/&#39;/g, "'")
+            .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+        if (/[\u0000-\u0020\u007f\\<>]/.test(destination)) return fallback;
+        try {
+            let resolved;
+            if (/^[a-z][a-z0-9+.-]*:/i.test(destination)) {
+                resolved = new URL(destination);
+            } else {
+                if (!sourceUrl) return fallback;
+                const base = new URL(sourceUrl);
+                if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) return fallback;
+                resolved = new URL(destination, base);
+            }
+            if (!['http:', 'https:', 'mailto:'].includes(resolved.protocol)
+                || resolved.username || resolved.password) return fallback;
+            return `<a href="${escapeHtml(resolved.href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
+        } catch (_) {
+            return fallback;
+        }
     });
 
     // ── Line breaks ────────────────────────────────────────────────────
