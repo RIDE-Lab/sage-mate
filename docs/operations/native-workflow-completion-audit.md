@@ -31,6 +31,33 @@ Automatic storage alerts and a measured long-term growth budget remain open.
 
 ### Remaining goal evidence
 
+**New verified correctness gap: pre-answer side effects.** Isolated qualification
+against installed c659c2f used real HttpWorkflow retry and LocalKnowledgeStore,
+injecting a failure after the first document commit and before canonical answer
+commit. Two producer attempts created two destination documents for one request.
+Separately a valid accepted booking disappeared when MeetingService was rebuilt
+with the same settings: bookings are kept in `_bookings`, not durable storage.
+These failures contradict broad crash-recovery completion despite the passing
+canonical-answer replay tests. No production knowledge/booking/email was changed.
+
+Reproduce with `tools/qualify_precommit_side_effects.py` under the installed Python
+and source PYTHONPATH. It creates a temporary isolated runtime, outputs only
+synthetic aggregate results, and intentionally exits 1 while invariants fail.
+It is a fault qualifier, not a passing regression or a real-model quality result.
+
+Repair requirements: propagate owner-scoped stable operation identity through
+the single graph; atomically commit destination state and immutable operation
+receipt using SAGE state transactions; replay the saved result before re-running
+the effect; reject same identity with changed input; persist booking transitions
+and protect slot conflicts across workers; keep email's external at-least-once
+boundary explicit. Do not replace this with source-name deduplication, disabling
+retries, or an in-memory receipt cache. Qualify write-before-answer crash/restart,
+lost acknowledgement, concurrent claims, changed payload and authorization.
+
+Also removed the unused `_run_stage_chain` direct executor after repository-wide
+caller inspection. The one-shot SAGE pipelines still used by distinct admin
+operations are not alternate chat paths and were not deleted by name alone.
+
 - Actual Slack ingress, completed native task chain, external acknowledgement and
   user-visible answer on the deployed release; tests alone do not establish it.
 - Storage growth/operational alert qualification and external side-effect limits.

@@ -11988,16 +11988,6 @@ class DigitalTwinService:
             updates["exchange_id"] = context.prepared_memory_record.memory_id
         return response.model_copy(update=updates)
 
-    def _run_stage_chain(
-        self,
-        source_item: Any,
-        stages: list[tuple[type[MapFunction], FacultyTwinWorkflowSupport]],
-    ) -> Any:
-        current = source_item
-        for stage_class, support in stages:
-            current = stage_class(support).execute(current)
-        return current
-
     def _run_pipeline_blocking(
         self,
         environment_name: str,
