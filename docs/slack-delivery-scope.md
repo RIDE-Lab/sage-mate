@@ -124,3 +124,31 @@ commits. Ruff, supported-Python lock verification, shell and frozen-lock checks
 pass. The previous immutable v2 frozen run had 1699 passes, 31 unchanged skips and
 one verifier-parser failure; that failed report is retained, not release evidence.
 A new frozen complete run and real client acceptance remain required.
+
+Immutable v3 qualification (Twin `c0cae2b`, SAGE `4c4abffe`): the completed
+JUnit report contains 1757 cases: 1726 passed, 31 unchanged skips, no failures
+or errors (470.248 seconds). The historical identity-evaluation exclusion and
+file-descriptor limit were unchanged. The previous red report remains retained.
+The same release's isolated HTTP preview returned full Wiki source blocks in
+9.63 seconds; native execution/atomic task acknowledgement, owner isolation and
+actual service-restart canonical replay (0.24 seconds) passed. Cancellation
+returned 499 with two sealed destination databases, no canonical answer and
+successful replay (0.43 seconds). Served JavaScript matches the frozen artifact.
+These are not evidence of real Slack client receipt/rendering or production
+promotion: both remain explicit gates.
+
+Independent knowledge qualification is reproducible with the release interpreter
+and configured environment (no secrets in arguments or dotenv loading):
+
+```bash
+python tools/qualify_knowledge_incremental.py --parent-dir /path/to/acceptance-artifacts
+```
+
+The tool creates a fresh synthetic corpus and uses real configured OpenAI-wire
+embeddings and SageVDB across three OS processes: seed, update/delete, then reopen
+and search. It checks revision 4, four completed native index tasks, removed
+document exclusion, canonical body, unchanged committed generation on reopen and
+no cold-start synchronization. All three phases passed against the candidate's
+installed dependencies and actual embedding configuration. The tool never opens
+the production corpus or changes services; it retains its own audit artifacts.
+This qualifies knowledge persistence/incremental processing, not Slack rendering.
