@@ -89,7 +89,7 @@ def test_rebuild_embedding_failure_does_not_publish_success(tmp_path, monkeypatc
             raise OSError("embedding offline")
         patch.setattr(LocalKnowledgeStore, "_embed_documents", fail)
         with pytest.raises(TimeoutError):
-            LocalKnowledgeStore(config.model_copy(update={"chat_request_timeout_seconds": 1}))
+            LocalKnowledgeStore(config.model_copy(update={"knowledge_startup_timeout_seconds": 1}))
     assert (root / "CURRENT").read_text() == before
     recovered = LocalKnowledgeStore(config)
     assert recovered.get_document(record.document_id) is not None
