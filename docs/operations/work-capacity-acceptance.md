@@ -107,3 +107,19 @@ Production remains Twin50306a7 and the original router. Admission limits have
 only been installed in the isolated store. Production capacity selection, a
 quiescent version6 migration and safe rollback/forward-recovery procedure remain
 required; old pre-capacity SAGE binaries must not write version6 state.
+
+## Lossless offline rollback qualification
+
+Twin now pins SAGEb46054f, adding `WorkJournal.disable_capacity()` for the explicit
+offline migration back to indexed version5. All namespace writers must be stopped.
+It removes only the capacity policy and changes version markers in the same
+transaction, preserving canonical answers, task payloads/status/results and active
+indexes. Live leases and missing policy with version6 records refuse migration.
+
+129work-family tests passed in2.83s, including fault-injected transactional rollback.
+An isolated A100 synthetic SQLite store was opened by the actual installed old
+SAGE in Twin50306a7: it rejected version6 before migration, recovered a pending
+task after migration, preserved completed receipts/full attachments/canonical
+answers, and allowed the current version to re-enable capacity. No production
+policy was changed. This avoids restoring an old snapshot over new user data;
+it is an offline recovery tool, not a second execution path.
