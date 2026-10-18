@@ -1,5 +1,43 @@
 # Native workflow completion audit
 
+## Authoritative current status
+
+Production is c659c2f / SAGE bcfeb104 (source-block receipt below). Earlier dated
+and candidate sections are historical; their present-tense statements do not
+override this status. In particular citation link bases, retired research
+shortcut removal, native inner-source parallelism, and transactional HTTP/Slack
+admission limits of eight are deployed. Browser visual acceptance is complete
+for the recorded public Wiki sample. Real Slack delivery is still unverified.
+
+### Explicit non-destructive retention policy
+
+Canonical conversations, completed work, event replay and isolated legacy data
+are retained without an automatic TTL. Neither completion nor age authorizes
+deletion or reassignment. Quarantine remains outside serving paths. Request
+capacity limits protect active admission, not disk capacity or total history.
+No cleanup job, silent truncation, vacuum or archive removal is introduced.
+
+SAGE's separate content-free SQLite observation helper is now under qualification;
+it has been run read-only against production without replacing its runtime. That
+snapshot reported 129 entries, 3,780,677 serialized payload bytes, 4,386,816 page
+bytes, 475,136 reusable page bytes, 4,643,272 observed WAL bytes, and
+2,108,203,995,136 filesystem-free bytes. These are distinct point-in-time metrics,
+not an SLA, growth forecast, backup verification or a hard storage bound.
+
+Continue to preserve data if space pressure emerges: report the pressure and
+provision capacity or qualify an explicitly authorized lossless archive/restore
+procedure. Do not delete canonical answers as a side effect of backpressure.
+Automatic storage alerts and a measured long-term growth budget remain open.
+
+### Remaining goal evidence
+
+- Actual Slack ingress, completed native task chain, external acknowledgement and
+  user-visible answer on the deployed release; tests alone do not establish it.
+- Storage growth/operational alert qualification and external side-effect limits.
+- Final requirement-by-requirement source audit; historical matrices below must
+  not be used as current completion claims. External delivery remains at-least-once.
+
+
 ## Explicit citation link bases (candidate, not deployed)
 
 New citation cards and historical citation hydration now pass their source URL
