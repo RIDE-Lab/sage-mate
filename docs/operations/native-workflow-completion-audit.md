@@ -1,5 +1,31 @@
 # Native workflow completion audit
 
+## Follow-up deployment: 9ff9fa0 (2026-10-18)
+
+The immutable release now runs `9ff9fa0` with installed SAGE `790007b`, independently
+installed with the frozen lock on Python 3.11. Clean-checkout regression passed:
+1530 tests, 31 existing skips, 332.10 seconds; the existing identity-evaluation
+exclusion is unchanged. Five frontend test groups and focused Ruff checks passed.
+An earlier partial scratch checkout failed repository-contract tests because root
+assets were missing and was not accepted as release evidence.
+
+Both app and Wiki sync were switched to the new release without changing data
+directories or model services. Local real QA passed in 5.60 seconds; canonical
+replay after a real restart took 0.09 seconds with identical answer/exchange ID.
+Public HTTPS real QA passed in 11.36 seconds, including complete source body,
+terminal SSE and cross-guest denial. The first public probe returned 429; its body
+was not retained, so its precise cause is not asserted. The acceptance client now
+supports explicit application queue responses using the same cookie/request ID.
+Wiki sync exited successfully and its timer was restored. These checks are not
+a throughput benchmark or proof of public visual rendering/actual Slack delivery.
+
+Rollback configuration is retained under the private operator directory
+`/home/shuhao/source-audit-tests.ThER15/release-switch.P1uNEG`; prior release
+`56f4281` remains available. Rollback must preserve new owned data and must not
+remount quarantined legacy memory.
+
+### Pre-deployment investigation record (superseded status)
+
 Follow-up finding: the new concurrent-peer regression reproduced head-of-line
 blocking in the installed release. A blocked KnowledgeReader Actor held its
 instance lock while the healthy peer waited in `actors/invoker.py:148`.
