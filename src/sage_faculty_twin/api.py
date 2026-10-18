@@ -765,14 +765,15 @@ def _require_slack_destination(team_id):
 
 async def _deliver_slack_reply(ingress, reply):
     _require_slack_destination(ingress.team_id)
-    payload = {"channel": ingress.channel_id, "text": reply.text}
+    # All currently authorized Slack answers use the requester's member scope,
+    # including private retrieval and personal context. Neither an app mention
+    # nor a historical private_reply=False grants the channel that access.
+    # Enforce the audience at the final transport boundary on every retry.
+    payload = {"channel": ingress.channel_id, "user": ingress.user_id,
+               "text": reply.text, "link_names": False, "parse": "none"}
     if ingress.thread_ts:
         payload["thread_ts"] = ingress.thread_ts
-    method = "chat.postMessage"
-    if ingress.kind == "command" or ingress.private_reply:
-        method = "chat.postEphemeral"
-        payload["user"] = ingress.user_id
-    result = await asyncio.to_thread(_post_slack_api, method, payload)
+    result = await asyncio.to_thread(_post_slack_api, "chat.postEphemeral", payload)
     return {"accepted": True, "message_ts": result.get("ts") or result.get("message_ts")}
 
 

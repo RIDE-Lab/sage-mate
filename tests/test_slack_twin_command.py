@@ -20,7 +20,7 @@ from sage_faculty_twin.chat_delivery import ChatDeliveryGate
 from sage_faculty_twin.models import ChatResponse, UserAccountResponse, UserSessionResponse
 from sage_faculty_twin.slack_channel_context import SlackChannelContext, SlackHistoryUnavailable
 from sage_faculty_twin.slack_link_store import SlackUserLinkStore
-from sage_faculty_twin.slack_workflow import SlackAnswerRecovery, SlackWorkflow
+from sage_faculty_twin.slack_workflow import SlackAnswerRecovery, SlackIngress, SlackReply, SlackWorkflow
 from sage_faculty_twin.workflow_events import WorkflowEventBroker
 
 
@@ -371,10 +371,10 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     assert request.slack_channel_context == "Earlier lab discussion"
     assert "slack_channel_context" not in request.model_dump()
     method, payload = harness.sent[0]
-    assert method == ("chat.postEphemeral" if transport == "command" else "chat.postMessage")
+    # The linked member's private retrieval scope is not the channel audience.
+    assert method == "chat.postEphemeral"
     assert "完整的研究回答。" in payload["text"]
-    if transport == "command":
-        assert payload["user"] == "UOTHER"
+    assert payload["user"] == "UOTHER"
     if transport == "mention":
         assert payload["thread_ts"] == "1719200000.000100"
     records, _ = api_module.slack_workflow.journal.records(limit=10)
@@ -384,6 +384,57 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     assert "private-credential" not in saved
     assert "fixture-token" not in saved
     assert "Earlier lab discussion" not in saved
+
+
+@pytest.mark.parametrize("channel", ["CPUBLIC", "GPRIVATE", "D123"])
+def test_member_mention_recovery_never_widens_answer_audience(harness, channel):
+    harness.bind()
+    harness.accept = False
+    body = event(user="UOTHER", type="app_mention", channel=channel,
+                 channel_type="channel", text="<@BOT> 研究路线是什么？")
+    assert harness.client.post("/slack/events", content=body,
+                               headers=signed(body, json_body=True)).status_code == 200
+    assert harness.calls == harness.sent == []
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    # An already admitted legacy ingress can have private_reply=False. The
+    # transport must enforce the audience on recovery, not trust that old flag.
+    assert rows[0]["value"]["tasks"]["deliver"]["payload"]["private_reply"] is False
+    harness.client.portal.call(api_module.shutdown_event)
+    harness.accept = True
+    harness.fail_delivery = 1
+    harness.client.portal.call(api_module.startup_event)
+    harness.flush()
+    assert len(harness.calls) == len(harness.sent) == 1
+    assert harness.calls[0].visitor_profile == "lab_member"
+    method, payload = harness.sent[0]
+    assert method == "chat.postEphemeral"
+    assert payload["user"] == "UOTHER"
+    assert payload["channel"] == channel
+    assert payload["thread_ts"] == "1719200000.000100"
+    assert "完整的研究回答。" in payload["text"]
+    assert payload["link_names"] is False
+    assert payload["parse"] == "none"
+
+
+@pytest.mark.parametrize("kind", ["command", "message", "mention"])
+def test_rejected_private_delivery_has_no_public_fallback(harness, monkeypatch, kind):
+    attempts = []
+
+    def reject(method, payload):
+        attempts.append((method, payload))
+        raise PermissionError("fixture recipient cannot receive ephemeral messages")
+
+    monkeypatch.setattr(api_module, "_post_slack_api", reject)
+    ingress = SlackIngress(team_id="T123", user_id="U1", channel_id="CPUBLIC",
+                           transport_id="fixture", kind=kind, private_reply=False,
+                           question="member-scoped question")
+    with pytest.raises(PermissionError):
+        harness.client.portal.call(api_module._deliver_slack_reply, ingress,
+                                   SlackReply(text="member-scoped answer"))
+    assert len(attempts) == 1
+    method, payload = attempts[0]
+    assert method == "chat.postEphemeral"
+    assert payload["user"] == "U1" and payload["channel"] == "CPUBLIC"
 
 
 def test_event_retry_and_lost_answer_ack_do_not_regenerate(harness):
