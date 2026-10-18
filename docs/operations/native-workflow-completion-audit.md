@@ -67,6 +67,30 @@ Production is unchanged. Repository search also found `try_fast_answer` referenc
 only by legacy tests, not production callers; remove obsolete alternate entrypoints
 and their misleading comments as part of the single-workflow cleanup.
 
+### Native inner-source parallelism candidate
+
+Wiki and private source searches now run as two business operators on a persistent
+SAGE flow, replacing the serial calls in KnowledgeSources. SAGE owns execution,
+request accounting and shutdown; Twin does not introduce an execution thread pool.
+Permission and requested-origin masks are computed before dispatch, and disabled
+operators never touch their store. Rank interleaving remains deterministic despite
+completion order. The graph inherits parent cancellation and the current request's
+remaining time (or the configured chat timeout when no request deadline exists).
+Service shutdown closes the source graph before closing the backing catalogs.
+
+Barrier-based concurrent tests verify both source lanes overlap, distinct caller
+results remain isolated, the endpoint persists, a failed branch cannot publish
+partial success, and the endpoint recovers. A nested test runs this graph inside
+the existing memory/knowledge flow and proves completion without deadlock.
+The first attempt failed the SAGE DSL's required init_stream parameter name;
+after correction 53 focused tests passed in 11.36s, followed by 23 source tests
+including nesting in 2.38s. Broader business regression and release qualification
+remain separate gates. No production cutover has occurred.
+
+Final source plus agentic-business regression passed 79 tests in 47.04s after
+deadline/lifecycle wiring. This does not substitute for the full frozen-release
+suite or real authenticated browser acceptance.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.

@@ -9049,6 +9049,7 @@ class DigitalTwinService:
         )
         self._knowledge_retriever = KnowledgeSources(
             self._knowledge_store, self._wiki_store, top_k=settings.retrieval_top_k,
+            timeout=settings.chat_request_timeout_seconds,
         )
         self._conversation_store = NeuroMemConversationStore(settings)
         from .guest_identity import GuestIdentityStore
@@ -11815,6 +11816,7 @@ class DigitalTwinService:
             await asyncio.to_thread(self._chat_finalizer)
         if self._retrieval_finalizer is not None:
             await asyncio.to_thread(self._retrieval_finalizer)
+        await asyncio.to_thread(self._knowledge_retriever.close)
         # Retrieval and post-answer producers must stop before index admission
         # closes; each catalog drains SAGE workers before closing its state.
         for store in (self._knowledge_store, self._wiki_store):

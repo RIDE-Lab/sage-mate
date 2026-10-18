@@ -1,4 +1,6 @@
 import pytest
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.knowledge_sources import KnowledgeSources, SourceSelection, wiki_index_settings
@@ -15,6 +17,79 @@ def stores(tmp_path):
             content=f'quartz research {origin} complete body TAIL',
             source_name=f'{origin}:quartz', tags=['audience:public']))
     return settings, private, wiki, KnowledgeSources(private, wiki)
+
+
+def test_native_source_lanes_overlap_and_keep_request_identity():
+    from sage_faculty_twin.models import KnowledgeSearchHit
+
+    barriers = {query: Barrier(2) for query in ('owner-a', 'owner-b')}
+    class Store:
+        def __init__(self, origin):
+            self.origin = origin
+        def list_documents(self):
+            return []
+        def search(self, query, **kwargs):
+            barriers[query].wait(timeout=3)
+            return [KnowledgeSearchHit(document_id=query, title=query, excerpt=query,
+                score=1, source_name=self.origin + ':' + query)]
+
+    sources = KnowledgeSources(Store('private'), Store('wiki'))
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            futures = [callers.submit(sources.search, query, visitor_profile='lab_member')
+                       for query in barriers]
+            for query, future in zip(barriers, futures):
+                assert [hit.document_id for hit in future.result(timeout=5)] == [
+                    'wiki::' + query, 'private::' + query]
+        runtime = sources._runtime
+        assert runtime._endpoint._requests == {}
+        sources.search('owner-a', visitor_profile='lab_member')
+        assert sources._runtime is runtime
+    finally:
+        sources.close()
+
+
+def test_failed_source_does_not_leave_partial_success_or_poison_endpoint():
+    from sage.runtime.flownet import FlowRequestOutcomeError
+    class Store:
+        def list_documents(self):
+            return []
+        def search(self, query, **kwargs):
+            if query == 'fail':
+                raise ValueError('synthetic_source_failure')
+            return []
+    sources = KnowledgeSources(Store(), Store())
+    try:
+        with pytest.raises(FlowRequestOutcomeError):
+            sources.search('fail', visitor_profile='lab_member')
+        assert sources._runtime._endpoint._requests == {}
+        assert sources.search('healthy', visitor_profile='lab_member') == []
+    finally:
+        sources.close()
+
+
+def test_source_graph_runs_nested_inside_existing_retrieval_graph():
+    from types import SimpleNamespace
+    from sage_faculty_twin.retrieval_runtime import RetrievalRuntime
+    barrier = Barrier(2)
+    class Store:
+        def list_documents(self):
+            return []
+        def search(self, query, **kwargs):
+            barrier.wait(timeout=3)
+            return []
+    sources = KnowledgeSources(Store(), Store())
+    outer = RetrievalRuntime()
+    try:
+        ports = SimpleNamespace(retrieve_memory=lambda value: value,
+            retrieve_knowledge=lambda value: sources.search(value, visitor_profile='lab_member'))
+        assert outer.retrieve(ports, memory='owned-memory', knowledge='synthetic', timeout=5) == (
+            'owned-memory', [])
+        assert outer._endpoint._requests == {}
+        assert sources._runtime._endpoint._requests == {}
+    finally:
+        outer.close()
+        sources.close()
 
 
 def test_guest_only_wiki_member_both_and_full_evidence(tmp_path):
