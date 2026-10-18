@@ -329,10 +329,14 @@ def test_explicit_cancel_endpoint_interrupts_durable_request(monkeypatch) -> Non
         assert entered.wait(3)
         response = client.post("/chat/cancel", params={"request_id": request_id})
         assert response.status_code == 200
-        assert response.json() == {"request_id": request_id, "cancelled": True}
+        assert response.json() == {"request_id": request_id, "cancelled": True, "status": "cancelled"}
         assert interrupted.wait(3)
         assert pending.result(timeout=3).status_code == 499
     key = api_module._owned_chat_request_key(f"guest:{guest.subject_id}", request_id)
     task = api_module.http_workflow.journal.read(key)["tasks"]["answer"]
     assert task["status"] == "failed" and task["failure_code"] == "request_cancelled"
-    assert client.post("/chat/cancel", params={"request_id": request_id}).json()["cancelled"] is False
+    assert service._meeting_service.effect_fences.is_sealed(key)
+    assert service._knowledge_store._catalog.effect_fences.is_sealed(key)
+    replay = client.post("/chat/cancel", params={"request_id": request_id})
+    assert replay.status_code == 200
+    assert replay.json() == {"request_id": request_id, "cancelled": True, "status": "cancelled"}
