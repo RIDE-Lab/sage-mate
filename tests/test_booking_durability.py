@@ -141,7 +141,13 @@ store.book(BookingRequest(student_name='Fixture', student_email='fixture@example
     store = MeetingService(settings(tmp_path))
     try:
         assert len(store.list_bookings()) == int(after_commit)
+        # A durable booking and its notification intent must share the commit
+        # boundary, including abrupt process death without orderly close().
+        pending = store._notifications.journal.read("same")
+        assert (pending is not None) == after_commit
         assert store.book(request(), operation_id="same").accepted
         assert len(store.list_bookings()) == 1
+        pending = store._notifications.journal.read("same")
+        assert pending["tasks"]["notify"]["payload"]["booking"]["booking_id"] == store.list_bookings()[0].booking_id
     finally:
         store.close()

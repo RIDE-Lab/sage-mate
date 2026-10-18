@@ -144,6 +144,7 @@ def isolated_availability_store(tmp_path: Path):
     service._meeting_service = MeetingService(
         settings.model_copy(
             update={
+                "booking_state_path": tmp_path / "bookings.sqlite3",
                 "availability_schedule_path": tmp_path
                 / "availability"
                 / "current_week.json"
@@ -182,6 +183,7 @@ def isolated_availability_store(tmp_path: Path):
         service._post_answer_runtime = original_post_runtime
         service._post_answer_finalizer = original_post_finalizer
         service._settings = original_settings
+        service._meeting_service.close()
         service._meeting_service = original_meeting_service
         service._knowledge_store = original_knowledge_store
         service._conversation_store = original_conversation_store
@@ -916,6 +918,14 @@ def test_admin_can_control_managed_services(isolated_availability_store) -> None
     assert runtime_manager.calls == ["status", "restart"]
 
 
+def _complete_booking_notifications():
+    meeting = service._meeting_service
+    meeting.start_notifications(service._email_notifier)
+    rows, _ = meeting._notifications.journal.records()
+    for row in rows:
+        meeting._notifications.service.wait(row["key"], timeout=5)
+
+
 def test_admin_can_confirm_pending_booking(
     isolated_availability_store: RecordingNotifier,
 ) -> None:
@@ -950,6 +960,8 @@ def test_admin_can_confirm_pending_booking(
     )
     assert confirm_response.status_code == 200
     assert confirm_response.json()["booking"]["status"] == "已确认"
+    assert confirm_response.json()["notification"]["status"] == "queued"
+    _complete_booking_notifications()
     assert len(isolated_availability_store.approved_bookings) == 1
 
 
@@ -987,6 +999,8 @@ def test_admin_can_reject_pending_booking(
         reject_response.json()["booking"]["rejection_reason"]
         == "这周安排已满，请改约下周。"
     )
+    assert reject_response.json()["notification"]["status"] == "queued"
+    _complete_booking_notifications()
     assert len(isolated_availability_store.rejected_bookings) == 1
 
 

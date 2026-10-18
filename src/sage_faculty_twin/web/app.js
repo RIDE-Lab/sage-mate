@@ -8530,7 +8530,7 @@ function buildNotificationStatusHtml(notification, options = {}) {
         ? "已发送"
         : notification.status === "failed"
             ? "发送失败"
-            : "未发送";
+            : notification.status === "queued" ? "等待发送" : "未发送";
     const statusClass = notification.status === "sent"
         ? "notification-card-sent"
         : notification.status === "failed"

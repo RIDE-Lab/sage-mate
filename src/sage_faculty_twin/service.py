@@ -240,7 +240,7 @@ from .models import (
     WorkflowPlanPreview,
     WorkflowTraceStep,
 )
-from .notifications import BookingEmailNotifier, BookingNotificationError
+from .notifications import BookingEmailNotifier
 from .numeric_consistency import numeric_answer_issues, verified_percent_summary
 from .online_presence_store import OnlinePresenceStore
 from .operations_store import OperationsTaskStateStore
@@ -1584,7 +1584,6 @@ class FacultyTwinWorkflowSupport:
             self._booking_workflows.pop(context.conversation_id, None)
             context.pending_fields = []
             context.workflow_action = "book_meeting"
-            context.booking_result = self._attach_booking_request_notification(booking_response)
             context.booking_notification = context.booking_result.notification
             context.answer = self._build_booking_success_message(context.booking_result)
             self._append_trace(
@@ -1614,36 +1613,6 @@ class FacultyTwinWorkflowSupport:
         context.route = "done"
         return context
 
-    def _attach_booking_request_notification(
-        self, booking_response: BookingResponse
-    ) -> BookingResponse:
-        booking = booking_response.booking
-        if booking is None:
-            return booking_response
-
-        try:
-            recipient = self._email_notifier.send_booking_request_notification(booking)
-        except BookingNotificationError as exc:
-            notification = NotificationDeliveryStatus(
-                status="failed",
-                summary=f"管理员提醒邮件发送失败。{exc}",
-                detail="预约记录已经保存，不影响管理员后续在后台查看和处理；邮件可稍后重试。",
-            )
-        else:
-            notification = NotificationDeliveryStatus(
-                status="sent",
-                recipient=recipient,
-                summary=f"已向 {recipient} 发送预约申请提醒邮件。",
-            )
-
-        return BookingResponse(
-            accepted=booking_response.accepted,
-            message=booking_response.message,
-            booking=booking,
-            alternative_slots=booking_response.alternative_slots,
-            notification=notification,
-        )
-
     def _build_booking_execute_summary(self, booking_response: BookingResponse) -> str:
         notification = booking_response.notification
         if notification is not None and notification.status == "failed":
@@ -1657,7 +1626,7 @@ class FacultyTwinWorkflowSupport:
         if notification.status == "failed":
             detail = notification.detail or "预约记录已保存，邮件可稍后重试。"
             return f"预约请求已记录，但邮件通知失败：{notification.summary} {detail}"
-        if notification.recipient:
+        if notification.status == "sent" and notification.recipient:
             return f"预约请求已记录，并已向 {notification.recipient} 发送提醒邮件。"
         return notification.summary
 
@@ -5023,10 +4992,7 @@ class FacultyTwinWorkflowSupport:
         )
 
     def book_meeting(self, request: BookingRequest) -> BookingResponse:
-        response = self._meeting_service.book(request)
-        if not response.accepted:
-            return response
-        return self._attach_booking_request_notification(response)
+        return self._meeting_service.book(request)
 
     def list_bookings(self, status: str | None = None) -> list[BookingRecord]:
         return self._meeting_service.list_bookings(status=status)
@@ -5319,12 +5285,7 @@ class FacultyTwinWorkflowSupport:
         )
 
     def confirm_booking(self, booking_id: str) -> BookingResponse:
-        response = self._meeting_service.confirm_booking(booking_id)
-        notified_response = self._attach_student_notification(
-            response,
-            success_message_prefix="已向 {recipient} 发送预约确认邮件。",
-            notify=self._email_notifier.send_booking_approved_notification,
-        )
+        notified_response = self._meeting_service.confirm_booking(booking_id)
         booking = notified_response.booking
         if notified_response.accepted and booking is not None and booking.status == "已确认":
             profiles = self._conversation_store.list_profiles_for_student(
@@ -5355,13 +5316,8 @@ class FacultyTwinWorkflowSupport:
     def reject_booking(
         self, booking_id: str, rejection_reason: str | None = None
     ) -> BookingResponse:
-        response = self._meeting_service.reject_booking(
+        return self._meeting_service.reject_booking(
             booking_id, rejection_reason=rejection_reason
-        )
-        return self._attach_student_notification(
-            response,
-            success_message_prefix="已向 {recipient} 发送预约拒绝通知邮件。",
-            notify=self._email_notifier.send_booking_rejected_notification,
         )
 
     def read_admin_session(self, request: AdminSessionTokenInput) -> AdminSessionResponse:
@@ -8432,46 +8388,6 @@ class FacultyTwinWorkflowSupport:
             f"{booking_response.message}\n"
             f"可选时间：{alternatives}\n"
             "请回复新的时间，我会继续为你完成预约。"
-        )
-
-    def _attach_student_notification(
-        self,
-        booking_response: BookingResponse,
-        *,
-        success_message_prefix: str,
-        notify: Callable[[BookingRecord], str],
-    ) -> BookingResponse:
-        booking = booking_response.booking
-        if not booking_response.accepted or booking is None:
-            return booking_response
-
-        if booking_response.message not in {"预约已确认。", "预约已拒绝。"}:
-            return booking_response
-
-        message = booking_response.message
-        try:
-            recipient = notify(booking)
-        except BookingNotificationError as exc:
-            notification = NotificationDeliveryStatus(
-                status="failed",
-                summary=str(exc),
-                detail="预约状态已经更新，但学生通知邮件未成功送达；可稍后重试或改为人工联系。",
-            )
-        else:
-            notification = NotificationDeliveryStatus(
-                status="sent",
-                recipient=recipient,
-                summary=success_message_prefix.format(recipient=recipient),
-            )
-
-        message = f"{message} {notification.summary}"
-
-        return BookingResponse(
-            accepted=booking_response.accepted,
-            message=message,
-            booking=booking,
-            alternative_slots=booking_response.alternative_slots,
-            notification=notification,
         )
 
     def _extract_email(self, text: str) -> str | None:
@@ -11622,6 +11538,7 @@ class DigitalTwinService:
         await self._llm_client.aclose()
 
     def start_background_work(self):
+        self._meeting_service.start_notifications(self._email_notifier)
         for store in (self._knowledge_store, self._wiki_store):
             if store is not None:
                 store.start_background_indexing()

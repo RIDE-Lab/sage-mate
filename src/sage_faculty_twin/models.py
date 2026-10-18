@@ -155,7 +155,7 @@ class EscalationDecisionRequest(BaseModel):
 
 class NotificationDeliveryStatus(BaseModel):
     channel: str = Field(default="email", pattern="^(email)$")
-    status: str = Field(default="skipped", pattern="^(sent|failed|skipped)$")
+    status: str = Field(default="skipped", pattern="^(queued|sent|failed|skipped)$")
     recipient: str | None = Field(default=None, max_length=256)
     summary: str = Field(min_length=1, max_length=256)
     detail: str | None = Field(default=None, max_length=512)

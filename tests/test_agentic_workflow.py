@@ -272,6 +272,28 @@ def _trace_step(response, key: str):
     return next(step for step in response.workflow_trace if step.key == key)
 
 
+def _drain_booking_notifications(service, *, failed=False):
+    from sage.runtime.work_service import WorkFailedError
+    outbox = service._meeting_service._notifications
+    outbox.start(service._email_notifier,
+                 admin_recipient=service._settings.booking_notification_email, retry_delay=0)
+    try:
+        rows, _ = outbox.journal.records()
+        assert rows
+        for row in rows:
+            if failed:
+                with pytest.raises(WorkFailedError):
+                    outbox.service.wait(row["key"], timeout=5)
+                saved = outbox.journal.read(row["key"])
+                assert saved["tasks"]["notify"]["failure_code"] == "notification_retry_exhausted"
+            else:
+                outbox.service.wait(row["key"], timeout=5)
+                saved = outbox.journal.read(row["key"])
+                assert saved["tasks"]["notify"]["result"]["status"] in {"sent", "skipped"}
+    finally:
+        outbox.close()
+
+
 def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="bm25")
     service = DigitalTwinService(settings)
@@ -298,7 +320,7 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     assert response.booking_result.booking.topic == "论文进展"
     assert response.booking_result.booking.status == "待确认"
     assert response.booking_result.notification is not None
-    assert response.booking_result.notification.status == "sent"
+    assert response.booking_result.notification.status == "queued"
     assert response.booking_result.notification.recipient == settings.booking_notification_email
     assert [step.key for step in response.workflow_trace] == [
         "bootstrap",
@@ -362,11 +384,12 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     assert response.workflow_trace[2].summary == "已识别当前交互意图：book_meeting/booking。"
     assert response.workflow_trace[3].summary == "预约字段已经齐备。"
     assert response.workflow_trace[4].summary == "预约申请已提交，等待管理员确认。"
-    assert settings.booking_notification_email in response.workflow_trace[4].detail
+    assert "尚未确认送达" in response.workflow_trace[4].detail
     assert any(item.basis_label == "预约规则与时段" for item in response.answer_basis)
     assert any(item.source_label == "当前预约安排配置" for item in response.answer_basis)
+    _drain_booking_notifications(service)
     assert len(notifier.request_bookings) == 1
-    assert settings.booking_notification_email in response.answer
+    assert "尚未确认送达" in response.answer
     assert "待确认" in response.answer
 
 
@@ -513,7 +536,7 @@ def test_admin_confirmation_sends_student_email(tmp_path: Path) -> None:
 
     assert created.booking is not None
     assert created.notification is not None
-    assert created.notification.status == "sent"
+    assert created.notification.status == "queued"
     assert created.notification.recipient == settings.booking_notification_email
     confirmed = service.confirm_booking(created.booking.booking_id)
 
@@ -521,10 +544,10 @@ def test_admin_confirmation_sends_student_email(tmp_path: Path) -> None:
     assert confirmed.booking is not None
     assert confirmed.booking.status == "已确认"
     assert confirmed.notification is not None
-    assert confirmed.notification.status == "sent"
+    assert confirmed.notification.status == "queued"
     assert confirmed.notification.recipient == "alice@example.com"
+    _drain_booking_notifications(service)
     assert len(notifier.approved_bookings) == 1
-    assert "alice@example.com" in confirmed.message
 
 
 def test_admin_rejection_sends_student_email(tmp_path: Path) -> None:
@@ -545,17 +568,17 @@ def test_admin_rejection_sends_student_email(tmp_path: Path) -> None:
 
     assert created.booking is not None
     assert created.notification is not None
-    assert created.notification.status == "sent"
+    assert created.notification.status == "queued"
     rejected = service.reject_booking(created.booking.booking_id)
 
     assert rejected.accepted is True
     assert rejected.booking is not None
     assert rejected.booking.status == "已拒绝"
     assert rejected.notification is not None
-    assert rejected.notification.status == "sent"
+    assert rejected.notification.status == "queued"
     assert rejected.notification.recipient == "alice@example.com"
+    _drain_booking_notifications(service)
     assert len(notifier.rejected_bookings) == 1
-    assert "alice@example.com" in rejected.message
 
 
 def test_admin_rejection_includes_reason_in_booking(tmp_path: Path) -> None:
@@ -605,9 +628,8 @@ def test_direct_booking_keeps_record_when_notification_fails(tmp_path: Path) -> 
     assert created.booking is not None
     assert created.booking.status == "待确认"
     assert created.notification is not None
-    assert created.notification.status == "failed"
-    assert "SMTP 未配置" in created.notification.summary
-    assert created.notification.detail is not None
+    assert created.notification.status == "queued"
+    _drain_booking_notifications(service, failed=True)
 
 
 def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) -> None:
@@ -679,14 +701,12 @@ def test_chat_booking_reports_notification_failure_without_rolling_back_booking(
     assert response.booking_result is not None
     assert response.booking_result.accepted is True
     assert response.booking_result.notification is not None
-    assert response.booking_result.notification.status == "failed"
-    assert "SMTP 未配置" in response.booking_result.notification.summary
-    assert response.booking_result.notification.detail is not None
-    assert "预约记录已经保存" in response.booking_result.notification.detail
+    assert response.booking_result.notification.status == "queued"
+    _drain_booking_notifications(service, failed=True)
     booking_execute_step = _trace_step(response, "booking_execute")
-    assert booking_execute_step.summary == "预约申请已提交，但提醒邮件发送失败。"
-    assert "邮件通知失败" in booking_execute_step.detail
-    assert "SMTP 未配置" in response.answer
+    assert booking_execute_step.summary == "预约申请已提交，等待管理员确认。"
+    assert "尚未确认送达" in booking_execute_step.detail
+    assert "尚未确认送达" in response.answer
 
 
 def test_chat_uses_llm_intent_to_avoid_false_booking_positive(tmp_path: Path) -> None:

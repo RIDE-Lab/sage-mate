@@ -69,13 +69,15 @@ def test_start_recovers_both_knowledge_sources_before_post_answer_work():
     from types import SimpleNamespace
     calls = []
     fake = SimpleNamespace(
+        _email_notifier=object(),
+        _meeting_service=SimpleNamespace(start_notifications=lambda _: calls.append("booking_notifications")),
         _knowledge_store=SimpleNamespace(start_background_indexing=lambda: calls.append("private")),
         _wiki_store=SimpleNamespace(start_background_indexing=lambda: calls.append("wiki")),
         _get_post_answer_runtime=lambda: SimpleNamespace(start=lambda: calls.append("post_answer")),
         _get_feedback_runtime=lambda: SimpleNamespace(start=lambda: calls.append("feedback")),
     )
     DigitalTwinService.start_background_work(fake)
-    assert calls == ["private", "wiki", "post_answer", "feedback"]
+    assert calls == ["booking_notifications", "private", "wiki", "post_answer", "feedback"]
 
 
 def test_digest_port_does_not_keep_finalized_service_alive(tmp_path):

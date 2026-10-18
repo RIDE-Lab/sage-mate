@@ -9,8 +9,16 @@ from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProce
 from sage.runtime.operation_receipts import OperationReceipts
 
 from .availability import WeeklyAvailabilityStore
+from .booking_notifications import BookingNotifications
 from .config import AppSettings
-from .models import AvailabilitySchedule, BookingRecord, BookingRequest, BookingResponse
+from .models import AvailabilitySchedule, BookingRecord, BookingRequest, BookingResponse, NotificationDeliveryStatus
+
+
+def _retire_booking_resources(state, notifications):
+    if notifications.service is not None:
+        notifications.service.retire(state.close)
+    else:
+        state.close()
 
 
 class MeetingService:
@@ -19,6 +27,7 @@ class MeetingService:
         self._state = None
         self._state_lock = threading.RLock()
         self._closed = False
+        self._notifications = None
         self._slot = ("twin-bookings-v1", "calendar", "records")
         self._availability_store = WeeklyAvailabilityStore(settings)
 
@@ -30,15 +39,24 @@ class MeetingService:
                 path = self._settings.booking_state_path
                 path.parent.mkdir(parents=True, exist_ok=True)
                 self._state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(path))
-                self._finalizer = weakref.finalize(self, self._state.close)
+                self._notifications = BookingNotifications(self._state)
+                self._finalizer = weakref.finalize(self, _retire_booking_resources,
+                                                 self._state, self._notifications)
             return self._state
 
     def close(self):
+        if self._notifications is not None:
+            self._notifications.close()
         with self._state_lock:
             if not self._closed:
                 if self._state is not None:
                     self._finalizer()
                 self._closed = True
+
+    def start_notifications(self, notifier):
+        with self._state_lock:
+            self._storage()
+            self._notifications.start(notifier, admin_recipient=self._settings.booking_notification_email.strip())
 
     def _commit(self, operation_id, inputs, decide):
         """The pure decision sees current bookings under the SAGE transaction.
@@ -50,13 +68,27 @@ class MeetingService:
         with self._state_lock:
             state = self._storage()
             receipts = OperationReceipts(state, namespace="twin-booking-effects-v1")
+            operation_id = operation_id or str(uuid4())
+            action = inputs["action"]
+            prepared = self._notifications.prepare(operation_id, action=action)
             def apply(values):
                 bookings = [BookingRecord.model_validate(row) for row in (values[self._slot] or [])]
+                before = [row.model_dump(mode="json") for row in bookings]
                 response = decide(bookings)
+                after = [row.model_dump(mode="json") for row in bookings]
+                changed = response.accepted and response.booking is not None and before != after
+                booking = response.booking.model_dump(mode="json") if changed else None
+                recipient = (self._settings.booking_notification_email.strip() if action == "book"
+                             else response.booking.student_email.strip()) if changed else None
+                work = self._notifications.prepare(operation_id, action=action,
+                                                    booking=booking, recipient=recipient)
+                if changed:
+                    response.notification = NotificationDeliveryStatus(status="queued",
+                        recipient=recipient, summary="邮件通知已持久化排队，尚未确认送达。")
                 return response.model_dump(mode="json"), {
-                    self._slot: [row.model_dump(mode="json") for row in bookings]}
-            saved = receipts.commit(operation_id or str(uuid4()), inputs=inputs,
-                                    slots=(self._slot,), transition=apply)
+                    self._slot: after, **work.apply(values)}
+            saved = receipts.commit(operation_id, inputs=inputs,
+                                    slots=(self._slot, *prepared.slots), transition=apply)
             return BookingResponse.model_validate(saved)
 
     def book(self, request: BookingRequest, *, operation_id: str | None = None) -> BookingResponse:
