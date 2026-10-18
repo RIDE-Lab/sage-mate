@@ -560,7 +560,8 @@ body.onboarding-active .chat-shell .onboarding-card {
 .workflow-dag-node-card {
     border-color: var(--line);
     border-radius: 8px;
-    background: #fafaf8;
+    background: var(--surface-soft);
+    color: var(--ink);
     box-shadow: none;
 }
 
