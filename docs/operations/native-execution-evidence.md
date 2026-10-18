@@ -172,3 +172,34 @@ failure to bypass native drain.
 
 This section describes the candidate contract; matching full regression, preview,
 production and visual gates must be recorded before promotion is claimed.
+
+### Continuous-status qualification
+
+`f6cda6a` / SAGE `34f65c41` passed the frozen installed full regression:
+1,677 passed, 31 unchanged skips, zero failures (451.39 seconds). The baseline
+identity-evaluation exclusion and descriptor limit were unchanged. SAGE status,
+work, event, cancellation and dependency families passed both source (202 tests)
+and independent installed-package qualification (202 tests). Twin's focused
+permission/startup/runtime/status suites passed 179 tests; six browser logic
+groups passed. No test downgrade, source overlay on the installed SAGE package
+or application runtime patch was used. Model fixtures in unit/integration tests
+remain distinct from the real preview; runtime model/provider settings were not
+changed.
+
+Real isolated Wiki delivery took 9.0 seconds for the specific acceptance question;
+canonical replay took 0.12 seconds. Full source blocks, 30 native foreground
+frames, durable background acknowledgement, owner isolation, actual task completion
+and stream closure were verified. A second question followed by an actual owned
+preview restart preserved the same canonical answer, sources and native state
+(6.87 seconds initial, 0.17 seconds replay). Cross-store cancellation retained
+HTTP 499, both destination seals, no canonical answer and stable replay (0.39
+seconds). These timings are functional acceptance observations, not matched
+performance benchmarks.
+
+The served JavaScript hash matched the immutable release and both assets carried
+`native-status-20261019`. Preview health reported independent HTTP/background
+readiness; Slack/SMTP were disabled. The owned preview was stopped after tests,
+with its data retained. Production remained unchanged. Browser visual acceptance
+still requires the user's unlocked desktop session; source, numeric color and
+Node checks do not substitute for that evidence. Slack presentation, final
+incremental-knowledge/recovery audit and production promotion remain open.
