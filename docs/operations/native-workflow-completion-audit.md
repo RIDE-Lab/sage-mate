@@ -2,12 +2,37 @@
 
 ## Authoritative current status
 
-Production is c659c2f / SAGE bcfeb104 (source-block receipt below). Earlier dated
+Production is 29fd999 / SAGE a8487923. Earlier dated
 and candidate sections are historical; their present-tense statements do not
 override this status. In particular citation link bases, retired research
 shortcut removal, native inner-source parallelism, and transactional HTTP/Slack
 admission limits of eight are deployed. Browser visual acceptance is complete
-for the recorded public Wiki sample. Real Slack delivery is still unverified.
+for the recorded public Wiki sample. Real Slack delivery passed for the sample
+below; Slack Markdown presentation remains imperfect and is not a formatting pass.
+
+### 2026-10-18 personal Slack binding and real delivery
+
+After explicit user approval, the operator verified the signed-in personal Twin
+account and the native Slack user/workspace. The settings binding entry is now
+accessible to authenticated users. The normal one-time-code flow returned binding
+success at 21:50:01 Asia/Shanghai; membership checks remain enabled. No whitelist,
+identity store override or automatic legacy ownership assignment was used.
+
+The exact authorized ECPA/StateAxis Wiki question was acknowledged at 21:50:32
+and its final ephemeral answer was visible at 21:50:45 (about 13 seconds). It
+included both roles, research-status limitations and complete clickable Wiki and
+supporting URLs. This establishes real slash-command ingress, identity resolution,
+execution and final Slack delivery, not just HTTP 200. Slack displays Markdown
+heading/table/link delimiters literally; this is a remaining presentation issue.
+
+Frozen release regression: 1619 passed, 31 skipped in 355.05 seconds (existing
+identity-eval exclusion unchanged). Before cutover all three booking statuses were
+empty and no work was active. Production PID2586713 became ready with health200;
+Wiki timer restored, inference services untouched. Fresh public QA took9.47s,
+SSE completed and cross-guest isolation passed; canonical same-version replay0.07s.
+The cross-version replay probe was released before readiness and failed connecting;
+it must not be represented as a successful cross-version restart qualification.
+Separate uncommitted notification-outbox work is not part of this deployment.
 
 ### Real Slack command acceptance: configuration repaired, identity gate remains
 
