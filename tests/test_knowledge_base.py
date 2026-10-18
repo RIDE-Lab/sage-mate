@@ -99,6 +99,25 @@ def test_project_policy_query_is_not_misclassified_as_teaching_experiment() -> N
     assert "teaching" in course_profile.topic_domains
 
 
+@pytest.mark.parametrize("question", [
+    "评审 StateAxis 这个研究方向，如何设计对照实验？",
+    "评审 NovelSystem 研究贡献，提出能证伪假设的实验。",
+    "Review a research idea and propose controlled experiments.",
+])
+def test_research_experiments_do_not_require_teaching_documents(question):
+    profile = _build_query_profile(question)
+    assert "research" in profile.topic_domains
+    assert "teaching" not in profile.topic_domains
+    assert "experiment" not in profile.document_types
+
+
+@pytest.mark.parametrize("question", ["数据库课程实验说明", "研究生课程的实验要求", "第一个实验怎么做"])
+def test_course_and_unqualified_experiments_keep_teaching_intent(question):
+    profile = _build_query_profile(question)
+    assert "teaching" in profile.topic_domains
+    assert "experiment" in profile.document_types
+
+
 def test_graduate_course_query_is_not_misclassified_as_research() -> None:
     course_profile = _build_query_profile("2026年研究生课程教学大纲")
     research_profile = _build_query_profile("张老师的主要研究方向")

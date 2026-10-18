@@ -2557,7 +2557,7 @@ def _build_query_profile(
         or any(marker in query for marker in ("课程", "作业", "实验课", "教学", "课件"))
         or any(marker in lowered for marker in ("course", "assignment", "class project"))
     )
-    if has_explicit_experiment or (has_project and has_teaching_project_context):
+    if (has_explicit_experiment or has_project) and has_teaching_project_context:
         document_types.add("experiment")
         topic_domains.add("teaching")
 
@@ -2586,6 +2586,11 @@ def _build_query_profile(
         or any(marker in query for marker in research_markers)
         or "研究" in query_without_graduate
     )
+    # Research experiments do not imply course handouts. Preserve explicit
+    # course context above and the legacy unqualified teaching query below.
+    if has_explicit_experiment and not has_research_marker and not has_teaching_project_context:
+        document_types.add("experiment")
+        topic_domains.add("teaching")
     if has_research_marker:
         topic_domains.add("research")
         if has_project and any(

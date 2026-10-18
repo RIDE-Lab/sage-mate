@@ -9,6 +9,15 @@ was the generic first-month research guide; the model selected no source but
 produced suggestions, correctly rejected by the existing contract. Candidate
 tracing found this unrelated guide already present before intent filtering.
 Query construction/retrieval ranking therefore remains under investigation.
+Follow-up isolated tracing confirmed the original query was preserved. The
+query profile classified every occurrence of experiment as a teaching document
+request, even for a research review. The candidate defers that ambiguous rule
+until research intent is known, while preserving explicit course context.
+Six new Chinese/English intent checks plus existing knowledge/source tests passed
+(66 passed, 5 existing skips). Correct system-overview evidence then returned,
+but seven unrelated prompt-engineering chunks also survived and the real request
+hit its 80-second observer deadline. Research QA remains unqualified; do not
+deploy this candidate merely because the narrower retrieval tests pass.
 A prompt-only clarification did not resolve it and was not deployed. Ordinary
 Wiki QA acceptance below does not qualify research-review quality.
 
