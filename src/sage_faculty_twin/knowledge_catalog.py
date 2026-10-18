@@ -11,6 +11,7 @@ from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProce
 from sage.runtime.operation_receipts import OperationReceipts
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
+from sage.runtime.effect_cancellation import EffectFences
 from sagevdb import VersionedDocumentCatalog
 
 from .models import KnowledgeDocumentRecord
@@ -39,6 +40,7 @@ class KnowledgeCatalog:
         self._lifecycle_lock = threading.RLock()
         self._index_service = None
         self._projection_key = None
+        self._effect_fences = None
         self._closed = False
         self._closing = False
         self.catalog = VersionedDocumentCatalog(self.state, namespace=namespace)
@@ -189,7 +191,16 @@ class KnowledgeCatalog:
                             mutations=mutations)
         return operation_id
 
-    def create_once(self, operation_id, record, *, inputs, expected_revision):
+    @property
+    def effect_fences(self):
+        with self._lifecycle_lock:
+            self._assert_open()
+            self._assert_storage()
+            if self._effect_fences is None:
+                self._effect_fences = EffectFences(self.state, namespace="twin-preanswer-effects-v1")
+            return self._effect_fences
+
+    def create_once(self, operation_id, record, *, inputs, expected_revision, guard=None):
         """Replay the original result without restoring subsequently edited data.
 
         The caller must authorize every call and supply a server-captured,
@@ -213,7 +224,7 @@ class KnowledgeCatalog:
                     slot: transform(values[slot]), **work.apply(values)}
 
             saved = self.receipts.commit(operation_id, inputs=inputs,
-                slots=(slot, *work.slots), transition=apply)
+                slots=(slot, *work.slots), transition=apply, guard=guard)
             return KnowledgeDocumentRecord.model_validate(saved)
 
     def import_legacy(self, decode):

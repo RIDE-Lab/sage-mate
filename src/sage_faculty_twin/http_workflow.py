@@ -12,7 +12,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sage.runtime.async_work_service import AsyncWorkService
 from sage.runtime.work_dispatcher import WorkFailure
 from sage.runtime.work_journal import WorkJournal
-from sage.runtime.work_service import WorkFailedError
+from sage.runtime.work_service import WorkFailedError, WorkWaitTimeoutError
+from sage.runtime.effect_cancellation import CancellationService, EffectCancelled
 from sage.runtime.event_journal import EventJournal
 from sage.runtime.source_audit import AnswerValidationRejected, SourceAuditRejected
 from sage.runtime.model_errors import ModelRequestRejected
@@ -74,7 +75,8 @@ class HttpWorkflow:
     Borrowed state and ports must remain alive until aclose drains successfully.
     """
 
-    def __init__(self, state, *, authorize, recover, answer, max_attempts=5, **options):
+    def __init__(self, state, *, authorize, recover, answer, max_attempts=5,
+                 cancellation_targets=None, cancellation_timeout=30, **options):
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("http_max_attempts_must_be_positive")
         self.journal = WorkJournal(state, namespace="twin-http-workflow-v1")
@@ -82,11 +84,28 @@ class HttpWorkflow:
         self._authorize, self._recover, self._answer = authorize, recover, answer
         self._max_attempts = max_attempts
         self._retry_delay = options.get("retry_delay", 5)
+        self._cancellation_timeout = cancellation_timeout
+        self._cancellations = CancellationService(self.journal, task_id="answer",
+            targets={} if cancellation_targets is None else cancellation_targets, protection=self._cancel_protection,
+            poll_interval=options.get("poll_interval", 0.05))
+        self._task_selector = options.pop("accept_task", None)
+        if self._task_selector is not None and not callable(self._task_selector):
+            raise TypeError("task_selector_must_be_callable")
         self._work = AsyncWorkService(self.journal, self._handle,
             **{"max_workers": 2, "poll_interval": 0.05,
-               "failure_policy": self._failure, "completion_mutations": self._completion_events, **options})
+               "failure_policy": self._failure, "completion_mutations": self._completion_events,
+               "accept_task": self._accept_task, **options})
         self._start_lock = asyncio.Lock()
         self._started = False
+
+    def _accept_task(self, task_id, payload):
+        if self._task_selector is not None and not self._task_selector(task_id, payload):
+            return False
+        ingress = HttpIngress.model_validate(payload)
+        record = self._cancellations.journal.read(ingress.delivery.stream_id)
+        # Freeze retries and terminal publication while distributed cancellation
+        # is pending. WorkService will discover settlement on its normal sweep.
+        return record is None or all(task["status"] == "done" for task in record["tasks"].values())
 
     def _completion_events(self, lease, result):
         if lease.task_id != "finalize" or not result["failed"]:
@@ -106,6 +125,13 @@ class HttpWorkflow:
         return {terminal.slot: close}
 
     def _failure(self, lease, error):
+        if isinstance(error, EffectCancelled) or (
+            isinstance(error, FlowRequestOutcomeError) and error.error_type == "EffectCancelled"
+        ):
+            if self._cancellations.journal.read(lease.request_id) is not None:
+                # The native coordinator must finish all seals before the origin
+                # fails as request_cancelled and its finalizer publishes that fact.
+                return WorkFailure("cancellation_pending", 0.05)
         if isinstance(error, ModelRequestRejected):
             return WorkFailure(error.code)
         if isinstance(error, FlowRequestOutcomeError) and error.error_type == "ModelRequestRejected":
@@ -164,6 +190,7 @@ class HttpWorkflow:
         async with self._start_lock:
             if not self._started:
                 await asyncio.to_thread(self._upgrade_finalizers)
+                await self._cancellations.astart()
                 await self._work.start()
                 self._started = True
 
@@ -226,6 +253,7 @@ class HttpWorkflow:
 
     async def aclose(self):
         await self._work.aclose()
+        await self._cancellations.aclose()
 
     async def cancel(self, *, owner_id, request_id):
         """Cancel only a transport-verified owner's durable task.
@@ -240,10 +268,20 @@ class HttpWorkflow:
         ingress = HttpIngress.model_validate(record["tasks"]["answer"]["payload"])
         if ingress.delivery != delivery:
             raise PermissionError("http_cancel_owner_mismatch")
+        admission = await self._cancellations.arequest(delivery.stream_id)
+        if admission != "accepted":
+            return admission
+        try:
+            return await self._cancellations.await_result(delivery.stream_id,
+                                                         timeout=self._cancellation_timeout)
+        except WorkWaitTimeoutError:
+            return "cancelling"
+
+    def _cancel_protection(self, stream_id):
         # Preparing an append does not publish it. Its native slot identifies
         # the canonical stream protected inside SAGE's cancellation transaction.
-        terminal = self.events.prepare_append(delivery.stream_id, event_id="terminal",
+        terminal = self.events.prepare_append(stream_id, event_id="terminal",
             payload={"type": "error", "code": "request_cancelled"}, terminal=True)
-        return await self._work.cancel(delivery.stream_id, "answer", protect={
+        return {
             terminal.slot: lambda old: bool(old and any(event["id"] == "answer_done"
-                                                       for event in old["events"]))})
+                                                       for event in old["events"]))}

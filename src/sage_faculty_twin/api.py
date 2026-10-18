@@ -403,6 +403,7 @@ def _create_http_workflow(instance):
             raise
 
     return HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer,
+                        cancellation_targets=instance.cancellation_targets(),
                         max_workers=CHAT_MAX_INFLIGHT_REQUESTS)
 
 
@@ -1742,7 +1743,10 @@ async def cancel_chat_request(
         raise HTTPException(status_code=503, detail="工作流尚未就绪，请稍后重试。")
     outcome = await http_workflow.cancel(owner_id=identity.owner_id, request_id=request_id)
     _deliver_guest_cookie(raw_request, response)
-    return {"request_id": request_id, "cancelled": outcome == "cancelled"}
+    if outcome == "cancelling":
+        response.status_code = 202
+        response.headers["Retry-After"] = "2"
+    return {"request_id": request_id, "cancelled": outcome == "cancelled", "status": outcome}
 
 
 def _slack_conversation_owner(team_id: str, user_id: str, channel_id: str) -> str:

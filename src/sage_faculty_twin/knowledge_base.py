@@ -485,11 +485,14 @@ class LocalKnowledgeStore:
         *,
         rebuild_indexes: bool = True,
         operation_id: str | None = None,
+        cancellation_scope: str | None = None,
     ) -> KnowledgeDocumentRecord:
         return self._add_document_locked(payload, rebuild_indexes=rebuild_indexes,
-                                         operation_id=operation_id)
+                                         operation_id=operation_id, cancellation_scope=cancellation_scope)
 
-    def _add_document_locked(self, payload, *, rebuild_indexes, operation_id=None):
+    def _add_document_locked(self, payload, *, rebuild_indexes, operation_id=None, cancellation_scope=None):
+        if cancellation_scope is not None and operation_id is None:
+            raise ValueError("cancelled_knowledge_write_requires_operation_identity")
         self._check_source_namespace(payload.source_name)
         self._refresh_documents()
         record = KnowledgeDocumentRecord(
@@ -505,7 +508,9 @@ class LocalKnowledgeStore:
             self._commit_documents({record.document_id: record})
         else:
             record = self._catalog.create_once(operation_id, record,
-                inputs=payload.model_dump(mode="json"), expected_revision=self._catalog_revision)
+                inputs=payload.model_dump(mode="json"), expected_revision=self._catalog_revision,
+                guard=(self._catalog.effect_fences.prepare_guard(cancellation_scope)
+                       if cancellation_scope is not None else None))
             self._last_index_operation = operation_id
             self._refresh_documents()
         if rebuild_indexes and not self._has_persistent_projection():

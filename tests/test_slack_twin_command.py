@@ -92,6 +92,7 @@ def harness(monkeypatch, tmp_path):
     instance._settings = AppSettings(runtime_dir=tmp_path)
     instance._user_store = UserAccountStore(instance._settings)
     instance._guest_identity_store = GuestIdentityStore(state, ttl_seconds=300)
+    instance.cancellation_targets = lambda: {}  # This fixture's producer has no destination effects.
     h.service = SimpleNamespace(answer=answer, ensure_initialized=lambda: instance,
         is_initialized=lambda: True, aclose=close, health=lambda: {"status": "ok"},
         get_slack_link_account=lambda uid: h.accounts.get(uid))

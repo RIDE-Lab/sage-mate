@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.operation_receipts import OperationReceipts
+from sage.runtime.effect_cancellation import EffectFences
 
 from .availability import WeeklyAvailabilityStore
 from .booking_notifications import BookingNotifications
@@ -29,6 +30,7 @@ class MeetingService:
         self._state_lock = threading.RLock()
         self._closed = False
         self._notifications = None
+        self._effect_fences = None
         self._slot = ("twin-bookings-v1", "calendar", "records")
         self._availability_store = WeeklyAvailabilityStore(settings)
         self.workflows = BookingWorkflows(self._storage)
@@ -60,7 +62,15 @@ class MeetingService:
             self._storage()
             self._notifications.start(notifier, admin_recipient=self._settings.booking_notification_email.strip())
 
-    def _commit(self, operation_id, inputs, decide):
+    @property
+    def effect_fences(self):
+        with self._state_lock:
+            state = self._storage()
+            if self._effect_fences is None:
+                self._effect_fences = EffectFences(state, namespace="twin-preanswer-effects-v1")
+            return self._effect_fences
+
+    def _commit(self, operation_id, inputs, decide, *, cancellation_scope=None):
         """The pure decision sees current bookings under the SAGE transaction.
 
         Authentication belongs to ingress on every invocation. Caller-supplied
@@ -89,11 +99,15 @@ class MeetingService:
                         recipient=recipient, summary="邮件通知已持久化排队，尚未确认送达。")
                 return response.model_dump(mode="json"), {
                     self._slot: after, **work.apply(values)}
+            guard = self.effect_fences.prepare_guard(cancellation_scope) if cancellation_scope is not None else None
             saved = receipts.commit(operation_id, inputs=inputs,
-                                    slots=(self._slot, *prepared.slots), transition=apply)
+                                    slots=(self._slot, *prepared.slots), transition=apply, guard=guard)
             return BookingResponse.model_validate(saved)
 
-    def book(self, request: BookingRequest, *, operation_id: str | None = None) -> BookingResponse:
+    def book(self, request: BookingRequest, *, operation_id: str | None = None,
+             cancellation_scope: str | None = None) -> BookingResponse:
+        if cancellation_scope is not None and not operation_id:
+            raise ValueError("cancellable_booking_requires_operation_identity")
         # Availability is a captured file-policy snapshot. It is not claimed to
         # be transactionally coupled to concurrent calendar-policy edits.
         slot_start = request.preferred_start.replace(second=0, microsecond=0)
@@ -101,7 +115,8 @@ class MeetingService:
         available = self._availability_store.is_available(slot_start, slot_end)
         suggestions = self._suggest_slots(slot_start)
         return self._commit(operation_id, {"action": "book", "request": request.model_dump(mode="json")},
-            lambda bookings: self._decide_booking(request, bookings, available, suggestions))
+            lambda bookings: self._decide_booking(request, bookings, available, suggestions),
+            cancellation_scope=cancellation_scope)
 
     def _decide_booking(self, request, bookings, available, suggestions):
         requested_minutes = (request.preferred_end - request.preferred_start).total_seconds() / 60

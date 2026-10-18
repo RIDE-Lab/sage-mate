@@ -1524,6 +1524,8 @@ class FacultyTwinWorkflowSupport:
                 "student_name", "student_email", "question", "course_context"}),
             fields=fields,
             topic_default=topic_default,
+            guard=(self._meeting_service.effect_fences.prepare_guard(self._delivery.stream_id)
+                   if self._delivery is not None else None),
         )
         state = decision.state
         context.booking_decision = decision
@@ -1576,8 +1578,11 @@ class FacultyTwinWorkflowSupport:
         booking_response = self._meeting_service.book(
             decision.request,
             operation_id=f"booking-create:{self._booking_operation_id}",
+            cancellation_scope=self._delivery.stream_id if self._delivery is not None else None,
         )
-        self._booking_workflows.settle(request.owner_id, self._booking_operation_id, booking_response)
+        self._booking_workflows.settle(request.owner_id, self._booking_operation_id, booking_response,
+            guard=(self._meeting_service.effect_fences.prepare_guard(self._delivery.stream_id)
+                   if self._delivery is not None else None))
         context.booking_result = booking_response
 
         if booking_response.accepted:
@@ -1640,6 +1645,7 @@ class FacultyTwinWorkflowSupport:
                     knowledge_request,
                     operation_id=(f"knowledge-write:{self._delivery.stream_id}"
                                   if self._delivery is not None else None),
+                    cancellation_scope=self._delivery.stream_id if self._delivery is not None else None,
                 )
                 context.answer = self._build_admin_knowledge_success_message(
                     context.added_knowledge_record
@@ -8999,6 +9005,11 @@ class DigitalTwinService:
 
         if changed:
             self._knowledge_store.rebuild_indexes()
+
+    def cancellation_targets(self):
+        """Lazy destination ports; SAGE owns durable sealing and recovery."""
+        return {"bookings": lambda: self._meeting_service.effect_fences,
+                "knowledge": lambda: self._knowledge_store._catalog.effect_fences}
 
     async def answer(
         self,

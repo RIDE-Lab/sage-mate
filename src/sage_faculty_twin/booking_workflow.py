@@ -69,7 +69,7 @@ class BookingWorkflows:
         saved = self._state_provider().peek(("twin-booking-plans-v1", owner_id, identity))
         return BookingDecision.model_validate(saved) if saved else None
 
-    def capture(self, owner_id, conversation_id, operation_id, *, inputs, fields, topic_default=None):
+    def capture(self, owner_id, conversation_id, operation_id, *, inputs, fields, topic_default=None, guard=None):
         identity = self._identity(owner_id, operation_id)
         draft_slot = self._draft_slot(owner_id, conversation_id)
         plan_slot = ("twin-booking-plans-v1", owner_id, identity)
@@ -95,11 +95,11 @@ class BookingWorkflows:
 
         result = OperationReceipts(self._state_provider(), namespace="twin-booking-plans-v1").commit(
             identity, inputs={"conversation_id": conversation_id, "request": inputs},
-            slots=(draft_slot, plan_slot), transition=decide,
+            slots=(draft_slot, plan_slot), transition=decide, guard=guard,
         )
         return BookingDecision.model_validate(result)
 
-    def settle(self, owner_id, operation_id, response: BookingResponse):
+    def settle(self, owner_id, operation_id, response: BookingResponse, *, guard=None):
         identity = self._identity(owner_id, operation_id)
         plan = self.decision(owner_id, operation_id)
         if plan is None or plan.request is None:
@@ -116,5 +116,5 @@ class BookingWorkflows:
             return {"settled_current_draft": owned}, {draft_slot: replacement}
 
         return OperationReceipts(self._state_provider(), namespace="twin-booking-draft-settle-v1").commit(
-            identity, inputs=response.model_dump(mode="json"), slots=(draft_slot,), transition=finish,
+            identity, inputs=response.model_dump(mode="json"), slots=(draft_slot,), transition=finish, guard=guard,
         )

@@ -515,6 +515,7 @@ let activeWorkflowStream = null;
 let activeWorkflowRequestId = null;
 let activeChatAbortController = null;
 let activeChatUserCancelled = false;
+let activeChatCancellationPromise = null;
 let lastAutoChatQuestion = chatQuestion?.value?.trim() || "";
 let lastAutoCourseContext = courseContextInput?.value?.trim() || "";
 let lastHardwareSnapshot = null;
@@ -2937,6 +2938,7 @@ chatForm.addEventListener("submit", async (event) => {
     const requestController = new AbortController();
     activeChatAbortController = requestController;
     activeChatUserCancelled = false;
+    activeChatCancellationPromise = null;
 
     appendMessage("user", payload.student_name || "学生", question, {
         emphasis: "user",
@@ -3016,16 +3018,20 @@ chatForm.addEventListener("submit", async (event) => {
         } catch (error) {
             if (error?.cancelled || activeChatUserCancelled) {
                 stopWorkflowTraceStream();
-                renderWorkflowTraceError("已停止生成。");
+                renderPendingAssistantMessage(pendingMessage, "正在请求停止，等待后台确认。", [],
+                    { deepThinking: explicitDeepMode });
+                const outcome = activeChatCancellationPromise ? await activeChatCancellationPromise : null;
+                const cancellationMessage = chatCancellationMessage(outcome);
+                renderWorkflowTraceError(cancellationMessage);
                 renderAssistantMessage(
                     pendingMessage,
-                    "已停止生成。你可以修改问题后重新发送。",
+                    cancellationMessage,
                     [], [], [], null, true, null, activeWorkflowSteps
                 );
                 sageCompanionController?.setRequestActive(false);
                 sageCompanionController?.setState(
                     "idle",
-                    "这次生成已停止，想好后可以重新问我。",
+                    cancellationMessage,
                     { resetAfterMs: 3200 }
                 );
                 break;
@@ -6661,21 +6667,35 @@ async function apiStreamRequest(path, options = {}) {
     }
 }
 
+function chatCancellationMessage(outcome) {
+    if (outcome?.cancelled === true && outcome?.status === "cancelled") {
+        return "已确认停止生成。已经提交的预约或其他操作不会自动撤回。";
+    }
+    if (outcome?.status === "cancelling") {
+        return "已停止接收新内容；后台仍在确认取消，暂不能保证任务已停止。";
+    }
+    if (["protected", "terminal"].includes(outcome?.status)) {
+        return "已停止接收新内容；已完成的回答或已提交的操作未被撤回，可在历史记录中查看。";
+    }
+    return "已停止接收新内容，但尚未确认后台任务取消；已提交的操作不会自动撤回。";
+}
+
 async function cancelActiveChatRequest() {
     const requestId = activeWorkflowRequestId;
     activeChatUserCancelled = true;
+    activeChatCancellationPromise = (async () => {
+        if (!requestId) return null;
+        try {
+            const outcome = await apiRequest(`/chat/cancel?request_id=${encodeURIComponent(requestId)}`,
+                { method: "POST", keepalive: true, timeoutMs: 35000 });
+            return outcome.request_id === requestId ? outcome : null;
+        } catch {
+            return null;
+        }
+    })();
     activeChatAbortController?.abort("user-cancelled");
     stopWorkflowTraceStream();
-    if (!requestId) return;
-    try {
-        const apiOrigin = await resolveApiOrigin();
-        await fetch(
-            buildApiUrl(`/chat/cancel?request_id=${encodeURIComponent(requestId)}`, apiOrigin),
-            { method: "POST", credentials: "include", keepalive: true }
-        );
-    } catch {
-        // Closing the workflow SSE is an independent cancellation signal.
-    }
+    return activeChatCancellationPromise;
 }
 
 globalThis.addEventListener("pagehide", () => {
