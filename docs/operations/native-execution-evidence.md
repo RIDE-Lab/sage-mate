@@ -106,3 +106,33 @@ rails/grouping are removed, preserving business notes explicitly as historical
 annotations without native execution evidence. An absent event is unknown,
 never an inferred success. This integration is a release candidate until the
 matching installed, preview and production gates have passed.
+
+### Qualified candidate, not production
+
+Candidate `e6aa708` / SAGE `b8fbae1d` passed the frozen installed full regression:
+1,669 passed, 31 unchanged dependency skips, zero failures (446.82 seconds).
+The existing identity-evaluation baseline exclusion and descriptor limit were
+unchanged. Selected installed work/event/cancellation/observation tests also
+passed (180 tests), as did all six browser logic groups. Earlier four failures
+remain recorded: three history-store doubles lacked the native state port, and
+the process-death assertion predated durable start publication. Corrected tests
+use a real empty legacy journal and require the killed first attempt to retain
+only `started`, followed by second-attempt start/completion, with no regenerated
+canonical answer. The real process test retains the default 60-second lease.
+
+The identical application runtime (`aedde6e`, with only subsequent test changes)
+passed isolated real Wiki delivery: full source blocks, 30 native frames for
+15 foreground attempts before answer admission, and native background start/
+completion before stream closure. Owner-scoped metadata, cross-guest denial,
+canonical replay and an actual preview restart preserved the original answer
+and native events. Cross-store cancellation still produced HTTP 499, both
+destination seals, no canonical answer and stable replay. Test SMTP/Slack were
+disabled; the owned preview was stopped after acceptance. Production was not
+changed by these checks.
+
+This is not a whole-workflow completion or live visual acceptance claim. Final
+release gates still include continuous worker-supervisor health reporting,
+authoritative current task/stream state, avoiding closed-history stream replay,
+removal of the unreachable old phase renderer, Slack presentation and browser
+visual acceptance. Missing native attempt evidence must remain unknown, never
+inferred completion.
