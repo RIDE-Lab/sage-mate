@@ -14,6 +14,16 @@ investigate reproducibility before claiming the expanded suite is reliable.
 The same complete group subsequently passed: 24 tests in 12.46 seconds; project
 Ruff checks passed. This repeat does not erase the earlier cancellation failure.
 
+The cancellation race is now reproduced deterministically in SAGE: cancellation
+while a thread polls pending work was replaced by WorkWaitTimeoutError, which
+the outer observer loop caught and retried. SAGE `790007b` converts only this
+expected pending result before the cancellation-aware offload boundary; genuine
+storage errors still surface. The new regression fails against the installed
+old SAGE and passes with the fix. 21 SAGE async/cancellation tests and all 24
+Twin integration checks passed (13.58 seconds for Twin). Twin pins that revision;
+`uv lock --check` passed. Immutable-release/full-regression and deployment gates
+remain open; the running production release has not yet been replaced.
+
 This is a requirement audit, not a declaration of overall completion. Runtime
 revision: `56f4281`; production evidence date: 2026-10-18. The detailed cutover
 receipt is `native-cutover-20261018.md`.
