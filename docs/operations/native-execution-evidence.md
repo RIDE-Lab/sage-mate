@@ -54,6 +54,28 @@ invented phase/completion totals. The affected frontend/knowledge/recovery group
 pass 139 tests with five existing skips (48.80 seconds). A fresh full gate remains
 required; resource exhaustion did not recur in the completed failing gate.
 
+The corrected, independent frozen 6bb141c / SAGE502caf74 gate completed with
+1665 passes, 31 unchanged skips, zero failures/errors and one existing framework
+warning in 438.39 seconds. JUnit independently confirms 1696 cases, zero failures,
+zero errors and 31 skips. The file-descriptor soft limit remained 1024. The existing
+identity-evaluation exclusion was unchanged; no extra tests were excluded.
+
+Actual isolated HTTP preview of the identical runtime code (dd2f76c differs from
+6bb141c only in tests/docs) passed full Wiki provenance/links, 30 native frames for
+15 attempts before answer admission, terminal SSE, cross-guest denial and identical
+replay (12.26 seconds first answer; 0.13 seconds replay). Booking state survived a
+controlled preview restart and an email-only continuation preserved original topic
+and time (1.39 seconds; replay 0.12 seconds). Cancellation sealed both destination
+databases, returned 499 without a canonical answer and replayed correctly (0.37
+seconds). SMTP/Slack were disabled in preview; no production business effects or
+model/GPU service changes were made. The preview unit was stopped after acceptance;
+qualification data and failed artifacts remain available for audit.
+
+These results qualify the foreground source/runtime stage, not production or
+browser acceptance. Production remains d758087 / SAGEb7355905. Native background
+task acknowledgement events, legacy cached visualization claims and final visual
+acceptance must be completed before claiming the overall workflow goal achieved.
+
 This foreground evidence is not a durable background task acknowledgement. Native
 WorkService claim/lease/retry/recovery/finish events and their atomic publication
 still need qualification before the overall workflow visualization is complete.
