@@ -1,5 +1,17 @@
 # Native workflow completion audit
 
+## Open research-answer quality gate
+
+A public StateAxis review question requesting sourced facts, unknowns and
+controlled experiments returned 503 in 7.94 seconds on `9ff9fa0`. An isolated
+copy of the public Wiki reproduced source-plan rejection: the only candidate
+was the generic first-month research guide; the model selected no source but
+produced suggestions, correctly rejected by the existing contract. Candidate
+tracing found this unrelated guide already present before intent filtering.
+Query construction/retrieval ranking therefore remains under investigation.
+A prompt-only clarification did not resolve it and was not deployed. Ordinary
+Wiki QA acceptance below does not qualify research-review quality.
+
 ## Follow-up deployment: 9ff9fa0 (2026-10-18)
 
 The immutable release now runs `9ff9fa0` with installed SAGE `790007b`, independently
