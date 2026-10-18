@@ -2,13 +2,32 @@
 
 ## Authoritative current status
 
-Production is 29fd999 / SAGE a8487923. Earlier dated
+Production is Twin `477b305` / SAGE `8f7535f7` (2026-10-19). Earlier dated
 and candidate sections are historical; their present-tense statements do not
-override this status. In particular citation link bases, retired research
-shortcut removal, native inner-source parallelism, and transactional HTTP/Slack
-admission limits of eight are deployed. Browser visual acceptance is complete
-for the recorded public Wiki sample. Real Slack delivery passed for the sample
-below; Slack Markdown presentation remains imperfect and is not a formatting pass.
+override this status. Citation link bases, source-constrained Wiki answers,
+native independent retrieval and transactional HTTP/Slack admission are deployed.
+Owner-scoped booking draft/decision persistence and receipt/outbox recovery are
+also deployed; the former in-memory draft path has been removed.
+
+Independent Slack dependency verification now uses SAGE's native durable work
+engine. HTTP starts without awaiting Slack network access, while ingress,
+delivery and recovered task claims remain fail-closed until current credentials
+and workspace pass verification. Every startup requires a fresh binding.
+Installed SAGE qualification: 231 passed. Frozen Twin: 1649 passed, 31 existing
+skips, one existing warning in 372.63 seconds; identity-eval exclusion unchanged.
+Isolated restart verified a fresh binding, identical canonical answer replay,
+full sources and guest isolation. Production started with zero supervisor restarts
+and Slack verified. Public cross-version replay passed in 1.26 seconds; fresh
+Wiki answer passed in 10.34 seconds with full sources, SSE termination and guest
+isolation; replay took 0.73 seconds. No inference/GPU service was restarted.
+
+Whole-goal completion remains unproven. Cross-store cancellation fencing, full
+native lifecycle/topology events, Slack Markdown presentation and final
+requirement-by-requirement audit remain open. Earlier real Slack delivery proves
+only its recorded sample, not a new formatting acceptance. The current deployment
+used read-only auth.test and did not send new Slack messages.
+
+## Historical qualification records
 
 ### 2026-10-18 personal Slack binding and real delivery
 

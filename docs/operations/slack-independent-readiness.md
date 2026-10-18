@@ -45,3 +45,23 @@ recovery, wrong workspace and revoked credentials, changed configuration, and
 restart recovery with no pre-verification task claims. SAGE separately covers
 lease fencing, concurrent replacement and abrupt process death after admission.
 Production deployment and real transport acceptance remain separate release gates.
+
+## Release acceptance — 2026-10-19
+
+Deployed Twin `477b305` with SAGE `8f7535f7`, both on main. Installed SAGE runtime
+qualification passed 231 tests. Frozen Twin regression passed 1649 tests with
+31 existing skips and one existing warning in 372.63 seconds; the pre-existing
+identity-eval exclusion was unchanged. These are not model-quality benchmark scores.
+
+The isolated loopback service used actual read-only Slack auth.test, became
+verified, then restarted with a different binding and verified again in 8.86
+seconds. A held Wiki request replayed the identical answer/exchange/source blocks
+after restart in 0.14 seconds. Real public production checks passed after cutover:
+HTTP ready, Slack verified, zero supervisor restarts; cross-version canonical
+replay 1.26 seconds; fresh full-source Wiki answer 10.34 seconds; SSE completion,
+cross-guest isolation and replay 0.73 seconds. No new Slack message was sent.
+
+Writers were stopped for two on-host integrity-checked SQLite backups before
+switching the app and Wiki task to the frozen release. Existing authorization
+configuration was retained, the Wiki timer restored, and inference services left
+untouched. Backups and isolated test state remain private and are not serving data.
