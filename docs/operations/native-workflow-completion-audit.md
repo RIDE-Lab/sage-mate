@@ -17,12 +17,23 @@ The first harness attempt incorrectly expected raw private search hits to have
 the later hydrated `source_content` field; the corrected harness checked the
 small result excerpt and exact canonical document body separately.
 
+The isolated final-release process-crash test passed in 63.19 seconds. A spawned
+worker admitted the canonical answer and acquired the post-answer lease, then
+was killed by its parent. A new runtime opened the same store and recovered
+after the unchanged default 60-second lease expired (attempt 1 to attempt 2).
+The canonical record, including full attachment content, remained identical;
+answer_done and terminal complete each appeared once, and repeated submission
+left the event stream unchanged. No production process was terminated. This
+qualifies the pre-side-effect leased-worker boundary, not external exactly-once
+effects or every possible crash point. The reusable test is
+`tests/test_post_answer_process_recovery.py`.
+
 | Requirement | Source and qualifying evidence | Remaining gate |
 | --- | --- | --- |
 | One SAGE execution contract | `chat_runtime.py`, `retrieval_runtime.py`, HTTP/Slack native work adapters; frozen release regression | Confirm actual Slack ingress/delivery on this release |
 | Independent parallel authorized retrieval | `test_retrieval_runtime.py` checks persistent graph concurrency, request scopes, failed-branch recovery and cancellation; real Wiki/embedding/reranker requests passed | Controlled multi-source latency/fault check against the final installed environment |
 | Atomic turn commit and replay | `test_post_answer_delivery.py` checks transaction rollback, owned result/event commit, recovered worker completion; production same-request replay retained answer and exchange ID after restart | None for the observed HTTP replay; do not infer external exactly-once delivery |
-| Persistent background execution | Production read-only journal audit found two answer, two finalize and two post_answer tasks, all done at attempt 1 | In-flight worker crash/recovery in an isolated final-release service; production restart tested completed requests only |
+| Persistent background execution | Production journal audit plus isolated real worker-kill/recovery with the default lease, unchanged canonical record and unique delivery events | External side-effect crash boundaries must not be inferred from this test |
 | Bounded scheduling and recovery | Native WorkService/AsyncWorkService adapters and existing failure/capacity tests | Explicit matched admission/queue/retention qualification; no unbounded-throughput claim |
 | Versioned knowledge updates | `test_knowledge_index_work.py` checks running worker updates, pending-intent recovery, failed projection, revision fences and config isolation; `test_knowledge_projection_recovery.py` checks deleted/latest records and damaged-index recovery; real-embedding isolated canary verified update/delete/restart and six completed native tasks | No production-document mutation needed; unchanged Wiki sync is not used alone as proof |
 | Reliable delivery | Production/public HTTP, answer_done plus complete SSE, cross-guest denial, restart replay passed | Real Slack acknowledgement/delivery; public browser visual confirmation remains pending |
