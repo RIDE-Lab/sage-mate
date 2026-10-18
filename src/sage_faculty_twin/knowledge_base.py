@@ -1802,6 +1802,14 @@ class LocalKnowledgeStore:
         ]
         if not visible_hits:
             return []
+        if "research" in query_profile.topic_domains and query_profile.named_entities:
+            from sage.runtime.evidence_relevance import subject_candidate_indices
+
+            indices = subject_candidate_indices(tuple(query_profile.named_entities), tuple(
+                hit.title + "\n" + self._documents[hit.document_id].content
+                for hit in visible_hits
+            ))
+            visible_hits = [visible_hits[index] for index in indices]
         if not query_profile.document_types and not query_profile.topic_domains:
             return _dedupe_hits_by_source_group(visible_hits, limit)
 

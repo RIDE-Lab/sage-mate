@@ -111,6 +111,25 @@ def test_research_experiments_do_not_require_teaching_documents(question):
     assert "experiment" not in profile.document_types
 
 
+def test_research_subjects_are_not_replaced_by_common_wiki_label(tmp_path):
+    store = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local",
+                                            knowledge_namespace="wiki"))
+    records = [store.add_document(KnowledgeDocumentCreate(
+        title=title, content=content, source_name=f"wiki:source-{index}", tags=["research", "overview"],
+    )) for index, (title, content) in enumerate([
+        ("Wiki | irrelevant long guide", "研究实验 " * 200),
+        ("Wiki | first source", "background " * 200 + "AlphaSystem state ownership"),
+        ("Wiki | second source", "BetaSystem safe composition"),
+    ])]
+    hits = [KnowledgeSearchHit(document_id=record.document_id, title=record.title,
+        excerpt="display excerpt only", source_name=record.source_name, score=1,
+        tags=record.tags) for record in records]
+    selected = store._finalize_hits(hits,
+        _build_query_profile("根据 Wiki 评审 AlphaSystem 与 BetaSystem 研究方向"), 8)
+    assert [hit.document_id for hit in selected] == [records[1].document_id, records[2].document_id]
+    assert store.get_visible_document(records[1].document_id).content == records[1].content
+
+
 @pytest.mark.parametrize("question", ["数据库课程实验说明", "研究生课程的实验要求", "第一个实验怎么做"])
 def test_course_and_unqualified_experiments_keep_teaching_intent(question):
     profile = _build_query_profile(question)

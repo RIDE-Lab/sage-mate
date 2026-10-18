@@ -15,6 +15,7 @@ from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkFailedError
 from sage.runtime.event_journal import EventJournal
 from sage.runtime.source_audit import AnswerValidationRejected, SourceAuditRejected
+from sage.runtime.model_errors import ModelRequestRejected
 from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
 
 from .models import ChatRequest, ChatResponse
@@ -105,6 +106,14 @@ class HttpWorkflow:
         return {terminal.slot: close}
 
     def _failure(self, lease, error):
+        if isinstance(error, ModelRequestRejected):
+            return WorkFailure(error.code)
+        if isinstance(error, FlowRequestOutcomeError) and error.error_type == "ModelRequestRejected":
+            # Only allow safe codes across the serialized worker boundary.
+            code = error.message
+            if code not in {"prompt_capacity", "model_request_invalid", "model_access_denied"}:
+                code = "model_request_invalid"
+            return WorkFailure(code)
         if isinstance(error, SourceAuditRejected) or (
             isinstance(error, FlowRequestOutcomeError)
             and error.error_type == "SourceAuditRejected"

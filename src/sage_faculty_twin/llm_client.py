@@ -26,6 +26,7 @@ from .runtime_env import bootstrap_runtime_env
 bootstrap_runtime_env(require_policy=True, require_fastapi=False)
 
 from sage.serving.integrations import policy as serving_policy
+from sage.runtime.model_errors import model_request_rejection
 
 from .config import AppSettings
 from .thinking_policy import ThinkingCapability, VisibleAnswerFilter, capability_from_tokenization, configured_capability
@@ -71,6 +72,25 @@ _VLLM_METRICS_REFRESH_SECONDS = 5.0
 _THROUGHPUT_WINDOW_SECONDS = 60.0
 _SEGMENT_REUSE_TAG_PREFIX = "segreuse:v1"
 _SEGMENT_REUSE_TAG_SEPARATOR = "||"
+
+
+def _raise_completion_status(response: httpx.Response) -> None:
+    """Classify rejected model requests without retaining provider error bodies."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as error:
+        response = error.response
+        if response.status_code not in {400, 401, 403, 413, 422}:
+            raise
+        response.read()  # Streaming HTTP failures have not buffered their body yet.
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        rejection = model_request_rejection(response.status_code, body)
+        if rejection is not None:
+            raise rejection from None
+        raise
 
 _LUCKY_QUESTION_CONTEXTS = {
     "初次来访",
@@ -1582,7 +1602,7 @@ class VllmChatClient:
                     json=self._wire_payload(payload),
                     **self._request_timeout_kwargs(),
                 ) as response:
-                    response.raise_for_status()
+                    _raise_completion_status(response)
                     for raw_line in response.iter_lines():
                         raise_if_request_cancelled()
                         if not raw_line:
@@ -1850,7 +1870,7 @@ class VllmChatClient:
                         payload,
                         **self._request_timeout_kwargs(),
                     )
-                response.raise_for_status()
+                _raise_completion_status(response)
 
                 data = response.json()
                 emit_trace_event(
@@ -1958,7 +1978,7 @@ class VllmChatClient:
                     continuation_payload,
                     **self._request_timeout_kwargs(),
                 )
-            continuation_response.raise_for_status()
+            _raise_completion_status(continuation_response)
             data = continuation_response.json()
             emit_trace_event(
                 "model_response", {"mode": "continuation", "response": data}
