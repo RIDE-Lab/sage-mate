@@ -1224,6 +1224,7 @@ class FacultyTwinWorkflowSupport:
         planner_comparison: WorkflowPlanComparison | None = None,
         knowledge_retriever: KnowledgeSources | None = None,
         feedback_runtime_provider=None,
+        delivery: DeliveryIntent | None = None,
     ) -> None:
         self._settings = settings
         self._booking_workflows = booking_workflows
@@ -1232,6 +1233,7 @@ class FacultyTwinWorkflowSupport:
         self._conversation_store = conversation_store
         self._analytics_store = analytics_store
         self._feedback_runtime_provider = feedback_runtime_provider
+        self._delivery = delivery
         self._artifact_memory_draft_store = artifact_memory_draft_store
         self._knowledge_gap_draft_store = knowledge_gap_draft_store
         self._escalation_store = escalation_store
@@ -1668,7 +1670,9 @@ class FacultyTwinWorkflowSupport:
                 detail = "管理员对话已进入知识入库模式，但还没有解析出可直接写入知识库的正文内容。"
             else:
                 context.added_knowledge_record = self._knowledge_store.add_document(
-                    knowledge_request
+                    knowledge_request,
+                    operation_id=(f"knowledge-write:{self._delivery.stream_id}"
+                                  if self._delivery is not None else None),
                 )
                 context.answer = self._build_admin_knowledge_success_message(
                     context.added_knowledge_record
@@ -9346,6 +9350,7 @@ class DigitalTwinService:
             shadow_planner_status=shadow_status,
             shadow_planner_message=shadow_message,
             planner_comparison=planner_comparison,
+            delivery=delivery,
         )
         response, context = await asyncio.to_thread(
             self._run_chat_dag_pipeline,
@@ -11722,6 +11727,7 @@ class DigitalTwinService:
         shadow_planner_status: str = "shadow_disabled",
         shadow_planner_message: str | None = None,
         planner_comparison: WorkflowPlanComparison | None = None,
+        delivery: DeliveryIntent | None = None,
     ) -> FacultyTwinWorkflowSupport:
         return FacultyTwinWorkflowSupport(
             self._settings,
@@ -11751,6 +11757,7 @@ class DigitalTwinService:
             planner_comparison=planner_comparison,
             knowledge_retriever=self._knowledge_retriever,
             feedback_runtime_provider=self._get_feedback_runtime,
+            delivery=delivery,
         )
 
     def _record_planner_metrics(

@@ -34,7 +34,8 @@ async def qualify(root):
     async def answer(item, *, admission_guard):
         record = knowledge.add_document(KnowledgeDocumentCreate(
             title="Isolated retry fixture", content="Synthetic public test content",
-            source_name="isolated-retry-fixture"))
+            source_name="isolated-retry-fixture"),
+            operation_id=f"knowledge-write:{item.delivery.stream_id}")
         attempts.append(record.document_id)
         if len(attempts) == 1:
             raise ConnectionError("injected after destination commit, before answer commit")

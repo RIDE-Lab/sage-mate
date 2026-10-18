@@ -484,10 +484,12 @@ class LocalKnowledgeStore:
         payload: KnowledgeDocumentCreate,
         *,
         rebuild_indexes: bool = True,
+        operation_id: str | None = None,
     ) -> KnowledgeDocumentRecord:
-        return self._add_document_locked(payload, rebuild_indexes=rebuild_indexes)
+        return self._add_document_locked(payload, rebuild_indexes=rebuild_indexes,
+                                         operation_id=operation_id)
 
-    def _add_document_locked(self, payload, *, rebuild_indexes):
+    def _add_document_locked(self, payload, *, rebuild_indexes, operation_id=None):
         self._check_source_namespace(payload.source_name)
         self._refresh_documents()
         record = KnowledgeDocumentRecord(
@@ -499,7 +501,13 @@ class LocalKnowledgeStore:
             metadata=_normalize_knowledge_metadata(payload),
             created_at=datetime.now(UTC),
         )
-        self._commit_documents({record.document_id: record})
+        if operation_id is None:
+            self._commit_documents({record.document_id: record})
+        else:
+            record = self._catalog.create_once(operation_id, record,
+                inputs=payload.model_dump(mode="json"), expected_revision=self._catalog_revision)
+            self._last_index_operation = operation_id
+            self._refresh_documents()
         if rebuild_indexes and not self._has_persistent_projection():
             self._rebuild_backend_indexes()
         self._rebuild_link_graph()

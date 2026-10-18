@@ -8,6 +8,7 @@ import weakref
 from uuid import uuid4
 
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.operation_receipts import OperationReceipts
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
 from sagevdb import VersionedDocumentCatalog
@@ -42,6 +43,7 @@ class KnowledgeCatalog:
         self._closing = False
         self.catalog = VersionedDocumentCatalog(self.state, namespace=namespace)
         self.journal = WorkJournal(self.state, namespace=f"knowledge-index:{namespace}")
+        self.receipts = OperationReceipts(self.state, namespace=f"knowledge-create:{namespace}")
         self._imports_slot = ("twin-knowledge-import-v1", namespace, "files")
 
     def bind_projection(self, projection_key):
@@ -186,6 +188,33 @@ class KnowledgeCatalog:
                             tasks={"knowledge_index": payload},
                             mutations=mutations)
         return operation_id
+
+    def create_once(self, operation_id, record, *, inputs, expected_revision):
+        """Replay the original result without restoring subsequently edited data.
+
+        The caller must authorize every call and supply a server-captured,
+        owner-scoped identity. This fences local knowledge state, not an ingress
+        lease in a different database or an external service.
+        """
+        with self._lifecycle_lock:
+            self._assert_open()
+            self._assert_storage()
+            slot, transform = self.catalog.prepare(operation_id, {
+                record.document_id: record.model_dump(mode="json")},
+                expected_revision=expected_revision)
+            payload = {"namespace": self.catalog.namespace, "revision": expected_revision + 1}
+            if self._projection_key is not None:
+                payload["projection_key"] = self._projection_key
+            work = self.journal.prepare_commit(operation_id,
+                result={"revision": expected_revision + 1}, tasks={"knowledge_index": payload})
+
+            def apply(values):
+                return record.model_dump(mode="json"), {
+                    slot: transform(values[slot]), **work.apply(values)}
+
+            saved = self.receipts.commit(operation_id, inputs=inputs,
+                slots=(slot, *work.slots), transition=apply)
+            return KnowledgeDocumentRecord.model_validate(saved)
 
     def import_legacy(self, decode):
         """Import with same-transaction receipts, then archive original bytes."""

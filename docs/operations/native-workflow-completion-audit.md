@@ -31,6 +31,23 @@ Automatic storage alerts and a measured long-term growth budget remain open.
 
 ### Remaining goal evidence
 
+Knowledge-write candidate now pins SAGE a848792 and uses native
+`OperationReceipts`: the document, immutable result, and knowledge-index intent
+commit in one destination transaction. The graph receives the server-captured
+DeliveryIntent; its verified-owner/request digest scopes the write identity.
+The current admin knowledge parser is deterministic, not a model-generated plan.
+Changed payload fails closed. Replaying after a later deletion returns the original
+receipt without resurrecting the document. Unkeyed administrative writes remain
+distinct operations; source names are not idempotency keys.
+
+Isolated results: 33 catalog/index/receipt tests passed (29.25s); after adding
+independent-connection race and real authorized-stage cases, 55 receipt/retrieval/
+admin-auth tests passed (19.63s). The real HttpWorkflow fault qualifier now reports
+two attempts and **one** destination document. Its overall exit remains **1**:
+booking reconstruction still loses the accepted booking. This is partial repair,
+not a release gate pass. Production remains unchanged. Knowledge receipts do not
+provide cross-database ingress cancellation fencing or external email exactly-once.
+
 **New verified correctness gap: pre-answer side effects.** Isolated qualification
 against installed c659c2f used real HttpWorkflow retry and LocalKnowledgeStore,
 injecting a failure after the first document commit and before canonical answer
