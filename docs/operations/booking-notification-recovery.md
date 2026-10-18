@@ -73,8 +73,13 @@ initialization; Twin pins that exact dependency. Deterministic tests fail on the
 old package and pass with the repair, including an actual held database lock,
 deadline exhaustion and eight independent cold connections with 80 updates.
 The related SAGE runtime suite passed 202 tests, and Twin's booking, notification
-and migration group passed 21 tests against the repaired source. Qualification
-of the new installed release remains required before production promotion.
+and migration group passed 21 tests against the repaired source. The frozen
+`cbcb10b` release installed the pinned SAGE package into its own environment;
+four deterministic initialization checks also passed against that installed
+package, without a source-path override. Its complete regression passed
+1,633 tests with the same 31 skips in 358.70 seconds and the same existing
+`test_identity_eval.py` exclusion. No additional tests were skipped to clear
+the startup failure.
 
 The initial collection attempt for `ea724d3`
 selected an unavailable `cpp` memory index because the isolated test index was
@@ -83,3 +88,24 @@ local knowledge, hash embeddings and BM25 memory indexing. This neither changes
 production indexing nor qualifies the unavailable backend. Do not deploy an old
 frontend when promoting the backend: the release must retain `ea724d3` or newer
 identity-specific Wiki question pools.
+
+## Production acceptance for the SQLite repair
+
+Production promoted the complete `cbcb10b` release, retaining the question-pool,
+workflow-status and dark/light workflow-theme repairs. The cutover verified no
+active work and no bookings, stopped the Wiki sync timer and application, then
+backed up both affected SQLite databases through the backup API and checked
+their integrity. Offline receipt migration reported zero legacy/current receipts
+and zero migrated records. No historical notifications were admitted.
+
+After the application reported ready, a public HTTPS request completed before
+the switch was replayed on the new release in 2.12 seconds, retaining its exchange
+ID, answer and source blocks. A fresh public Wiki request completed in 10.14
+seconds; full sources, terminal SSE completion and cross-guest isolation passed,
+and same-request replay took 0.89 seconds. The Wiki timer was restored and the
+installed SAGE commit was verified as `b5abaa80`. Private state backups remain on
+the service host. No inference engine was restarted for this deployment.
+
+These checks qualify this startup repair and release transition. Conversational
+plan capture, cross-store cancellation fencing and the remaining native workflow
+requirements still need their own implementation and acceptance.
