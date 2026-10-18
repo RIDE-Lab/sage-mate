@@ -1547,7 +1547,8 @@ def test_glm4_answer_uses_neutral_sampling_penalties() -> None:
     assert payload["repetition_penalty"] == 1.0
 
 
-def test_non_glm_answer_keeps_configured_sampling_penalties() -> None:
+@pytest.mark.parametrize("neutral_sampling", [False, True])
+def test_non_glm_answer_keeps_configured_sampling_penalties(neutral_sampling) -> None:
     transport = _SequencedHttpxClient([_SequencedChatCompletionResponse("OK")])
     client = _build_retry_test_client(
         AppSettings(
@@ -1565,12 +1566,13 @@ def test_non_glm_answer_keeps_configured_sampling_penalties() -> None:
         enable_thinking=False,
         max_tokens=8,
         use_reuse_hints=False,
+        neutral_sampling=neutral_sampling,
     )
 
     _, payload = transport.calls[0]
-    assert payload["frequency_penalty"] == 0.35
-    assert payload["presence_penalty"] == 0.2
-    assert payload["repetition_penalty"] == 1.08
+    assert payload["frequency_penalty"] == (0.0 if neutral_sampling else 0.35)
+    assert payload["presence_penalty"] == (0.0 if neutral_sampling else 0.2)
+    assert payload["repetition_penalty"] == (1.0 if neutral_sampling else 1.08)
 
 
 def test_answer_question_does_not_drop_thinking_budget_after_server_error() -> None:

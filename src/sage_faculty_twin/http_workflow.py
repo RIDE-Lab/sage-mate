@@ -14,6 +14,8 @@ from sage.runtime.work_dispatcher import WorkFailure
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkFailedError
 from sage.runtime.event_journal import EventJournal
+from sage.runtime.source_audit import SourceAuditRejected
+from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
 
 from .models import ChatRequest, ChatResponse
 from .http_authority import HttpAuthority
@@ -103,6 +105,11 @@ class HttpWorkflow:
         return {terminal.slot: close}
 
     def _failure(self, lease, error):
+        if isinstance(error, SourceAuditRejected) or (
+            isinstance(error, FlowRequestOutcomeError)
+            and error.error_type == "SourceAuditRejected"
+        ):
+            return WorkFailure("source_audit_rejected")
         if isinstance(error, HttpWorkRejected):
             return WorkFailure(error.code)
         if isinstance(error, PermissionError):

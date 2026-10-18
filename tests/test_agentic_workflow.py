@@ -1,8 +1,10 @@
 import asyncio
+import json
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
+from sage.runtime.source_audit import AUDIT_SYSTEM_PROMPT
 
 from sage_faculty_twin.benchmark_adapter import LampQuestionSample, build_lamp_request
 from sage_faculty_twin.config import AppSettings, settings
@@ -96,6 +98,17 @@ class IntentAwareLLMClient:
         **kwargs,
     ) -> str:
         del kwargs
+        if system_prompt == AUDIT_SYSTEM_PROMPT:
+            # Simulate an approving auditor for workflow/basis tests. Negative
+            # verdicts and malformed audits are covered in test_source_audit_gate;
+            # these mocks are not evidence of real-model entailment quality.
+            data = json.loads(user_prompt)
+            source = data["sources"][0]
+            return json.dumps({"digest": data["digest"], "units": [
+                {"id": unit["id"], "verdict": "supported", "evidence": [
+                    {"source_id": source["id"], "quote": source["text"]}
+                ]} for unit in data["units"]
+            ]})
         return self._answer
 
     async def answer_question(self, system_prompt: str, user_prompt: str) -> str:

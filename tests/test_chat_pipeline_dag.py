@@ -399,10 +399,12 @@ def test_canonicalize_keeps_unknown_keys_at_the_end_in_relative_order() -> None:
 
 def test_canonical_trace_order_matches_published_constant() -> None:
     # Sanity check: the constant exposed by service.py contains the same
-    # keys our fixture asserts plus the conditional `artifact_memory_writeback`.
+    # keys our fixture asserts plus conditional memory and full-source audits.
     assert tuple(CANONICAL_CHAT_TRACE) == tuple(
-        key for key in _CANONICAL_TRACE_ORDER if key != "artifact_memory_writeback"
+        key for key in _CANONICAL_TRACE_ORDER
+        if key not in {"artifact_memory_writeback", "source_audit"}
     )
+    assert _CANONICAL_TRACE_ORDER.index("source_audit") < _CANONICAL_TRACE_ORDER.index("memory_persist")
 
 
 # ------------------------- ChatContextMergeFunction --------------------------

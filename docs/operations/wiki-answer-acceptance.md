@@ -26,3 +26,27 @@ Run these against the real embedding/reranker/model stack:
 Record end-to-end latency separately from correctness. An HTTP 200, normal SSE
 termination, or a fast answer alone does not pass the gate. Keep the old-memory
 quarantine and public/private retrieval boundaries intact during validation.
+
+## Source-audit integration
+
+Full-source answers are buffered until `sage.runtime.source_audit` validates a
+complete per-unit audit. The audit sees the same authorized full evidence, with
+titles and public URLs; it cannot fetch additional private documents. The cache
+namespace binds the exact question, answer and sources. Malformed audits and
+transport errors never count as approval. Unsupported statements may use the
+existing single repair, followed by a fresh audit; a prior repair exhausts that
+allowance. The render stage runs this gate before response construction and the
+subsequent durable memory/result commit. Raw audit transcripts are suppressed
+from trace sinks; successful checks expose only aggregate workflow metadata.
+
+Auditing uses neutral repetition penalties because repeated JSON keys and exact
+source quotations are required. Normal answer decoding remains unchanged. This
+does not reduce evidence or the configured output cap. Protocol tests and seeded
+semantic tests are distinct from full Wiki/model/browser acceptance: a model
+auditor is not a proof of truth. Requested hypothetical advice and mixed factual/
+proposal answers still need explicit real-model qualification before rollout.
+
+For loopback HTTP preview probes, preserve the guest cookie across retries in
+the test client. Production cookies remain Secure; ordinary HTTP clients do not
+send them back automatically. Reuse one request ID with the same identity and
+input when querying queued work, rather than admitting a fresh task each time.

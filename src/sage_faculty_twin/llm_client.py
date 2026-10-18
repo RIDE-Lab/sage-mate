@@ -1385,6 +1385,7 @@ class VllmChatClient:
         reasoning_effort: str | None = None,
         use_reuse_hints: bool = True,
         continue_on_length: bool = True,
+        neutral_sampling: bool = False,
     ) -> str:
         if (
             enable_thinking
@@ -1397,7 +1398,7 @@ class VllmChatClient:
             self._settings.llm_answer_temperature if temperature is None else temperature
         )
         model_name = (self.model_name or "").strip().lower()
-        if "glm-4" in model_name:
+        if neutral_sampling or "glm-4" in model_name:
             # GLM-4-32B is highly sensitive to OpenAI-style frequency penalties:
             # even modest values can turn direct answers into prompt echoes,
             # refusals, or repeated fragments. Keep its decoding neutral.
