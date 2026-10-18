@@ -91,6 +91,25 @@ Final source plus agentic-business regression passed 79 tests in 47.04s after
 deadline/lifecycle wiring. This does not substitute for the full frozen-release
 suite or real authenticated browser acceptance.
 
+### Obsolete answer-entry cleanup candidate
+
+Removed `try_fast_answer` and `_build_lightweight_fact_response` after repository
+search found no production caller. These were an obsolete response/delivery route,
+not a second path to keep for compatibility. Structured policy matching tests now
+call the pure policy-response helper directly; they do not claim production
+execution/delivery. Native fact-question tests assert the obsolete methods are
+absent and still require the workflow, durable exchange and memory commit.
+
+The first broader regression exposed stale test doubles: duck-typed requests
+lacked knowledge_sources, the fake intent classifier omitted the existing
+recent_session_context argument, and the shutdown fixture omitted the new source
+graph. Updated those doubles and asserted source-graph shutdown before catalogs;
+the runtime's fail-closed source-selection rule is unchanged. The failed run
+(24 failed, 100 passed, 5 skipped) is retained, pending the corrected rerun.
+
+Corrected regression passed 124 tests with 5 existing skips in 31.38s. The
+Starlette/httpx warning remains. No production deployment occurred for this cleanup.
+
 ## Current release: durable admission and tokenizer qualification (2026-10-18)
 
 Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.

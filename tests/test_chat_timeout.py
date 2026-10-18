@@ -97,7 +97,6 @@ def test_streamed_explicit_deep_chat_uses_long_budget_and_delivers_final_respons
     async def answer(*_args, **_kwargs):
         return ChatResponse(answer="完整研究回答", owner_name="Twin", used_model="Qwen")
 
-    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "answer", answer)
     client.cookies.clear()
     response = client.post(
@@ -130,7 +129,6 @@ def test_streamed_non_deep_chat_keeps_normal_budget(
     async def answer(*_args, **_kwargs):
         return ChatResponse(answer="普通回答", owner_name="Twin", used_model="Qwen")
 
-    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "answer", answer)
     client.cookies.clear()
     response = client.post(
@@ -153,7 +151,6 @@ def test_streamed_chat_does_not_report_failed_answer_as_result(
     async def failed_answer(*_args, **_kwargs):
         raise HTTPException(status_code=503, detail="生成未完成")
 
-    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "answer", failed_answer)
     client.cookies.clear()
     response = client.post(
@@ -178,7 +175,6 @@ def test_chat_does_not_report_failed_answer_as_http_200(
             headers={"Retry-After": "2"},
         )
 
-    monkeypatch.setattr(service, "try_fast_answer", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(service, "answer", failed_answer)
     client.cookies.clear()
     response = client.post(

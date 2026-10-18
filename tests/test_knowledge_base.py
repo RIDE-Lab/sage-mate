@@ -1139,6 +1139,7 @@ def test_service_prompt_includes_retrieved_owner_materials(tmp_path: Path) -> No
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": None,
                 "question": "What should I prepare before a meeting?",
@@ -1179,6 +1180,7 @@ def test_service_prompt_allows_general_accelerator_memory_guidance(tmp_path: Pat
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "guest",
                 "course_context": None,
                 "visitor_profile": "general_visitor",
@@ -1207,6 +1209,7 @@ def test_service_prompt_keeps_private_materials_out_of_materialized_prefix(
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": None,
                 "visitor_profile": "lab_member",
@@ -1238,6 +1241,7 @@ def test_service_prompt_enforces_team_knowledge_answer_boundary(tmp_path: Path) 
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Member",
                 "course_context": None,
                 "visitor_profile": "lab_member",
@@ -1287,10 +1291,10 @@ def test_structured_team_policy_fast_response_is_member_only_and_cited(
     )
     monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [hit])
 
-    member = service.try_fast_answer(
+    member = service._build_structured_team_policy_response(
         ChatRequest(student_name="Member", visitor_profile="lab_member", question="季度有哪些奖项？")
     )
-    guest = service.try_fast_answer(
+    guest = service._build_structured_team_policy_response(
         ChatRequest(
             student_name="Guest",
             visitor_profile="general_visitor",
@@ -1356,7 +1360,7 @@ def test_structured_knowledge_fast_response_supports_strict_string_metadata(
     )
 
     monkeypatch.setattr(service._knowledge_store, "search", lambda *args, **kwargs: [member_hit])
-    member = service.try_fast_answer(
+    member = service._build_structured_team_policy_response(
         ChatRequest(
             student_name="Member",
             visitor_profile="lab_member",
@@ -1364,7 +1368,7 @@ def test_structured_knowledge_fast_response_supports_strict_string_metadata(
             deep_thinking=False,
         )
     )
-    guest = service.try_fast_answer(
+    guest = service._build_structured_team_policy_response(
         ChatRequest(
             student_name="Guest",
             visitor_profile="general_visitor",
@@ -1383,7 +1387,7 @@ def test_structured_knowledge_fast_response_supports_strict_string_metadata(
     wiki = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path/'wiki', knowledge_backend='local', knowledge_namespace='wiki'))
     service._knowledge_retriever.wiki = wiki
     monkeypatch.setattr(wiki, "search", lambda *args, **kwargs: [public_hit])
-    public = service.try_fast_answer(
+    public = service._build_structured_team_policy_response(
         ChatRequest(
             student_name="Guest",
             visitor_profile="general_visitor",
@@ -1411,6 +1415,7 @@ def test_service_materialized_context_uses_stable_hit_order(tmp_path: Path) -> N
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": None,
                 "visitor_profile": "lab_member",
@@ -1453,6 +1458,7 @@ def test_service_prompt_filters_teaching_materials_for_research_queries(
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": None,
                 "question": "你主要研究什么？",
@@ -1684,6 +1690,7 @@ def test_service_prompt_adds_meeting_preparation_checklist_guidance(
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "和老师约时间前，我应该先准备什么？",
@@ -1722,6 +1729,7 @@ def test_mixed_joining_question_repeats_owner_facts_next_to_question(tmp_path: P
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": question,
@@ -1770,6 +1778,7 @@ def test_service_prompt_adds_project_scoping_guidance(tmp_path: Path) -> None:
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "老师，我现在想做一个跟推理系统有关的项目。如果题目太大，您一般会建议怎么收窄？",
@@ -1799,6 +1808,7 @@ def test_service_prompt_adds_draft_feedback_guidance(tmp_path: Path) -> None:
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "老师，我下周想带一个初稿来请您看。在您看之前，我自己最好先整理哪些信息，能让反馈更集中？",
@@ -1883,6 +1893,7 @@ def test_service_prompt_adds_teaching_question_logistics_guidance(
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "LaMP personalization benchmark",
                 "question": "结合我的情况，我下次问课上问题时应该先整理哪几类信息？作业里端到端性能分析不清楚，而且问题比较碎。",
@@ -1915,6 +1926,7 @@ def test_service_prompt_adds_publication_entry_guidance(tmp_path: Path) -> None:
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "如果我想从您的研究里先挑一个主题开始读，哪类会更适合我？我想先建立主线理解。",
@@ -1943,6 +1955,7 @@ def test_service_prompt_adds_follow_up_next_step_guidance(tmp_path: Path) -> Non
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "上次已被建议按主题整理问题，我现在已经整理成三类。按我现在的进展，下一步更适合先发邮件还是继续补实验？",
@@ -1976,6 +1989,7 @@ def test_service_prompt_adds_course_research_boundary_guidance(tmp_path: Path) -
             "Request",
             (),
             {
+                "knowledge_sources": None,
                 "student_name": "Alice",
                 "course_context": "科研指导",
                 "question": "老师，我既想问课程作业，也想顺便聊下研究。这种情况您一般建议一次都问完，还是分开准备？",

@@ -52,6 +52,7 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
             _post_answer_observers={asyncio.create_task(observe())},
             _chat_finalizer=lambda: calls.append("chat_close"),
             _retrieval_finalizer=lambda: calls.append("retrieval_close"),
+            _knowledge_retriever=SimpleNamespace(close=lambda: calls.append('source_graph_close')),
             _knowledge_store=SimpleNamespace(close=lambda: calls.append("private_close")),
             _wiki_store=SimpleNamespace(close=lambda: calls.append("wiki_close")),
             _llm_client=SimpleNamespace(aclose=close_llm),
@@ -60,7 +61,7 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
 
     asyncio.run(driver())
     assert calls == ["feedback_close", "feedback_detach", "drain", "observed", "close", "detach", "chat_close",
-                     "retrieval_close", "private_close", "wiki_close", "llm_close"]
+                     "retrieval_close", "source_graph_close", "private_close", "wiki_close", "llm_close"]
 
 
 def test_start_recovers_both_knowledge_sources_before_post_answer_work():
@@ -113,6 +114,7 @@ class _FastLLMClient:
         self,
         question: str,
         course_context: str | None = None,
+        recent_session_context: str | None = None,
     ) -> InteractionIntent:
         return InteractionIntent(
             action="answer",
@@ -238,10 +240,8 @@ def test_fact_question_uses_unified_execution_and_commit(tmp_path, monkeypatch):
     service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
     service._llm_client = _FastLLMClient("当前证据不足以确认，请查看公开 Wiki。")
 
-    def forbidden_shortcut(*args, **kwargs):
-        raise AssertionError("fact response bypassed SAGE workflow")
-
-    monkeypatch.setattr(service, "_build_lightweight_fact_response", forbidden_shortcut)
+    assert not hasattr(service, 'try_fast_answer')
+    assert not hasattr(service, '_build_lightweight_fact_response')
     response = asyncio.run(service.answer(ChatRequest(
         student_name="Alice", question="张老师是谁？", conversation_id="fact-unified",
     )))

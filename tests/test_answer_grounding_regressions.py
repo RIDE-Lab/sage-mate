@@ -240,11 +240,10 @@ def test_excerpt_uses_numbered_plain_text_line_without_markdown():
     assert "Slide 33" not in excerpt
 
 
-def test_constrained_fact_query_requires_model_formatting(tmp_path):
+def test_fact_queries_have_no_alternate_response_entrypoint(tmp_path):
     service = DigitalTwinService(AppSettings(_env_file=None, knowledge_base_dir=tmp_path))
-    assert service._build_lightweight_fact_response(ChatRequest(
-        student_name="test", question="用两句话介绍张书豪老师研究方向", deep_thinking=False
-    )) is None
+    assert not hasattr(service, '_build_lightweight_fact_response')
+    assert not hasattr(service, 'try_fast_answer')
 
 
 def test_compact_path_never_drops_selected_evidence(tmp_path):
@@ -441,7 +440,6 @@ async def test_skill_answer_uses_same_support_builder_as_workflow(tmp_path, monk
         )
     )
     monkeypatch.setattr(service, "_build_lightweight_chat_response", lambda _: None)
-    monkeypatch.setattr(service, "_build_lightweight_fact_response", lambda _: None)
     monkeypatch.setattr(service, "_is_light_request", lambda _: False)
     skill = SimpleNamespace(skill_id="profile")
     service._skill_router = SimpleNamespace(match=lambda _: skill)
