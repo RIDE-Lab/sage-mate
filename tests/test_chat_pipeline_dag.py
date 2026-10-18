@@ -290,6 +290,7 @@ def test_booking_with_full_details_keeps_canonical_trace_order(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-booking",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             )
         )

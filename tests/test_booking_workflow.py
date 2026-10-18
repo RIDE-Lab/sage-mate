@@ -99,6 +99,17 @@ def test_rejected_plan_retains_contact_but_collects_a_new_time(tmp_path):
         meeting.close()
 
 
+def test_fallback_topic_cannot_replace_a_previously_captured_value(tmp_path):
+    meeting = store(tmp_path)
+    try:
+        capture(meeting, changes={**fields(), "student_email": None})
+        plan = meeting.workflows.capture(OWNER, CONVERSATION, "email", inputs={"question": "email"},
+            fields={"student_email": "fixture@example.test"}, topic_default="Generic course context")
+        assert plan.request.topic == "Synthetic"
+    finally:
+        meeting.close()
+
+
 def test_conflicting_input_and_failed_capture_leave_no_partial_plan(tmp_path, monkeypatch):
     meeting = store(tmp_path)
     try:
@@ -271,6 +282,7 @@ def test_real_chat_restart_retries_captured_plan_without_reparsing(tmp_path, mon
         response = asyncio.run(recovered.answer(request, delivery=delivery))
         assert response.booking_result.accepted
         assert response.booking_result.booking.start_at == datetime(2030, 1, 7, 10)
+        assert response.booking_result.booking.topic == "论文进展"
         assert len(recovered._meeting_service.list_bookings()) == 1
         rows, _ = recovered._meeting_service._notifications.journal.records()
         assert len(rows) == 1

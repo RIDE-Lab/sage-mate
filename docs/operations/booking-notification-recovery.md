@@ -54,6 +54,9 @@ HTTP/Slack adapters continue to capture and reauthorize the actual channel owner
 Before an effect, SAGE OperationReceipts atomically stores the updated draft and
 an immutable decision for the owner-scoped delivery identity. The decision holds
 missing fields or the complete typed booking request, including resolved dates.
+Explicit topic updates may replace a draft topic; suggestions/defaults only fill
+an empty value inside the transaction. Contact/time-only follow-ups preserve an
+already captured topic, including when another turn updated it concurrently.
 Retry validates the original request digest and reuses that decision without
 reparsing fields. If a client omits a conversation ID, the conversation identity
 is derived from the delivery identity so the same request survives restart.

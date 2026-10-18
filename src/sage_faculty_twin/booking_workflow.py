@@ -69,7 +69,7 @@ class BookingWorkflows:
         saved = self._state_provider().peek(("twin-booking-plans-v1", owner_id, identity))
         return BookingDecision.model_validate(saved) if saved else None
 
-    def capture(self, owner_id, conversation_id, operation_id, *, inputs, fields):
+    def capture(self, owner_id, conversation_id, operation_id, *, inputs, fields, topic_default=None):
         identity = self._identity(owner_id, operation_id)
         draft_slot = self._draft_slot(owner_id, conversation_id)
         plan_slot = ("twin-booking-plans-v1", owner_id, identity)
@@ -81,6 +81,10 @@ class BookingWorkflows:
             state = BookingWorkflowState.model_validate({
                 **(previous["state"] if previous else {}), **fields,
             })
+            # Suggested defaults never replace a previously captured value,
+            # including a draft changed after the caller's preliminary read.
+            if not state.topic and topic_default:
+                state.topic = topic_default
             missing = [name for name in ("student_email", "preferred_start", "topic")
                        if not getattr(state, name)]
             request = None if missing else BookingRequest.model_validate(state.model_dump())

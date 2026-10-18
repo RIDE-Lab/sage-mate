@@ -1496,6 +1496,7 @@ class FacultyTwinWorkflowSupport:
             return context
 
         fields = {"student_name": request.student_name}
+        topic_default = None
         if captured is None:
             if request.student_email:
                 fields["student_email"] = request.student_email.strip()
@@ -1507,11 +1508,14 @@ class FacultyTwinWorkflowSupport:
                 fields["preferred_start"] = extracted_start
                 fields["preferred_end"] = extracted_end or (
                     extracted_start + timedelta(minutes=self._settings.meeting_duration_minutes))
-            extracted_topic = self._extract_topic(request.question, request.course_context)
+            extracted_topic = self._extract_topic(request.question, request.course_context,
+                explicit_only=True)
             if extracted_topic:
                 fields["topic"] = extracted_topic
-            elif (existing_state is None or existing_state.topic is None) and request.course_context:
-                fields["topic"] = request.course_context.strip()
+            elif existing_state is None:
+                topic_default = self._extract_topic(request.question, request.course_context)
+            elif request.course_context:
+                topic_default = request.course_context.strip()
         # Even a replay must verify original request identity through the receipt;
         # parser output is deliberately not regenerated for a captured decision.
         decision = self._booking_workflows.capture(
@@ -1519,6 +1523,7 @@ class FacultyTwinWorkflowSupport:
             inputs=request.model_dump(mode="json", include={
                 "student_name", "student_email", "question", "course_context"}),
             fields=fields,
+            topic_default=topic_default,
         )
         state = decision.state
         context.booking_decision = decision
@@ -8490,7 +8495,7 @@ class FacultyTwinWorkflowSupport:
             return digits.get(tens_text, 1) * 10 + digits.get(ones_text, 0)
         return digits.get(text, 0)
 
-    def _extract_topic(self, question: str, course_context: str | None) -> str | None:
+    def _extract_topic(self, question: str, course_context: str | None, *, explicit_only=False) -> str | None:
         explicit_patterns = (
             r"(?:讨论|聊聊|沟通|关于)\s*([^，。！？?]+)",
             r"主题(?:是|为)?\s*([^，。！？?]+)",
@@ -8501,6 +8506,9 @@ class FacultyTwinWorkflowSupport:
                 topic = match.group(1).strip()
                 if topic:
                     return topic[:256]
+
+        if explicit_only:
+            return None
 
         cleaned = question
         cleaned = re.sub(
