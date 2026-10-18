@@ -123,3 +123,44 @@ task after migration, preserved completed receipts/full attachments/canonical
 answers, and allowed the current version to re-enable capacity. No production
 policy was changed. This avoids restoring an old snapshot over new user data;
 it is an offline recovery tool, not a second execution path.
+
+## Production cutover (2026-10-18)
+
+Final frozen Twin `d3fa3fb` / SAGE `b46054f` passed 1563 tests, 31 existing skips
+in 333.25s. The identity-evaluation exclusion and Starlette warning are unchanged.
+Control-plane `a5928e8` was installed in an independent pinned environment; installed
+router/admission source hashes matched the release and its standalone regression
+passed before switching the current symlink. No GPU engine, model, credentials or
+routing configuration changed.
+
+With Wiki synchronization stopped and no pending/running work, the app stopped
+gracefully, the state database was backed up, and SAGE configured HTTP and Slack
+ingress namespaces with limit 8 each. Nonsecret release pointers were installed,
+the app became ready, and the Wiki timer was restored. Read-only policy inspection
+found both limits persisted, active lists empty, SQLite integrity OK. Ownership
+inspection found 12 records and 22 profiles, none without owner, and no legacy
+import directory. Quarantined test/unknown records were not imported or deleted.
+
+Mac-origin public original onboarding QA passed before/after cutover in
+6.90s/11.26s. All three selected complete source bodies matched the independent
+canonical public catalog, full source links were present, and no Prompt Engineering
+source was selected. Overview QA passed in 5.69s with terminal SSE and cross-guest
+denial. These are observed warm/cache-mixed requests, not a latency benchmark.
+A100-origin public probing failed with TLS ConnectTimeout and a separate curl
+DNS-resolution timeout; this is retained as a failed network-path probe, not
+counted as a successful API check.
+
+After a drained controlled application restart, the same public request returned
+200 in 2.37s with identical canonical answer and exchange ID. Two real research
+questions (StateAxis review and ECPA/StateAxis validation boundaries) passed in
+10.20s and 8.70s. Both preserved the independently compared complete system-overview
+source and labelled suggestions as non-source inference. Manual output review found
+no claim that unpublished measurements imply experiments were never performed.
+The second answer used English experiment-field labels in otherwise Chinese text;
+this remains a presentation-quality limitation, not a factual-boundary failure.
+These checks qualify the observed questions, not arbitrary model reasoning.
+
+Rollback must stop all writers and use current SAGE `disable_capacity()` before
+starting old pre-v6 binaries; do not overwrite new answers with the backup.
+Candidate retrieval precision, real Slack delivery, visual browser acceptance,
+and broader storage/retention policy remain distinct open items.

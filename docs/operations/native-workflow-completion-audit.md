@@ -1,6 +1,16 @@
 # Native workflow completion audit
 
-## Current status: source-plan production acceptance (2026-10-18)
+## Current release: durable admission and tokenizer qualification (2026-10-18)
+
+Production now runs Twin `d3fa3fb`, SAGE `b46054f`, and control-plane `a5928e8`.
+The receipt in [work-capacity-acceptance.md](work-capacity-acceptance.md)
+supersedes the historical deployment and unimplemented-capacity statements below.
+HTTP and Slack ingress each have a persisted active-request limit of 8. This is
+not a bound on every background namespace, storage bytes or retained history.
+No history retention/deletion policy was introduced. Real Slack delivery and
+browser visual confirmation remain separate, open acceptance gates.
+
+## Previous status: source-plan production acceptance (2026-10-18)
 
 Production code is Twin `50306a7` with SAGE `f3ecd85`. The full receipt is
 [`research-source-plan-acceptance-20261018.md`](../research-source-plan-acceptance-20261018.md).
