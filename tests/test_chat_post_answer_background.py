@@ -55,13 +55,14 @@ def test_shutdown_keeps_journal_open_until_result_observers_finish():
             _knowledge_retriever=SimpleNamespace(close=lambda: calls.append('source_graph_close')),
             _knowledge_store=SimpleNamespace(close=lambda: calls.append("private_close")),
             _wiki_store=SimpleNamespace(close=lambda: calls.append("wiki_close")),
+            _meeting_service=SimpleNamespace(close=lambda: calls.append("meeting_close")),
             _llm_client=SimpleNamespace(aclose=close_llm),
         )
         await DigitalTwinService.aclose(fake)
 
     asyncio.run(driver())
     assert calls == ["feedback_close", "feedback_detach", "drain", "observed", "close", "detach", "chat_close",
-                     "retrieval_close", "source_graph_close", "private_close", "wiki_close", "llm_close"]
+                     "retrieval_close", "source_graph_close", "private_close", "wiki_close", "meeting_close", "llm_close"]
 
 
 def test_start_recovers_both_knowledge_sources_before_post_answer_work():
