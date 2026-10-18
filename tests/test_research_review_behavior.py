@@ -28,6 +28,16 @@ FIRST_TURN_SCENARIOS = (
 )
 
 
+@pytest.mark.parametrize("question", [
+    "说明两个系统的研究区别，并列出可以证伪安全性与性能假设的不同实验。",
+    "为这个机制设计对照实验。",
+    "Propose controlled experiments to falsify this hypothesis.",
+])
+def test_explicit_experiment_design_requests_enable_research_analysis(question):
+    assert is_research_review_request(question, domain="research")
+    assert not is_research_review_request(question, domain="teaching")
+
+
 @pytest.mark.parametrize("question", FIRST_TURN_SCENARIOS)
 def test_first_turn_research_reviews_receive_the_full_contract(question: str) -> None:
     guidance = build_research_review_guidance(question, domain="research")

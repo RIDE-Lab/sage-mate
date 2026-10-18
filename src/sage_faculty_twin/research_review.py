@@ -32,6 +32,11 @@ _REVIEW_ACTION_MARKERS = (
     "怎么推进",
     "能否作为",
     "负结果",
+    "证伪",
+    "实验设计",
+    "设计对照",
+    "falsif",
+    "controlled experiment",
     "review",
     "research idea",
     "negative result",
@@ -59,6 +64,8 @@ _RESEARCH_OBJECT_MARKERS = (
     "方案",
     "论文",
     "实验",
+    "experiment",
+    "hypothes",
 )
 
 _REPORTED_EVIDENCE_MARKERS = (
