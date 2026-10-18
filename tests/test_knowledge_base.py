@@ -1634,10 +1634,13 @@ def test_owner_method_retrieval_query_requires_authenticated_lab_profile(tmp_pat
     assert support._owner_method_retrieval_queries(unrelated) == ()
 
 
-def test_explicit_owner_method_bypasses_generic_curated_direction_answer() -> None:
+def test_explicit_owner_method_uses_retrieval_after_curated_path_removal(tmp_path: Path) -> None:
     question = "请按七问研究方法评价候选研究方向是否值得继续，并检查 baseline、公平对比和消融。"
-
-    assert not FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(question)
+    support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
+    request = ChatRequest(student_name="Alice", question=question, visitor_profile="lab_member")
+    assert not hasattr(FacultyTwinWorkflowSupport, "_should_use_curated_direction_evaluation")
+    assert support._owner_method_retrieval_queries(request)
+    assert support._build_fallback_interaction_intent(request).domain == "research"
 
 
 def test_service_drops_scope_matched_hit_without_query_evidence(tmp_path: Path) -> None:
