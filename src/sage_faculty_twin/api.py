@@ -2052,9 +2052,11 @@ async def stream_chat(
                     yield ": keepalive\n\n"
                     continue
                 except HTTPException as exc:
+                    error_event = {"type": "error", "status": exc.status_code, "detail": exc.detail}
+                    if code := (exc.headers or {}).get("X-Sage-Error-Code"):
+                        error_event["code"] = code
                     yield "data: " + json.dumps(
-                        {"type": "error", "status": exc.status_code, "detail": exc.detail,
-                         "code": (exc.headers or {}).get("X-Sage-Error-Code")},
+                        error_event,
                         ensure_ascii=False,
                     ) + "\n\n"
                     break

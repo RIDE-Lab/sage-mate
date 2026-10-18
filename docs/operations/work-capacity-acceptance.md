@@ -41,3 +41,33 @@ exercise overload/recovery end-to-end in an isolated service; deploy during a
 quiescent maintenance boundary. Do not independently quota downstream finalizers
 in a way that prevents already-admitted requests from completing. No TTL,
 canonical history deletion or quarantine changes are part of this integration.
+
+## Frozen candidate and real-model gate (2026-10-18)
+
+Independent CPython3.11 release f8f96ec installed147 frozen packages with exact
+SAGEd00ee1e (no source overlay). Full regression:1562passed,1failed,31existing
+skips in336.11s, with the existing identity-evaluation exclusion unchanged.
+The failure was an unintended `code: null` field on ordinary SSE errors. The
+fix emits the optional code only when present; the old exact assertion is kept.
+Five frontend groups passed on that release.
+
+The isolated real-model capacity1 canary did observe a truthful second-request
+429 rejection, but the first request returned413, so the complete canary FAILED.
+Question: new members' first-month research steps with complete source links.
+Diagnostic-only isolated tracing showed102024source-plan characters: the907-char
+onboarding guide, a2937-char research-method page, a2665-char public index and
+five unrelated17489–17995-char Prompt Engineering chunks. Upstream returned400
+classified as prompt_capacity. The diagnostic regex captured no numeric token
+count, so no exact required-context number is claimed.
+
+Read-only inspection of the running control-plane release
+`native-budget-router-20261015` confirmed admission estimates complete JSON UTF8
+bytes/2, not actual tokenizer counts. This may contribute to conservative
+rejection; actual tokenizer comparison is still needed. Its deployed directory
+has no Git metadata, so a commit identity has not been inferred from its name.
+
+The clean preview and temporary diagnostic services are stopped (MainPID0).
+Production app/router/model services were not changed. Do not deploy on this
+failed QA gate or solve it by truncating sources, lowering output budgets, or
+substituting an easier question. Relevance and tokenizer-aware admission remain
+to be resolved before repeating this same end-to-end canary.
