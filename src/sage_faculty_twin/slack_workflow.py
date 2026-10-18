@@ -15,6 +15,8 @@ from sage.runtime.async_work_service import AsyncWorkService
 from sage.runtime.event_journal import EventJournal
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_dispatcher import WorkFailure
+from sage.runtime.source_audit import AnswerValidationRejected
+from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
 
 from .post_answer_contract import DeliveryIntent
 from .models import ChatResponse
@@ -108,6 +110,11 @@ class SlackWorkflow:
         self._started = False
 
     def _classify_failure(self, lease, error):
+        if isinstance(error, AnswerValidationRejected) or (
+            isinstance(error, FlowRequestOutcomeError)
+            and error.error_type in {"SourceAuditRejected", "AnswerValidationRejected", "InvalidSourcePlan"}
+        ):
+            return WorkFailure("answer_validation_rejected")
         status = getattr(error, "status_code", getattr(error, "code", None))
         permanent = isinstance(error, (ValueError, PermissionError)) or (
             isinstance(status, int) and 400 <= status < 500 and status not in {408, 429}

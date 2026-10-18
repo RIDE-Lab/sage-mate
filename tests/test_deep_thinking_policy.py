@@ -239,6 +239,19 @@ def test_one_experiment_does_not_require_a_numbered_list() -> None:
     assert not _answer_does_not_complete_requested_task(question, answer)
 
 
+def test_shared_citation_host_is_not_repeated_prose() -> None:
+    answer = (
+        "先阅读[论文方法](https://lab.example.org/wiki/method/)。\n"
+        "再完成[可复现实验](https://lab.example.org/wiki/reproduce/)。\n"
+        "接着记录[失败与变量](https://lab.example.org/wiki/failures/)。\n"
+        "最后提交[验收材料](https://lab.example.org/wiki/report/)。"
+    )
+    assert not FacultyTwinWorkflowSupport._is_degenerate_answer(answer)
+    assert FacultyTwinWorkflowSupport._is_degenerate_answer(
+        answer + "必须认真记录失败。" * 3
+    )
+
+
 def test_degenerate_answer_detection_keeps_substantive_answer_with_uncertainty() -> None:
     answer = (
         "当前公开资料能够确认三层协作关系。SAGE 位于应用层，负责组织知识检索、"

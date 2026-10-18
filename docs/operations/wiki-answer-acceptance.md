@@ -27,24 +27,50 @@ Record end-to-end latency separately from correctness. An HTTP 200, normal SSE
 termination, or a fast answer alone does not pass the gate. Keep the old-memory
 quarantine and public/private retrieval boundaries intact during validation.
 
-## Source-audit integration
+## Source-constrained answer plan
 
-Full-source answers are buffered until `sage.runtime.source_audit` validates a
-complete per-unit audit. The audit sees the same authorized full evidence, with
-titles and public URLs; it cannot fetch additional private documents. The cache
-namespace binds the exact question, answer and sources. Malformed audits and
-transport errors never count as approval. Unsupported statements may use the
-existing single repair, followed by a fresh audit; a prior repair exhausts that
-allowance. The render stage runs this gate before response construction and the
-subsequent durable memory/result commit. Raw audit transcripts are suppressed
-from trace sinks; successful checks expose only aggregate workflow metadata.
+Full-source facts use `sage.runtime.source_answer_plan`, not free factual
+generation followed by a model judging its own paraphrase. The model selects
+authorized source IDs; SAGE renders the selected documents verbatim, including
+complete paragraphs, qualifications, Markdown and links. Version 1 selects whole
+documents to avoid dropping a qualifier, reference definition or later list item.
+It may be longer than a synthesis; it must not silently truncate.
 
-Auditing uses neutral repetition penalties because repeated JSON keys and exact
-source quotations are required. Normal answer decoding remains unchanged. This
-does not reduce evidence or the configured output cap. Protocol tests and seeded
-semantic tests are distinct from full Wiki/model/browser acceptance: a model
-auditor is not a proof of truth. Requested hypothetical advice and mixed factual/
-proposal answers still need explicit real-model qualification before rollout.
+The plan digest binds question, full authorized source snapshot and inference
+policy. Strict JSON rejects unknown/duplicate IDs, extra fields and stale plans.
+Final rendering is independently rechecked before response construction and
+durable commit. Only selected sources appear in answer basis; other retrieval
+hits are not presented as support. Empty selection states insufficient evidence,
+not that the fact does not exist. The raw internal transcript is never streamed.
+
+Research-review requests may have a separately labelled inference/advice section;
+ordinary Wiki fact questions disallow it. Verbatim provenance does not establish
+source truth, relevance or coverage: test those with real questions separately.
+The same SAGE workflow is used for generation, delivery and persistence; there is
+no semantic-audit fallback or second legacy Wiki pipeline.
+
+Isolated live acceptance on 2026-10-18: systems overview 6.06s, new-member guide
+3.95s; all three routes, both cross-cutting systems, four steps and completion
+conditions preserved. Browser guide 5.2s, complete Markdown and default-collapsed
+single-source basis; reload/history restored without re-asking. Initial footer
+autolink syntax was rendered as literal text; changed to explicit Markdown link
+and browser recheck passed (5.3s, clickable full source, all four steps). An
+open-ended research-directions question also selected the correct overview (7.8s).
+These observations alone are not production
+cutover or frozen-release acceptance.
+
+Exhausted quality repairs are terminal in both HTTP and Slack durable workflows;
+they must not be retried as transport failures. Public HTTP status remains 503.
+Repeated URL destinations are excluded from prose repetition checks, while
+actual repeated sentences remain invalid.
+
+The superseded semantic-auditor qualification **did not pass**: both bulk and independently
+focused model audits have incorrectly approved an inference from an interpretation
+warning to product maturity. A separate multilingual NLI control also falsely
+entailed missing experiments from absent displayed data. Neither extra prompting,
+long native reasoning nor combining model scores is an accepted replacement for
+full-source negative controls. Do not deploy based on protocol tests or short
+synthetic cases alone; preserve these negative controls during further work.
 
 For loopback HTTP preview probes, preserve the guest cookie across retries in
 the test client. Production cookies remain Secure; ordinary HTTP clients do not

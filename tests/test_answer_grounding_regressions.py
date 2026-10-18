@@ -265,12 +265,14 @@ def test_caveat_does_not_delete_valid_support():
     context = SimpleNamespace(
         answer="已知结论来自这篇论文。对其它模型的资料不足，需要进一步实验。",
         added_knowledge_record=None, knowledge_hits=[hit("paper", ["publication"])],
-        web_search_hits=[], memory_hits=[],
+        web_search_hits=[], memory_hits=[], source_answer_plan=None,
     )
     assert len(support._build_answer_basis(context)) == 1
 
 
-def test_structured_fast_answer_has_complete_budget_and_failed_repair_is_503(tmp_path):
+def test_structured_fast_answer_has_complete_budget_and_failed_repair_is_terminal(tmp_path):
+    from sage.runtime.source_audit import AnswerValidationRejected
+    from sage_faculty_twin.http_workflow import public_http_failure
     support = object.__new__(FacultyTwinWorkflowSupport)
     support._settings = AppSettings(_env_file=None, knowledge_base_dir=tmp_path)
     calls = []
@@ -287,10 +289,9 @@ def test_structured_fast_answer_has_complete_budget_and_failed_repair_is_503(tmp
         knowledge_hits=[hit("paper", ["research"])],
     )
     assert support._build_llm_serving_policy_context(context)["max_tokens"] == 16384
-    with pytest.raises(HTTPException) as exc_info:
+    with pytest.raises(AnswerValidationRejected):
         support._retry_answer_with_compact_prompt(context)
-    assert exc_info.value.status_code == 503
-    assert exc_info.value.headers == {"Retry-After": "2"}
+    assert public_http_failure("answer_validation_rejected")[0] == 503
     assert len(calls) == 1
     assert "长上下文推理" in calls[0]  # repair preserved its original evidence
     assert len(context.knowledge_hits) == 1

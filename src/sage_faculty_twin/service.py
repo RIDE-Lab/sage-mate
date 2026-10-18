@@ -24,8 +24,11 @@ from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
 from sage.runtime import FlowNetEnvironment
 from sage.runtime.work_journal import PreparedLeaseGuard
 from sage.runtime.source_audit import (
-    AUDIT_SYSTEM_PROMPT, InvalidSourceAudit, SourceAuditRejected,
-    prepare_source_audit, validate_source_audit,
+    AnswerValidationRejected, SourceAuditRejected,
+)
+from sage.runtime.source_answer_plan import (
+    PLAN_SYSTEM_PROMPT, PlanSource, SourceAnswerPlan,
+    prepare_source_plan, render_source_plan, validate_source_plan,
 )
 
 from . import __version__ as _app_version
@@ -1055,6 +1058,7 @@ class ChatWorkflowContext:
     decision_mode: str = "direct_answer"
     answer: str | None = None
     source_audit_digest: str | None = None
+    source_answer_plan: SourceAnswerPlan | None = None
     answer_repair_attempted: bool = False
     system_prompt: str | None = None
     user_prompt: str | None = None
@@ -2716,6 +2720,9 @@ class FacultyTwinWorkflowSupport:
 
     def answer_with_llm(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
+        if context.route == "answer" and self._requires_source_audit(context):
+            self._prepare_source_answer(context)
+            return context
         if context.route != "answer" or context.answer is not None:
             self._append_trace(
                 context,
@@ -3769,10 +3776,8 @@ class FacultyTwinWorkflowSupport:
         _logger.error("LLM compact retry failed: %s", ",".join(errors))
         # Do not turn an incomplete upstream generation into HTTP 200/stop.
         # The API records this as an error and the UI can offer a real retry.
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="本轮回答未能完整生成或通过校验，请稍后重试或缩小问题范围。",
-            headers={"Retry-After": "2"},
+        raise AnswerValidationRejected(
+            "本轮回答未能完整生成或通过校验，请稍后重试。",
         )
 
     def _call_compact_retry_sync(
@@ -4093,6 +4098,11 @@ class FacultyTwinWorkflowSupport:
             "",
             text,
         )
+        # Repeated URL hosts are citations, not repeated prose. In particular,
+        # sentence splitting on '.' previously counted a shared hostname as a
+        # repeated sentence and rejected otherwise complete sourced answers.
+        # Preserve link labels and all surrounding prose for repetition checks.
+        repetition_text = re.sub(r"https?://[^\s<>\"')\]]+", "", repetition_text)
         compact = re.sub(r"\s+", "", repetition_text)
         if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", compact):
             return True
@@ -4141,7 +4151,7 @@ class FacultyTwinWorkflowSupport:
         # Numbered Markdown headings such as "#### 2.1" and "#### 2.2"
         # share the fragment "#### 2" when splitting on periods. They are
         # structure, not three repeated answer sentences.
-        sentence_check_text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", text)
+        sentence_check_text = re.sub(r"(?m)^\s*#{1,6}\s+.*$", "", repetition_text)
         sentence_fragments = [
             fragment.strip()
             for fragment in re.split(r"[。！？.!?]+", sentence_check_text)
@@ -4432,68 +4442,56 @@ class FacultyTwinWorkflowSupport:
         return any(hit.source_content is not None for hit in context.knowledge_hits)
 
     def _validate_source_answer(self, context: ChatWorkflowContext) -> None:
-        """Audit the exact final draft before response construction or durable commit.
-
-        Only already-authorized evidence is passed. Never log the audit body.
-        Repaired drafts receive a new digest and an independent audit. Transport
-        failures and cancellation propagate, never accepting the original draft.
-        """
+        """Verify the exact source-constrained rendering before durable commit."""
         if not self._requires_source_audit(context):
+            if context.source_answer_plan is not None:
+                raise SourceAuditRejected("来源集合在回答期间发生变化。")
             return
+        request = self._source_plan_request(context)
+        if context.source_answer_plan is None or context.answer != render_source_plan(request, context.source_answer_plan):
+            raise SourceAuditRejected("回答与来源约束计划不一致，未发布。")
+        context.source_audit_digest = request.digest
+
+    @staticmethod
+    def _source_plan_request(context: ChatWorkflowContext):
+        return prepare_source_plan(context.request.question, tuple(
+            PlanSource(
+                f"knowledge:{index}", hit.title, str(hit.metadata.get("wiki_url") or ""),
+                hit.source_content if hit.source_content is not None else hit.excerpt,
+            ) for index, hit in enumerate(context.knowledge_hits)
+        ), allow_inferences=is_research_review_request(
+            context.request.question,
+            domain=context.interaction_intent.domain if context.interaction_intent else None,
+        ))
+
+    def _prepare_source_answer(self, context: ChatWorkflowContext) -> None:
         started_at = perf_counter()
-        sources = {
-            f"knowledge:{index}": (
-                f"Title: {hit.title}\nURL: {hit.metadata.get('wiki_url') or ''}\n"
-                + (hit.source_content if hit.source_content is not None else hit.excerpt)
-            )
-            for index, hit in enumerate(context.knowledge_hits)
-        }
-        sources.update({
-            f"web:{index}": f"Title: {hit.title}\nURL: {hit.url}\n{hit.snippet or ''}"
-            for index, hit in enumerate(context.web_search_hits)
-        })
-        for attempt in range(2):
+        request = self._source_plan_request(context)
+        if context.source_answer_plan is None:
             _raise_if_request_cancelled()
-            audit = prepare_source_audit(context.request.question, context.answer or "", sources)
-            if context.source_audit_digest == audit.digest:
-                return
-            # The audit transcript contains full authorized source text. Keep
-            # that internal, not in persisted/streamed model diagnostic events.
             with bind_trace_event_sink(lambda _kind, _payload: None):
                 response = self._call_compact_retry_sync(
-                    system_prompt=AUDIT_SYSTEM_PROMPT,
-                    user_prompt=audit.payload,
+                    system_prompt=PLAN_SYSTEM_PROMPT, user_prompt=request.payload,
                     temperature=0.0,
                     max_tokens=int(self._settings.llm_policy_output_max_tokens_cap),
-                    cache_namespace=f"source-audit:{audit.digest}",
-                    neutral_sampling=True,
+                    cache_namespace=f"source-plan:{request.digest}", neutral_sampling=True,
                 )
             _raise_if_request_cancelled()
-            try:
-                result = validate_source_audit(audit, response)
-            except InvalidSourceAudit:
-                # Invalid protocol is not an unsupported claim verdict: do not
-                # rewrite a potentially correct answer to hide auditor failure.
-                raise SourceAuditRejected("来源校验暂不可用，请稍后重试。") from None
-            if result.passed:
-                context.source_audit_digest = audit.digest
-                self._append_trace(
-                    context, key="source_audit", title="来源事实校验",
-                    summary="回答已完成来源支持性校验。",
-                    detail=f"已校验 {len(audit.units)} 个回答单元；校验绑定当前回答及可见来源。",
-                    duration_ms=self._elapsed_ms(started_at),
-                )
-                return
-            if attempt == 0 and not context.answer_repair_attempted:
-                context.answer = self._retry_answer_with_compact_prompt(
-                    context,
-                    unsupported_source_units=tuple(audit.units[i] for i in result.unsupported_units),
-                )
-            else:
-                break
-        raise SourceAuditRejected("回答未通过来源事实校验，未发布未经验证的结论。")
+            context.source_answer_plan = validate_source_plan(request, response)
+        context.answer = render_source_plan(request, context.source_answer_plan)
+        context.workflow_action = "answer"
+        context.decision_mode = "source_plan"
+        self._validate_source_answer(context)
+        self._append_trace(
+            context, key="source_audit", title="来源原文完整性校验",
+            summary="事实部分由 SAGE 从所选来源原文生成，未改写或截断。",
+            detail="校验绑定问题与当前可见来源；原文可追溯不代表来源内容已被独立证实。",
+            duration_ms=self._elapsed_ms(started_at),
+        )
 
     def render_chat_response(self, context: ChatWorkflowContext) -> ChatResponse:
+        if self._requires_source_audit(context) and context.source_answer_plan is None:
+            self._prepare_source_answer(context)
         if context.answer is None:
             # A planner may legitimately finish a fact request without routing
             # through the LLM stage (for example, an empty course collection).
@@ -4523,7 +4521,7 @@ class FacultyTwinWorkflowSupport:
                         "我不使用通用模板猜测事实。可以补充更具体的资料范围，或选择联网检索。"
                     )
         context.answer = context.answer.strip()
-        if self._should_use_curated_direction_evaluation(context.request.question):
+        if context.source_answer_plan is None and self._should_use_curated_direction_evaluation(context.request.question):
             # Broad profile hits do not support an experiment-design checklist;
             # do not present them as citations.  The basis builder will add a
             # transparent internal-method card instead.
@@ -4535,7 +4533,7 @@ class FacultyTwinWorkflowSupport:
             # hits as if they supported the refusal.
             context.knowledge_hits = []
             context.web_search_hits = []
-        if self._is_degenerate_answer(context.answer):
+        if context.source_answer_plan is None and self._is_degenerate_answer(context.answer):
             _logger.warning("chat workflow produced an empty/degenerate answer; returning bounded unknown")
             context.answer = (
                 "当前可见资料不足以可靠回答这个问题；"
@@ -4568,7 +4566,11 @@ class FacultyTwinWorkflowSupport:
                 if context.persisted_memory_record is not None
                 else None
             ),
-            knowledge_hits=context.knowledge_hits,
+            knowledge_hits=(
+                [hit for index, hit in enumerate(context.knowledge_hits)
+                 if f"knowledge:{index}" in context.source_answer_plan.source_ids]
+                if context.source_answer_plan is not None else context.knowledge_hits
+            ),
             web_search_hits=context.web_search_hits,
             answer_basis=self._build_answer_basis(context),
             external_evidence_required=not self._is_self_contained_request(context),
@@ -7579,6 +7581,12 @@ class FacultyTwinWorkflowSupport:
         - Final safety net: any item with basis_label "近期交流记录" is
           stripped regardless of how it was produced.
         """
+        if context.source_answer_plan is not None:
+            # Only selected evidence supports this answer, not every retrieval hit.
+            # Keep the full input snapshot untouched for final receipt validation.
+            return [self._build_knowledge_basis_item(hit)
+                    for index, hit in enumerate(context.knowledge_hits)
+                    if f"knowledge:{index}" in context.source_answer_plan.source_ids]
         if context.answer and context.answer.startswith((
             "当前可见资料不足", "当前可见的公开资料不足", "当前可见的课程资料不足"
         )):
