@@ -10,6 +10,7 @@ from sage.runtime.operation_receipts import OperationReceipts
 
 from .availability import WeeklyAvailabilityStore
 from .booking_notifications import BookingNotifications
+from .booking_workflow import BookingWorkflows
 from .config import AppSettings
 from .models import AvailabilitySchedule, BookingRecord, BookingRequest, BookingResponse, NotificationDeliveryStatus
 
@@ -30,6 +31,7 @@ class MeetingService:
         self._notifications = None
         self._slot = ("twin-bookings-v1", "calendar", "records")
         self._availability_store = WeeklyAvailabilityStore(settings)
+        self.workflows = BookingWorkflows(self._storage)
 
     def _storage(self):
         with self._state_lock:

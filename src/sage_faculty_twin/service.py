@@ -140,6 +140,7 @@ from .post_answer_runtime import PostAnswerRuntime
 from .feedback_knowledge_runtime import FeedbackKnowledgeRuntime
 from .llm_client import IncompleteCompletionError, VllmChatClient
 from .meeting import MeetingService
+from .booking_workflow import BookingDecision, BookingWorkflowState
 from .memory_store import (
     ConversationDigestStore,
     ConversationMemoryHit,
@@ -1031,15 +1032,6 @@ _WEB_SEARCH_QUERY_MARKERS = (
 
 
 @dataclass
-class BookingWorkflowState:
-    student_name: str
-    student_email: str | None = None
-    topic: str | None = None
-    preferred_start: datetime | None = None
-    preferred_end: datetime | None = None
-
-
-@dataclass
 class ChatWorkflowContext:
     request: ChatRequest
     conversation_id: str
@@ -1075,6 +1067,7 @@ class ChatWorkflowContext:
     web_search_hits: list[WebSearchHit] = field(default_factory=list)
     memory_hits: list[ConversationMemoryHit] = field(default_factory=list)
     booking_state: BookingWorkflowState | None = None
+    booking_decision: BookingDecision | None = None
     booking_result: BookingResponse | None = None
     booking_notification: NotificationDeliveryStatus | None = None
     escalation_record: EscalationRecord | None = None
@@ -1198,7 +1191,6 @@ class FacultyTwinWorkflowSupport:
     def __init__(
         self,
         settings: AppSettings,
-        booking_workflows: dict[str, BookingWorkflowState],
         knowledge_store: LocalKnowledgeStore,
         conversation_store: NeuroMemConversationStore,
         analytics_store: ConversationAnalyticsStore,
@@ -1227,13 +1219,14 @@ class FacultyTwinWorkflowSupport:
         delivery: DeliveryIntent | None = None,
     ) -> None:
         self._settings = settings
-        self._booking_workflows = booking_workflows
+        self._booking_workflows = meeting_service.workflows
         self._knowledge_store = knowledge_store
         self._knowledge_retriever = knowledge_retriever or KnowledgeSources(knowledge_store)
         self._conversation_store = conversation_store
         self._analytics_store = analytics_store
         self._feedback_runtime_provider = feedback_runtime_provider
         self._delivery = delivery
+        self._booking_operation_id = delivery.stream_id if delivery is not None else uuid4().hex
         self._artifact_memory_draft_store = artifact_memory_draft_store
         self._knowledge_gap_draft_store = knowledge_gap_draft_store
         self._escalation_store = escalation_store
@@ -1279,7 +1272,8 @@ class FacultyTwinWorkflowSupport:
             )
         context = ChatWorkflowContext(
             request=request,
-            conversation_id=request.conversation_id or str(uuid4()),
+            conversation_id=request.conversation_id or (
+                f"turn-{self._delivery.stream_id}" if self._delivery is not None else str(uuid4())),
             owner_name=self._settings.owner_name,
             used_model=self._llm_client.model_name,
             is_admin_request=self._admin_session_payload is not None,
@@ -1484,11 +1478,12 @@ class FacultyTwinWorkflowSupport:
     def prepare_booking(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
         started_at = perf_counter()
         request = context.request
-        existing_state = self._booking_workflows.get(context.conversation_id)
+        existing_state = self._booking_workflows.peek(request.owner_id, context.conversation_id)
+        captured = self._booking_workflows.decision(request.owner_id, self._booking_operation_id)
         interaction_intent = context.interaction_intent or self._build_fallback_interaction_intent(
             request
         )
-        if existing_state is None and interaction_intent.action != "book_meeting":
+        if captured is None and existing_state is None and interaction_intent.action != "book_meeting":
             self._append_trace(
                 context,
                 key="booking_prepare",
@@ -1500,32 +1495,36 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
-        state = existing_state or BookingWorkflowState(student_name=request.student_name)
-        state.student_name = request.student_name
-        if request.student_email:
-            state.student_email = request.student_email.strip()
-
-        extracted_email = self._extract_email(request.question)
-        if extracted_email:
-            state.student_email = extracted_email
-
-        extracted_start, extracted_end = self._extract_time_window(request.question)
-        if extracted_start is not None:
-            state.preferred_start = extracted_start
-            state.preferred_end = extracted_end or (
-                extracted_start + timedelta(minutes=self._settings.meeting_duration_minutes)
-            )
-
-        extracted_topic = self._extract_topic(request.question, request.course_context)
-        if extracted_topic:
-            state.topic = extracted_topic
-        elif state.topic is None and request.course_context:
-            state.topic = request.course_context.strip()
-
+        fields = {"student_name": request.student_name}
+        if captured is None:
+            if request.student_email:
+                fields["student_email"] = request.student_email.strip()
+            extracted_email = self._extract_email(request.question)
+            if extracted_email:
+                fields["student_email"] = extracted_email
+            extracted_start, extracted_end = self._extract_time_window(request.question)
+            if extracted_start is not None:
+                fields["preferred_start"] = extracted_start
+                fields["preferred_end"] = extracted_end or (
+                    extracted_start + timedelta(minutes=self._settings.meeting_duration_minutes))
+            extracted_topic = self._extract_topic(request.question, request.course_context)
+            if extracted_topic:
+                fields["topic"] = extracted_topic
+            elif (existing_state is None or existing_state.topic is None) and request.course_context:
+                fields["topic"] = request.course_context.strip()
+        # Even a replay must verify original request identity through the receipt;
+        # parser output is deliberately not regenerated for a captured decision.
+        decision = self._booking_workflows.capture(
+            request.owner_id, context.conversation_id, self._booking_operation_id,
+            inputs=request.model_dump(mode="json", include={
+                "student_name", "student_email", "question", "course_context"}),
+            fields=fields,
+        )
+        state = decision.state
+        context.booking_decision = decision
         context.booking_state = state
-        missing_fields = self._missing_booking_fields(state)
+        missing_fields = decision.pending_fields
         if missing_fields:
-            self._booking_workflows[context.conversation_id] = state
             context.pending_fields = missing_fields
             context.workflow_action = "collect_booking_details"
             context.answer = self._build_booking_follow_up(missing_fields, state)
@@ -1566,22 +1565,17 @@ class FacultyTwinWorkflowSupport:
             return context
 
         request = context.request
-        state = context.booking_state
+        decision = context.booking_decision
+        if decision is None or decision.request is None:
+            raise ValueError("booking_execution_requires_captured_plan")
         booking_response = self._meeting_service.book(
-            BookingRequest(
-                student_name=state.student_name,
-                student_email=state.student_email or "",
-                topic=state.topic or request.course_context or "会议沟通",
-                preferred_start=state.preferred_start,
-                preferred_end=state.preferred_end,
-            ),
-            operation_id=(f"booking-create:{self._delivery.stream_id}"
-                          if self._delivery is not None else None),
+            decision.request,
+            operation_id=f"booking-create:{self._booking_operation_id}",
         )
+        self._booking_workflows.settle(request.owner_id, self._booking_operation_id, booking_response)
         context.booking_result = booking_response
 
         if booking_response.accepted:
-            self._booking_workflows.pop(context.conversation_id, None)
             context.pending_fields = []
             context.workflow_action = "book_meeting"
             context.booking_notification = context.booking_result.notification
@@ -1595,9 +1589,6 @@ class FacultyTwinWorkflowSupport:
                 duration_ms=self._elapsed_ms(started_at),
             )
         else:
-            state.preferred_start = None
-            state.preferred_end = None
-            self._booking_workflows[context.conversation_id] = state
             context.pending_fields = ["preferred_start"]
             context.workflow_action = "collect_booking_details"
             context.answer = self._build_booking_retry_message(booking_response)
@@ -6865,7 +6856,8 @@ class FacultyTwinWorkflowSupport:
     def _resolve_interaction_intent(
         self, context: ChatWorkflowContext
     ) -> tuple[InteractionIntent, str]:
-        if context.conversation_id in self._booking_workflows:
+        if (self._booking_workflows.decision(context.request.owner_id, self._booking_operation_id) is not None
+                or self._booking_workflows.peek(context.request.owner_id, context.conversation_id) is not None):
             return self._build_booking_follow_up_intent(), "workflow_state"
 
         if context.is_admin_request and self._looks_like_admin_knowledge_injection(
@@ -8321,16 +8313,6 @@ class FacultyTwinWorkflowSupport:
                 return _summarize_text(normalized, limit=64)
         return "管理员对话录入知识"
 
-    def _missing_booking_fields(self, state: BookingWorkflowState) -> list[str]:
-        missing_fields: list[str] = []
-        if not state.student_email:
-            missing_fields.append("student_email")
-        if state.preferred_start is None:
-            missing_fields.append("preferred_start")
-        if not state.topic:
-            missing_fields.append("topic")
-        return missing_fields
-
     def _build_booking_follow_up(
         self,
         missing_fields: list[str],
@@ -8962,7 +8944,6 @@ class DigitalTwinService:
             answer_max_tokens=settings.skill_answer_max_tokens,
         )
         self._sage_runtime_class = ChatRuntime
-        self._booking_workflows: dict[str, BookingWorkflowState] = {}
         self._fixed_prefix_cache_warmup_attempted = False
         self._fixed_prefix_cache_warmup_lock = threading.Lock()
         self._normalize_published_gap_documents()
@@ -11651,7 +11632,6 @@ class DigitalTwinService:
     ) -> FacultyTwinWorkflowSupport:
         return FacultyTwinWorkflowSupport(
             self._settings,
-            self._booking_workflows,
             self._knowledge_store,
             self._conversation_store,
             self._analytics_store,

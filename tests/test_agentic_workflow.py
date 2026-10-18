@@ -308,6 +308,7 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-complete",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             )
         )
@@ -500,6 +501,7 @@ def test_chat_books_meeting_with_chinese_relative_time(tmp_path: Path) -> None:
                 student_email="alice@example.com",
                 course_context="数据库实验课",
                 conversation_id="conv-cn-time",
+                owner_id="guest:alice",
                 question="请帮我预约明天下午三点讨论数据库实验课报告。",
             )
         )
@@ -644,6 +646,7 @@ def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) ->
                 student_name="Alice",
                 course_context="科研指导",
                 conversation_id="conv-follow-up",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             )
         )
@@ -664,6 +667,7 @@ def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) ->
                 student_name="Alice",
                 course_context="科研指导",
                 conversation_id="conv-follow-up",
+                owner_id="guest:alice",
                 question="我的邮箱是 alice@example.com",
             )
         )
@@ -692,6 +696,7 @@ def test_chat_booking_reports_notification_failure_without_rolling_back_booking(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-notify-fail",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             )
         )
@@ -865,6 +870,7 @@ def test_chat_emits_trace_steps_via_callback(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-callback",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             ),
             trace_callback=emitted_steps.append,
@@ -1839,6 +1845,7 @@ def test_chat_reuses_booking_preference_profile_memory_in_follow_up_prompt(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-booking-profile",
+                owner_id="guest:alice",
                 question="请帮我预约 2026-05-26 15:00 讨论论文进展",
             )
         )
@@ -1853,6 +1860,7 @@ def test_chat_reuses_booking_preference_profile_memory_in_follow_up_prompt(
                 student_email="alice@example.com",
                 course_context="科研指导",
                 conversation_id="conv-booking-profile",
+                owner_id="guest:alice",
                 question="根据你记得的我的预约习惯，提醒我还要准备什么？",
             )
         )

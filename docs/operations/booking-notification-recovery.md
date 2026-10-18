@@ -40,9 +40,35 @@ Interrupted multi-record migration can be repeated; do not restore an older stor
 over newer application writes. Replays are handled by the one current receipt path,
 not by a legacy producer or a runtime compatibility branch.
 
-Conversational plan capture and cross-database ingress lease fencing are separate
-remaining qualifications. Passing local receipt tests does not establish those
-properties or complete the overall native workflow migration.
+Cross-database ingress lease fencing remains a separate qualification. Passing
+local receipt tests does not complete the overall native workflow migration.
+
+## Captured conversational booking decisions
+
+The conversational booking draft uses the same SAGE persistent state runtime as
+the calendar and notification journal. The former process-local conversation
+dictionary is removed. Draft slots are scoped by verified owner and conversation;
+unattributed requests cannot capture a draft or discover one by name/email.
+HTTP/Slack adapters continue to capture and reauthorize the actual channel owner.
+
+Before an effect, SAGE OperationReceipts atomically stores the updated draft and
+an immutable decision for the owner-scoped delivery identity. The decision holds
+missing fields or the complete typed booking request, including resolved dates.
+Retry validates the original request digest and reuses that decision without
+reparsing fields. If a client omits a conversation ID, the conversation identity
+is derived from the delivery identity so the same request survives restart.
+
+Calendar commit still uses its single canonical receipt/outbox path. A failure
+between calendar commit and draft settlement recovers by replaying the same
+booking identity, then settling the draft. Settlement has its own SAGE receipt
+and only updates a draft still owned by that turn; an older retry cannot erase
+a newer draft. A conflict clears only the captured time preference, retaining
+contact and topic. No external notification is sent from these transactions.
+
+Draft/plan results are private state. There is no import or automatic claiming of
+old in-memory/unattributed drafts. This change does not add a second scheduler,
+an application retry worker, or a cross-database cancellation guarantee. Production
+promotion still requires the frozen-release regression and recovery gates below.
 
 ## Candidate evidence
 
