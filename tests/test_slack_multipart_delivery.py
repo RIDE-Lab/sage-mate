@@ -171,14 +171,18 @@ def test_pending_legacy_format_is_a_nonmutating_cutover_barrier(tmp_path, runnin
 
 
 @pytest.mark.parametrize("missing_optional_default", [False, True])
-def test_completed_legacy_replay_is_preserved_without_resend(tmp_path, missing_optional_default):
+@pytest.mark.parametrize("verified_dm", [False, True])
+def test_completed_legacy_replay_is_preserved_without_resend(tmp_path, missing_optional_default, verified_dm):
     async def run():
         state = StatefulProcessRuntime(backend="sqlite", sqlite_path=str(tmp_path / "state.db"))
         item = ingress()
+        if verified_dm:
+            item = SlackIngress.model_validate({**item.model_dump(), "kind": "message", "conversation_type": "im"})
         journal = WorkJournal(state, namespace="twin-slack-workflow-v1")
         payload = item.model_dump(mode="json")
         if missing_optional_default:
             payload.pop("private_reply")
+            payload.pop("conversation_type")
         journal.commit(item.request_id, result={"owner_id": item.owner_id},
                        tasks={"answer": payload, "deliver": payload}, dependencies={"deliver": ["answer"]})
         for name in ("answer", "deliver"):
@@ -192,6 +196,7 @@ def test_completed_legacy_replay_is_preserved_without_resend(tmp_path, missing_o
                                  answer=forbidden, deliver=forbidden)
         try:
             assert await workflow.resume_if_admitted(item) is True
+            assert await workflow.submit(item) == before
             assert journal.read(item.request_id) == before
         finally:
             await workflow.aclose()
@@ -214,5 +219,17 @@ def test_captured_policy_cannot_be_silently_downgraded_to_notice():
     item = ingress()
     captured = module._capture_reply(item, SlackReply(text="fixture"), requires_member=True)
     captured["requires_member"] = False
+    with pytest.raises(PermissionError, match="slack_delivery_destination_mismatch"):
+        module._restore_reply(item, captured)
+
+
+def test_generic_message_kind_does_not_authorize_a_persistent_channel_post():
+    item = SlackIngress.model_validate({**ingress().model_dump(), "kind": "message"})
+    assert module.slack_reply_method(item) == "chat.postEphemeral"
+    captured = module._capture_reply(item, SlackReply(text="fixture"), requires_member=True)
+    inputs = captured["delivery_plan"]
+    inputs["destination"].update(method="chat.postMessage", visibility="bot_dm")
+    captured["delivery_plan"] = DeliveryPlan.capture(destination=inputs["destination"],
+                                                    payloads=inputs["payloads"]).to_dict()
     with pytest.raises(PermissionError, match="slack_delivery_destination_mismatch"):
         module._restore_reply(item, captured)

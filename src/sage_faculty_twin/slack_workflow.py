@@ -27,10 +27,20 @@ from .models import ChatResponse
 
 _ANSWER_DEPENDENCIES = {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
 _SLACK_MARKDOWN_LIMIT = 12000
+_SLACK_WORKFLOW_VERSION = 3
+
+
+def slack_reply_method(ingress):
+    # Only the signed-event adapter can attest an actual one-to-one bot IM.
+    # A generic message kind or the old private_reply flag is not sufficient.
+    return ("chat.postMessage" if ingress.kind == "message" and ingress.conversation_type == "im"
+            else "chat.postEphemeral")
 
 
 def _destination(ingress, *, requires_member):
-    return {"protocol": "slack-markdown-v1", "visibility": "requester",
+    method = slack_reply_method(ingress)
+    return {"protocol": "slack-markdown-v1", "method": method,
+            "visibility": "bot_dm" if method == "chat.postMessage" else "requester_ephemeral",
             "authorization": "member" if requires_member else "requester_notice",
             "team_id": ingress.team_id, "channel_id": ingress.channel_id, "user_id": ingress.user_id}
 
@@ -74,6 +84,7 @@ class SlackIngress(BaseModel):
     channel_id: str = Field(pattern=r"^[A-Za-z0-9]+$")
     transport_id: str = Field(min_length=1, max_length=256)
     kind: Literal["command", "message", "mention"]
+    conversation_type: Literal["im"] | None = None
     private_reply: bool = False
     question: str = Field(min_length=1)
     thread_ts: str | None = Field(default=None, pattern=r"^[0-9]+\.[0-9]+$")
@@ -206,7 +217,7 @@ class SlackWorkflow:
             for row in rows:
                 record = row["value"]
                 version = record["result"].get("workflow_version")
-                if (type(version) is not int or version != 2) and any(
+                if (type(version) is not int or version != _SLACK_WORKFLOW_VERSION) and any(
                         task["status"] in {"pending", "running"} for task in record["tasks"].values()):
                     raise RuntimeError("slack_legacy_work_requires_drain")
             if cursor is None:
@@ -214,6 +225,8 @@ class SlackWorkflow:
 
     async def submit(self, ingress: SlackIngress):
         captured = SlackIngress.model_validate_json(ingress.model_dump_json())
+        if await self.resume_if_admitted(captured):
+            return await asyncio.to_thread(self.journal.read, captured.request_id)
         payload = captured.model_dump(mode="json")
         failure = SlackReply(text=(
             "本次 Twin 请求处理或投递失败，已停止自动重试。请联系管理员检查。\n"
@@ -221,7 +234,8 @@ class SlackWorkflow:
         failure_plan = await asyncio.to_thread(_capture_reply, captured, failure, requires_member=False)
         await self.start()
         return await self._work.commit(captured.request_id,
-            result={"workflow_version": 2, "owner_id": captured.owner_id, "failure_plan": failure_plan},
+            result={"workflow_version": _SLACK_WORKFLOW_VERSION, "owner_id": captured.owner_id,
+                    "failure_plan": failure_plan},
             tasks={"answer": payload, "deliver": payload, "finalize": payload},
             dependencies=_ANSWER_DEPENDENCIES, settled=["finalize"])
 
@@ -230,7 +244,7 @@ class SlackWorkflow:
         planned = await asyncio.to_thread(_capture_reply, captured, reply, requires_member=False)
         await self.start()
         return await self._work.commit(captured.request_id,
-            result={"workflow_version": 2, "owner_id": captured.owner_id, "notice": planned},
+            result={"workflow_version": _SLACK_WORKFLOW_VERSION, "owner_id": captured.owner_id, "notice": planned},
             tasks={"deliver": captured.model_dump(mode="json")})
 
     async def bind(self, ingress, bindings, code):
@@ -243,7 +257,7 @@ class SlackWorkflow:
         planned = await asyncio.to_thread(_capture_reply, captured, notice, requires_member=False)
         await self.start()
         await self._work.commit(captured.request_id,
-            result={"workflow_version": 2, "owner_id": captured.owner_id, "notice": planned},
+            result={"workflow_version": _SLACK_WORKFLOW_VERSION, "owner_id": captured.owner_id, "notice": planned},
             tasks={"deliver": captured.model_dump(mode="json")},
             mutations=bindings.prepare_code_consumption(code, slack_user_id=captured.user_id,
                 team_id=captured.team_id, operation_id=captured.request_id))
@@ -256,9 +270,20 @@ class SlackWorkflow:
             return False
         payload = SlackIngress.model_validate_json(ingress.model_dump_json()).model_dump(mode="json")
         tasks = {name: task["payload"] for name, task in record["tasks"].items()}
+
+        def matches(value):
+            normalized = SlackIngress.model_validate(value).model_dump(mode="json")
+            expected = dict(payload)
+            if (record["result"].get("workflow_version") != _SLACK_WORKFLOW_VERSION
+                    and "conversation_type" not in value):
+                # Terminal history has no new execution authority to grant.
+                # Compare its original fields, never upgrade its old sender.
+                normalized.pop("conversation_type")
+                expected.pop("conversation_type")
+            return normalized == expected
+
         try:
-            same_payload = all(SlackIngress.model_validate(value).model_dump(mode="json") == payload
-                               for value in tasks.values())
+            same_payload = all(matches(value) for value in tasks.values())
         except ValueError:
             raise ValueError("journal_commit_conflict") from None
         if not same_payload or record["result"].get("owner_id") != ingress.owner_id:

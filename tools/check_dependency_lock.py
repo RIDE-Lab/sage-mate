@@ -15,12 +15,17 @@ def check_pins(project, lock):
     for requirement in project["project"].get("dependencies", []):
         if "git+" not in requirement:
             continue
-        match = re.fullmatch(r"([\w-]+)\s*@\s*git\+(.+)@([0-9a-f]{40})", requirement)
+        match = re.fullmatch(
+            r"([\w.-]+)(?:\[\s*[\w.-]+(?:\s*,\s*[\w.-]+)*\s*\])?\s*@\s*git\+(.+)@([0-9a-f]{40})",
+            requirement,
+        )
         if match is None:
             errors.append("Git dependencies must use full commit pins")
             continue
         name, repository, commit = match.groups()
-        candidates = [entry for entry in packages if entry["name"] == name]
+        name = re.sub(r"[-_.]+", "-", name).lower()
+        candidates = [entry for entry in packages
+                      if re.sub(r"[-_.]+", "-", entry["name"]).lower() == name]
         if len(candidates) != 1:
             errors.append(f"{name}: missing or ambiguous locked package")
             continue

@@ -30,7 +30,7 @@ and the source-title footer is not limited to the first two entries.
 
 ## Cutover and history
 
-The root journal result marks the new workflow version. Startup rejects any
+The root journal result marks workflow version 3. Startup rejects any
 unfinished legacy-format work without mutating it. Before promotion, drain the
 old worker and recheck zero old pending/running requests under quiescent writers.
 An earlier zero-count snapshot is not a substitute for this cutover check.
@@ -45,10 +45,15 @@ member identity. Retrieval can therefore contain private knowledge or personal
 context. A channel mention does **not** authorize disclosing that answer to the
 channel, even if the channel itself is private.
 
-The transport sends all replies through `chat.postEphemeral`, with the verified
-workspace, original channel and requesting user. The same invariant applies to
-commands, direct-message events, mentions, notices, recovery and retries. No
-public-message fallback exists. Historical ingress `private_reply=False` is
+The transport uses `chat.postEphemeral` for commands and channel mentions, with
+the verified workspace, original channel and requesting user. A signed message
+event explicitly identifying a one-to-one Bot IM captures `conversation_type=im`
+and uses `chat.postMessage` **in that original private conversation** instead,
+preserving normal DM persistence across sessions. It does not create a new DM.
+Generic message kinds, channel-ID prefixes, caller-supplied extra fields and the
+legacy privacy hint do not attest a private conversation. Both methods use the
+same captured plan and native sequence; no public-channel fallback exists.
+Historical ingress `private_reply=False` is
 retained as journal data, not as authority to widen the audience. Neither the
 model nor a caller-supplied owner ID chooses a destination or recipient.
 
@@ -63,6 +68,24 @@ that ephemeral messages require an active user and are not retained across
 sessions. The canonical Twin answer and owner-scoped work status remain separate
 from that transport acknowledgement. Do not treat ephemeral delivery as a durable
 archive or silently switch to a public reply when it fails.
+
+The selected method, private visibility and membership policy are part of the
+captured plan identity. Persistent DM receipts require `ts` and the exact original
+channel; ephemeral receipts require `message_ts`. Neither method tries the other
+method's response fields as a success fallback. Reported truncation is failure.
+
+## Input integrity
+
+The signed Events API `authorizations` envelope identifies installed Bot users;
+it is not the sender's identity or a member-role grant. Only those verified
+leading Bot invocations and their single ordinary separator are removed. Other
+people's mentions, line breaks, indentation and trailing whitespace remain in
+the model question. Slash-command questions also retain their original bytes.
+Malformed/unverified Bot metadata is rejected before command/binding admission,
+rather than guessing a Bot name or storing a misparsed binding credential.
+Caller/member authorization remains a separate current-account check.
+
+Reference: [Slack Events API envelope](https://docs.slack.dev/apis/events-api/).
 
 Reference: [Slack chat.postEphemeral](https://docs.slack.dev/reference/methods/chat.postEphemeral/).
 
@@ -79,7 +102,7 @@ possibly inactive `thread_ts`. The existing Starlette test-client deprecation
 warning remains. This is isolated source qualification, not a frozen deployment
 or proof of receipt/display in a real Slack client.
 
-Multipart source qualification: 200 related checks passed (32.27 seconds),
+Prior v2 multipart source qualification: 200 related checks passed (32.27 seconds),
 covering native worker/SQLite reopen without formatter/model calls, confirmed
 prefix preservation, mid-sequence revocation, legacy drain barriers and terminal
 history replay (including absent optional defaults), typed recipient/policy
@@ -90,3 +113,14 @@ identity, dependency/bootstrap and service-script checks passed in the same gate
 Ruff, shell syntax, diff and frozen-lock checks passed. The existing Starlette
 deprecation warning remains. Frozen complete-suite and actual Slack display
 acceptance are still required before production promotion.
+
+Current v3 source qualification: 231 related checks passed (34.72 seconds),
+including verified private-DM persistence, channel-mention anti-override, method-
+specific receipt/channel validation, old terminal DM metadata replay, exact input
+whitespace/person preservation, and malformed Bot-authorization rejection before
+binding admission. The Git-pin verifier now accepts valid extras syntax while
+still rejecting short pins, registry fallback, wrong repositories and stale
+commits. Ruff, supported-Python lock verification, shell and frozen-lock checks
+pass. The previous immutable v2 frozen run had 1699 passes, 31 unchanged skips and
+one verifier-parser failure; that failed report is retained, not release evidence.
+A new frozen complete run and real client acceptance remain required.

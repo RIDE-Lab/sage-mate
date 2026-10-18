@@ -44,6 +44,7 @@ def event(*, team_id="T123", event_id="Ev1", **changes):
              "user": "U1", "text": "研究路线是什么？", "ts": "1719200000.000100"}
     value.update(changes)
     return json.dumps({"type": "event_callback", "team_id": team_id,
+                       "authorizations": [{"team_id": team_id, "user_id": "BOT", "is_bot": True}],
                        "event_id": event_id, "event": value}).encode()
 
 
@@ -104,7 +105,8 @@ def harness(monkeypatch, tmp_path):
             h.fail_delivery -= 1
             raise OSError("simulated network failure")
         h.sent.append((method, payload))
-        return {"ok": True, "message_ts": "123.456"}
+        return ({"ok": True, "ts": "123.456", "channel": payload["channel"]}
+                if method == "chat.postMessage" else {"ok": True, "message_ts": "123.456"})
     monkeypatch.setattr(api_module, "_post_slack_api", post)
     dependency_factory = api_module._create_slack_dependency
     def dependency(shared):
@@ -169,7 +171,7 @@ def test_slack_worker_failure_preserves_web_readiness_and_stops_new_admission(ha
 
 
 def test_normalization_and_owned_memory():
-    assert api_module._normalize_slack_twin_question("<@BOT> <@BOT> question") == "question"
+    assert api_module._normalize_slack_twin_question("<@BOT> <@BOT> question", bot_user_ids={"BOT"}) == "question"
     owner = api_module._slack_conversation_owner("T1", "U1", "C1")
     assert owner == api_module._slack_conversation_owner("T1", "U1", "C1")
     for ids in [("T2", "U1", "C1"), ("T1", "U2", "C1"), ("T1", "U1", "C2")]:
@@ -193,6 +195,35 @@ def test_slack_assembly_preserves_answer_indentation_and_all_basis_items():
                for token in parsed)
 
 
+@pytest.mark.parametrize("kind", ["command", "message", "app_mention"])
+@pytest.mark.parametrize("person", ["", "<@PERSON> "])
+def test_signed_slack_intake_keeps_original_code_whitespace_and_people(harness, kind, person):
+    original = person + "请用中文检查代码：\n```python\nif ready:\n    print('  kept  ')\n```\n"
+    text = "<@BOT> " + original if kind == "app_mention" else original
+    body = command(text=text) if kind == "command" else event(type=kind, text=text)
+    endpoint = "/slack/commands/twin" if kind == "command" else "/slack/events"
+    assert harness.client.post(endpoint, content=body,
+                               headers=signed(body, json_body=kind != "command")).status_code == 200
+    harness.flush()
+    assert len(harness.calls) == 1
+    assert harness.calls[0].question == original
+
+
+@pytest.mark.parametrize("authorizations", [None, [], [{"team_id": "TOTHER", "user_id": "BOT", "is_bot": True}],
+    [{"team_id": ["T123"], "user_id": "BOT", "is_bot": True}],
+    [{"team_id": "T123", "user_id": "BOT", "is_bot": False}],
+    [{"team_id": "T123", "user_id": "invalid>id", "is_bot": True}]])
+def test_unverified_event_bot_is_not_guessed_and_bind_input_is_never_admitted(harness, authorizations):
+    payload = json.loads(event(type="app_mention", text="<@BOT> bind fixture-private-code"))
+    payload["authorizations"] = authorizations
+    body = json.dumps(payload).encode()
+    response = harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True))
+    assert response.status_code == 400
+    assert harness.calls == harness.sent == []
+    assert api_module.slack_workflow.journal.records(limit=10)[0] == []
+    assert "fixture-private-code" not in response.text
+
+
 @pytest.mark.parametrize("event_type", ["message", "app_mention"])
 def test_event_status_is_private_durable_and_does_not_call_model(harness, event_type):
     original = event(type=event_type)
@@ -208,8 +239,9 @@ def test_event_status_is_private_durable_and_does_not_call_model(harness, event_
     assert len(harness.calls) == 1
     assert len(harness.sent) == 2
     method, payload = harness.sent[-1]
-    assert method == "chat.postEphemeral"
-    assert payload["user"] == "U1"
+    assert method == ("chat.postMessage" if event_type == "message" else "chat.postEphemeral")
+    assert payload["channel"] == "D123"
+    assert ("user" not in payload) if event_type == "message" else payload["user"] == "U1"
     assert "处理完成" in payload["markdown_text"]
     assert "完整的研究回答" not in payload["markdown_text"]
 
@@ -235,8 +267,9 @@ def test_terminal_answer_failure_sends_private_notice_without_question(harness, 
     assert record["tasks"]["deliver"]["status"] == "blocked"
     assert len(harness.sent) == 1
     method, payload = harness.sent[0]
-    assert method == "chat.postEphemeral"
-    assert payload["user"] == "U1"
+    assert method == ("chat.postMessage" if transport == "message" else "chat.postEphemeral")
+    assert payload["channel"] == "D123"
+    assert ("user" not in payload) if transport == "message" else payload["user"] == "U1"
     assert "已停止自动重试" in payload["markdown_text"]
     assert "private model exception" not in payload["markdown_text"]
     assert "研究路线" not in payload["markdown_text"]
@@ -389,10 +422,10 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     assert "slack_channel_context" not in request.model_dump()
     method, payload = harness.sent[0]
     # The linked member's private retrieval scope is not the channel audience.
-    assert method == "chat.postEphemeral"
+    assert method == ("chat.postMessage" if transport == "event" else "chat.postEphemeral")
     assert "完整的研究回答。" in payload["markdown_text"]
     assert "text" not in payload and "blocks" not in payload
-    assert payload["user"] == "UOTHER"
+    assert ("user" not in payload) if transport == "event" else payload["user"] == "UOTHER"
     assert "thread_ts" not in payload
     records, _ = api_module.slack_workflow.journal.records(limit=10)
     assert records[0]["value"]["dependencies"] == {"deliver": ["answer"], "finalize": ["answer", "deliver"]}
@@ -502,6 +535,32 @@ def test_success_http_body_without_complete_native_receipt_is_not_accepted(harne
                            kind="command", question="fixture")
     with pytest.raises(ValueError, match="slack_delivery_"):
         harness.client.portal.call(api_module._deliver_slack_reply, ingress, SlackReply(text="fixture"))
+
+
+@pytest.mark.parametrize("result", [
+    {"ok": True, "message_ts": "123.456", "channel": "D123"},
+    {"ok": True, "ts": "123.456", "channel": "OTHER"},
+    {"ok": True, "ts": "invalid", "channel": "D123"},
+])
+def test_verified_dm_requires_its_own_exact_receipt_and_destination(harness, monkeypatch, result):
+    monkeypatch.setattr(api_module, "_post_slack_api", lambda *_: result)
+    ingress = SlackIngress(team_id="T123", user_id="U1", channel_id="D123", transport_id="dm-receipt",
+                           kind="message", conversation_type="im", question="fixture")
+    with pytest.raises(ValueError, match="slack_delivery_"):
+        harness.client.portal.call(api_module._deliver_slack_reply, ingress, SlackReply(text="fixture"))
+
+
+def test_channel_mention_cannot_choose_dm_transport_with_extra_input(harness):
+    harness.bind()
+    body = event(user="UOTHER", type="app_mention", channel="CPUBLIC", channel_type="channel",
+                 conversation_type="im", text="<@BOT> 研究路线是什么？")
+    assert harness.client.post("/slack/events", content=body,
+                               headers=signed(body, json_body=True)).status_code == 200
+    harness.flush()
+    assert len(harness.sent) == 1
+    method, payload = harness.sent[0]
+    assert method == "chat.postEphemeral"
+    assert payload["channel"] == "CPUBLIC" and payload["user"] == "UOTHER"
 
 
 def test_event_retry_and_lost_answer_ack_do_not_regenerate(harness):

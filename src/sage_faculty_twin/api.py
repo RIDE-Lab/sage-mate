@@ -47,7 +47,7 @@ from .api_token_store import LabMemberApiTokenStore
 from .config import settings
 from .conversation_trace_store import ConversationTraceStore
 from .workflow_events import WorkflowEventBroker
-from .slack_workflow import SlackAnswerRecovery, SlackIngress, SlackReply, SlackWorkflow
+from .slack_workflow import SlackAnswerRecovery, SlackIngress, SlackReply, SlackWorkflow, slack_reply_method
 from .request_context import (
     RequestCancellationController,
     RequestCancelledError,
@@ -771,13 +771,16 @@ async def _deliver_slack_reply(ingress, reply):
     # including private retrieval and personal context. Neither an app mention
     # nor a historical private_reply=False grants the channel that access.
     # Enforce the audience at the final transport boundary on every retry.
-    payload = {"channel": ingress.channel_id, "user": ingress.user_id,
-               "markdown_text": reply.text, "link_names": False, "parse": "none"}
+    method = slack_reply_method(ingress)
+    payload = {"channel": ingress.channel_id, "markdown_text": reply.text,
+               "link_names": False, "parse": "none"}
+    if method == "chat.postEphemeral":
+        payload["user"] = ingress.user_id
     # A mention can be the root of a thread that does not yet exist. Slack only
     # displays ephemeral thread replies in an already active thread. Keep the
     # thread identity in durable ingress, but deliver in the same channel so
     # an initial mention does not become an accepted-but-invisible reply.
-    result = await asyncio.to_thread(_post_slack_api, "chat.postEphemeral", payload)
+    result = await asyncio.to_thread(_post_slack_api, method, payload)
     if not isinstance(result, dict) or result.get("ok") is not True:
         raise ValueError("slack_delivery_requires_success_response")
     metadata = result.get("response_metadata")
@@ -786,9 +789,11 @@ async def _deliver_slack_reply(ingress, reply):
         warnings.extend(metadata["warnings"])
     if "message_truncated" in warnings:
         raise ValueError("slack_delivery_truncated")
-    stamp = result.get("message_ts")
+    stamp = result.get("ts" if method == "chat.postMessage" else "message_ts")
     if not isinstance(stamp, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", stamp):
         raise ValueError("slack_delivery_requires_message_receipt")
+    if method == "chat.postMessage" and result.get("channel") != ingress.channel_id:
+        raise ValueError("slack_delivery_receipt_destination_mismatch")
     return {"accepted": True, "message_ts": stamp}
 
 
@@ -799,11 +804,19 @@ def _slack_twin_link_instructions() -> str:
     )
 
 
-def _normalize_slack_twin_question(text: str) -> str:
-    words = text.split()
-    while words and words[0].startswith("<@") and words[0].endswith(">"):
-        words.pop(0)
-    return " ".join(words).strip()
+def _normalize_slack_twin_question(text: str, *, bot_user_ids=()) -> str:
+    """Consume verified invocation prefixes, never rewrite the question body."""
+    question = text
+    while True:
+        mention = re.match(r"^[ \t\r\n]*<@([A-Za-z0-9]+)(?:\|[^>\r\n]*)?>", question)
+        if mention is None or mention.group(1) not in bot_user_ids:
+            break
+        question = question[mention.end():]
+        # Slack's ordinary invocation separator is one space. Preserve every
+        # remaining byte, including code indentation and trailing line breaks.
+        if question.startswith(" "):
+            question = question[1:]
+    return question if question.strip() else ""
 
 
 async def _bind_slack_ingress(ingress, code):
@@ -1820,8 +1833,8 @@ async def slack_twin_command(
     channel_id = form.get("channel_id", "").strip()
     _slack_conversation_owner(team_id, user_id, channel_id)
     _require_slack_destination(team_id)
-    question = form.get("text", "").strip()
-    if not question:
+    question = form.get("text", "")
+    if not question.strip():
         return JSONResponse(
             {
                 "response_type": "ephemeral",
@@ -1894,31 +1907,42 @@ async def slack_events(
 
     channel_type = str(event.get("channel_type") or "").strip()
     is_direct_message = channel_type == "im"
-    is_public_mention = event_type == "app_mention"
-    if not is_direct_message and not is_public_mention:
+    is_mention = event_type == "app_mention"
+    if not is_direct_message and not is_mention:
         return JSONResponse({"ok": True})
 
     user_id = str(event.get("user") or "").strip()
     channel_id = str(event.get("channel") or "").strip()
-    question = _normalize_slack_twin_question(str(event.get("text") or ""))
     thread_ts = str(event.get("thread_ts") or "").strip() or None
-    if is_public_mention and thread_ts is None:
+    if is_mention and thread_ts is None:
         thread_ts = str(event.get("ts") or "").strip() or None
     if not user_id or not channel_id:
         return JSONResponse({"ok": True})
     team_id = str(payload.get("team_id") or "").strip()
     _slack_conversation_owner(team_id, user_id, channel_id)
     _require_slack_destination(team_id)
+    authorizations = payload.get("authorizations")
+    bot_ids = {item["user_id"] for item in (authorizations if isinstance(authorizations, list) else [])
+               if isinstance(item, dict) and item.get("is_bot") is True
+               and (item.get("team_id") is None or item.get("team_id") == team_id)
+               and isinstance(item.get("user_id"), str)
+               and re.fullmatch(r"[A-Za-z0-9]+", item["user_id"])}
+    if not bot_ids:
+        # Do not guess which mentioned person is the bot, or accidentally
+        # persist a misparsed bind command as a model question.
+        raise HTTPException(status_code=400, detail="Slack event missing verified bot authorization.")
+    question = _normalize_slack_twin_question(str(event.get("text") or ""), bot_user_ids=bot_ids)
     try:
         ingress = SlackIngress(team_id=team_id, user_id=user_id, channel_id=channel_id,
             transport_id=str(payload.get("event_id") or "").strip(),
-            kind="mention" if is_public_mention else "message",
+            kind="mention" if is_mention else "message",
+            conversation_type="im" if is_direct_message and not is_mention else None,
             question=question or "Slack usage", thread_ts=thread_ts,
             latest_ts=str(event.get("ts") or "").strip())
     except ValidationError:
         raise HTTPException(status_code=400, detail="Slack event missing valid transport identity.") from None
     if question.split()[:1] and question.split()[0].lower() == "bind":
-        ingress = ingress.model_copy(update={"question": "Slack binding status", "private_reply": is_public_mention})
+        ingress = ingress.model_copy(update={"question": "Slack binding status", "private_reply": is_mention})
     elif question.split()[:1] and question.split()[0].lower() == "status":
         ingress = ingress.model_copy(update={"private_reply": True})
     if slack_workflow is None:
