@@ -47,6 +47,17 @@ def test_research_fact_answer_reuses_evidence_without_model_expansion(tmp_path: 
     assert "资料没有明确说明" in answer
 
 
+def test_complete_sources_use_common_synthesis_without_rewriting_evidence(tmp_path):
+    service = _service(tmp_path)
+    hit = KnowledgeSearchHit(document_id="wiki-research", title="公开研究方向",
+        excerpt="目录摘要", source_content="- 流处理\n- 数据库\n- 推理系统\n[来源](https://lab.sage.org.ai/research)",
+        score=90, tags=["research", "audience:public"], source_name="wiki:research")
+    context = _context("请介绍课题组研究方向并给出来源", "research", [hit])
+    before = hit.model_dump()
+    assert service._build_grounded_fact_answer(context) is None
+    assert [item.model_dump() for item in context.knowledge_hits] == [before]
+
+
 def test_course_fact_answer_is_explicitly_unknown_without_course_evidence(tmp_path: Path) -> None:
     service = _service(tmp_path)
     context = _context(

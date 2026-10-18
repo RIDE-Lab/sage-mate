@@ -14,7 +14,18 @@ DEFAULT_STYLE_GUIDE = """Voice and style baseline:
 - Avoid hype, flattery, emojis, and generic motivational filler.
 """
 
-CITATION_GROUNDING_RULES = (
+SOURCE_SCOPE_RULES = (
+    "概括来源时保留其范围和不确定性：‘仍在研究’或‘不能把设计等同于收益’"
+    "不证明‘尚未部署’、‘没有基准’或‘仅有原型’，不得作此反向推断。"
+    "对来源的限制性声明，只转述声明本身，不追加‘这意味着’式结论。"
+    "例如‘不能把概念设计等同于性能收益’只能转述为‘资料提醒设计不等于实测收益’，"
+    "不能改成‘目前仅停留在设计层面’或‘尚未经过严格的基准测试验证’。"
+    "导航页的链接和目录只说明资料入口，不证明被链接页面的具体结论；"
+    "依据实际提供的正文作答。用户只要求资料概括时，不额外生成实验方案、硬件建议或待办。"
+    "给出来源时使用证据中的完整可点击链接，不截短 URL，也不把内部 source_name 当作链接。"
+)
+
+CITATION_GROUNDING_RULES = SOURCE_SCOPE_RULES + (
     "Strict citation rules — you MUST follow these without exception: "
     "(1) NEVER fabricate or invent any academic reference, including paper titles, author names, "
     "conference or journal names, volume/page numbers, DOIs, URLs, or any other bibliographic detail. "
@@ -28,7 +39,7 @@ CITATION_GROUNDING_RULES = (
     "simply omit the citation entirely. "
 )
 
-COMPACT_CITATION_GROUNDING_RULES = (
+COMPACT_CITATION_GROUNDING_RULES = SOURCE_SCOPE_RULES + (
     "不得编造论文、作者、机构、会议、期刊、DOI、链接或参考文献编号。"
     "只有当准确标题或链接出现在提供的证据或用户问题中时才能引用；"
     "没有来源证据时直接依据通用知识回答，不点名任何具体文献、作者、机构或链接。"

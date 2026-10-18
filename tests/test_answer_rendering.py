@@ -41,3 +41,21 @@ def test_stack_comparison_labels_experiments_as_proposals() -> None:
     assert "待验证" in answer
     assert "NPU 利用率" in answer
     assert "当前系统已经实现" in answer
+
+
+def test_excerpt_preserves_long_markdown_links_and_nested_list():
+    content = "研究方向：\n- 系统\n  - [完整资料](https://lab.sage.org.ai/research/" + "long-path/" * 50 + ")\n- 第二个方向：数据库。"
+    hit = _hit("研究", "显示摘要")
+    hit.source_content = content
+    assert grounded_excerpt(hit, "研究方向") == content
+
+
+def test_excerpt_never_slices_a_long_factual_sentence():
+    content = "研究方向包括" + "推理系统、" * 100 + "数据库。"
+    assert grounded_excerpt(_hit("研究", content), "研究") == content
+
+
+def test_full_and_compact_prompts_share_source_scope_contract():
+    from sage_faculty_twin.persona import CITATION_GROUNDING_RULES, COMPACT_CITATION_GROUNDING_RULES, SOURCE_SCOPE_RULES
+    assert SOURCE_SCOPE_RULES in CITATION_GROUNDING_RULES
+    assert SOURCE_SCOPE_RULES in COMPACT_CITATION_GROUNDING_RULES

@@ -8,11 +8,16 @@ from .models import KnowledgeSearchHit
 
 
 def grounded_excerpt(hit: KnowledgeSearchHit, question: str) -> str:
-    normalized = re.sub(r"\s+", " ", hit.excerpt or "").strip()
+    source = hit.source_content if hit.source_content is not None else hit.excerpt
+    # Markdown blocks are structural evidence, not sentences. Splitting on a
+    # domain's dot or slicing at a character limit corrupts links and lists.
+    if re.search(r"https?://|\[[^\]]+\]\(|(?m:^\s*(?:[-*+] |\d+[.)] |#{1,6} |```|\|))", source or ""):
+        return (source or "").strip()
+    normalized = re.sub(r"\s+", " ", source or "").strip()
     if not normalized:
         return ""
     anchors = [token for token in re.findall(r"[\u4e00-\u9fff]{2,}|[A-Za-z][A-Za-z0-9+-]{3,}", question)]
-    sentences = [part.strip() for part in re.split(r"(?<=[。！？.!?])\s*", normalized) if part.strip()]
+    sentences = [part.strip() for part in re.split(r"(?<=[。！？])\s*|(?<=[.!?])\s+", normalized) if part.strip()]
     factual_markers = ("研究", "当前工作", "大模型", "推理", "状态管理", "课程", "prefill", "decode", "KV cache")
     metadata_markers = ("来源：", "可见性：", "说明：", "用途：", "维护稿")
     ranked: list[tuple[int, int, str]] = []
@@ -25,8 +30,8 @@ def grounded_excerpt(hit: KnowledgeSearchHit, question: str) -> str:
             ranked.append((fact_score * 3 + anchor_score, fact_score, sentence))
     if ranked:
         ranked.sort(key=lambda item: (-item[0], -item[1], len(item[2])))
-        return ranked[0][2][:360]
-    return normalized[:360]
+        return ranked[0][2]
+    return normalized
 
 
 def grounded_course_fact_line(hit: KnowledgeSearchHit) -> str:

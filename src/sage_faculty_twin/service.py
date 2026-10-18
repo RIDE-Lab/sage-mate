@@ -3026,6 +3026,10 @@ class FacultyTwinWorkflowSupport:
             self._is_explicit_deep_request(request)
             or context.web_search_hits
             or getattr(request, "attachments", None)
+            # Full source documents belong to the common grounded synthesis
+            # path. A display excerpt is not a complete factual answer and
+            # broad title/tag matches cannot establish answer completeness.
+            or any(hit.source_content is not None for hit in context.knowledge_hits)
         ):
             return None
 
