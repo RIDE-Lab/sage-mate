@@ -397,7 +397,43 @@ No secrets, identities, private source bodies or raw journal payloads are includ
 in the journal audit. Task completion is observed state, not proof of every crash
 boundary. Browser automation timeouts remain separate from website health: API
 success does not prove rendering, and a control timeout does not prove a freeze.
-# Source-block integration candidate
+# Source-block deployment receipt — c659c2f
+
+Production now runs `/home/shuhao/sage-mate-releases/twin-native-c659c2f/source`,
+PID 2295106, with its own frozen venv and SAGE bcfeb104. Rollback configuration
+is retained in `switch-c659c2f` and the previous d1ace34 release remains intact.
+Only the Twin app and Wiki release pointers changed; inference engines did not.
+
+- Frozen Python regression: 1598 passed, 31 existing skips, 348.07 seconds.
+  The existing `test_identity_eval.py` exclusion is unchanged. Five Node groups,
+  Ruff on changed Python files, and offline uv lock check passed.
+- Previous dd5b38c regression: 1597 passed, 31 skipped, one obsolete test calling
+  the removed curated helper failed. c659c2f tests actual research retrieval and
+  absence of that shortcut; it does not restore the retired production path.
+- Frozen preview real research questions passed full-source comparison against
+  an independent public catalog and exact answer-block/URL binding.
+  Both questions also passed after cutover over Mac public HTTPS; first response
+  completed in 14.68 seconds. Advice is explicitly non-source inference, not a
+  claim that the proposed experiments or benefits have already been realized.
+- Mac public HTTPS old-to-new replay: same exchange and answer, 2.51 seconds.
+  Fresh source-bound answer: 11.92 seconds, HTTP/SSE blocks equal, stream completed,
+  cross-guest access denied, same-request replay 2.51 seconds without regeneration.
+- Authenticated Chrome: exact Chinese Wiki directions/ECPA/StateAxis question,
+  10.8 seconds, one public Wiki source, full source text and links. Accessibility
+  tree and actual screenshot show readable Markdown; Support is initially folded.
+- Read-only live ownership audit: 27 records, 41 profiles, two source-bound records
+  with exact answer binding, no unowned records/profiles, no legacy import folder,
+  SQLite integrity OK. These are point-in-time counts, not retention guarantees.
+- Preview stopped (MainPID 0); production and Wiki timer active. No legacy data
+  deletion or reassignment. Broad workflow completion still includes separate
+  real Slack acceptance and retention-policy work.
+
+Network limitation: A100-to-public HTTPS acceptance failed during TLS handshake
+before application admission; its health probe also timed out after 10 seconds.
+Mac public HTTPS and remote loopback acceptance passed. The failed A100 probe is
+not counted as an application acceptance success or declared repaired.
+
+## Source-block integration details
 
 SAGE bcfeb104 owns canonical, lossless source blocks. Twin transports those blocks,
 validates their exact concatenation against the answer, commits them with memory
