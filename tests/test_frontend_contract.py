@@ -39,6 +39,22 @@ assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retriev
 assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retrieve','unknown')]).retrieve,'pending');
 assert.equal(states([step('knowledge_retrieve','running'),step('knowledge_retrieve','completed')]).retrieve,'completed');
 assert.equal(states([],false).intake,'pending');
+vm.runInContext(source.slice(source.indexOf('function normalizeWorkflowStepStatus('),
+    source.indexOf('function stripNotificationText(')), context);
+assert.equal(context.normalizeWorkflowStepStatus('failed'),'failed');
+assert.equal(context.normalizeWorkflowStepStatus('error'),'failed');
+assert.equal(context.normalizeWorkflowStepStatus('queued'),'queued');
+assert.equal(context.normalizeWorkflowStepStatus('retrying'),'active');
+assert.equal(context.normalizeWorkflowStepStatus(undefined),'unknown');
+assert.equal(context.normalizeWorkflowStepStatus('future-status'),'unknown');
+assert.equal(context.normalizeWorkflowStepStatus('skipped'),'skipped');
+vm.runInContext(source.slice(source.indexOf('function inferWorkflowParallelGroup('),
+    source.indexOf('function getWorkflowDisplayOrderIndex(')), context);
+assert.equal(context.inferWorkflowParallelGroup({key:'memory_retrieve',title:'检索知识'}),null);
+assert.equal(context.inferWorkflowParallelGroup({title:'写回归档'}),null);
+assert.equal(context.inferWorkflowParallelGroup({parallel_group:'retrieval'}),'retrieval');
+assert(!source.includes('WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES'));
+assert(source.includes('const completedSteps = steps.filter((step) => step?.status === "completed");'));
 '''
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 

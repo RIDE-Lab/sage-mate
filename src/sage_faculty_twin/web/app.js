@@ -8263,8 +8263,8 @@ function buildPendingWorkflowTraceCompactHtml(steps, options = {}) {
         return '<div class="thinking-trace-empty">会用阶段图标和简短状态提示当前处理进展。</div>';
     }
 
-    const completedSteps = steps.filter((step) => step?.status !== "active");
-    const activeStepIndex = steps.findIndex((step) => step?.status === "active");
+    const completedSteps = steps.filter((step) => step?.status === "completed");
+    const activeStepIndex = steps.findIndex((step) => normalizeWorkflowStepStatus(step?.status) === "active");
     const currentStepIndex = activeStepIndex >= 0 ? activeStepIndex : Math.max(steps.length - 1, 0);
     const phaseStates = deriveWorkflowPhaseStates({
         currentStage: latestStep.title,
@@ -8360,22 +8360,6 @@ const WORKFLOW_PARALLEL_GROUP_LABELS = {
     post_answer: "答后处理",
 };
 
-const WORKFLOW_RUNTIME_KEY_TO_PARALLEL_GROUP = {
-    memory_retrieve: "retrieval",
-    knowledge_retrieve: "retrieval",
-    memory_persist: "post_answer",
-    artifact_memory_writeback: "post_answer",
-    memory_profile_consolidate: "post_answer",
-    follow_up_plan: "post_answer",
-    memory_usefulness_score: "post_answer",
-    context_digest: "post_answer",
-};
-
-const WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES = {
-    retrieval: /(retrieve|retrieval|knowledge|context|memory[_ -]?retrieve|检索|召回|知识)/i,
-    post_answer: /(persist|writeback|consolidat|follow[_ -]?up|useful|score|post[_ -]?answer|写回|归档|收尾|后处理|评分)/i,
-};
-
 const WORKFLOW_PLAN_STEP_TO_RUNTIME_KEY = {
     classify_intent: "interaction_understand",
     draft_booking_request: "booking_prepare",
@@ -8417,34 +8401,7 @@ function inferWorkflowParallelGroup(step) {
     if (typeof step?.parallel_group === "string" && step.parallel_group) {
         return step.parallel_group;
     }
-
-    const keyCandidates = [
-        String(step?.display_key || "").trim(),
-        String(step?.key || "").trim(),
-    ].filter(Boolean);
-
-    for (const key of keyCandidates) {
-        if (WORKFLOW_RUNTIME_KEY_TO_PARALLEL_GROUP[key]) {
-            return WORKFLOW_RUNTIME_KEY_TO_PARALLEL_GROUP[key];
-        }
-    }
-
-    const text = [step?.title, step?.summary, step?.detail]
-        .filter(Boolean)
-        .map((value) => String(value))
-        .join(" ")
-        .slice(0, 280);
-
-    if (!text) {
-        return null;
-    }
-
-    if (WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES.retrieval.test(text)) {
-        return "retrieval";
-    }
-    if (WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES.post_answer.test(text)) {
-        return "post_answer";
-    }
+    // A familiar label or planned step is not evidence of parallel execution.
     return null;
 }
 
@@ -8495,13 +8452,11 @@ function formatWorkflowStepChipTitle(step, fallbackTitle) {
 }
 
 function normalizeWorkflowStepStatus(status) {
-    if (status === "skipped") {
-        return "skipped";
-    }
-    if (status === "active") {
-        return "active";
-    }
-    return "completed";
+    if (["completed", "skipped", "failed"].includes(status)) return status;
+    if (status === "error") return "failed";
+    if (["active", "running", "retrying"].includes(status)) return "active";
+    if (["queued", "pending"].includes(status)) return "queued";
+    return "unknown";
 }
 
 
@@ -9042,7 +8997,7 @@ function buildWorkflowDagDisplaySteps(runtimeSteps, plannerPreview) {
                     detail: `规划步骤 ID: ${stepId}`,
                     status: "pending",
                     duration_ms: null,
-                    parallel_group: WORKFLOW_RUNTIME_KEY_TO_PARALLEL_GROUP[runtimeKey] || inferWorkflowParallelGroup({ display_key: runtimeKey }),
+                    parallel_group: null,
                 });
             });
         });
