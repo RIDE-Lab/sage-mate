@@ -30,7 +30,8 @@ def read_private(request):
 
 @flow(uri='flow://twin/knowledge-sources', namespace='twin')
 def knowledge_sources_flow(init_stream):
-    return init_stream.map(read_wiki).connect(init_stream.map(read_private))
+    return init_stream.map(read_wiki, operator_key='read-wiki').connect(
+        init_stream.map(read_private, operator_key='read-private'))
 
 
 class KnowledgeSourceRuntime:

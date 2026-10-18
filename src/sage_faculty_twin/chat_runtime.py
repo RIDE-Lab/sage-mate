@@ -64,10 +64,10 @@ def render(context):
 
 @flow(uri="flow://twin/chat", namespace="twin")
 def chat_flow(init_stream):
-    return (init_stream.map(bootstrap).map(understand)
-            .map(prepare_booking).map(execute_booking)
-            .map(write_knowledge).map(retrieve)
-            .map(prompt).map(answer).map(render))
+    return (init_stream.map(bootstrap, operator_key="bootstrap").map(understand, operator_key="understand")
+            .map(prepare_booking, operator_key="prepare-booking").map(execute_booking, operator_key="execute-booking")
+            .map(write_knowledge, operator_key="write-knowledge").map(retrieve, operator_key="retrieve")
+            .map(prompt, operator_key="prompt").map(answer, operator_key="answer").map(render, operator_key="render"))
 
 
 class ChatRuntime:

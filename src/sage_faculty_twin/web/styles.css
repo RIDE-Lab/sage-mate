@@ -1,3 +1,21 @@
+.native-execution {
+    color: var(--ink);
+    background: var(--surface-inset);
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    padding: 12px;
+    overflow-wrap: anywhere;
+}
+.native-execution p, .native-execution-empty { color: var(--text-secondary); }
+.native-execution ol { padding-inline-start: 20px; }
+.native-execution li { margin-block: 8px; }
+.native-execution summary { cursor: pointer; }
+.native-execution pre { white-space: pre-wrap; font-size: 11px; color: var(--text-secondary); }
+.native-execution [data-execution-state="failed"] { color: var(--error-text); }
+.native-execution [data-execution-state="recovered"],
+.native-execution [data-execution-state="cancelled"] { color: var(--warning-text); }
+.native-execution [data-execution-state="started"] { color: var(--ink); }
+
 :root {
     --bg: #071225;
     --bg-deep: #040a16;

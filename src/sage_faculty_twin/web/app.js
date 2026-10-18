@@ -520,6 +520,7 @@ let lastAutoChatQuestion = chatQuestion?.value?.trim() || "";
 let lastAutoCourseContext = courseContextInput?.value?.trim() || "";
 let lastHardwareSnapshot = null;
 let activeWorkflowSteps = [];
+let activeExecutionEvents = [];
 let availabilityEditorState = null;
 let workflowMobileHandlePointerId = null;
 let workflowMobileHandleStartY = 0;
@@ -2981,6 +2982,7 @@ chatForm.addEventListener("submit", async (event) => {
                 ? await apiStreamRequest(chatPath, chatOptions)
                 : await apiRequest(chatPath, chatOptions);
             activeConversationId = data.conversation_id || activeConversationId;
+            mergeNativeExecutionEvents(data.execution_events || []);
             // HTTP completion is not durable worker completion. Keep the SSE
             // cursor alive until its terminal event, including reconnects.
             const mergedSteps = new Map((data.workflow_trace || []).map(step => [step.key, step]));
@@ -3006,7 +3008,8 @@ chatForm.addEventListener("submit", async (event) => {
                     data.exchange_id || null,
                     data.workflow_trace || [],
                     data.external_evidence_required !== false,
-                    data.answer_blocks || []
+                    data.answer_blocks || [],
+                    data.execution_events || []
                 );
                 noteConversationAnswerPreview(data.answer);
                 updateTokenUsageBadge(data.token_usage || null);
@@ -7317,6 +7320,7 @@ function getCurrentHistorySyncEmail() {
 function resetConversationViewForHistoryScopeSwitch() {
     stopWorkflowTraceStream();
     activeWorkflowSteps = [];
+    activeExecutionEvents = [];
     activeConversationId = createConversationId();
     currentConversationTitle = DEFAULT_CONVERSATION_TITLE;
     currentConversationPreview = "";
@@ -7587,6 +7591,7 @@ async function restoreConversationFromHistory(conversationId) {
     stopWorkflowTraceStream();
     activeWorkflowSteps = [];
     activeConversationId = conversationId;
+    activeExecutionEvents = [];
     if (entry?.html) {
         currentConversationTitle = conversationHistoryMeta.titleOverrides[conversationId] || entry.title || DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = entry.preview || "";
@@ -7657,7 +7662,9 @@ function renderConversationTranscript(transcript) {
 
     exchanges.forEach((exchange) => {
         appendMessage("user", speakerName, exchange.question, {});
-        appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
+        const message = appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
+        renderAssistantMessage(message, exchange.answer, [], [], [], null, false,
+            exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || []);
     });
     hideOnboardingCard();
     syncConversationMode();
@@ -7806,6 +7813,7 @@ function startFreshConversation() {
 
     stopWorkflowTraceStream();
     activeWorkflowSteps = [];
+    activeExecutionEvents = [];
     activeConversationId = createConversationId();
     sessionTokenTotal = 0;
     resetTokenUsageBadge();
@@ -7961,7 +7969,8 @@ function renderAssistantMessage(
     exchangeId = null,
     workflowTrace = [],
     externalEvidenceRequired = true,
-    answerBlocks = []
+    answerBlocks = [],
+    executionEvents = []
 ) {
     stopAnswerProcessingTicker(container);
     const startedAt = Number(container?.dataset?.startedAt);
@@ -8036,8 +8045,8 @@ function renderAssistantMessage(
         : "";
     const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
         && Array.isArray(workflowTrace)
-        && workflowTrace.length
-        ? buildWorkflowStatusSummaryHtml(workflowTrace)
+        && (workflowTrace.length || executionEvents.length)
+        ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents)
         : "";
     const thinkSectionHtml = thinkContent
         ? `<div class="thinking-text-section" data-collapsed="true">
@@ -8084,22 +8093,13 @@ function renderAssistantMessage(
     chatStream.scrollTop = chatStream.scrollHeight;
 }
 
-function buildWorkflowStatusSummaryHtml(workflowTrace) {
-    if (!Array.isArray(workflowTrace) || !workflowTrace.length) {
+function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = []) {
+    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length) {
         return "";
     }
 
-    const latestStep = workflowTrace[workflowTrace.length - 1] || null;
-    const totalDurationMs = workflowTrace.reduce(
-        (sum, step) => (typeof step?.duration_ms === "number" ? sum + step.duration_ms : sum),
-        0
-    );
-    const completedPhaseCount = deriveWorkflowPhaseStates({ workflowSteps: workflowTrace, complete: true })
-        .filter((phase) => phase.state === "completed")
-        .length;
-    const preview = latestStep
-        ? `${completedPhaseCount}/${WORKFLOW_PHASE_DEFINITIONS.length} 段 · ${workflowTrace.length} 步 · ${totalDurationMs > 0 ? formatWorkflowDuration(totalDurationMs) : "处理中"}`
-        : `${workflowTrace.length} 步`;
+    const nativeCount = new Set(executionEvents.map(event => event.execution_id)).size;
+    const preview = nativeCount ? `${nativeCount} 个原生节点` : `${workflowTrace.length} 条业务记录 · 原生执行状态未记录`;
 
     return `
         <section class="message-workflow-summary message-section" data-expanded="false" aria-label="本次处理过程">
@@ -8114,13 +8114,49 @@ function buildWorkflowStatusSummaryHtml(workflowTrace) {
                 </div>
             </button>
             <div class="message-section-content" hidden>
-                ${buildWorkflowPhaseRailHtml({ workflowSteps: workflowTrace, complete: true })}
+                ${buildNativeExecutionHtml(executionEvents)}
+                <p>业务记录（不代表节点执行或后台任务确认）</p>
                 <div class="message-workflow-chip-row">
                     ${buildWorkflowChipRowHtml(workflowTrace)}
                 </div>
             </div>
         </section>
     `;
+}
+
+function buildNativeExecutionHtml(events = []) {
+    const latest = new Map();
+    for (const event of events) {
+        if (event?.version !== 1 || typeof event.execution_id !== "string") continue;
+        const previous = latest.get(event.execution_id);
+        if (!previous || event.sequence > previous.sequence) latest.set(event.execution_id, event);
+    }
+    if (!latest.size) return '<p class="native-execution-empty">尚无原生执行记录；不按步骤名称推断完成或并行。</p>';
+    const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
+    return `<div class="native-execution"><p>原生节点状态；节点完成不等于答案提交、后台任务完成或消息送达。同批调度不等于同时执行。</p><ol>${[...latest.values()].map(event => {
+        const label = event.operator_key || event.operator_type || "原生节点";
+        const state = labels[event.state] || "未知";
+        const duration = typeof event.duration_ns === "number" ? ` · ${(event.duration_ns / 1e6).toFixed(1)} ms` : "";
+        const wave = event.wave_size > 1 ? ` · 同批调度 ${event.wave_size} 个节点` : "";
+        const metadata = JSON.stringify({execution_id:event.execution_id, parent_execution_id:event.parent_execution_id,
+            program_uri:event.program_uri, program_rev:event.program_rev, node_id:event.node_id,
+            wave_id:event.wave_id, next_nodes:event.next_nodes, resolution:event.resolution}, null, 2);
+        return `<li data-execution-state="${escapeHtml(event.state || "unknown")}"><details><summary>${escapeHtml(label)} · ${escapeHtml(state + duration + wave)}</summary><pre>${escapeHtml(metadata)}</pre></details></li>`;
+    }).join("")}</ol></div>`;
+}
+
+function syncNativeExecutionDisplay() {
+    const pending = chatStream?.querySelector(".message-pending .thinking-trace-list");
+    if (pending && activeExecutionEvents.length) pending.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
+    if (workflowTrace) workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
+}
+
+function mergeNativeExecutionEvents(events) {
+    // Preserve stream arrival order across attempts; a response snapshot may
+    // describe only the successful attempt. Do not discard earlier failures.
+    const merged = new Map(activeExecutionEvents.map(event => [event.event_id, event]));
+    for (const event of events) merged.set(event.event_id, event);
+    activeExecutionEvents = [...merged.values()];
 }
 
 function buildWorkflowPhaseRailHtml({ currentStage = "", workflowSteps = [], complete = false } = {}) {
@@ -8278,167 +8314,16 @@ function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
 }
 
 function buildPendingWorkflowTraceCompactHtml(steps, options = {}) {
-    const latestStep = steps[steps.length - 1] || null;
-    if (!latestStep) {
-        return '<div class="thinking-trace-empty">会用阶段图标和简短状态提示当前处理进展。</div>';
-    }
-
-    const completedSteps = steps.filter((step) => step?.status === "completed");
-    const activeStepIndex = steps.findIndex((step) => normalizeWorkflowStepStatus(step?.status) === "active");
-    const currentStepIndex = activeStepIndex >= 0 ? activeStepIndex : Math.max(steps.length - 1, 0);
-    const phaseStates = deriveWorkflowPhaseStates({
-        currentStage: latestStep.title,
-        workflowSteps: steps,
-        complete: false,
-    });
-    const completedPhaseCount = phaseStates.filter((phase) => phase.state === "completed").length;
-
-    return `
-        <div class="thinking-trace-compact ${options.animate ? "thinking-trace-item-enter" : ""}">
-            <div class="thinking-trace-compact-current">
-                <span class="thinking-trace-status">当前</span>
-                <strong>${escapeHtml(latestStep?.title || "处理中")}</strong>
-                ${typeof latestStep?.duration_ms === "number" ? `<span class="thinking-trace-duration">${escapeHtml(formatWorkflowDuration(latestStep.duration_ms))}</span>` : ""}
-            </div>
-            <div class="thinking-trace-progress-meta">阶段 ${Math.min(completedPhaseCount + 1, WORKFLOW_PHASE_DEFINITIONS.length)}/${WORKFLOW_PHASE_DEFINITIONS.length} · 步骤 ${currentStepIndex + 1}/${steps.length}</div>
-            <p class="thinking-trace-compact-copy">${escapeHtml(latestStep?.summary || latestStep?.detail || "正在继续推进这次请求。")}</p>
-            ${completedSteps.length ? `<p class="thinking-trace-compact-history">已完成 ${completedSteps.length} 步</p>` : ""}
-        </div>
-    `;
+    const latest = steps[steps.length - 1];
+    if (!latest) return "";
+    return `<div class="thinking-trace-compact"><strong>业务记录</strong><p>${escapeHtml(latest.summary || latest.detail || "等待原生执行事件")}</p></div>`;
 }
 
 function buildWorkflowChipRowHtml(steps, options = {}) {
-    if (!Array.isArray(steps) || !steps.length) {
-        return "";
-    }
-    const compact = Boolean(options.compact);
-    const currentIndex = Number.isInteger(options.currentIndex) ? options.currentIndex : -1;
-    const groups = groupWorkflowChipsByParallel(steps);
-    return groups
-        .map((entry) => {
-            if (entry.type === "single") {
-                const { step, index } = entry;
-                return buildWorkflowStepChipHtml(step, index, {
-                    compact,
-                    current: index === currentIndex,
-                });
-            }
-            const branchCount = entry.items.length;
-            const branchLabel = `并行 ${branchCount} 路`;
-            const groupLabel = WORKFLOW_PARALLEL_GROUP_LABELS[entry.groupId] || "并行分支";
-            const chips = entry.items
-                .map((item) =>
-                    buildWorkflowStepChipHtml(item.step, item.index, {
-                        compact,
-                        current: item.index === currentIndex,
-                    })
-                )
-                .join("");
-            const containerClasses = [
-                "workflow-step-chip-group",
-                compact ? "workflow-step-chip-group-compact" : "",
-                `workflow-step-chip-group-${escapeHtml(entry.groupId)}`,
-            ]
-                .filter(Boolean)
-                .join(" ");
-            return `
-                <div class="${containerClasses}" role="group" aria-label="${escapeHtml(`${groupLabel}（${branchCount} 路并行）`)}">
-                    <div class="workflow-step-chip-group-head">
-                        <span class="workflow-step-chip-group-icon" aria-hidden="true">⇄</span>
-                        <span class="workflow-step-chip-group-label">${escapeHtml(groupLabel)}</span>
-                        <span class="workflow-step-chip-group-count">${escapeHtml(branchLabel)}</span>
-                    </div>
-                    <div class="workflow-step-chip-group-branches">${chips}</div>
-                </div>
-            `;
-        })
-        .join("");
-}
-
-function groupWorkflowChipsByParallel(steps) {
-    const groups = [];
-    let cursor = null;
-    steps.forEach((step, index) => {
-        const groupId = inferWorkflowParallelGroup(step);
-        if (!groupId) {
-            groups.push({ type: "single", step, index });
-            cursor = null;
-            return;
-        }
-        if (cursor && cursor.groupId === groupId) {
-            cursor.items.push({ step, index });
-            return;
-        }
-        cursor = { type: "group", groupId, items: [{ step, index }] };
-        groups.push(cursor);
-    });
-    return groups;
-}
-
-const WORKFLOW_PARALLEL_GROUP_LABELS = {
-    retrieval: "上下文检索",
-    post_answer: "答后处理",
-};
-
-const WORKFLOW_PLAN_STEP_TO_RUNTIME_KEY = {
-    classify_intent: "interaction_understand",
-    draft_booking_request: "booking_prepare",
-    retrieve_recent_memory: "memory_retrieve",
-    retrieve_profile_memory: "memory_retrieve",
-    retrieve_knowledge: "knowledge_retrieve",
-    assemble_prompt_context: "prompt_build",
-    answer_with_citations: "llm_answer",
-    render_user_response: "response_render",
-    record_conversation_memory: "memory_persist",
-    draft_follow_up_action: "follow_up_plan",
-};
-
-const WORKFLOW_DISPLAY_ORDER = [
-    "bootstrap",
-    "workflow_plan_preview",
-    "interaction_understand",
-    "booking_prepare",
-    "booking_execute",
-    "memory_retrieve",
-    "knowledge_retrieve",
-    "prompt_build",
-    "llm_answer",
-    "response_render",
-    "memory_persist",
-    "artifact_memory_writeback",
-    "memory_profile_consolidate",
-    "follow_up_plan",
-    "memory_usefulness_score",
-    "context_digest",
-];
-
-const WORKFLOW_DISPLAY_ORDER_INDEX = WORKFLOW_DISPLAY_ORDER.reduce((acc, key, index) => {
-    acc[key] = index;
-    return acc;
-}, {});
-
-function inferWorkflowParallelGroup(step) {
-    if (typeof step?.parallel_group === "string" && step.parallel_group) {
-        return step.parallel_group;
-    }
-    // A familiar label or planned step is not evidence of parallel execution.
-    return null;
-}
-
-function getWorkflowDisplayOrderIndex(step) {
-    const displayKey = String(step?.display_key || step?.key || "");
-    if (displayKey && WORKFLOW_DISPLAY_ORDER_INDEX[displayKey] !== undefined) {
-        return WORKFLOW_DISPLAY_ORDER_INDEX[displayKey];
-    }
-
-    const inferredGroup = inferWorkflowParallelGroup(step);
-    if (inferredGroup === "retrieval") {
-        return WORKFLOW_DISPLAY_ORDER_INDEX.memory_retrieve;
-    }
-    if (inferredGroup === "post_answer") {
-        return WORKFLOW_DISPLAY_ORDER_INDEX.memory_persist;
-    }
-    return Number.MAX_SAFE_INTEGER;
+    if (!Array.isArray(steps)) return "";
+    return steps.map((step, index) => buildWorkflowStepChipHtml(step, index, {
+        compact: Boolean(options.compact), current: index === options.currentIndex,
+    })).join("");
 }
 
 function buildWorkflowStepChipHtml(step, index, options = {}) {
@@ -8927,237 +8812,19 @@ function renderWorkflowTrace(steps, meta = {}) {
     };
     latestWorkflowMeta = resolvedMeta;
 
-    if (!steps.length) {
+    if (activeExecutionEvents.length) {
         workflowTrace.classList.remove("workflow-trace-dag");
         workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
-        updateWorkflowStats([], resolvedMeta);
-        workflowTrace.innerHTML = `
-            <article class="workflow-step workflow-step-empty" data-expanded="false">
-                <button type="button" class="workflow-step-toggle" aria-expanded="false">
-                    <div class="workflow-step-header">
-                        <span class="workflow-step-index">-</span>
-                        <div class="workflow-step-content">
-                            <div class="workflow-step-meta">
-                                <h3 class="workflow-step-title">等待你的第一条问题</h3>
-                                <span class="workflow-step-chevron">展开</span>
-                            </div>
-                                <p class="workflow-step-summary">发出消息后，这里会展示本轮请求的执行 DAG（主干 + 并行分支），并可展开查看每个节点的细节。</p>
-                        </div>
-                    </div>
-                </button>
-                    <div class="workflow-step-detail" hidden>这里会记录系统先看了什么资料、做了哪些判断，以及最后如何组织出回复。</div>
-            </article>
-        `;
+        updateWorkflowStats(steps, resolvedMeta);
+        workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
         return;
     }
 
+    workflowTrace.classList.remove("workflow-trace-dag");
+    workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
     updateWorkflowStats(steps, resolvedMeta);
-    workflowTrace.classList.add("workflow-trace-dag");
-    workflowTraceWrap?.classList.add("workflow-trace-wrap-dag");
-
-    const displaySteps = buildWorkflowDagDisplaySteps(steps, resolvedMeta.plannerPreview);
-    workflowTrace.innerHTML = buildWorkflowDagTraceHtml(displaySteps, resolvedMeta);
-    applyWorkflowDagZoom();
-
-    scrollWorkflowToLatest();
-}
-
-function buildWorkflowDagDisplaySteps(runtimeSteps, plannerPreview) {
-    const steps = Array.isArray(runtimeSteps)
-        ? runtimeSteps.map((step) => {
-            const inferredGroup = inferWorkflowParallelGroup(step);
-            if (!inferredGroup || step?.parallel_group) {
-                return step;
-            }
-            return {
-                ...step,
-                parallel_group: inferredGroup,
-            };
-        })
-        : [];
-    const plannedSteps = Array.isArray(plannerPreview?.planned_steps) ? plannerPreview.planned_steps : [];
-    if (plannedSteps.length) {
-        const runtimeCountByKey = steps.reduce((acc, step) => {
-            const key = String(step?.key || "");
-            if (!key) {
-                return acc;
-            }
-            acc[key] = (acc[key] || 0) + 1;
-            return acc;
-        }, {});
-
-        const plannedByRuntimeKey = {};
-        plannedSteps.forEach((plannedStepId) => {
-            const stepId = String(plannedStepId || "").trim();
-            if (!stepId) {
-                return;
-            }
-            const runtimeKey = WORKFLOW_PLAN_STEP_TO_RUNTIME_KEY[stepId] || stepId;
-            if (!plannedByRuntimeKey[runtimeKey]) {
-                plannedByRuntimeKey[runtimeKey] = [];
-            }
-            plannedByRuntimeKey[runtimeKey].push(stepId);
-        });
-
-        let syntheticIndex = 0;
-        Object.entries(plannedByRuntimeKey).forEach(([runtimeKey, stepIds]) => {
-            const runtimeCount = runtimeCountByKey[runtimeKey] || 0;
-            const missingCount = Math.max(stepIds.length - runtimeCount, 0);
-            if (!missingCount) {
-                return;
-            }
-            const missingStepIds = stepIds.slice(stepIds.length - missingCount);
-            missingStepIds.forEach((stepId) => {
-                syntheticIndex += 1;
-                steps.push({
-                    key: `plan:${stepId}:${syntheticIndex}`,
-                    display_key: runtimeKey,
-                    title: `规划：${formatWorkflowPlanStepLabel(stepId)}`,
-                    summary: "该节点在本轮规划中，但尚未进入执行轨迹。",
-                    detail: `规划步骤 ID: ${stepId}`,
-                    status: "pending",
-                    duration_ms: null,
-                    parallel_group: null,
-                });
-            });
-        });
-    }
-
-    return steps.sort((left, right) => {
-        const leftIndex = getWorkflowDisplayOrderIndex(left);
-        const rightIndex = getWorkflowDisplayOrderIndex(right);
-        if (leftIndex !== rightIndex) {
-            return leftIndex - rightIndex;
-        }
-        const leftTitle = String(left?.title || "");
-        const rightTitle = String(right?.title || "");
-        if (leftTitle !== rightTitle) {
-            return leftTitle.localeCompare(rightTitle);
-        }
-        return String(left?.key || "").localeCompare(String(right?.key || ""));
-    });
-}
-
-function buildWorkflowDagTraceHtml(steps, meta = {}) {
-    const groups = groupWorkflowChipsByParallel(steps);
-    const currentStepIndex = meta.isStreaming ? steps.length - 1 : -1;
-
-    return `
-        <div class="workflow-dag-board" role="list" aria-label="推理执行 DAG">
-            ${groups
-            .map((entry, layerIndex) => {
-                const layerHtml = buildWorkflowDagLayerHtml(entry, {
-                    layerIndex,
-                    currentStepIndex,
-                });
-                if (layerIndex === groups.length - 1) {
-                    return layerHtml;
-                }
-                return `${layerHtml}${buildWorkflowDagConnectorHtml(entry, groups[layerIndex + 1])}`;
-            })
-            .join("")}
-        </div>
-    `;
-}
-
-function buildWorkflowDagLayerHtml(entry, options = {}) {
-    if (!entry) {
-        return "";
-    }
-
-    if (entry.type === "single") {
-        return `
-            <section class="workflow-dag-layer" role="listitem">
-                ${buildWorkflowDagNodeHtml(entry.step, entry.index, options)}
-            </section>
-        `;
-    }
-
-    const groupLabel = WORKFLOW_PARALLEL_GROUP_LABELS[entry.groupId] || "并行分支";
-    return `
-        <section class="workflow-dag-layer workflow-dag-layer-group" role="listitem" aria-label="${escapeHtml(groupLabel)}">
-            <div class="workflow-dag-group-head">${escapeHtml(groupLabel)} · ${escapeHtml(String(entry.items.length))} 路并行</div>
-            <div class="workflow-dag-branches">
-                ${entry.items
-            .map((item) => buildWorkflowDagNodeHtml(item.step, item.index, options))
-            .join("")}
-            </div>
-        </section>
-    `;
-}
-
-function buildWorkflowDagConnectorHtml(fromEntry, toEntry) {
-    const fromGroup = fromEntry?.type === "group";
-    const toGroup = toEntry?.type === "group";
-    const connectorType = fromGroup && !toGroup
-        ? "join"
-        : !fromGroup && toGroup
-            ? "fork"
-            : "linear";
-    const connectorLabel = connectorType === "fork"
-        ? "分叉"
-        : connectorType === "join"
-            ? "汇合"
-            : "流转";
-    const connectorSymbol = connectorType === "fork"
-        ? "⇢"
-        : connectorType === "join"
-            ? "⇠"
-            : "→";
-    return `
-        <div class="workflow-dag-connector workflow-dag-connector-${connectorType}" aria-hidden="true">
-            <span class="workflow-dag-connector-arrow">${connectorSymbol}</span>
-            <span class="workflow-dag-connector-label">${connectorLabel}</span>
-        </div>
-    `;
-}
-
-function buildWorkflowDagNodeHtml(step, index, options = {}) {
-    const isCurrent = index === options.currentStepIndex;
-    const status = isCurrent ? "active" : normalizeWorkflowStepStatus(step?.status);
-    const statusLabel = workflowStatusLabel(status);
-    const detail = step?.detail || "";
-    const summary = step?.summary || summarizeWorkflowDetail(detail);
-    const expanded = status === "active" || status === "error";
-    const cardClasses = [
-        "workflow-step",
-        "workflow-dag-node",
-        `workflow-step-${escapeHtml(status)}`,
-        status === "completed" ? "workflow-step-completed" : "",
-        isCurrent ? "workflow-step-current" : "",
-    ]
-        .filter(Boolean)
-        .join(" ");
-    const durationBadge =
-        typeof step?.duration_ms === "number" && step.duration_ms > 0
-            ? `<span class="workflow-step-duration">${escapeHtml(formatWorkflowDuration(step.duration_ms))}</span>`
-            : "";
-    const currentBadge = isCurrent
-        ? '<span class="workflow-step-status workflow-step-status-active">当前</span>'
-        : "";
-
-    return `
-        <article class="${cardClasses}" data-expanded="${expanded}" data-step-key="${escapeHtml(String(step?.key || ""))}">
-            <button type="button" class="workflow-step-toggle" aria-expanded="${expanded}">
-                <div class="workflow-step-header">
-                    <span class="workflow-step-index">${index + 1}</span>
-                    <div class="workflow-step-content">
-                        <div class="workflow-step-meta">
-                            <h3 class="workflow-step-title">${escapeHtml(step?.title || "处理中")}</h3>
-                            <div class="workflow-step-meta-right">
-                                ${durationBadge}
-                                ${currentBadge}
-                                <span class="workflow-step-status workflow-step-status-${escapeHtml(status)}">${statusLabel}</span>
-                                <span class="workflow-step-chevron">${expanded ? "收起" : "展开"}</span>
-                            </div>
-                        </div>
-                        <p class="workflow-step-summary">${escapeHtml(summary)}</p>
-                    </div>
-                </div>
-            </button>
-            <div class="workflow-step-detail" ${expanded ? "" : "hidden"}>${escapeHtml(detail)}</div>
-        </article>
-    `;
+    workflowTrace.innerHTML = buildNativeExecutionHtml([])
+        + '<p>业务记录（非原生执行状态）</p>' + buildWorkflowChipRowHtml(steps);
 }
 
 function renderWorkflowTraceError(message) {
@@ -9647,6 +9314,7 @@ async function openWorkflowTraceStream(requestId) {
     stopWorkflowTraceStream();
     activeWorkflowRequestId = requestId;
     activeWorkflowSteps = [];
+    activeExecutionEvents = [];
 
 
     if (typeof EventSource !== "function") {
@@ -9837,12 +9505,21 @@ function handleWorkflowStreamEvent(payload) {
         return;
     }
 
+    if (payload.type === "execution-event" && payload.event?.version === 1) {
+        if (!activeExecutionEvents.some(event => event.event_id === payload.event.event_id)) {
+            activeExecutionEvents.push(payload.event);
+        }
+        syncNativeExecutionDisplay();
+        return;
+    }
+
     if (payload.type === "trace-step" && payload.step) {
         activeWorkflowSteps = [...activeWorkflowSteps, payload.step];
         // Hide typing dots on first trace-step
         const dots = chatStream?.querySelector(".message-pending #pending-typing-dots");
         if (dots) dots.hidden = true;
         updatePendingAssistantMessage(payload.step.title || "处理中", activeWorkflowSteps);
+        syncNativeExecutionDisplay();
         renderWorkflowTrace(activeWorkflowSteps, {
             workflowAction: latestWorkflowMeta.workflowAction,
             knowledgeHits: latestWorkflowMeta.knowledgeHits,
@@ -9875,6 +9552,7 @@ function handleWorkflowStreamEvent(payload) {
 
     if (payload.type === "answer_done") {
         const response = payload.response || {};
+        mergeNativeExecutionEvents(response.execution_events || []);
         if (typeof response.answer === "string") {
             streamingDeliveredResponse = response;
             activeConversationId = response.conversation_id || activeConversationId;
@@ -9892,7 +9570,8 @@ function handleWorkflowStreamEvent(payload) {
                 response.exchange_id || null,
                 response.workflow_trace || [],
                 response.external_evidence_required !== false,
-                response.answer_blocks || []
+                response.answer_blocks || [],
+                response.execution_events || []
             );
             // Some SSE deployments publish answer_done before post-answer
             // evidence is attached. Do not prevent the canonical /chat
@@ -10068,11 +9747,9 @@ function updateWorkflowStats(steps, meta = {}) {
         return;
     }
 
-    const totalDurationMs = steps.reduce(
-        (sum, step) => sum + (typeof step.duration_ms === "number" ? step.duration_ms : 0),
-        0
-    );
-    workflowTotalDuration.textContent = steps.length ? (formatWorkflowDuration(totalDurationMs) || "处理中") : "--";
+    // Summing nested/overlapping durations invents a request latency. The
+    // answer bubble measures wall time; this panel exposes per-node durations.
+    workflowTotalDuration.textContent = activeExecutionEvents.length ? "见节点" : "--";
     workflowCurrentAction.textContent = formatWorkflowActionLabel(meta, steps);
     workflowKnowledgeCount.textContent =
         typeof meta.knowledgeHits === "number" ? `${meta.knowledgeHits} 条` : steps.length ? "0 条" : "--";

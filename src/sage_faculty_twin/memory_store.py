@@ -14,6 +14,9 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from pydantic import TypeAdapter
+from sage.runtime.execution_observation import ExecutionEvent
+
 from sage.neuromem import (
     MemoryEntry,
     QueryRequest,
@@ -81,6 +84,7 @@ class ConversationMemoryRecord:
     web_search_hits: list[WebSearchHit] = field(default_factory=list)
     owner_id: str | None = None
     answer_blocks: list[SourceAnswerBlock] = field(default_factory=list)
+    execution_events: list[ExecutionEvent] = field(default_factory=list)
 
     def __post_init__(self):
         _validate_owner_id(self.owner_id)
@@ -101,6 +105,8 @@ class ConversationMemoryRecord:
             "answer": self.answer,
             **({"answer_blocks": [asdict(block) for block in self.answer_blocks]}
                if self.answer_blocks else {}),
+            **({"execution_events": [event.to_dict() for event in self.execution_events]}
+               if self.execution_events else {}),
             "workflow_action": self.workflow_action,
             "interaction_domain": self.interaction_domain,
             "knowledge_hit_count": self.knowledge_hit_count,
@@ -125,6 +131,7 @@ class ConversationMemoryRecord:
             answer=str(payload["answer"]),
             answer_blocks=[SourceAnswerBlock(**item)
                            for item in payload.get("answer_blocks", [])],
+            execution_events=TypeAdapter(list[ExecutionEvent]).validate_python(payload.get("execution_events", [])),
             workflow_action=str(payload["workflow_action"]),
             interaction_domain=(
                 str(payload["interaction_domain"]) if payload.get("interaction_domain") else None

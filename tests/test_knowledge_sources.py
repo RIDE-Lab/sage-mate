@@ -70,6 +70,7 @@ def test_failed_source_does_not_leave_partial_success_or_poison_endpoint():
 
 def test_source_graph_runs_nested_inside_existing_retrieval_graph():
     from types import SimpleNamespace
+    from sage.runtime.execution_observation import ExecutionObserver
     from sage_faculty_twin.retrieval_runtime import RetrievalRuntime
     barrier = Barrier(2)
     class Store:
@@ -83,8 +84,19 @@ def test_source_graph_runs_nested_inside_existing_retrieval_graph():
     try:
         ports = SimpleNamespace(retrieve_memory=lambda value: value,
             retrieve_knowledge=lambda value: sources.search(value, visitor_profile='lab_member'))
-        assert outer.retrieve(ports, memory='owned-memory', knowledge='synthetic', timeout=5) == (
-            'owned-memory', [])
+        events = []
+        with ExecutionObserver(events.append, trace_id='synthetic-sources').bind():
+            assert outer.retrieve(ports, memory='owned-memory', knowledge='synthetic', timeout=5) == (
+                'owned-memory', [])
+        parent = next(event for event in events if event.operator_key == 'read-knowledge'
+                      and event.state == 'started')
+        branches = [event for event in events if event.operator_key in {'read-wiki', 'read-private'}]
+        starts = [event for event in branches if event.state == 'started']
+        ends = [event for event in branches if event.state == 'completed']
+        assert len(starts) == len(ends) == 2
+        assert {event.parent_execution_id for event in starts} == {parent.execution_id}
+        assert max(event.sequence for event in starts) < min(event.sequence for event in ends)
+        assert len({event.wave_id for event in starts}) == 1
         assert outer._endpoint._requests == {}
         assert sources._runtime._endpoint._requests == {}
     finally:

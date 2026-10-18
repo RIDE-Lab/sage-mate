@@ -36,6 +36,29 @@ class WorkflowEventBroker:
         self._journal().append(request_id, event_id=uuid4().hex,
             payload={"type": "trace-step", "step": step.model_dump(mode="json")})
 
+    def publish_execution(self, request_id, event, *, guard=None):
+        """Publish native metadata before answer admission, fenced to its lease.
+
+        This does not acknowledge the answer or a background task. Late/stale
+        workers must fail instead of writing into an already closed stream.
+        """
+        from sage.runtime.execution_observation import ExecutionEvent
+
+        if not isinstance(event, ExecutionEvent) or event.trace_id != request_id:
+            raise ValueError("execution_event_scope_conflict")
+        state = self._state_provider()
+        prepared = self._journal().prepare_append(request_id, event_id=event.event_id,
+            payload={"type": "execution-event", "event": event.to_dict()})
+        if guard is not None:
+            guard.validate_store(state)
+
+        def commit(values):
+            updates = guard.apply(values) if guard is not None else {}
+            updates[prepared.slot] = prepared.transform(values[prepared.slot])
+            return updates
+
+        state.update_many((prepared.slot, *((guard.slot,) if guard is not None else ())), commit)
+
     def publish_answer_done(self, request_id, response):
         if not isinstance(response, DeliveredChatResponse):
             raise TypeError("answer_done requires a DeliveredChatResponse")

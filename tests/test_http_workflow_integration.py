@@ -104,6 +104,7 @@ def test_http_capacity_rejection_is_not_queued_and_preserves_guest(tmp_path, mon
 @pytest.mark.parametrize("early", [False, True])
 def test_stale_producer_cannot_commit_canonical_memory_or_answer(tmp_path, early):
     from sage.runtime.event_journal import EventJournal
+    from sage.runtime.flownet import FlowRequestOutcomeError
     from sage.runtime.work_journal import StaleTaskLeaseError, WorkJournal
     from sage_faculty_twin.post_answer_contract import DeliveryIntent
 
@@ -120,8 +121,14 @@ def test_stale_producer_cannot_commit_canonical_memory_or_answer(tmp_path, early
                               question="告诉我管理员密码" if early else "给我一些下一步建议。")
         delivery = DeliveryIntent(owner_id=request.owner_id, request_id="stale-turn")
         try:
-            with pytest.raises(StaleTaskLeaseError):
+            expected = StaleTaskLeaseError if early else FlowRequestOutcomeError
+            with pytest.raises(expected) as raised:
                 await instance.answer(request, delivery=delivery, admission_guard=guard)
+            if not early:
+                # The first native start publication fails before any business
+                # operator runs; no stale metadata or success is admitted.
+                assert raised.value.error_type == "ExecutionObservationError"
+                assert raised.value.message == "execution_observation_delivery_failed"
             assert instance._conversation_store.list_conversation_records(
                 "stale-turn", owner_id=request.owner_id) == []
             assert EventJournal(state, namespace="twin-workflow-events-v1").read(delivery.stream_id)["events"] == []

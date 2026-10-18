@@ -115,9 +115,16 @@ def test_service_delivery_publishes_answer_and_terminal_without_callback(tmp_pat
             page = service._get_post_answer_runtime().events.read(delivery.stream_id)
             assert page["closed"]
             kinds = [event["payload"]["type"] for event in page["events"]]
-            assert kinds[0] == "answer_done" and kinds[-1] == "complete"
+            assert kinds[-1] == "complete"
             assert kinds.count("answer_done") == 1 and kinds.count("complete") == 1
-            assert page["events"][0]["payload"]["response"]["answer"] == response.answer
+            answer_index = kinds.index("answer_done")
+            answer = page["events"][answer_index]["payload"]["response"]
+            assert answer["answer"] == response.answer
+            native = [event["payload"]["event"] for event in page["events"]
+                      if event["payload"]["type"] == "execution-event"]
+            assert native == answer["execution_events"]
+            assert all(index < answer_index for index, kind in enumerate(kinds) if kind == "execution-event")
+            assert bool(native) is not early
         finally:
             await service.aclose()
 

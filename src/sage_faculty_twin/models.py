@@ -5,6 +5,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sage.runtime.source_answer_plan import SourceAnswerBlock
+from sage.runtime.execution_observation import ExecutionEvent
 
 
 class ChatAttachment(BaseModel):
@@ -83,14 +84,6 @@ class WorkflowTraceStep(BaseModel):
     detail: str = Field(min_length=1, max_length=512)
     status: str = Field(default="completed", pattern="^(completed|skipped)$")
     duration_ms: int | None = Field(default=None, ge=0)
-    # Identifies the DAG fan-out branch this step belongs to. ``None`` means
-    # the step is part of the linear backbone and renders as a single chip in
-    # the workflow rail. Steps that share the same non-null ``parallel_group``
-    # ran concurrently in the chat DAG (e.g. memory + knowledge retrieval, or
-    # the four post-answer side-effect stages) and are visualised together as
-    # a vertical fan-out cluster on the client. Kept short so it round-trips
-    # cheaply in streaming partial traces.
-    parallel_group: str | None = Field(default=None, max_length=32)
 
 
 class AnswerBasisItem(BaseModel):
@@ -275,6 +268,8 @@ class ChatResponse(BaseModel):
     shadow_planner_preview: WorkflowPlanPreview | None = None
     planner_comparison: WorkflowPlanComparison | None = None
     workflow_trace: list[WorkflowTraceStep] = Field(default_factory=list)
+    # Actual SAGE cursor attempts, not business annotations or durable task acks.
+    execution_events: list[ExecutionEvent] = Field(default_factory=list)
     memory_used: bool = False
     memory_write_back: bool = False
     retrieved_items: list[MemoryAuditItem] = Field(default_factory=list)
@@ -311,6 +306,7 @@ class ConversationExchangeResponse(BaseModel):
     question: str = Field(min_length=1, max_length=4000)
     answer: str = Field(min_length=1)
     answer_blocks: list[SourceAnswerBlock] = Field(default_factory=list)
+    execution_events: list[ExecutionEvent] = Field(default_factory=list)
     workflow_action: str = Field(min_length=1, max_length=64)
     knowledge_hit_count: int = Field(ge=0)
     created_at: datetime

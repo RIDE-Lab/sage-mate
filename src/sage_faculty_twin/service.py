@@ -909,21 +909,6 @@ _CANONICAL_TRACE_INDEX: dict[str, int] = {
     key: idx for idx, key in enumerate(_CANONICAL_TRACE_ORDER)
 }
 
-# Maps canonical trace keys to the DAG fan-out branch they belong to. Steps
-# sharing the same group ran concurrently in the chat DAG pipeline (Task 4 of
-# the Faculty Twin DAG Pipeline plan) and the UI renders them as a stacked
-# fan-out cluster instead of a flat sequence. Keys not in this map remain on
-# the linear backbone (``parallel_group=None``).
-_PARALLEL_TRACE_GROUPS: dict[str, str] = {
-    "memory_retrieve": "retrieval",
-    "knowledge_retrieve": "retrieval",
-    "memory_persist": "post_answer",
-    "artifact_memory_writeback": "post_answer",
-    "memory_profile_consolidate": "post_answer",
-    "follow_up_plan": "post_answer",
-    "memory_usefulness_score": "post_answer",
-}
-
 # Trace keys that belong to the post-answer fan-out branch. Kept in canonical
 # order. The chat DAG runs these stages *after* ``response_render`` when the
 # critical path completes — so the immediate ``ChatResponse`` ships without
@@ -976,11 +961,10 @@ _PLANNER_COMPARISON_SLOW_WRITE_MS = 1000.0
 def _canonicalize_workflow_trace(
     trace: list["WorkflowTraceStep"],
 ) -> list["WorkflowTraceStep"]:
-    """Stable-sort a workflow trace into canonical chat-pipeline order.
+    """Stable-sort business annotations, not native execution evidence.
 
-    Operators in the chat DAG run in parallel and may append trace steps in
-    arrival order rather than canonical order. This helper restores the
-    deterministic ordering that downstream tests and the UI rail rely on.
+    Native execution_events keep their actual emission order and identities.
+    This helper only groups explanatory notes for deterministic presentation.
     Steps whose key is not in `_CANONICAL_TRACE_ORDER` (defensive case) are
     placed after all known keys in their original relative order.
     """
@@ -1723,7 +1707,7 @@ class FacultyTwinWorkflowSupport:
     @staticmethod
     def _append_knowledge_trace(context: _KnowledgeBranchState, **fields: Any) -> None:
         context.workflow_trace.append(WorkflowTraceStep(
-            **fields, parallel_group=_PARALLEL_TRACE_GROUPS.get(fields["key"]),
+            **fields,
         ))
 
     def _read_knowledge_branch(self, context: _KnowledgeBranchState) -> _KnowledgeBranchState:
@@ -8011,7 +7995,6 @@ class FacultyTwinWorkflowSupport:
             detail=detail,
             status=status,
             duration_ms=duration_ms,
-            parallel_group=_PARALLEL_TRACE_GROUPS.get(key),
         )
         context.workflow_trace.append(step)
         if self._trace_callback is not None:
@@ -9270,11 +9253,24 @@ class DigitalTwinService:
             planner_comparison=planner_comparison,
             delivery=delivery,
         )
+        from sage.runtime.execution_observation import ExecutionObserver
+
+        execution_events = []
+        broker = WorkflowEventBroker(lambda: self._conversation_store.state_store)
+
+        def observe(event):
+            if delivery is not None:
+                broker.publish_execution(delivery.stream_id, event, guard=admission_guard)
+            execution_events.append(event)
+
+        observer = ExecutionObserver(observe, trace_id=delivery.stream_id if delivery else None)
         response, context = await asyncio.to_thread(
             self._run_chat_dag_pipeline,
             request,
             support,
+            observer,
         )
+        response = response.model_copy(update={"execution_events": execution_events})
 
         should_background = self._settings.post_answer_background and trace_callback is not None
 
@@ -9297,6 +9293,7 @@ class DigitalTwinService:
         if context.prepared_memory_record is not None:
             context.prepared_memory_record = replace(
                 context.prepared_memory_record, answer_blocks=response.answer_blocks,
+                execution_events=response.execution_events,
             )
         memory_commit_trace = None
         if context.prepared_memory_record is not None:
@@ -10606,6 +10603,7 @@ class DigitalTwinService:
                     question=record.question,
                     answer=record.answer,
                     answer_blocks=record.answer_blocks,
+                    execution_events=record.execution_events,
                     workflow_action=record.workflow_action,
                     knowledge_hit_count=record.knowledge_hit_count,
                     created_at=record.created_at,
@@ -11843,6 +11841,7 @@ class DigitalTwinService:
         self,
         request: ChatRequest,
         support: FacultyTwinWorkflowSupport,
+        observer=None,
     ) -> tuple[ChatResponse, ChatWorkflowContext]:
         """Execute the single persistent SAGE chat graph with request-local ports.
 
@@ -11861,10 +11860,13 @@ class DigitalTwinService:
             "render": ChatResponseRenderStage(support),
         }
         remaining = request_remaining_seconds()
-        return self._get_chat_runtime().answer(
-            request, ports,
-            timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds,
-        )
+        from contextlib import nullcontext
+
+        with observer.bind() if observer is not None else nullcontext():
+            return self._get_chat_runtime().answer(
+                request, ports,
+                timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds,
+            )
 
     def _capture_post_answer_task(self, context, response, support):
         skip_profile = (context.prepared_memory_record is None

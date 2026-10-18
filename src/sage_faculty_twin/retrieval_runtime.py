@@ -30,7 +30,8 @@ def read_knowledge(inputs):
 
 @flow(uri="flow://twin/retrieval", namespace="twin")
 def retrieval_flow(init_stream):
-    return init_stream.map(read_memory).connect(init_stream.map(read_knowledge))
+    return init_stream.map(read_memory, operator_key="read-memory").connect(
+        init_stream.map(read_knowledge, operator_key="read-knowledge"))
 
 
 class RetrievalRuntime:

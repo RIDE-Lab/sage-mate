@@ -229,7 +229,13 @@ def test_actual_booking_pipeline_propagates_scope_into_stale_business_commit(tmp
                 assert task["failure_code"] == "cancellation_pending"
                 await asyncio.sleep(0.05)
                 assert flow.journal.read(item.delivery.stream_id)["tasks"]["answer"]["attempt"] == 1
-                assert flow.events.read(item.delivery.stream_id)["events"] == []
+                observed = flow.events.read(item.delivery.stream_id)
+                assert not observed["closed"]
+                assert observed["events"]
+                assert all(frame["payload"]["type"] == "execution-event" for frame in observed["events"])
+                assert not any(frame["payload"]["event"]["operator_key"] == "execute-booking"
+                               and frame["payload"]["event"]["state"] == "completed"
+                               for frame in observed["events"])
                 available.set()
                 assert await flow._cancellations.await_result(item.delivery.stream_id, timeout=5) == "cancelled"
             assert instance._meeting_service.list_bookings() == []

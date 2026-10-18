@@ -49,7 +49,7 @@ class PostAnswerHandler:
             nonlocal started
             traces.append(WorkflowTraceStep(
                 key=key, title=title, summary=summary, detail=detail,
-                status="skipped" if skipped else "completed", parallel_group="post_answer",
+                status="skipped" if skipped else "completed",
                 duration_ms=max(0, round((perf_counter() - started) * 1000)),
             ))
             started = perf_counter()

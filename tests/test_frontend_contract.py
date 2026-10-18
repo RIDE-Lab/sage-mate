@@ -14,6 +14,39 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_native_execution_timeline_uses_attempt_identity_not_labels_or_completion_guess():
+    import subprocess
+    script = r'''
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const context = {escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;')};
+vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('function buildNativeExecutionHtml('),source.indexOf('function syncNativeExecutionDisplay(')), context);
+let sequence = 0;
+const event = (id,state,key) => ({version:1,event_id:'event-'+(++sequence),sequence,execution_id:id,state,operator_key:key,program_uri:'flow://synthetic',next_nodes:[],wave_size:2});
+const html = context.buildNativeExecutionHtml([event('one','started','same'), event('two','started','same'),event('one','failed','same')]);
+assert.equal((html.match(/<li /g)||[]).length,2);
+assert(html.includes('执行失败') && html.includes('执行中'));
+assert(!html.includes('data-execution-state="completed"'));
+assert(html.includes('同批调度 2 个节点') && html.includes('同批调度不等于同时执行'));
+assert(context.buildNativeExecutionHtml([]).includes('不按步骤名称推断'));
+assert(!context.buildNativeExecutionHtml([event('x','recovered','<script>')]).includes('<script>'));
+assert(context.buildNativeExecutionHtml([event('x','cancelled','safe')]).includes('已取消'));
+const started = event('out-of-order','started','safe'), ended = event('out-of-order','completed','safe');
+assert(context.buildNativeExecutionHtml([ended,started]).includes('data-execution-state="completed"'));
+vm.runInContext('let activeExecutionEvents = []',context);
+vm.runInContext(source.slice(source.indexOf('function mergeNativeExecutionEvents('),source.indexOf('function buildWorkflowPhaseRailHtml(')),context);
+context.mergeNativeExecutionEvents([started]);
+context.mergeNativeExecutionEvents([started,ended]);
+assert.equal(vm.runInContext('activeExecutionEvents.length',context),2);
+assert.equal(vm.runInContext('activeExecutionEvents[0].event_id',context),started.event_id);
+assert(source.includes('payload.type === "execution-event"'));
+assert(source.includes('response.execution_events || []'));
+assert(source.includes('exchange.execution_events || []'));
+'''
+    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
+
+
 def test_phase_status_requires_actual_events_not_answer_completion():
     import subprocess
     script = r'''
@@ -48,13 +81,15 @@ assert.equal(context.normalizeWorkflowStepStatus('retrying'),'active');
 assert.equal(context.normalizeWorkflowStepStatus(undefined),'unknown');
 assert.equal(context.normalizeWorkflowStepStatus('future-status'),'unknown');
 assert.equal(context.normalizeWorkflowStepStatus('skipped'),'skipped');
-vm.runInContext(source.slice(source.indexOf('function inferWorkflowParallelGroup('),
-    source.indexOf('function getWorkflowDisplayOrderIndex(')), context);
-assert.equal(context.inferWorkflowParallelGroup({key:'memory_retrieve',title:'检索知识'}),null);
-assert.equal(context.inferWorkflowParallelGroup({title:'写回归档'}),null);
-assert.equal(context.inferWorkflowParallelGroup({parallel_group:'retrieval'}),'retrieval');
+context.buildWorkflowStepChipHtml = step => step.key;
+vm.runInContext(source.slice(source.indexOf('function buildWorkflowChipRowHtml('),
+    source.indexOf('function buildWorkflowStepChipHtml(')), context);
+assert.equal(context.buildWorkflowChipRowHtml([{key:'memory_retrieve',parallel_group:'retrieval'},
+    {key:'follow_up_plan',parallel_group:'post_answer'}]),'memory_retrievefollow_up_plan');
+assert(!source.includes('function inferWorkflowParallelGroup('));
+assert(!source.includes('function buildWorkflowDagDisplaySteps('));
 assert(!source.includes('WORKFLOW_PARALLEL_GROUP_FALLBACK_RULES'));
-assert(source.includes('const completedSteps = steps.filter((step) => step?.status === "completed");'));
+assert(!source.includes('WORKFLOW_PARALLEL_GROUP_LABELS'));
 '''
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 
