@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import HTTPException
+from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
 from sage_faculty_twin.memory_store import ConversationMemoryRecord
 from sage_faculty_twin.service import DigitalTwinService
@@ -13,6 +14,9 @@ from sage_faculty_twin.service import DigitalTwinService
 @dataclass
 class _ConversationStoreStub:
     records: list[ConversationMemoryRecord]
+    # Historical records may predate native events; use the real empty journal
+    # backend rather than bypassing fresh metadata projection in application code.
+    state_store: StatefulProcessRuntime = field(default_factory=StatefulProcessRuntime)
 
     def list_records(self) -> list[ConversationMemoryRecord]:
         return list(self.records)

@@ -52,7 +52,10 @@ def test_killed_leased_worker_recovers_without_regenerating_answer(tmp_path):
             assert before["status"] == "running" and before["attempt"] == 1
             initial = runtime.events.read(task.delivery.stream_id)
             assert not initial["closed"]
-            assert [event["payload"]["type"] for event in initial["events"]] == ["answer_done"]
+            assert [event["payload"]["type"] for event in initial["events"]] == ["answer_done", "work-event"]
+            entered = initial["events"][1]["payload"]["event"]
+            assert (entered["request_id"], entered["task_id"], entered["attempt"], entered["state"]) == (
+                task.request_id, "post_answer", 1, "started")
             runtime.start()
             runtime.wait(task.request_id, timeout=90)
             after = runtime.journal.read(task.request_id)["tasks"]["post_answer"]
@@ -63,6 +66,12 @@ def test_killed_leased_worker_recovers_without_regenerating_answer(tmp_path):
             kinds = [event["payload"]["type"] for event in page["events"]]
             assert page["closed"] and kinds[-1] == "complete"
             assert kinds.count("answer_done") == kinds.count("complete") == 1
+            attempts = [event["payload"]["event"] for event in page["events"]
+                        if event["payload"]["type"] == "work-event"]
+            assert [(event["attempt"], event["state"]) for event in attempts] == [
+                (1, "started"), (2, "started"), (2, "completed")]
+            assert attempts[0] == entered  # Dead attempts never acquire invented completion.
+            assert len({event["event_id"] for event in attempts}) == 3
             assert page["events"][0] == initial["events"][0]
             runtime.submit_turn(task, memory)
             assert runtime.events.read(task.delivery.stream_id) == page
