@@ -53,7 +53,7 @@ def harness(monkeypatch, tmp_path):
     links = SlackUserLinkStore(tmp_path / "links")
     h = SimpleNamespace(state=state, links=links, sent=[], calls=[], lifecycle=[], accounts={},
                         fail_delivery=0, history=[], commit_then_fail=False, accept=True,
-                        block=False, entered=Event(), release=None)
+                        block=False, entered=Event(), release=None, answer_text="完整的研究回答。")
     broker = WorkflowEventBroker(lambda: state)
     monkeypatch.setattr(api_module, "SLACK_TWIN_SIGNING_SECRET", "secret")
     monkeypatch.setattr(api_module, "SLACK_TWIN_TEAM_ID", "T123")
@@ -72,7 +72,7 @@ def harness(monkeypatch, tmp_path):
             h.release = asyncio.Event()
             h.entered.set()
             await h.release.wait()
-        response = ChatResponse(answer="完整的研究回答。", owner_name="Twin", used_model="fixture-model")
+        response = ChatResponse(answer=h.answer_text, owner_name="Twin", used_model="fixture-model")
         delivered = ChatDeliveryGate().deliver(response=response, original_question=request.question)
         broker.finish_immediate(delivery.stream_id, delivered, guard=admission_guard)
         if h.commit_then_fail:
@@ -176,6 +176,23 @@ def test_normalization_and_owned_memory():
         assert api_module._slack_conversation_owner(*ids) != owner
 
 
+def test_slack_assembly_preserves_answer_indentation_and_all_basis_items():
+    from markdown_it import MarkdownIt
+    from sage.runtime.markdown_delivery import plan_markdown
+    from sage_faculty_twin.models import AnswerBasisItem
+    answer = "    print('keep indentation')\n"
+    response = ChatResponse(answer=answer, owner_name="Twin", used_model="fixture", answer_basis=[
+        AnswerBasisItem(title=f"完整依据{i}", basis_label="public", source_label="Wiki", detail="完整证据")
+        for i in range(3)])
+    assembled = api_module._format_slack_twin_answer(response, question="```\nunclosed question")
+    assert answer in assembled
+    assert all(f"完整依据{i}" in assembled for i in range(3))
+    plan = plan_markdown(assembled, max_chars=12000)
+    parsed = MarkdownIt().parse(plan.frames[0].text)
+    assert any(token.type == "fence" and token.content == "print('keep indentation')\n"
+               for token in parsed)
+
+
 @pytest.mark.parametrize("event_type", ["message", "app_mention"])
 def test_event_status_is_private_durable_and_does_not_call_model(harness, event_type):
     original = event(type=event_type)
@@ -183,7 +200,7 @@ def test_event_status_is_private_durable_and_does_not_call_model(harness, event_
     harness.flush()
     rows, _ = api_module.slack_workflow.journal.records(limit=10)
     request_id = rows[0]["key"]
-    assert request_id in harness.sent[0][1]["text"]
+    assert request_id in harness.sent[0][1]["markdown_text"]
     query = event(event_id="EvStatus", type=event_type, text=f"status {request_id}")
     for _ in range(2):
         assert harness.client.post("/slack/events", content=query, headers=signed(query, json_body=True)).status_code == 200
@@ -193,8 +210,8 @@ def test_event_status_is_private_durable_and_does_not_call_model(harness, event_
     method, payload = harness.sent[-1]
     assert method == "chat.postEphemeral"
     assert payload["user"] == "U1"
-    assert "处理完成" in payload["text"]
-    assert "完整的研究回答" not in payload["text"]
+    assert "处理完成" in payload["markdown_text"]
+    assert "完整的研究回答" not in payload["markdown_text"]
 
 
 @pytest.mark.parametrize("transport", ["command", "message", "mention"])
@@ -220,9 +237,9 @@ def test_terminal_answer_failure_sends_private_notice_without_question(harness, 
     method, payload = harness.sent[0]
     assert method == "chat.postEphemeral"
     assert payload["user"] == "U1"
-    assert "已停止自动重试" in payload["text"]
-    assert "private model exception" not in payload["text"]
-    assert "研究路线" not in payload["text"]
+    assert "已停止自动重试" in payload["markdown_text"]
+    assert "private model exception" not in payload["markdown_text"]
+    assert "研究路线" not in payload["markdown_text"]
 
 
 def test_signed_status_reports_terminal_failure_without_new_work_or_cross_channel_disclosure(harness):
@@ -348,7 +365,7 @@ def test_bare_allowlist_is_not_authorization(harness, monkeypatch, transport):
                                    content=body, headers=signed(body, json_body=transport == "event"))
     assert response.status_code == 200
     harness.flush()
-    text = response.json()["text"] if transport == "command" else harness.sent[0][1]["text"]
+    text = response.json()["text"] if transport == "command" else harness.sent[0][1]["markdown_text"]
     assert "生成 Slack 绑定码" in text
     assert harness.calls == []
 
@@ -373,7 +390,8 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     method, payload = harness.sent[0]
     # The linked member's private retrieval scope is not the channel audience.
     assert method == "chat.postEphemeral"
-    assert "完整的研究回答。" in payload["text"]
+    assert "完整的研究回答。" in payload["markdown_text"]
+    assert "text" not in payload and "blocks" not in payload
     assert payload["user"] == "UOTHER"
     assert "thread_ts" not in payload
     records, _ = api_module.slack_workflow.journal.records(limit=10)
@@ -383,6 +401,39 @@ def test_signed_requests_use_durable_answer_and_correct_visibility(harness, tran
     assert "private-credential" not in saved
     assert "fixture-token" not in saved
     assert "Earlier lab discussion" not in saved
+
+
+def test_signed_member_request_delivers_complete_native_markdown_in_private_parts(harness):
+    from markdown_it import MarkdownIt
+    from sage.runtime.markdown_delivery import character_units
+    harness.bind()
+    url = "https://example.org/full/source?key=value&other=complete"
+    harness.answer_text = ("**" + " ".join(f"资料{i:04}" for i in range(2200))
+                           + f" FINAL**\n\n<@U123> <!channel> [source]({url})")
+    body = event(user="UOTHER", type="app_mention", channel="CPUBLIC", channel_type="channel")
+    assert harness.client.post("/slack/events", content=body,
+                               headers=signed(body, json_body=True)).status_code == 200
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    harness.client.portal.call(partial(api_module.slack_workflow.wait, rows[0]["key"], timeout=20))
+    assert len(harness.calls) == 1 and len(harness.sent) >= 2
+    controls, links = [], []
+    for method, payload in harness.sent:
+        assert method == "chat.postEphemeral"
+        assert payload["user"] == "UOTHER" and payload["channel"] == "CPUBLIC"
+        assert not {"text", "blocks", "thread_ts"}.intersection(payload)
+        assert character_units(payload["markdown_text"]) <= 12000
+        for block in MarkdownIt().parse(payload["markdown_text"]):
+            for token in block.children or []:
+                if token.type == "code_inline":
+                    controls.append(token.content)
+                if token.type == "link_open":
+                    links.append(token.attrGet("href"))
+    assert "FINAL" in "".join(payload["markdown_text"] for _, payload in harness.sent)
+    assert "<@U123>" in controls and "<!channel>" in controls
+    assert url in links
+    ledger = api_module.slack_workflow._sequence.read(rows[0]["key"], "deliver")
+    assert len(ledger["receipts"]) == len(harness.sent)
+    assert all(receipt["accepted"] is True for receipt in ledger["receipts"])
 
 
 @pytest.mark.parametrize("channel", ["CPUBLIC", "GPRIVATE", "D123"])
@@ -412,7 +463,7 @@ def test_member_mention_recovery_never_widens_answer_audience(harness, channel):
     # A newly mentioned message need not have an active Slack thread. Reply at
     # channel level to the same user, without creating a public placeholder.
     assert "thread_ts" not in payload
-    assert "完整的研究回答。" in payload["text"]
+    assert "完整的研究回答。" in payload["markdown_text"]
     assert payload["link_names"] is False
     assert payload["parse"] == "none"
 
@@ -436,6 +487,21 @@ def test_rejected_private_delivery_has_no_public_fallback(harness, monkeypatch, 
     method, payload = attempts[0]
     assert method == "chat.postEphemeral"
     assert payload["user"] == "U1" and payload["channel"] == "CPUBLIC"
+
+
+@pytest.mark.parametrize("result", [
+    {"ok": True}, {"ok": True, "ts": "123.456"},
+    {"ok": True, "message_ts": 123.456}, {"ok": True, "message_ts": "invalid"},
+    {"ok": "true", "message_ts": "123.456"},
+    {"ok": True, "message_ts": "123.456", "warning": "message_truncated"},
+    {"ok": True, "message_ts": "123.456", "response_metadata": {"warnings": ["message_truncated"]}},
+])
+def test_success_http_body_without_complete_native_receipt_is_not_accepted(harness, monkeypatch, result):
+    monkeypatch.setattr(api_module, "_post_slack_api", lambda *_: result)
+    ingress = SlackIngress(team_id="T123", user_id="U1", channel_id="D123", transport_id="receipt",
+                           kind="command", question="fixture")
+    with pytest.raises(ValueError, match="slack_delivery_"):
+        harness.client.portal.call(api_module._deliver_slack_reply, ingress, SlackReply(text="fixture"))
 
 
 def test_event_retry_and_lost_answer_ack_do_not_regenerate(harness):
@@ -654,7 +720,7 @@ def test_worker_revalidates_revocation_after_http_admission(harness):
     harness.accept = True
     harness.flush()
     assert harness.calls == []
-    assert "不是课题组成员" in harness.sent[0][1]["text"]
+    assert "不是课题组成员" in harness.sent[0][1]["markdown_text"]
 
 
 def test_same_transport_id_with_different_input_conflicts(harness):
@@ -712,7 +778,7 @@ def test_context_request_without_history_never_calls_model(harness, monkeypatch)
     assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 200
     harness.flush()
     assert harness.calls == []
-    assert "读不到当前 Slack 会话的历史消息" in harness.sent[0][1]["text"]
+    assert "读不到当前 Slack 会话的历史消息" in harness.sent[0][1]["markdown_text"]
 
 
 @pytest.mark.parametrize("transport", ["command", "event"])
@@ -728,7 +794,7 @@ def test_bind_success_and_event_retry_do_not_persist_code(harness, transport):
         headers["x-slack-retry-num"] = "1"
         assert harness.client.post(endpoint, content=body, headers=headers).status_code == 200
     harness.flush()
-    assert "绑定成功" in harness.sent[0][1]["text"]
+    assert "绑定成功" in harness.sent[0][1]["markdown_text"]
     assert harness.links.get_link_for_slack_user("UOTHER", team_id="T123").user_id == "account"
     rows, _ = api_module.slack_workflow.journal.records(limit=10)
     assert code.code not in json.dumps(rows)
@@ -743,8 +809,8 @@ def test_invalid_bind_and_usage(harness):
     body = event(type="app_mention", text="<@BOT>", channel_type="channel")
     assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
     harness.flush()
-    assert any("无效或已过期" in item[1]["text"] for item in harness.sent)
-    assert any("用法" in item[1]["text"] for item in harness.sent)
+    assert any("无效或已过期" in item[1]["markdown_text"] for item in harness.sent)
+    assert any("用法" in item[1]["markdown_text"] for item in harness.sent)
 
 
 def test_binding_lost_commit_ack_recovers_notice_after_restart(harness, monkeypatch):
@@ -766,7 +832,7 @@ def test_binding_lost_commit_ack_recovers_notice_after_restart(harness, monkeypa
     harness.client.portal.call(api_module.startup_event)
     harness.flush()
     assert len(harness.sent) == 1
-    assert "绑定成功" in harness.sent[0][1]["text"]
+    assert "绑定成功" in harness.sent[0][1]["markdown_text"]
     assert harness.client.post("/slack/events", content=body, headers=signed(body, json_body=True)).status_code == 200
     harness.flush()
     assert len(harness.sent) == 1
@@ -781,7 +847,7 @@ def test_invalid_binding_retry_replays_same_notice(harness):
     assert harness.client.post("/slack/events", content=body, headers=headers).status_code == 200
     harness.flush()
     assert len(harness.sent) == 1
-    assert "无效或已过期" in harness.sent[0][1]["text"]
+    assert "无效或已过期" in harness.sent[0][1]["markdown_text"]
 
 
 def test_url_verification(harness):

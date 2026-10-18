@@ -71,7 +71,7 @@ def test_runtime_dependency_contract_includes_required_neuromem() -> (
         "project"
     ]
     dependencies = {
-        dependency.split(">=", 1)[0].split(" @ ", 1)[0].lower()
+        dependency.split(">=", 1)[0].split(" @ ", 1)[0].split("[", 1)[0].lower()
         for dependency in project["dependencies"]
     }
 

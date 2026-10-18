@@ -695,7 +695,9 @@ def _post_slack_api(method: str, payload: dict[str, object]) -> dict[str, object
     response = urllib.request.urlopen(req, timeout=8)
     body = response.read().decode("utf-8")
     parsed = json.loads(body) if body else {}
-    if not parsed.get("ok"):
+    if not isinstance(parsed, dict):
+        raise RuntimeError("slack_invalid_response")
+    if parsed.get("ok") is not True:
         if parsed.get("error") in {"invalid_auth", "not_authed", "token_revoked", "account_inactive"}:
             raise DependencyRejected("slack_authentication_rejected")
         raise RuntimeError(f"Slack API {method} failed: {parsed.get('error', 'unknown_error')}")
@@ -770,13 +772,24 @@ async def _deliver_slack_reply(ingress, reply):
     # nor a historical private_reply=False grants the channel that access.
     # Enforce the audience at the final transport boundary on every retry.
     payload = {"channel": ingress.channel_id, "user": ingress.user_id,
-               "text": reply.text, "link_names": False, "parse": "none"}
+               "markdown_text": reply.text, "link_names": False, "parse": "none"}
     # A mention can be the root of a thread that does not yet exist. Slack only
     # displays ephemeral thread replies in an already active thread. Keep the
     # thread identity in durable ingress, but deliver in the same channel so
     # an initial mention does not become an accepted-but-invisible reply.
     result = await asyncio.to_thread(_post_slack_api, "chat.postEphemeral", payload)
-    return {"accepted": True, "message_ts": result.get("ts") or result.get("message_ts")}
+    if not isinstance(result, dict) or result.get("ok") is not True:
+        raise ValueError("slack_delivery_requires_success_response")
+    metadata = result.get("response_metadata")
+    warnings = [result.get("warning")]
+    if isinstance(metadata, dict) and isinstance(metadata.get("warnings"), list):
+        warnings.extend(metadata["warnings"])
+    if "message_truncated" in warnings:
+        raise ValueError("slack_delivery_truncated")
+    stamp = result.get("message_ts")
+    if not isinstance(stamp, str) or not re.fullmatch(r"[0-9]+\.[0-9]+", stamp):
+        raise ValueError("slack_delivery_requires_message_receipt")
+    return {"accepted": True, "message_ts": stamp}
 
 
 def _slack_twin_link_instructions() -> str:
@@ -847,10 +860,13 @@ def _format_slack_twin_answer(
     lines: list[str] = []
     normalized_question = (question or "").strip()
     if normalized_question:
-        lines.append(f"你问：{normalized_question}")
-    lines.append(response.answer.strip())
+        # Keep question markup in its own container. An unmatched user fence
+        # must not swallow the generated answer or its source links.
+        quoted = "\n> ".join(normalized_question.splitlines())
+        lines.append(f"> 你问：{quoted}\n")
+    lines.append(response.answer)
     if response.answer_basis:
-        basis = "；".join(item.title for item in response.answer_basis[:2])
+        basis = "；".join(item.title for item in response.answer_basis)
         if basis:
             lines.append(f"\n依据：{basis}")
     if slack_message_count:

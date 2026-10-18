@@ -60,7 +60,7 @@ def test_failure_notification_exhaustion_does_not_create_more_work(tmp_path):
 
 
 @pytest.mark.parametrize("denial", [None, "membership revoked"])
-def test_legacy_failure_recovers_private_notice_once_and_preserves_failure(tmp_path, denial):
+def test_terminal_legacy_failure_is_retained_without_rewriting_or_sending(tmp_path, denial):
     from sage.runtime.work_journal import WorkJournal
     async def scenario():
         path = str(tmp_path / "state.db")
@@ -72,7 +72,7 @@ def test_legacy_failure_recovers_private_notice_once_and_preserves_failure(tmp_p
                        tasks={"answer": payload, "deliver": payload}, dependencies={"deliver": ["answer"]})
         lease = journal.claim(item.request_id, "answer", lease_seconds=30)
         journal.fail(lease, code="retry_exhausted")
-        before = journal.read(item.request_id)["tasks"]["answer"]
+        before = journal.read(item.request_id)
         state.close()
         state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
         sent = []
@@ -91,19 +91,8 @@ def test_legacy_failure_recovers_private_notice_once_and_preserves_failure(tmp_p
         current = workflow()
         try:
             await current.start()
-            async def observed():
-                while current.journal.read(item.request_id)["tasks"]["finalize"]["status"] != "done":
-                    await asyncio.sleep(0.01)
-            await asyncio.wait_for(observed(), 3)
-            assert current.journal.read(item.request_id)["tasks"]["answer"] == before
-            assert len(sent) == 1
-            assert sent[0] == denial if denial else "已停止自动重试" in sent[0]
-            await current.aclose()
-            current = workflow()
-            await current.start()
-            assert await current.resume_if_admitted(item)
-            await asyncio.sleep(0.03)
-            assert len(sent) == 1
+            assert current.journal.read(item.request_id) == before
+            assert sent == []
         finally:
             await current.aclose()
             state.close()
@@ -172,7 +161,7 @@ def test_final_attempt_recovers_committed_answer_after_lost_ack(tmp_path):
             await workflow.submit(item)
             result = await workflow.wait(item.request_id, timeout=3)
             assert result["tasks"]["answer"]["attempt"] == 1
-            assert sent == ["canonical answer"]
+            assert sent == ["canonical answer\n"]
         finally:
             await workflow.aclose()
             state.close()
@@ -203,8 +192,10 @@ def test_delivery_retry_does_not_regenerate_answer_and_duplicate_ingress_is_idem
             await workflow.submit(item)
             result = await workflow.wait(item.request_id, timeout=3)
             assert calls == [item.request_id]
-            assert deliveries == ["full answer", "full answer"]
-            assert result["tasks"]["deliver"]["result"]["message_ts"] == "123.456"
+            assert deliveries == ["full answer\n", "full answer\n"]
+            assert result["tasks"]["deliver"]["result"] == {"accepted": True, "parts": 1}
+            saved = workflow._sequence.read(item.request_id, "deliver")
+            assert saved["receipts"] == [{"accepted": True, "external_id": "123.456"}]
             assert result["tasks"]["deliver"]["attempt"] == 2  # One real network failure only.
             with pytest.raises(ValueError, match="commit_conflict"):
                 await workflow.submit(SlackIngress.model_validate({**item.model_dump(), "question": "changed"}))
@@ -235,10 +226,9 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
         async def deliver(item, reply):
             sent.append(reply.text)
             return {"accepted": True}
-        first = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer, deliver=deliver)
-        payload = item.model_dump(mode="json")
-        first.journal.commit(item.request_id, result={"owner_id": item.owner_id},
-                             tasks={"answer": payload, "deliver": payload})
+        first = SlackWorkflow(state, authorize=authorize, recover=recover, answer=answer, deliver=deliver,
+                              accept_task=lambda *_: False)
+        await first.submit(item)
         await first.aclose()
         state.close()
         reopened = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
@@ -253,7 +243,7 @@ def test_restart_recovers_committed_answer_without_running_producer(tmp_path):
             assert completed["settled"] == ["finalize"]
             assert completed["tasks"]["finalize"]["result"] == {"skipped": True}
             assert completed["tasks"]["deliver"]["attempt"] == 1
-            assert sent == ["canonical answer"]
+            assert sent == ["canonical answer\n"]
         finally:
             await workflow.aclose()
             reopened.close()
@@ -281,8 +271,16 @@ def test_revocation_before_delivery_never_sends_saved_private_answer(tmp_path):
         try:
             item = ingress()
             await workflow.submit(item)
-            await workflow.wait(item.request_id, timeout=3)
-            assert sent == ["membership revoked"]
+            from sage.runtime.work_service import WorkFailedError
+            with pytest.raises(WorkFailedError):
+                await workflow.wait(item.request_id, timeout=3)
+            async def finalized():
+                while workflow.journal.read(item.request_id)["tasks"]["finalize"]["status"] != "done":
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(finalized(), timeout=3)
+            assert len(sent) == 1
+            assert "已停止自动重试" in sent[0]
+            assert "private answer" not in sent[0]
         finally:
             await workflow.aclose()
             state.close()
@@ -306,7 +304,7 @@ def test_denial_skips_recovery_and_model_and_false_receipt_is_retried(tmp_path):
             item = ingress()
             await workflow.submit(item)
             result = await workflow.wait(item.request_id, timeout=3)
-            assert receipts == ["access denied", "access denied"]
+            assert receipts == ["access denied\n", "access denied\n"]
             assert result["tasks"]["deliver"]["result"]["accepted"] is True
         finally:
             await workflow.aclose()
