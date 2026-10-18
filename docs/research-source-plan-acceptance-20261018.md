@@ -82,3 +82,36 @@ comparison in15.38s and full onboarding in4.21s. Source originals passed indepen
 read-only catalog comparison. Suggested numerical thresholds are hypothetical
 acceptance criteria, not reported measurements. Scientific proposals still require
 human review; this is not proof of universal model reasoning correctness.
+
+## Production receipt
+
+Deployed code: Twin50306a74073b4748551eee2a4876a8d8b287c2bf,
+SAGEf3ecd85114005f007f9e9e4a8b3b1b3e22c583af. Both verified on GitHub main.
+Independent CPython3.11 release,147 frozen packages; no local source overlays.
+Final clean regression:1557 passed,31 existing skips,331.13s; the pre-existing
+identity-eval exclusion is unchanged. Five Node groups, Ruff and offline lock
+check passed. A Starlette/httpx deprecation warning remains.
+
+Application switched at18:06:45 Asia/Shanghai on2026-10-18; ready18:06:53.
+Only Twin app and its Wiki-sync release references changed. Model services,
+GPU allocations, authentication credentials and legacy quarantine were unchanged.
+Wiki timer restored active; previous release/configs retained for rollback.
+All isolated preview services started for this qualification are stopped.
+
+Public HTTPS research probes returned200 in10.03s and7.98s. Every selected
+source's complete text was compared against the public canonical catalog
+opened read-only. Advice was separately labelled non-source inference.
+The pre-upgrade guest request replayed after cutover with identical exchange ID
+and answer (4.65s); no regeneration was needed.
+
+A subsequent A100-origin connection failed during TLS setup, before reaching
+the app (Connection reset by peer); this attempt is not counted as a pass.
+Mac-origin public health and fresh chat then passed:8.08s, complete SSE terminal
+frame, and cross-guest event access denied. These are API delivery tests, not a
+new browser visual or real Slack acceptance claim; those manual checks remain
+outstanding.
+
+Post-switch aggregate ownership:8 records/14 profiles at the audit snapshot,
+zero unowned, SQLite integrity OK, no legacy-import directory. Later work
+snapshot:28 tasks done,1 historical failed,none active. A new public acceptance
+request can increase owned record counts normally.
