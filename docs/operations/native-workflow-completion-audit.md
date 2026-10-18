@@ -1,5 +1,75 @@
 # Native workflow completion audit
 
+## Deployed source-selection release: d1ace34 (2026-10-18)
+
+Production app and Wiki sync now use frozen `d1ace34`, SAGE `b46054f`.
+Final regression: **1596 passed, 31 existing skips**, 358.28 seconds, with the
+existing identity-eval exclusion unchanged. Five frontend groups, lock validation
+and changed HTTP/source-runtime lint checks passed. No model/GPU/credential change.
+
+The initially failed `92a50ed` cutover was rolled back, fixed on main, qualified
+in isolation, then replaced by this release. Production old-to-new replay now
+returns the same canonical exchange/answer in 0.08 seconds, without regeneration.
+Rollback configuration and prior releases remain recoverable; no database was
+restored or history deleted. Wiki timer is active; preview service was stopped.
+
+Authenticated Chrome acceptance repeated the original complete Chinese question:
+public Wiki research directions plus ECPA/StateAxis roles and full links. It
+completed in **11.1 seconds**, selected only the public Wiki overview (one source),
+and no longer included the private-KB-labelled homepage record. AX and a fresh
+screenshot verified readable Markdown, links and expandable support; process and
+support were initially collapsed. This is one measured case, not a latency SLA.
+Two fresh Mac-to-public-HTTPS research requests also passed independent full-source
+catalog checks in 17.57 and 14.05 seconds, retaining labelled proposals and links.
+
+Post-switch ownership check: 22 records / 35 profiles, zero unowned records or
+profiles, no legacy import directory, SQLite integrity OK. This checks current
+ownership, not a new legacy classification or automatic assignment. Broader goal
+items remain open: real Slack delivery, general source-relative links, and an
+explicit non-destructive storage-retention policy. Research proposals remain
+non-authoritative and still require expert review.
+
+## Source-selection release qualification (2026-10-18)
+
+Update: `92a50ed` passed 1595 tests (31 skips), but its first production
+cutover failed cross-version replay with HTTP 409. The application was rolled
+back to `d3fa3fb` after active work drained; no data snapshot was restored.
+The added optional source field changed raw ingress equality (old missing field
+versus new null). `d1ace34` preserves the original admitted payload and only
+normalizes that documented default for equality; explicit lists, other fields,
+authority checks and journal conflict handling remain enforced. Thirteen HTTP
+tests passed, including restart with both persisted request shapes and explicit
+source-change rejection. An isolated real old-to-new HTTP restart returned the
+identical canonical exchange and answer in 0.44 seconds. Final frozen regression
+and renewed production/browser acceptance are still pending at this checkpoint.
+
+Candidate `92a50ed` supersedes the adapter-only implementation notes below.
+The frozen `b669fa2` run failed: 1518 passed, 31 skipped, four failures and
+68 setup errors. Producer tests require the parent's Git pin, which an archive
+does not contain. Passing the verified committed pin
+`840ee59021be2152dc787cb7569407e534df06e1` through the existing test override
+restored all 117 instance-control tests without skipping their checks.
+Three classifier mocks lacked recent_session_context; the escalation test
+inadvertently used an unconfigured external model. Corrected isolated fixtures
+passed all 44 tests in those two modules. Frozen `f3516fe` subsequently passed
+1590 tests with 31 existing skips in 353.41 seconds.
+
+Real research QA then exposed a separate business-policy defect: the intent
+normalizer treated any occurrence of experiment/实验 as coursework, disabling
+research proposals. Removing those ambiguous triggers while retaining explicit
+course signals passed 109 tests, including five new bilingual controls. The
+real classifier now retains research plus Wiki-only selection; private-only,
+combined sources, negation and Wiki-as-topic checks also passed.
+
+The exact `92a50ed` isolated preview returned two research answers in 12.43 and
+12.52 seconds. Full selected source bodies were independently checked against
+the public catalog, links retained, and proposals separately labelled. These
+proposals remain unverified suggestions, not proof of scientific quality or
+experimental validity. Public delivery took 11.04 seconds; SSE completion and
+cross-guest stream denial passed. Five frontend test groups passed. The final
+full suite and authenticated browser gate are still pending; production remains
+`d3fa3fb` at this checkpoint.
+
 ## Browser acceptance findings requiring follow-up (2026-10-18)
 
 Chrome extension tab binding timed out after 15s, but native Chrome accessibility
