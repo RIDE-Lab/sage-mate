@@ -28,7 +28,8 @@ from sage.runtime.source_audit import (
 )
 from sage.runtime.source_answer_plan import (
     PLAN_SYSTEM_PROMPT, PlanSource, SourceAnswerPlan,
-    prepare_source_plan, render_source_plan, validate_source_plan, source_plan_response_format,
+    prepare_source_plan, render_source_plan, render_source_plan_blocks,
+    validate_source_plan, source_plan_response_format,
 )
 
 from . import __version__ as _app_version
@@ -129,7 +130,6 @@ from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
 from .knowledge_authority import (
     IDENTITY_FLOOR_TITLES,
     OWNER_SYSTEM_OVERVIEW_TITLE,
-    PUBLIC_COURSE_TAGS,
     is_owner_profile_source,
 )
 from .knowledge_gap_draft_store import KnowledgeGapDraftStore
@@ -273,7 +273,6 @@ from .skill_tools import SkillToolRegistry
 from .skills import SkillContext
 from .workflow_planner import DeterministicWorkflowPlanner, PlannerDecision
 from .query_routing_catalog import (
-    COURSE_FACT_MARKERS,
     OWNER_CONTEXT_MARKERS,
     OWNER_IDENTITY_MARKERS,
     SYSTEM_PROJECT_MARKERS,
@@ -4556,6 +4555,11 @@ class FacultyTwinWorkflowSupport:
 
         return ChatResponse(
             answer=context.answer,
+            answer_blocks=(
+                list(render_source_plan_blocks(
+                    self._source_plan_request(context), context.source_answer_plan,
+                )) if context.source_answer_plan is not None else []
+            ),
             owner_name=context.owner_name,
             used_model=context.used_model,
             exchange_id=(
@@ -9359,11 +9363,18 @@ class DigitalTwinService:
         response = self._deliver_chat_response(request, response)
         context.answer = response.answer
         if context.prepared_memory_record is not None:
-            context.prepared_memory_record = replace(context.prepared_memory_record, answer=response.answer)
+            context.prepared_memory_record = replace(
+                context.prepared_memory_record, answer=response.answer,
+                answer_blocks=response.answer_blocks,
+            )
 
         # Preparation is private: it does not write memory or emit a successful
         # commit trace. The final response and task are part of the same commit.
         await asyncio.to_thread(MemoryPrepareStage(support).execute, context)
+        if context.prepared_memory_record is not None:
+            context.prepared_memory_record = replace(
+                context.prepared_memory_record, answer_blocks=response.answer_blocks,
+            )
         memory_commit_trace = None
         if context.prepared_memory_record is not None:
             memory_commit_trace = WorkflowTraceStep(
@@ -10671,6 +10682,7 @@ class DigitalTwinService:
                     exchange_id=record.memory_id,
                     question=record.question,
                     answer=record.answer,
+                    answer_blocks=record.answer_blocks,
                     workflow_action=record.workflow_action,
                     knowledge_hit_count=record.knowledge_hit_count,
                     created_at=record.created_at,

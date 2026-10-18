@@ -4,9 +4,11 @@ import json
 import builtins
 import sqlite3
 from datetime import UTC, datetime
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from sage.runtime.source_answer_plan import SourceAnswerBlock
 
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.memory_store import (
@@ -31,7 +33,8 @@ def test_score_observation_is_deduplicated_in_current_telemetry_window(tmp_path)
     assert store._telemetry_type_counts["score_memory_usefulness"] == 1
 
 
-def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tmp_path):
+@pytest.mark.parametrize("with_blocks", [False, True])
+def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tmp_path, with_blocks):
     settings = AppSettings(conversation_memory_dir=tmp_path / "memory",
                            conversation_memory_index_type="segment")
     store = NeuroMemConversationStore(settings)
@@ -42,6 +45,11 @@ def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tm
         booking_result=None,
     )
     assert store.list_recent_conversation_records("stable-turn") == []
+    if with_blocks:
+        prepared = replace(prepared, answer_blocks=[SourceAnswerBlock(
+            kind="source", markdown="complete answer", source_id="knowledge:0",
+            source_url="https://example.org/wiki/",
+        )])
     serialized = json.loads(json.dumps(prepared.to_dict()))
     restored = ConversationMemoryRecord.from_dict(serialized)
     result = store.persist_exchange(restored)
@@ -49,6 +57,10 @@ def test_prepared_exchange_roundtrip_preserves_identity_and_rejects_conflicts(tm
     reloaded = NeuroMemConversationStore(settings)
     assert reloaded.list_recent_conversation_records("stable-turn")[0].to_dict() == serialized
     restored.answer = "conflicting answer"
+    if with_blocks:
+        with pytest.raises(ValueError, match="canonical answer"):
+            reloaded.persist_exchange(restored)
+        restored.answer_blocks = [replace(restored.answer_blocks[0], markdown=restored.answer)]
     with pytest.raises(ValueError, match="identity_conflict"):
         reloaded.persist_exchange(restored)
     assert reloaded.list_recent_conversation_records("stable-turn")[0].answer == "complete answer"

@@ -38,7 +38,17 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
         calls.append(kwargs)
         return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = plan
-    answer = support.render_chat_response(context).answer
+    response = support.render_chat_response(context)
+    answer = response.answer
+    from sage_faculty_twin.models import ChatResponse
+    restored = ChatResponse.model_validate_json(response.model_dump_json())
+    assert restored.answer_blocks == response.answer_blocks
+    assert restored.answer_blocks[1].source_url == "https://example.org/full/path/"
+    assert "\n\n".join(block.markdown for block in restored.answer_blocks).strip() == answer
+    corrupted = response.model_dump(mode="json")
+    corrupted["answer"] += "unsupported"
+    with pytest.raises(ValueError, match="canonical answer"):
+        ChatResponse.model_validate(corrupted)
     assert context.knowledge_hits[0].source_content in answer
     assert "https://example.org/full/path/" in answer
     assert "作者没有测量" not in answer

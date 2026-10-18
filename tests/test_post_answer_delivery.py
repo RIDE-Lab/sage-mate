@@ -1,5 +1,7 @@
 import pytest
 import asyncio
+from dataclasses import replace
+from sage.runtime.source_answer_plan import SourceAnswerBlock
 
 from sage_faculty_twin.memory_store import NeuroMemConversationStore
 from sage_faculty_twin.post_answer_contract import DeliveryIntent
@@ -40,8 +42,15 @@ def test_delivery_event_write_failure_rolls_back_memory_and_intent(tmp_path, mon
         runtime.close()
 
 
-def test_recovered_worker_publishes_terminal_without_request_callback(tmp_path, monkeypatch):
+@pytest.mark.parametrize("with_blocks", [False, True])
+def test_recovered_worker_publishes_terminal_without_request_callback(tmp_path, monkeypatch, with_blocks):
     settings, memory, record, task = delivery_turn(tmp_path)
+    if with_blocks:
+        blocks = [SourceAnswerBlock(kind="source", markdown=record.answer,
+                  source_id="knowledge:0", source_url="https://example.org/wiki/")]
+        record = replace(record, answer_blocks=blocks)
+        task = task.model_copy(update={"record": record,
+            "response": task.response.model_copy(update={"answer_blocks": blocks})})
     runtime = runtime_for(memory)
     original = memory.state_store.update_many
 
@@ -65,6 +74,8 @@ def test_recovered_worker_publishes_terminal_without_request_callback(tmp_path, 
         recovered.start()
         recovered.wait(record.memory_id, timeout=3)
         page = recovered.events.read(task.delivery.stream_id)
+        assert page["events"][0]["payload"]["response"]["answer_blocks"] == task.response.model_dump(mode="json")["answer_blocks"]
+        assert reopened.list_conversation_records("conversation", owner_id="account:alice")[0].answer_blocks == record.answer_blocks
         assert page["closed"]
         assert page["events"][-1]["payload"] == {"type": "complete"}
         assert [event["payload"]["type"] for event in page["events"]].count("answer_done") == 1

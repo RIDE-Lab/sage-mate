@@ -4,7 +4,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/app.js'), 'utf8');
 // Execute actual pure rendering functions, without a browser or application startup.
-const functions = ['cleanAnswerBasisDetail', 'formatMessageContent', 'escapeHtml', 'buildAnswerBasisItemHtml', 'buildFollowUpActionHtml'];
+const functions = ['cleanAnswerBasisDetail', 'formatMessageContent', 'escapeHtml', 'buildAnswerBasisItemHtml', 'buildFollowUpActionHtml', 'hasMatchingSourceBlocks', 'formatSourceAnswer'];
 const sandbox = {URL, formatAnswerBasisCard: item => item, formatFollowUpActionCard: item => item};
 for (const name of functions) {
   const start = source.indexOf(`function ${name}(`);
@@ -21,6 +21,20 @@ for (const url of ['javascript:alert', 'java\tscript:alert', 'data:text/html,hel
 }
 assert.ok(!sandbox.formatMessageContent('<img src=x onerror=alert(1)>').includes('<img'));
 console.log('Citation Markdown rendering, full-length preservation and unsafe-link tests passed');
+const blocks = [
+  {kind:'source', markdown:'## 来源原文 1\n\n[same](./guide)\n\n```text\n## 来源原文 2\n```', source_url:'https://one.example/docs/page'},
+  {kind:'source', markdown:'## 来源原文 2\n\n[same](./guide)', source_url:'https://two.example/wiki/page'},
+  {kind:'inference', markdown:'[proposal](./guide)', source_url:'https://untrusted.example/'},
+];
+const canonical = blocks.map(b => b.markdown).join('\n\n');
+const rendered = sandbox.formatSourceAnswer(canonical, blocks);
+assert.ok(rendered.includes('href="https://one.example/docs/guide"'));
+assert.ok(rendered.includes('href="https://two.example/wiki/guide"'));
+assert.ok(!rendered.includes('href="https://untrusted.example/'));
+assert.ok(rendered.includes('<pre>## 来源原文 2</pre>'));
+assert.ok(!sandbox.formatSourceAnswer(canonical + ' changed', blocks).includes('<a '));
+assert.ok(!sandbox.formatSourceAnswer(canonical, []).includes('<a '));
+assert.equal(sandbox.hasMatchingSourceBlocks(canonical, [null]), false);
 const base = 'https://source.example/docs/readme.md';
 for (const [relative, expected] of [
   ['./LICENSE', 'https://source.example/docs/LICENSE'],

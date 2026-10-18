@@ -8,7 +8,7 @@ import weakref
 from threading import RLock
 import time
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,7 @@ from sage.neuromem import (
 )
 from sage.neuromem.memory_collection.durable_digest import DurableDigest, DigestPlan
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.source_answer_plan import SourceAnswerBlock
 
 from .config import AppSettings
 from .models import BookingResponse, ChatAttachment, ChatRequest, WebSearchHit
@@ -79,9 +80,14 @@ class ConversationMemoryRecord:
     attachments: list[AttachmentMemoryRecord] = field(default_factory=list)
     web_search_hits: list[WebSearchHit] = field(default_factory=list)
     owner_id: str | None = None
+    answer_blocks: list[SourceAnswerBlock] = field(default_factory=list)
 
     def __post_init__(self):
         _validate_owner_id(self.owner_id)
+        if self.answer_blocks and "\n\n".join(
+            block.markdown for block in self.answer_blocks
+        ).strip() != self.answer:
+            raise ValueError("Source blocks must match the canonical answer")
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -93,6 +99,8 @@ class ConversationMemoryRecord:
             "course_context": self.course_context,
             "question": self.question,
             "answer": self.answer,
+            **({"answer_blocks": [asdict(block) for block in self.answer_blocks]}
+               if self.answer_blocks else {}),
             "workflow_action": self.workflow_action,
             "interaction_domain": self.interaction_domain,
             "knowledge_hit_count": self.knowledge_hit_count,
@@ -115,6 +123,8 @@ class ConversationMemoryRecord:
             ),
             question=str(payload["question"]),
             answer=str(payload["answer"]),
+            answer_blocks=[SourceAnswerBlock(**item)
+                           for item in payload.get("answer_blocks", [])],
             workflow_action=str(payload["workflow_action"]),
             interaction_domain=(
                 str(payload["interaction_domain"]) if payload.get("interaction_domain") else None

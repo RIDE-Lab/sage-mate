@@ -4,6 +4,7 @@ from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sage.runtime.source_answer_plan import SourceAnswerBlock
 
 
 class ChatAttachment(BaseModel):
@@ -255,6 +256,7 @@ class ChatRequestTiming(BaseModel):
 class ChatResponse(BaseModel):
     external_evidence_required: bool = True
     answer: str
+    answer_blocks: list[SourceAnswerBlock] = Field(default_factory=list)
     owner_name: str
     used_model: str
     finish_reason: Literal["stop", "length", "content_filter", "tool_calls"] = "stop"
@@ -280,6 +282,14 @@ class ChatResponse(BaseModel):
     request_timing: ChatRequestTiming | None = None
     generation_diagnostics: ChatGenerationDiagnostics | None = None
 
+    @model_validator(mode="after")
+    def validate_answer_blocks(self):
+        if self.answer_blocks and "\n\n".join(
+            block.markdown for block in self.answer_blocks
+        ).strip() != self.answer:
+            raise ValueError("Source blocks must match the canonical answer")
+        return self
+
 
 class ConversationHistoryItemResponse(BaseModel):
     conversation_id: str
@@ -300,6 +310,7 @@ class ConversationExchangeResponse(BaseModel):
     exchange_id: str
     question: str = Field(min_length=1, max_length=4000)
     answer: str = Field(min_length=1)
+    answer_blocks: list[SourceAnswerBlock] = Field(default_factory=list)
     workflow_action: str = Field(min_length=1, max_length=64)
     knowledge_hit_count: int = Field(ge=0)
     created_at: datetime

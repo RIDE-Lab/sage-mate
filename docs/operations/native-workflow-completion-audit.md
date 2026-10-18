@@ -397,3 +397,19 @@ No secrets, identities, private source bodies or raw journal payloads are includ
 in the journal audit. Task completion is observed state, not proof of every crash
 boundary. Browser automation timeouts remain separate from website health: API
 success does not prove rendering, and a control timeout does not prove a freeze.
+# Source-block integration candidate
+
+SAGE bcfeb104 owns canonical, lossless source blocks. Twin transports those blocks,
+validates their exact concatenation against the answer, commits them with memory
+and delivery, and includes them in server transcripts. Each source block renders
+relative URLs against its own provenance; inference blocks never inherit a base.
+Legacy records without provenance remain readable without invented attribution.
+
+Focused checks: 71 Python tests passed (source gate, memory reopen, HTTP workflow,
+post-answer delivery and delivery gate), five Node test groups passed. New source
+record/response parity check still requires frozen full regression. These are
+candidate checks, not production acceptance. Initial expanded Python run used
+incorrect unprefixed settings and failed eight tests attempting an unavailable
+offline embedding model; corrected DIGITAL_TWIN settings passed. Ruff passed
+after removing two stale imports left by the retired direction shortcut.
+

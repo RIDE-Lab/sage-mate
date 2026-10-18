@@ -2995,7 +2995,8 @@ chatForm.addEventListener("submit", async (event) => {
                     false,
                     data.exchange_id || null,
                     data.workflow_trace || [],
-                    data.external_evidence_required !== false
+                    data.external_evidence_required !== false,
+                    data.answer_blocks || []
                 );
                 noteConversationAnswerPreview(data.answer);
                 updateTokenUsageBadge(data.token_usage || null);
@@ -7152,7 +7153,7 @@ function appendMessage(role, label, text, options = {}) {
             <div class="message-role">${escapeHtml(label)}</div>
             <div class="message-frame">
                 ${attachmentsHtml}
-                <div class="message-body">${formatMessageContent(text)}</div>
+                <div class="message-body">${formatSourceAnswer(text, options.answerBlocks || [])}</div>
             </div>
         </div>
     </div>
@@ -7628,7 +7629,7 @@ function renderConversationTranscript(transcript) {
 
     exchanges.forEach((exchange) => {
         appendMessage("user", speakerName, exchange.question, {});
-        appendMessage("assistant", assistantLabel, exchange.answer, {});
+        appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
     });
     hideOnboardingCard();
     syncConversationMode();
@@ -7931,15 +7932,17 @@ function renderAssistantMessage(
     isError = false,
     exchangeId = null,
     workflowTrace = [],
-    externalEvidenceRequired = true
+    externalEvidenceRequired = true,
+    answerBlocks = []
 ) {
     stopAnswerProcessingTicker(container);
     const startedAt = Number(container?.dataset?.startedAt);
     const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
     const bodyClass = isError ? "message-body" : "message-body";
-    const afterNotification = stripNotificationText(text, bookingResult?.notification || null);
+    const sourceBlocksValid = hasMatchingSourceBlocks(text, answerBlocks);
+    const afterNotification = sourceBlocksValid ? text : stripNotificationText(text, bookingResult?.notification || null);
     // Strip <think>...</think> from the final answer and optionally display it
-    const thinkParsed = parseStreamingThinkContent(afterNotification);
+    const thinkParsed = sourceBlocksValid ? {main: text, think: ""} : parseStreamingThinkContent(afterNotification);
     const cleanedText = thinkParsed.main.trimStart() || (thinkParsed.think ? "" : afterNotification);
     const thinkContent = thinkParsed.think.trim();
     container.classList.remove("message-pending");
@@ -8027,7 +8030,7 @@ function renderAssistantMessage(
                     ${processingMetaHtml}
                     <div class="message-main-copy">
                         <div class="message-reply-block">
-                            <div class="${bodyClass}">${formatMessageContent(cleanedText)}</div>
+                            <div class="${bodyClass}">${formatSourceAnswer(text, answerBlocks, cleanedText)}</div>
                             <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
                                 ${uiIconSvg("copy", "ui-icon-sm")}
                             </button>
@@ -9904,7 +9907,8 @@ function handleWorkflowStreamEvent(payload) {
                 false,
                 response.exchange_id || null,
                 response.workflow_trace || [],
-                response.external_evidence_required !== false
+                response.external_evidence_required !== false,
+                response.answer_blocks || []
             );
             // Some SSE deployments publish answer_done before post-answer
             // evidence is attached. Do not prevent the canonical /chat
@@ -10933,6 +10937,20 @@ function escapeHtml(value) {
 // Markdown formatter: code blocks, inline code, bold, italic, headers,
 // unordered/ordered lists, links, blockquotes, horizontal rules, and
 // line breaks.  HTML is escaped first so the output is XSS-safe.
+function hasMatchingSourceBlocks(text, blocks) {
+    return Array.isArray(blocks) && blocks.length > 0
+        && blocks.every(block => block && typeof block.markdown === "string"
+            && ["notice", "source", "source_link", "inference"].includes(block.kind))
+        && blocks.map(block => block.markdown).join("\n\n").trim() === text;
+}
+
+function formatSourceAnswer(text, blocks, fallbackText = text) {
+    if (!hasMatchingSourceBlocks(text, blocks)) return formatMessageContent(fallbackText);
+    return blocks.map(block => formatMessageContent(
+        block.markdown, block.kind === "source" ? block.source_url : null
+    )).join("\n");
+}
+
 function formatMessageContent(rawText, sourceUrl = null) {
     const escaped = escapeHtml(rawText);
     const codeFragments = [];

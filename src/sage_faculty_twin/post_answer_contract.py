@@ -120,7 +120,8 @@ class PostAnswerTask(BaseModel):
                     or self.record.student_email != self.request.student_email
                     or self.record.owner_id != self.request.owner_id
                     or self.record.workflow_action != self.response.workflow_action
-                    or self.record.answer != self.response.answer):
+                    or self.record.answer != self.response.answer
+                    or self.record.answer_blocks != self.response.answer_blocks):
                 raise ValueError("post_answer_record_identity_conflict")
         elif self.response.exchange_id is not None or self.response.memory_write_back:
             raise ValueError("post_answer_missing_committed_record")
