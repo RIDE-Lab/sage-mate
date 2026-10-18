@@ -2,7 +2,7 @@
 
 ## Authoritative current status
 
-Production is Twin `477b305` / SAGE `8f7535f7` (2026-10-19). Earlier dated
+Production is Twin `d758087` / SAGE `b7355905` (2026-10-19). Earlier dated
 and candidate sections are historical; their present-tense statements do not
 override this status. Citation link bases, source-constrained Wiki answers,
 native independent retrieval and transactional HTTP/Slack admission are deployed.
@@ -13,37 +13,60 @@ Independent Slack dependency verification now uses SAGE's native durable work
 engine. HTTP starts without awaiting Slack network access, while ingress,
 delivery and recovered task claims remain fail-closed until current credentials
 and workspace pass verification. Every startup requires a fresh binding.
-Installed SAGE qualification: 231 passed. Frozen Twin: 1649 passed, 31 existing
-skips, one existing warning in 372.63 seconds; identity-eval exclusion unchanged.
-Isolated restart verified a fresh binding, identical canonical answer replay,
-full sources and guest isolation. Production started with zero supervisor restarts
-and Slack verified. Public cross-version replay passed in 1.26 seconds; fresh
-Wiki answer passed in 10.34 seconds with full sources, SSE termination and guest
-isolation; replay took 0.73 seconds. No inference/GPU service was restarted.
+Installed SAGE qualification: 243 passed. Frozen Twin: 1658 passed, 31 existing
+skips, one existing warning in 381.39 seconds; identity-eval exclusion unchanged.
+Six frontend Node groups passed. Production started with zero supervisor restarts
+and Slack verified. Public cross-version replay passed in 2.54 seconds; fresh
+Wiki answer passed in 13.18 seconds with full sources, SSE termination and guest
+isolation; replay took 0.72 seconds. No inference/GPU service was restarted.
 
-Whole-goal completion remains unproven. Cross-store cancellation fencing, full
-native lifecycle/topology events, Slack Markdown presentation and final
+Whole-goal completion remains unproven. Full native lifecycle/topology events,
+Slack Markdown presentation and final
 requirement-by-requirement audit remain open. Earlier real Slack delivery proves
 only its recorded sample, not a new formatting acceptance. The current deployment
 used read-only auth.test and did not send new Slack messages.
 
-### Cross-store cancellation foundation — not yet adopted by Twin
+### Cross-store cancellation — deployed with destination guards
 
-SAGE main `236bcc7b` now provides destination-local `EffectFences` and native
+SAGE `b7355905` provides destination-local `EffectFences` and native
 `CancellationService` seal tasks/dependencies. It acknowledges origin cancellation
 only after every declared destination is sealed, and rechecks persisted store
 identities after restart so an old acknowledgement cannot cover a remapped store.
-Its 242 source and 242 installed-package protocol tests passed, including real
+Its 243 source and 243 installed-package protocol tests passed, including real
 process death after seal/before acknowledgement, local write/seal races, partial
 destination outages, lost origin acknowledgements and canonical-answer protection.
 
-This is foundation qualification, not a Twin cancellation fix or deployment.
-Twin still pins SAGE `8f7535f7`. Booking capture/book/settle and knowledge creation
-must all adopt local guards; the HTTP workflow must use the one native coordinator,
-recover its intents at startup and distinguish pending from acknowledged
-cancellation. Sealed-effect exceptions must not publish premature terminal events.
-Then real Twin ownership/race/restart tests, full regression and release acceptance
-are required. Already committed booking/index/outbox effects are not silently undone.
+Twin now guards booking capture/book/settle and private knowledge creation in each
+destination's own transaction. The direct origin-only cancellation path is removed.
+The native coordinator recovers intents at startup and distinguishes pending
+admission (HTTP 202) from acknowledged cancellation. Producer retries and terminal
+publication pause until all seals settle; sealed-effect errors cannot cause early
+success or repeated model work. Async observer cancellation retains borrowed-store
+ownership through the native SAGE async ports.
+
+Nine actual Twin cross-store cases passed, including stale synchronous writers,
+real SAGE booking-stage propagation, partial destination outages with no premature
+events, HTTP 202/200 replay, service reconstruction and ownership protection.
+The isolated live HTTP canary confirmed two physical destination seals, source499,
+no answer_done, and identical cancellation replay after restart. Normal booking
+still survived restart, preserved topic/time, and replayed without duplicate effects.
+Native Chrome showed waiting-for-confirmation followed by confirmed stop; the
+saved screenshot contains only the synthetic public Wiki question.
+
+Public HTTPS from Mac then passed native read-only verification of both target
+seals and the exact synthetic owner's failed/request_cancelled source, HTTP499,
+no canonical answer, complete cancellation event and repeat cancellation/chat
+replay. The whole canary took 2.61 seconds, not an inference-speed benchmark.
+The observer read only that synthetic guest/request pair, with its credential
+kept in memory. No production booking, document or email was created. Three
+canonical SQLite backups were integrity checked after stopping writers and
+checking for open handles. Already committed business effects are not undone.
+
+Post-cutover public Chrome navigation could not be visually verified: native UI
+inspection explicitly reported the Mac locked. Do not label automation timeouts
+as a Twin freeze. Human manual unlock is requested; no password, unlock bypass
+or browser restart was attempted. Preview visual acceptance remains distinct
+from this pending public visual recheck.
 
 ## Historical qualification records
 
