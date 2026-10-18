@@ -32,6 +32,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Stre
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sage.edge.app import create_app as create_edge_app
+from sage.runtime.work_journal import WorkCapacityError
 
 from .auth import (
     ADMIN_COOKIE_NAME,
@@ -733,6 +734,9 @@ async def _bind_slack_ingress(ingress, code):
         raise HTTPException(status_code=503, detail="Slack workflow is not ready.")
     try:
         await slack_workflow.bind(ingress, slack_link_store, code)
+    except WorkCapacityError:
+        raise HTTPException(status_code=503, detail="服务队列已满，本次请求未接收；请稍后重试。",
+                            headers={"Retry-After": "2", "Cache-Control": "no-store"}) from None
     except ValueError as exc:
         if str(exc) == "slack_binding_code_invalid":
             await _admit_slack(ingress, notice="绑定码无效或已过期。请回到 twin 网页端重新生成 Slack 绑定码。")
@@ -878,6 +882,9 @@ async def _admit_slack(ingress, *, notice=None):
             await slack_workflow.submit_notice(ingress, SlackReply(text=notice))
         else:
             await slack_workflow.submit(ingress)
+    except WorkCapacityError:
+        raise HTTPException(status_code=503, detail="服务队列已满，本次请求未接收；请稍后重试。",
+                            headers={"Retry-After": "2", "Cache-Control": "no-store"}) from None
     except ValueError as exc:
         if str(exc) == "journal_commit_conflict":
             raise HTTPException(status_code=409, detail="Slack request identity conflict.") from None
@@ -1958,10 +1965,12 @@ async def chat(
         trace_store.append_event(trace_id, "error", error_payload)
         trace_store.finish(trace_id, status=status, error=error_payload)
 
-    def _http_error(status, detail):
+    def _http_error(status, detail, *, code=None):
         # FastAPI replaces the injected Response when handling an exception.
         # Preserve the newly issued guest identity so retry keeps its owner.
         headers = {"Cache-Control": "no-store", "X-Sage-Trace-ID": timing.trace_id}
+        if code is not None:
+            headers["X-Sage-Error-Code"] = code
         if status in {429, 503}:
             headers["Retry-After"] = "2"
         if "set-cookie" in http_response.headers:
@@ -1981,6 +1990,10 @@ async def chat(
                                             start_timeout=CHAT_ADMISSION_TIMEOUT_SECONDS)
         timing.record("sage_workflow", stage_started)
         return _record_success(response, route="sage_workflow")
+    except WorkCapacityError as exc:
+        _record_error(exc, status="rejected")
+        raise _http_error(429, "服务队列已满，本次请求未入队；请保留相同请求 ID，稍后重试。",
+                          code="work_capacity_exhausted") from None
     except PermissionError as exc:
         _record_error(exc, status="rejected")
         raise _http_error(403, "当前身份或权限已失效，请重新验证。") from exc
@@ -2040,7 +2053,8 @@ async def stream_chat(
                     continue
                 except HTTPException as exc:
                     yield "data: " + json.dumps(
-                        {"type": "error", "status": exc.status_code, "detail": exc.detail},
+                        {"type": "error", "status": exc.status_code, "detail": exc.detail,
+                         "code": (exc.headers or {}).get("X-Sage-Error-Code")},
                         ensure_ascii=False,
                     ) + "\n\n"
                     break

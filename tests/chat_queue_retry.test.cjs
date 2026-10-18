@@ -25,23 +25,25 @@ async function verify(active) {
   })()`, sandbox);
   assert.deepEqual(reopened, active ? [] : ['stable-request']);
 }
-async function verifyExhaustedRetry() {
+async function verifyExhaustedRetry(rejected = false) {
   const stop = source.indexOf('            if (streamingDeliveredResponse) break;', end);
   assert.ok(stop > end);
   const messages = [];
   const sandbox = {
-    error: {status: 429}, isTransientNetworkError: false, activeWorkflowStream: {},
+    error: {status: 429, code: rejected ? 'work_capacity_exhausted' : undefined},
+    isTransientNetworkError: false, activeWorkflowStream: {},
+    rejected,
     streamingDeliveredResponse: null, explicitDeepMode: false, pendingMessage: {},
     renderPendingAssistantMessage: (_, message) => messages.push(message),
   };
   vm.runInNewContext(`for (let attempt = 0; attempt < 1; attempt++) {
     ${source.slice(end, stop)}
-    throw new Error('durably queued request fell through to terminal error');
+    if (!rejected) throw new Error('durably queued request fell through to terminal error');
   }`, sandbox);
-  assert.equal(messages.length, 1);
-  assert.match(messages[0], /仍在排队/);
+  assert.equal(messages.length, rejected ? 0 : 1);
+  if (!rejected) assert.match(messages[0], /仍在排队/);
 }
-Promise.all([verify({}), verify(null), verifyExhaustedRetry()]).then(
+Promise.all([verify({}), verify(null), verifyExhaustedRetry(), verifyExhaustedRetry(true)]).then(
   () => console.log('Queued retry preserves request identity and active event observer'),
   error => { console.error(error); process.exitCode = 1; },
 );

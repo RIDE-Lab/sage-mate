@@ -3047,7 +3047,8 @@ chatForm.addEventListener("submit", async (event) => {
                 }
                 continue;
             }
-            if ((error?.status === 429 || error?.status === 504 || isTransientNetworkError) && activeWorkflowStream) {
+            if ((error?.status === 429 || error?.status === 504 || isTransientNetworkError) && activeWorkflowStream
+                && error?.code !== "work_capacity_exhausted") {
                 if (!streamingDeliveredResponse) {
                     renderPendingAssistantMessage(pendingMessage,
                         error?.status === 429
@@ -6565,6 +6566,7 @@ async function apiRequest(path, options = {}) {
             const friendly = friendlyHttpErrorMessage(response.status, text);
             const error = new Error(friendly);
             error.status = response.status;
+            error.code = response.headers.get("X-Sage-Error-Code");
             error.responseBody = text;
             const retryAfter = Number(response.headers.get("Retry-After"));
             if (Number.isFinite(retryAfter) && retryAfter > 0) {
@@ -6630,6 +6632,7 @@ async function apiStreamRequest(path, options = {}) {
                 if (event.type === "error") {
                     const error = new Error(event.detail || "回答生成失败，请稍后重试。");
                     error.status = event.status;
+                    error.code = event.code;
                     throw error;
                 }
             }

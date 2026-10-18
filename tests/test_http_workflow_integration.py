@@ -67,6 +67,40 @@ def test_native_http_ports_commit_and_recover_real_service_answer(tmp_path, monk
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("streamed", [False, True])
+def test_http_capacity_rejection_is_not_queued_and_preserves_guest(tmp_path, monkeypatch, streamed):
+    from sage.runtime.work_journal import WorkCapacityError
+    from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME
+
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+    with http_client(instance, monkeypatch) as client:
+        async def reject(ingress):
+            raise WorkCapacityError("work_capacity_exhausted")
+
+        async def unexpected_wait(*args, **kwargs):
+            pytest.fail("rejected admission must never wait for completion")
+
+        monkeypatch.setattr(api.http_workflow, "admit", reject)
+        monkeypatch.setattr(api.http_workflow, "wait", unexpected_wait)
+        endpoint = "/chat/stream" if streamed else "/chat"
+        response = client.post(endpoint + "?request_id=capacity", json={"student_name": "Guest", "question": "test"})
+        if streamed:
+            import json
+            frames = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith("data: ")]
+            assert len(frames) == 1
+            assert frames[0]["type"] == "error" and frames[0]["status"] == 429
+            assert frames[0]["code"] == "work_capacity_exhausted"
+            assert "未入队" in frames[0]["detail"]
+        else:
+            assert response.status_code == 429
+            assert "未入队" in response.json()["detail"]
+            assert response.headers["retry-after"] == "2"
+            assert response.headers["x-sage-error-code"] == "work_capacity_exhausted"
+        assert "正在排队" not in response.text
+        assert client.cookies.get(GUEST_COOKIE_NAME)
+        assert api.http_workflow.journal.records()[0] == []
+
+
 @pytest.mark.parametrize("early", [False, True])
 def test_stale_producer_cannot_commit_canonical_memory_or_answer(tmp_path, early):
     from sage.runtime.event_journal import EventJournal

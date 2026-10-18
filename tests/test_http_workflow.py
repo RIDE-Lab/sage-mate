@@ -3,6 +3,7 @@ import asyncio
 import pytest
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.event_journal import EventJournal
+from sage.runtime.work_journal import WorkCapacityError
 
 from sage_faculty_twin.http_workflow import HttpIngress, HttpWorkflow
 from sage_faculty_twin.auth import build_user_session_token, capture_work_session_reference
@@ -34,10 +35,16 @@ def test_duplicate_conflict_and_cancelled_observer_share_one_producer(tmp_path):
             await release.wait()
             return ChatResponse(answer="canonical", owner_name="Twin", used_model="fake")
         flow = HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer)
+        # Offline policy installation, before any worker or ingress starts.
+        flow.journal.configure_capacity(max_active_requests=1)
         try:
             item = ingress()
             await asyncio.gather(flow.admit(item), flow.admit(item))
             await asyncio.wait_for(entered.wait(), 3)
+            rejected = item.model_copy(update={"request_id": "capacity-rejected"})
+            with pytest.raises(WorkCapacityError):
+                await flow.admit(rejected)
+            assert flow.journal.read(rejected.delivery.stream_id) is None
             with pytest.raises(ValueError, match="conflict"):
                 await flow.admit(ingress("changed"))
             waiter = asyncio.create_task(flow.wait(item, timeout=3))

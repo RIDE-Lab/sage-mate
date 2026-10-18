@@ -461,6 +461,27 @@ def test_admission_failure_is_not_acknowledged(harness, monkeypatch):
     assert harness.sent == []
 
 
+@pytest.mark.parametrize("transport", ["command", "event"])
+@pytest.mark.parametrize("binding", [False, True])
+def test_capacity_rejection_is_not_acknowledged(harness, monkeypatch, transport, binding):
+    from sage.runtime.work_journal import WorkCapacityError
+
+    async def reject(*args, **kwargs):
+        raise WorkCapacityError("work_capacity_exhausted")
+
+    monkeypatch.setattr(api_module.slack_workflow, "bind" if binding else "submit", reject)
+    question = "bind fixture-code" if binding else "研究路线是什么？"
+    body = command(text=question) if transport == "command" else event(text=question)
+    response = harness.client.post("/slack/commands/twin" if transport == "command" else "/slack/events",
+        content=body, headers=signed(body, json_body=transport == "event"))
+    assert response.status_code == 503
+    assert "未接收" in response.json()["detail"]
+    assert response.headers["retry-after"] == "2"
+    assert harness.sent == []
+    assert harness.calls == []
+    assert api_module.slack_workflow.journal.records()[0] == []
+
+
 def test_context_request_without_history_never_calls_model(harness, monkeypatch):
     def missing(**kwargs):
         raise SlackHistoryUnavailable("not_in_channel")
