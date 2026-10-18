@@ -389,7 +389,10 @@ class LocalKnowledgeStore:
                 self._initialize_projection(prepare_only=True)
                 self._catalog.bind_projection(self._sagevdb_persistence.root.name)
                 self._open_projection()
-                self._wait_for_projection(self._catalog_revision)
+                self._wait_for_projection(
+                    self._catalog_revision,
+                    deadline=time.monotonic() + settings.knowledge_startup_timeout_seconds,
+                )
             except BaseException:
                 # A worker may still be finishing a durable acknowledgement.
                 # SAGE releases storage after drain, never from under that task.

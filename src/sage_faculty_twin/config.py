@@ -122,6 +122,10 @@ class AppSettings(BaseSettings):
         description="Character target for compacting memory and attachments, not a hard model context limit. Complete source evidence is never truncated to this target.",
     )
     chat_request_timeout_seconds: float = Field(default=80.0, ge=1.0, le=300.0)
+    knowledge_startup_timeout_seconds: float = Field(
+        default=600.0, ge=1.0, le=3600.0,
+        description="Readiness deadline for durable knowledge index recovery; independent of interactive chat latency.",
+    )
     feedback_writeback_wait_seconds: float = Field(default=10.0, ge=0.0, le=300.0)
     long_chat_request_timeout_seconds: float = Field(default=240.0, ge=80.0, le=600.0)
     chat_max_inflight_requests: int = Field(

@@ -1,4 +1,5 @@
 import threading
+import time
 
 import pytest
 
@@ -6,6 +7,28 @@ from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.knowledge_base import LocalKnowledgeStore
 from sage_faculty_twin.knowledge_catalog import KnowledgeCatalog
 from sage_faculty_twin.models import KnowledgeDocumentCreate
+
+
+def test_startup_projection_has_separate_readiness_deadline(tmp_path, monkeypatch):
+    observed = []
+    original = LocalKnowledgeStore._wait_for_projection
+
+    def inspect(self, revision, **kwargs):
+        observed.append(kwargs["deadline"] - time.monotonic())
+        return original(self, revision, **kwargs)
+
+    monkeypatch.setattr(LocalKnowledgeStore, "_wait_for_projection", inspect)
+    store = LocalKnowledgeStore(AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="sagevdb",
+        sagevdb_embedding_backend="hash", sagevdb_dimension=128,
+        chat_request_timeout_seconds=1, knowledge_startup_timeout_seconds=123,
+    ))
+    try:
+        assert len(observed) == 1
+        assert 122 < observed[0] <= 123
+        assert store._settings.chat_request_timeout_seconds == 1
+    finally:
+        store.close()
 
 
 def store_at(path):
@@ -415,7 +438,7 @@ def test_failed_native_startup_retires_worker_without_losing_canonical_data(tmp_
             LocalKnowledgeStore(AppSettings(
                 knowledge_base_dir=tmp_path / "knowledge", knowledge_backend="sagevdb",
                 sagevdb_embedding_backend="hash", sagevdb_dimension=128,
-                chat_request_timeout_seconds=1))
+                chat_request_timeout_seconds=1, knowledge_startup_timeout_seconds=1))
     assert len(retired) == 1 and retired[0]._closing
     assert retired[0]._index_service._stopped.wait(5)
     assert retired[0]._index_service._closed
