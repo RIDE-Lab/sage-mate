@@ -8,7 +8,7 @@ from contextvars import ContextVar
 from typing import Any
 
 from sage.runtime.flownet import (
-    FlowRequestOutcomeError, actor, bootstrap_runtime, build_runtime_client, flow,
+    FlowRequestOutcomeError, bootstrap_runtime, build_runtime_client, flow, stateless,
 )
 from sage.runtime.cancellation import RequestCancellation, bind_request_cancellation
 
@@ -18,21 +18,19 @@ from .request_context import register_request_cancel_callback, raise_if_request_
 _ports: ContextVar[Any] = ContextVar("twin_retrieval_ports")
 
 
-@actor(uri="actor://twin/retrieval/memory", namespace="twin")
-class MemoryReader:
-    def run(self, inputs):
-        return "memory", _ports.get().retrieve_memory(inputs["memory"])
+@stateless(uri="stateless://twin/retrieval/memory", namespace="twin")
+def read_memory(inputs):
+    return "memory", _ports.get().retrieve_memory(inputs["memory"])
 
 
-@actor(uri="actor://twin/retrieval/knowledge", namespace="twin")
-class KnowledgeReader:
-    def run(self, inputs):
-        return "knowledge", _ports.get().retrieve_knowledge(inputs["knowledge"])
+@stateless(uri="stateless://twin/retrieval/knowledge", namespace="twin")
+def read_knowledge(inputs):
+    return "knowledge", _ports.get().retrieve_knowledge(inputs["knowledge"])
 
 
 @flow(uri="flow://twin/retrieval", namespace="twin")
 def retrieval_flow(init_stream):
-    return init_stream.map(MemoryReader().run).connect(init_stream.map(KnowledgeReader().run))
+    return init_stream.map(read_memory).connect(init_stream.map(read_knowledge))
 
 
 class RetrievalRuntime:

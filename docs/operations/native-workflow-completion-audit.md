@@ -1,5 +1,19 @@
 # Native workflow completion audit
 
+Follow-up finding: the new concurrent-peer regression reproduced head-of-line
+blocking in the installed release. A blocked KnowledgeReader Actor held its
+instance lock while the healthy peer waited in `actors/invoker.py:148`.
+The candidate replaces both state-free readers with SAGE native `stateless`
+declarations, preserving request-local ports and the same bounded branch
+scheduler. The same four retrieval tests then passed in 0.91 seconds. This is
+isolated synthetic fault evidence, not a production latency benchmark.
+Production still runs `56f4281` until expanded regression and cutover acceptance.
+An expanded 24-test run initially had one HTTP observer-cancellation timeout;
+that case passed alone in 1.81 seconds. Keep this timing failure visible and
+investigate reproducibility before claiming the expanded suite is reliable.
+The same complete group subsequently passed: 24 tests in 12.46 seconds; project
+Ruff checks passed. This repeat does not erase the earlier cancellation failure.
+
 This is a requirement audit, not a declaration of overall completion. Runtime
 revision: `56f4281`; production evidence date: 2026-10-18. The detailed cutover
 receipt is `native-cutover-20261018.md`.

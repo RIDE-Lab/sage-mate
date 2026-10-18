@@ -61,6 +61,40 @@ def test_failed_branch_releases_request_and_endpoint_recovers():
         runtime.close()
 
 
+def test_concurrent_failure_does_not_mix_or_poison_other_request():
+    """One endpoint serves distinct request ports even when a peer fails."""
+    entered, release = Event(), Event()
+
+    class FailingPorts(Ports):
+        def retrieve_knowledge(self, value):
+            self.barrier.wait(timeout=3)
+            entered.set()
+            assert release.wait(5)
+            raise ValueError("isolated_peer_failure")
+
+    runtime = RetrievalRuntime()
+    try:
+        with ThreadPoolExecutor(max_workers=2) as callers:
+            failed = callers.submit(runtime.retrieve, FailingPorts("failed-owner"),
+                                    memory="private-a", knowledge="wiki-a", timeout=8)
+            assert entered.wait(3)
+            healthy = callers.submit(runtime.retrieve, Ports("healthy-owner"),
+                                     memory="private-b", knowledge="wiki-b", timeout=8)
+            try:
+                assert healthy.result(timeout=3) == (
+                    ("healthy-owner", "private-b"), ("healthy-owner", "wiki-b"))
+            finally:
+                release.set()
+            with pytest.raises(FlowRequestOutcomeError):
+                failed.result(timeout=3)
+        assert runtime._endpoint._requests == {}
+        assert runtime.retrieve(Ports("after"), memory="m", knowledge="k", timeout=5) == (
+            ("after", "m"), ("after", "k"))
+    finally:
+        release.set()
+        runtime.close()
+
+
 def test_http_scope_cancellation_aborts_native_request_and_unregisters():
     entered = Event()
     release = Event()
