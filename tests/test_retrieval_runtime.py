@@ -1,5 +1,6 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
+from time import monotonic
 
 import pytest
 from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
@@ -127,6 +128,49 @@ def test_http_scope_cancellation_aborts_native_request_and_unregisters():
         assert runtime.retrieve(Ports("next"), memory="m", knowledge="k", timeout=5) == (
             ("next", "m"), ("next", "k"),
         )
+    finally:
+        release.set()
+        runtime.close()
+
+
+def test_deadline_discards_late_branch_without_poisoning_next_owner():
+    """Cooperative deadlines do not kill blocked code or mix request results."""
+    entered, release, finished = Event(), Event(), Event()
+
+    class LatePorts(Ports):
+        def retrieve_knowledge(self, value):
+            self.barrier.wait(timeout=3)
+            entered.set()
+            try:
+                assert release.wait(5)
+                return self.marker, value
+            finally:
+                finished.set()
+
+    runtime = RetrievalRuntime()
+    try:
+        endpoint_id = runtime._endpoint.flow_instance.instance_id
+        with ThreadPoolExecutor(max_workers=1) as callers:
+            started = monotonic()
+            expired = callers.submit(runtime.retrieve, LatePorts("expired-owner"),
+                                     memory="private-old", knowledge="wiki-old", timeout=0.5)
+            try:
+                assert entered.wait(3)
+                assert runtime.retrieve(Ports("new-owner"), memory="private-new",
+                                        knowledge="wiki-new", timeout=3) == (
+                    ("new-owner", "private-new"), ("new-owner", "wiki-new"))
+                # Deliberately keep the uncooperative reader past its deadline.
+                Event().wait(max(0, started + 0.6 - monotonic()))
+            finally:
+                release.set()
+            assert finished.wait(3)
+            with pytest.raises((TimeoutError, FlowRequestOutcomeError)):
+                expired.result(timeout=3)
+            assert expired.done()  # Do not mistake Future.result timeout for runtime failure.
+        assert runtime.retrieve(Ports("after-late"), memory="m", knowledge="k", timeout=3) == (
+            ("after-late", "m"), ("after-late", "k"))
+        assert runtime._endpoint.flow_instance.instance_id == endpoint_id
+        assert runtime._endpoint._requests == {}
     finally:
         release.set()
         runtime.close()

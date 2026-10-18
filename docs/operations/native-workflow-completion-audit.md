@@ -10,6 +10,19 @@ not a bound on every background namespace, storage bytes or retained history.
 No history retention/deletion policy was introduced. Real Slack delivery and
 browser visual confirmation remain separate, open acceptance gates.
 
+### Installed-runtime retrieval deadline boundary
+
+Five retrieval-runtime tests passed in 1.59s against production d3fa3fb source and
+its frozen dependencies, in an isolated process. The added test holds an old
+owner's knowledge reader past its deadline, verifies another owner's two branches
+still execute on the same endpoint, releases the old reader, and requires an
+actual terminal failure plus empty request buffers and clean subsequent outputs.
+An initial test incorrectly caught the observer Future timeout; the corrected
+test explicitly checks the future is terminal. This proves late-output isolation
+for the exercised boundary, not forced interruption: SAGE deadlines are cooperative,
+and uncooperative blocking I/O still needs its own bounded transport timeout.
+No production process, document or runtime code changed for this qualification.
+
 ## Previous status: source-plan production acceptance (2026-10-18)
 
 Production code is Twin `50306a7` with SAGE `f3ecd85`. The full receipt is
