@@ -13,6 +13,7 @@ from urllib.parse import urlencode
 import pytest
 from fastapi.testclient import TestClient
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
+from sage.runtime.dependency_verifier import DependencyRejected
 
 from sage_faculty_twin import api as api_module
 from sage_faculty_twin.chat_delivery import ChatDeliveryGate
@@ -60,7 +61,11 @@ def harness(monkeypatch, tmp_path):
     monkeypatch.setattr(api_module, "SLACK_TWIN_ALLOWED_USER_IDS", {"T123:U1"})
     monkeypatch.setattr(api_module, "slack_link_store", links)
     monkeypatch.setattr(api_module, "slack_workflow", None)
-    monkeypatch.setattr(api_module, "settings", SimpleNamespace(warm_service_on_startup=False))
+    monkeypatch.setattr(api_module, "slack_dependency", None)
+    monkeypatch.setattr(api_module, "_slack_verified_configuration", None)
+    monkeypatch.setattr(api_module, "settings", SimpleNamespace(warm_service_on_startup=False,
+        owner_name="Twin", owner_role="fixture", homepage_public_url="https://example.com",
+        model_name="fixture-model"))
     async def answer(request, *, delivery, admission_guard):
         h.calls.append(request)
         if h.block:
@@ -88,7 +93,8 @@ def harness(monkeypatch, tmp_path):
     instance._user_store = UserAccountStore(instance._settings)
     instance._guest_identity_store = GuestIdentityStore(state, ttl_seconds=300)
     h.service = SimpleNamespace(answer=answer, ensure_initialized=lambda: instance,
-        is_initialized=lambda: True, aclose=close, get_slack_link_account=lambda uid: h.accounts.get(uid))
+        is_initialized=lambda: True, aclose=close, health=lambda: {"status": "ok"},
+        get_slack_link_account=lambda uid: h.accounts.get(uid))
     monkeypatch.setattr(api_module, "service", h.service)
     def post(method, payload):
         if method == "auth.test":
@@ -99,6 +105,11 @@ def harness(monkeypatch, tmp_path):
         h.sent.append((method, payload))
         return {"ok": True, "message_ts": "123.456"}
     monkeypatch.setattr(api_module, "_post_slack_api", post)
+    dependency_factory = api_module._create_slack_dependency
+    def dependency(shared):
+        return dependency_factory(shared, poll_interval=0.01,
+                                  retry_delay=0.01, max_retry_delay=0.02)
+    monkeypatch.setattr(api_module, "_create_slack_dependency", dependency)
     def history(**kwargs):
         h.history.append(kwargs)
         return SlackChannelContext(text="Earlier lab discussion", message_count=2)
@@ -107,7 +118,8 @@ def harness(monkeypatch, tmp_path):
         return SlackWorkflow(shared, authorize=api_module._authorize_slack_ingress,
             recover=SlackAnswerRecovery(shared, render=api_module._render_slack_reply),
             answer=api_module._produce_slack_reply, deliver=api_module._deliver_slack_reply,
-            poll_interval=0.01, retry_delay=0.01, accept_task=lambda *_: h.accept)
+            poll_interval=0.01, retry_delay=0.01,
+            accept_task=lambda *_: h.accept and api_module._slack_dependency_ready())
     monkeypatch.setattr(api_module, "_create_slack_workflow", factory)
     def bind(role="lab_member"):
         h.accounts["account"] = SimpleNamespace(visitor_profile=role, email="member@example.com")
@@ -116,6 +128,11 @@ def harness(monkeypatch, tmp_path):
     h.bind = bind
     with TestClient(api_module.llm_app) as client:
         h.client = client
+        def verified():
+            dependency = api_module.slack_dependency
+            dependency._work.wait(dependency._binding, timeout=3)
+        h.verified = verified
+        h.verified()
         def flush():
             rows, _ = api_module.slack_workflow.journal.records(limit=100)
             for row in rows:
@@ -415,15 +432,130 @@ def test_partial_slack_configuration_fails_before_service_start(harness, monkeyp
     harness.client.portal.call(api_module.startup_event)
 
 
-def test_wrong_bot_workspace_is_rejected_before_service_start(harness, monkeypatch):
+def test_wrong_bot_workspace_keeps_web_running_but_slack_rejected(harness, monkeypatch):
     harness.client.portal.call(api_module.shutdown_event)
     starts = harness.lifecycle.count("service-start")
     with monkeypatch.context() as patch:
         patch.setattr(api_module, "_post_slack_api", lambda *_: {"ok": True, "team_id": "TOTHER"})
-        with pytest.raises(RuntimeError, match="workspace_mismatch"):
-            harness.client.portal.call(api_module.startup_event)
-        assert harness.lifecycle.count("service-start") == starts
+        harness.client.portal.call(api_module.startup_event)
+        harness.verified()
+        assert harness.lifecycle.count("service-start") == starts + 1
+        assert api_module.slack_dependency.status() == {"state": "rejected"}
+        assert harness.client.get("/health").json()["readiness"] == "ready"
+        assert harness.client.get("/health").json()["slack_readiness"] == "rejected"
+        body = command()
+        assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 503
+        assert harness.calls == []
+        harness.client.portal.call(api_module.shutdown_event)
     harness.client.portal.call(api_module.startup_event)
+    harness.verified()
+
+
+def test_blocked_slack_verification_does_not_block_startup_or_admit(harness, monkeypatch):
+    harness.client.portal.call(api_module.shutdown_event)
+    entered, release = Event(), Event()
+    original = api_module._post_slack_api
+    def blocked(method, payload):
+        if method == "auth.test":
+            entered.set()
+            assert release.wait(5)
+        return original(method, payload)
+    monkeypatch.setattr(api_module, "_post_slack_api", blocked)
+    try:
+        harness.client.portal.call(api_module.startup_event)
+        assert entered.wait(3)
+        assert api_module.http_workflow is not None
+        assert api_module.slack_dependency.status() == {"state": "pending"}
+        health = harness.client.get("/health").json()
+        assert health["readiness"] == "ready"
+        assert health["slack_readiness"] == "pending"
+        body = command()
+        assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 503
+        assert harness.calls == []
+        release.set()
+        harness.verified()
+        assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 200
+        harness.flush()
+        assert len(harness.calls) == 1
+    finally:
+        release.set()
+
+
+def test_transient_dns_failure_recovers_through_native_work(harness, monkeypatch):
+    harness.client.portal.call(api_module.shutdown_event)
+    original = api_module._post_slack_api
+    attempts = []
+    def temporary(method, payload):
+        if method == "auth.test":
+            attempts.append(True)
+            if len(attempts) == 1:
+                raise OSError("DNS fixture temporary failure")
+        return original(method, payload)
+    monkeypatch.setattr(api_module, "_post_slack_api", temporary)
+    harness.client.portal.call(api_module.startup_event)
+    harness.verified()
+    assert api_module._slack_dependency_ready()
+    assert len(attempts) == 2
+    dependency = api_module.slack_dependency
+    assert "DNS fixture" not in repr(dependency.journal.read(dependency._binding))
+
+
+def test_recovered_jobs_do_not_spend_attempts_before_verification(harness, monkeypatch):
+    harness.accept = False
+    body = command()
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 200
+    rows, _ = api_module.slack_workflow.journal.records(limit=10)
+    request_id = rows[0]["key"]
+    harness.client.portal.call(api_module.shutdown_event)
+    entered, release = Event(), Event()
+    original = api_module._post_slack_api
+    def blocked(method, payload):
+        if method == "auth.test":
+            entered.set()
+            assert release.wait(5)
+        return original(method, payload)
+    monkeypatch.setattr(api_module, "_post_slack_api", blocked)
+    harness.accept = True
+    try:
+        harness.client.portal.call(api_module.startup_event)
+        assert entered.wait(3)
+        record = api_module.slack_workflow.journal.read(request_id)
+        assert record["tasks"]["answer"]["attempt"] == 0
+        assert record["tasks"]["answer"]["status"] == "pending"
+        assert harness.calls == harness.sent == []
+        release.set()
+        harness.verified()
+        harness.flush()
+        assert len(harness.calls) == len(harness.sent) == 1
+        record = api_module.slack_workflow.journal.read(request_id)
+        assert record["tasks"]["answer"]["attempt"] == 1
+    finally:
+        release.set()
+
+
+def test_revoked_credentials_never_unlock_slack_or_retry_forever(harness, monkeypatch):
+    harness.client.portal.call(api_module.shutdown_event)
+    def rejected(*_):
+        raise DependencyRejected("revoked fixture token")
+    monkeypatch.setattr(api_module, "_post_slack_api", rejected)
+    harness.client.portal.call(api_module.startup_event)
+    harness.verified()
+    dependency = api_module.slack_dependency
+    assert dependency.status() == {"state": "rejected"}
+    assert dependency.journal.read(dependency._binding)["tasks"]["verify"]["attempt"] == 1
+    body = command()
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 503
+    assert harness.sent == []
+
+
+def test_changed_in_memory_credentials_require_fresh_verification(harness, monkeypatch):
+    assert api_module._slack_dependency_ready()
+    monkeypatch.setattr(api_module, "SLACK_TWIN_BOT_TOKEN", "different-fixture-token")
+    assert not api_module._slack_dependency_ready()
+    assert harness.client.get("/health").json()["slack_readiness"] == "configuration_changed"
+    body = command()
+    assert harness.client.post("/slack/commands/twin", content=body, headers=signed(body)).status_code == 503
+    assert harness.calls == []
 
 
 def test_public_binding_notice_is_private(harness):

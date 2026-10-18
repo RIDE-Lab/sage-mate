@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sage.edge.app import create_app as create_edge_app
 from sage.runtime.work_journal import WorkCapacityError
+from sage.runtime.dependency_verifier import DependencyRejected, DependencyVerifier
 
 from .auth import (
     ADMIN_COOKIE_NAME,
@@ -337,6 +338,8 @@ workflow_event_broker = WorkflowEventBroker(
     heartbeat_provider=lambda: CHAT_SSE_KEEPALIVE_SECONDS,
 )
 slack_workflow = None
+slack_dependency = None
+_slack_verified_configuration = None
 http_workflow = None
 
 
@@ -691,8 +694,45 @@ def _post_slack_api(method: str, payload: dict[str, object]) -> dict[str, object
     body = response.read().decode("utf-8")
     parsed = json.loads(body) if body else {}
     if not parsed.get("ok"):
+        if parsed.get("error") in {"invalid_auth", "not_authed", "token_revoked", "account_inactive"}:
+            raise DependencyRejected("slack_authentication_rejected")
         raise RuntimeError(f"Slack API {method} failed: {parsed.get('error', 'unknown_error')}")
     return parsed
+
+
+def _slack_configuration():
+    # Only retained in memory; never passed to the journal or diagnostics.
+    return (SLACK_TWIN_TEAM_ID, SLACK_TWIN_BOT_TOKEN, SLACK_TWIN_SIGNING_SECRET)
+
+
+def _slack_dependency_ready():
+    return (slack_dependency is not None
+            and _slack_verified_configuration == _slack_configuration()
+            and slack_dependency.ready())
+
+
+def _slack_readiness():
+    if not any(_slack_configuration()):
+        return "disabled"
+    if slack_dependency is None:
+        return "not_started"
+    if _slack_verified_configuration != _slack_configuration():
+        return "configuration_changed"
+    return slack_dependency.status()["state"]
+
+
+def _create_slack_dependency(state, **options):
+    configuration = _slack_configuration()
+
+    def verify():
+        if configuration != _slack_configuration():
+            raise DependencyRejected("slack_configuration_changed")
+        identity = _post_slack_api("auth.test", {})
+        if configuration != _slack_configuration() or identity.get("team_id") != configuration[0]:
+            raise DependencyRejected("slack_bot_workspace_mismatch")
+        return True
+
+    return DependencyVerifier(state, name="twin-slack-workspace", probe=verify, **options)
 
 
 def _require_slack_destination(team_id):
@@ -700,6 +740,9 @@ def _require_slack_destination(team_id):
         raise HTTPException(status_code=503, detail="Slack workspace credentials are not configured.")
     if team_id != SLACK_TWIN_TEAM_ID:
         raise HTTPException(status_code=403, detail="Slack workspace is not configured.")
+    if not _slack_dependency_ready():
+        raise HTTPException(status_code=503, detail="Slack workspace verification is not ready.",
+                            headers={"Retry-After": "2", "Cache-Control": "no-store"})
 
 
 async def _deliver_slack_reply(ingress, reply):
@@ -870,6 +913,7 @@ def _create_slack_workflow(state):
     return SlackWorkflow(state, authorize=_authorize_slack_ingress,
         recover=SlackAnswerRecovery(state, render=_render_slack_reply),
         answer=_produce_slack_reply, deliver=_deliver_slack_reply,
+        accept_task=lambda *_: _slack_dependency_ready(),
         max_attempts=int(os.environ.get("SLACK_TWIN_MAX_ATTEMPTS", "5")))
 
 
@@ -1537,6 +1581,7 @@ async def health() -> dict[str, object]:
             "homepage_public_url", settings.homepage_public_url
         ),
         "model_name": snapshot.get("model_name", settings.model_name or "sage-auto"),
+        "slack_readiness": _slack_readiness(),
     }
 
 
@@ -1864,7 +1909,7 @@ async def slack_events(
 
 
 async def startup_event() -> None:
-    global slack_workflow, http_workflow
+    global slack_workflow, http_workflow, slack_dependency, _slack_verified_configuration
     slack_configuration = {
         "SLACK_TWIN_SIGNING_SECRET": SLACK_TWIN_SIGNING_SECRET,
         "SLACK_TWIN_TEAM_ID": SLACK_TWIN_TEAM_ID,
@@ -1873,16 +1918,15 @@ async def startup_event() -> None:
     if any(slack_configuration.values()) and not all(slack_configuration.values()):
         missing = ",".join(key for key, value in slack_configuration.items() if not value)
         raise RuntimeError(f"slack_configuration_incomplete:{missing}")
-    if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
-        identity = await asyncio.to_thread(_post_slack_api, "auth.test", {})
-        if identity.get("team_id") != SLACK_TWIN_TEAM_ID:
-            raise RuntimeError("slack_bot_workspace_mismatch")
     instance = await asyncio.to_thread(service.ensure_initialized)
     await asyncio.to_thread(slack_link_store.migrate_to, instance._conversation_store.state_store)
     await asyncio.to_thread(instance.start_background_work)
     http_workflow = _create_http_workflow(instance)
     await http_workflow.start()
     if SLACK_TWIN_TEAM_ID and SLACK_TWIN_BOT_TOKEN:
+        _slack_verified_configuration = _slack_configuration()
+        slack_dependency = _create_slack_dependency(instance._conversation_store.state_store)
+        await asyncio.to_thread(slack_dependency.start)
         slack_workflow = _create_slack_workflow(instance._conversation_store.state_store)
         await slack_workflow.start()
     if settings.warm_service_on_startup:
@@ -1898,13 +1942,17 @@ async def startup_event() -> None:
 
 
 async def shutdown_event() -> None:
-    global slack_workflow, http_workflow
+    global slack_workflow, http_workflow, slack_dependency, _slack_verified_configuration
     if http_workflow is not None:
         await http_workflow.aclose()
         http_workflow = None
     if slack_workflow is not None:
         await slack_workflow.aclose()
         slack_workflow = None
+    if slack_dependency is not None:
+        await asyncio.to_thread(slack_dependency.close)
+        slack_dependency = None
+    _slack_verified_configuration = None
     if service.is_initialized():
         await service.aclose()
 
