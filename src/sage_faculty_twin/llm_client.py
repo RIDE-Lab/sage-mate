@@ -402,8 +402,11 @@ class VllmChatClient:
                     logger.info("Auto-detected model max context: %d", max_len)
                 return detected
         except Exception as exc:
-            logger.warning("Failed to auto-detect model name from %s: %s",
-                           self._settings.llm_base_url, exc)
+            # Log only detached classifications. Buffered log handlers must
+            # not retain the exception/traceback and the whole service's init
+            # frame, nor disclose credentials embedded in an endpoint/error.
+            logger.warning("Model metadata discovery failed (error_type=%s, status=%s)",
+                           type(exc).__name__, getattr(getattr(exc, "response", None), "status_code", None))
         return ""
 
     def _refresh_thinking_capability(self) -> None:
@@ -1287,7 +1290,7 @@ class VllmChatClient:
             return normalize_generated_lucky_question(result)
         except Exception as exc:
             self._record_request_error(exc)
-            logger.warning("generate_lucky_question failed: %s", exc)
+            logger.warning("generate_lucky_question failed (error_type=%s)", type(exc).__name__)
             return {}
 
     def propose_shadow_plan_candidate_sync(
@@ -1834,7 +1837,7 @@ class VllmChatClient:
             response.raise_for_status()
             return True
         except Exception as exc:
-            logger.warning("Fixed-prefix warmup failed: %s", exc)
+            logger.warning("Fixed-prefix warmup failed (error_type=%s)", type(exc).__name__)
             return False
 
     def _request_chat_completion_sync(

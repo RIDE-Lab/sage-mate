@@ -27,8 +27,18 @@ are removed. Per-node durations are not added into an invented request latency.
 
 ## Acceptance boundary
 
-SAGE 78a90e0c has 329 passing source tests and the same 329 passing installed-package
-tests (21.84 seconds), including real overlapping fanout and SQLite event reopening.
+SAGE 78a90e0c initially passed 329 installed-package tests, but full Twin regression
+found a missing lifetime boundary: idle-GC inherited the initialization request's
+context and retained its observer and application owner. This candidate is not
+eligible for release. SAGE 502caf74 isolates service-lifetime tasks with a fresh
+Context and passes 332 installed-package tests (22.34 seconds), including weakref
+reclamation and preserved request-context propagation.
+
+The same investigation found exception objects retained in metadata-discovery log
+arguments, keeping the caller's service construction frames alive in buffered log
+handlers. The client now logs detached error type/status only, never the exception
+object or endpoint. Client/whole-service reclamation tests pass as part of 82 focused
+tests (6.78 seconds). No file-descriptor limit was raised to hide the leak.
 Twin application gates: 84 focused HTTP/lease/cancellation/delivery tests pass
 (51.15 seconds); 32 source-lane/frontend tests pass (5.66 seconds), including real
 nested Wiki/private fanout parentage. Six existing Node regression groups and

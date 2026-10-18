@@ -1,6 +1,9 @@
 """Native execution evidence stays distinct from business notes and task acks."""
 
+import asyncio
+import gc
 import json
+import weakref
 from dataclasses import replace
 
 import pytest
@@ -139,3 +142,27 @@ def test_real_http_execution_precedes_answer_commit_and_survives_canonical_histo
             assert saved.to_dict()["execution_events"] == record.to_dict()["execution_events"]
         finally:
             reopened.state_store.close()
+
+
+def test_finished_request_does_not_root_service_or_resident_runtime(tmp_path):
+    from sage_faculty_twin.config import AppSettings
+    from sage_faculty_twin.models import ChatRequest
+    from sage_faculty_twin.service import DigitalTwinService
+    from test_chat_post_answer_background import _FastLLMClient
+
+    async def scenario():
+        for index in range(3):
+            service = DigitalTwinService(AppSettings(runtime_dir=tmp_path / str(index), model_name="fixture"))
+            service._llm_client = _FastLLMClient()
+            reference = weakref.ref(service)
+            response = await service.answer(ChatRequest(student_name="Synthetic", question="给我一些下一步建议。"))
+            assert response.execution_events
+            del service
+            for _ in range(5):
+                await asyncio.sleep(0)
+                gc.collect()
+                if reference() is None:
+                    break
+            assert reference() is None, "completed request retained its service and resident executors"
+
+    asyncio.run(scenario())

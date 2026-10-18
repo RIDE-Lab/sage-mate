@@ -1,5 +1,7 @@
+import gc
 import json
 import threading
+import weakref
 from collections import OrderedDict
 from contextlib import nullcontext
 from pathlib import Path
@@ -103,6 +105,22 @@ def test_model_catalog_preserves_configured_auto_route_across_probes() -> None:
         assert client._model_max_len == 131072
     finally:
         client._client.close()
+
+
+def test_metadata_failure_log_is_detached_and_does_not_retain_client(caplog):
+    client = _model_catalog_client("fixture", [])
+    client._client.close()
+    client._client = httpx.Client(base_url="http://example.invalid/endpoint-canary",
+        transport=httpx.MockTransport(lambda request: httpx.Response(401)))
+    reference = weakref.ref(client)
+    assert client._detect_model_name() == ""
+    client._client.close()
+    del client
+    gc.collect()
+    assert reference() is None
+    assert "endpoint-canary" not in caplog.text
+    assert "HTTPStatusError" in caplog.text and "401" in caplog.text
+    assert all(not isinstance(arg, BaseException) for record in caplog.records for arg in record.args)
 
 
 @pytest.mark.parametrize(
