@@ -101,11 +101,7 @@ def test_review_contract_does_not_turn_owner_fact_lookup_into_a_review() -> None
 
 
 def test_canned_direction_checklist_is_retired() -> None:
-    question = "这个候选研究方向是否值得继续？请从 baseline、公平对比和消融来分析。"
-
-    assert not FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(
-        question
-    )
+    assert not hasattr(FacultyTwinWorkflowSupport, "_should_use_curated_direction_evaluation")
 
 
 def test_lab_member_review_uses_research_fast_intent_on_the_first_turn(tmp_path) -> None:

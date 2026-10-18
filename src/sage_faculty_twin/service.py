@@ -2802,12 +2802,11 @@ class FacultyTwinWorkflowSupport:
         enable_thinking = self._should_enable_deep_thinking(context)
         native_thinking = enable_thinking and self._model_supports_native_thinking()
         output_constraints = AnswerConstraints.from_question(context.request.question)
-        curated_direction = self._should_use_curated_direction_evaluation(relevance_question)
         # The fact renderer selects/mutates evidence. Do not run it speculatively
         # when the constrained/model path will consume the original evidence.
         grounded_fact_answer = (
             self._build_grounded_fact_answer(context)
-            if not curated_direction and not output_constraints.has_limits
+            if not output_constraints.has_limits
             and not self._is_benchmark_request(context.request)
             and not native_thinking
             else None
@@ -2859,7 +2858,7 @@ class FacultyTwinWorkflowSupport:
         ) or (
             explicit_deep
             and self._should_use_curated_deep_guidance(context.request.question)
-        ) or curated_direction or self._should_use_curated_general_guidance(
+        ) or self._should_use_curated_general_guidance(
             relevance_question
         )
         # Benchmark requests must exercise the prompt-grounding contract so
@@ -3414,17 +3413,6 @@ class FacultyTwinWorkflowSupport:
         )
 
     @staticmethod
-    def _should_use_curated_direction_evaluation(question: str) -> bool:
-        """Retired compatibility hook for the old canned review shortcut.
-
-        Research-direction reviews need the evidence and domain boundaries in
-        the common review contract.  A fixed baseline/fairness/ablation answer
-        erased the very distinctions the review is meant to discover.
-        """
-
-        return False
-
-    @staticmethod
     def _should_use_curated_deep_guidance(question: str) -> bool:
         lowered = question.lower()
         weekly_progress = "推进效率" in question and any(
@@ -3857,17 +3845,6 @@ class FacultyTwinWorkflowSupport:
                 "3. 建立测量：至少记录质量、吞吐、P50/P95 延迟、失败率和资源占用，并保留命令、配置和原始日志。\n"
                 "4. 设定周末验收：形成一张结果表和一个待验证清单；如果 baseline 仍不可复现，下一周优先修复实验闭环，不急着扩展新功能。\n\n"
                 "周末应能回答三个问题：主假设是什么？baseline 是否稳定？下一步最小实验如何证伪或支持它？"
-            )
-        if FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(question):
-            return (
-                "判断标准：先证明收益真实且可归因，再决定是否继续投入。按“收益/风险”排序，建议只做下面三项：\n\n"
-                "1. 最高收益、最低风险：冻结 baseline，先过可复现门槛。\n"
-                "   固定模型/数据、输入输出长度、硬件卡数、软件版本、并发、warm-up 和随机种子；用同一主指标报告均值、P50/P95、失败率和成本。若 baseline 自身不稳定或无法复现，先停止扩展实现。\n\n"
-                "2. 高收益、中风险：做公平对比，确认优势不是配置差异。\n"
-                "   选择最强且任务匹配的 baseline，在相同精度、预算、数据、服务目标和调参预算下比较；同时报告质量、吞吐/延迟、资源占用和失败案例。主结论只使用事先声明的指标。\n\n"
-                "3. 最高不确定性、最高风险：做关键消融，回答“为什么有效”。\n"
-                "   从完整方案出发，每次只移除一个核心组件（full vs. -one-component），再做一个关键参数敏感性实验；记录收益、副作用和失效场景。若移除组件后主指标几乎不变，就不要把它写成核心贡献。\n\n"
-                "继续/停止规则：三项实验都在公平条件下完成，且收益超过预先设定的最小实际改进、尾延迟和失败率没有恶化，才继续投入；否则优先修正问题定义或实验设计，而不是继续堆功能。"
             )
         if (
             "blocker" in lowered_question
@@ -4548,13 +4525,6 @@ class FacultyTwinWorkflowSupport:
                         "我不使用通用模板猜测事实。可以补充更具体的资料范围，或选择联网检索。"
                     )
         context.answer = context.answer.strip()
-        if context.source_answer_plan is None and self._should_use_curated_direction_evaluation(context.request.question):
-            # Broad profile hits do not support an experiment-design checklist;
-            # do not present them as citations.  The basis builder will add a
-            # transparent internal-method card instead.
-            context.knowledge_hits = []
-            context.web_search_hits = []
-            context.memory_hits = []
         if context.answer.startswith(("当前可见资料不足", "当前可见的公开资料不足", "当前可见的课程资料不足")):
             # An unknown/unsupported answer must not carry adjacent retrieval
             # hits as if they supported the refusal.
@@ -6929,21 +6899,6 @@ class FacultyTwinWorkflowSupport:
     def _resolve_interaction_intent(
         self, context: ChatWorkflowContext
     ) -> tuple[InteractionIntent, str]:
-        # This is an experiment-design prompt, not a fact lookup.  Bypass the
-        # intent-classifier model so the curated answer is returned without a
-        # second 30–60s inference call.
-        if self._should_use_curated_direction_evaluation(context.request.question):
-            return (
-                InteractionIntent(
-                    action="answer",
-                    domain="research",
-                    retrieval_scopes=[],
-                    exclude_scopes=["courseware"],
-                    decision_mode="direct_answer",
-                    confidence=0.99,
-                ),
-                "heuristic-curated-direction",
-            )
         if context.conversation_id in self._booking_workflows:
             return self._build_booking_follow_up_intent(), "workflow_state"
 
@@ -7700,22 +7655,6 @@ class FacultyTwinWorkflowSupport:
                 continue
             seen_keys.add(item_key)
             deduped_items.append(item)
-
-        # Methodology guidance is not a faculty fact.  When retrieval has no
-        # relevant source to cite, still show an explicit support card instead
-        # of silently omitting the references section.
-        if (
-            not deduped_items
-            and self._should_use_curated_direction_evaluation(context.request.question)
-        ):
-            deduped_items.append(
-                AnswerBasisItem(
-                    basis_label="方法框架",
-                    title="候选研究方向评估框架",
-                    source_label="SAGE 内置研究方法模板",
-                    detail="本回答是基于 baseline、公平对比和关键消融的实验设计建议，未引用特定论文或个人资料。",
-                )
-            )
 
         # 7. Safety net: strip any "近期交流记录" that slipped through.
         #    Session context is implicit and must never be cited.
@@ -9281,11 +9220,8 @@ class DigitalTwinService:
                 or not self._settings.legacy_skill_shortcut_enabled
                 or skip_skill_for_light_request
                 or (
-                FacultyTwinWorkflowSupport._should_use_curated_direction_evaluation(request.question)
-                or (
                     bool(getattr(request, "deep_thinking_explicit", False))
                     and bool(getattr(request, "deep_thinking", True))
-                )
                 )
             )
             else self._skill_router.match(request.question)

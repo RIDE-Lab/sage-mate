@@ -1,5 +1,16 @@
 # Native workflow completion audit
 
+## Retired research shortcut removal (candidate, not deployed)
+
+Removed the always-false curated-direction compatibility hook and every caller:
+canned review text, classifier bypass, source clearing, synthetic methodology
+basis card, and disabled selection terms in answer/skill routing. No replacement
+shortcut was added. The research-review contract and source-plan path remain.
+Regression now asserts the obsolete hook is absent, not merely disabled.
+Research review, grounding, source selection and post-answer tests: 113 passed
+in 21.80 seconds against installed production dependencies in an isolated tree.
+Production remains d1ace34; broader frozen-release/deployment acceptance is separate.
+
 ## Deployed source-selection release: d1ace34 (2026-10-18)
 
 Production app and Wiki sync now use frozen `d1ace34`, SAGE `b46054f`.
