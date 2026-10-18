@@ -29,6 +29,17 @@ unknown and must be preserved explicitly until reconciled. A migration must reta
 the original canonical response, original receipt evidence and current booking
 state, and must not admit a historical notification automatically.
 
+The operator tool `tools/migrate_booking_notifications.py STATE_PATH` reports only
+schema counts by default. After stopping the application and taking a recoverable
+SQLite backup, run the same command with `--apply`; it refuses while the user
+systemd application unit is active. Keep all writers stopped through the migration
+and release switch. The tool uses SAGE's atomic audited destination migration,
+retains original response/digest/current booking state and records historical SMTP
+outcomes as unknown, without queuing historical mail. Unknown schemas fail closed.
+Interrupted multi-record migration can be repeated; do not restore an older store
+over newer application writes. Replays are handled by the one current receipt path,
+not by a legacy producer or a runtime compatibility branch.
+
 Conversational plan capture and cross-database ingress lease fencing are separate
 remaining qualifications. Passing local receipt tests does not establish those
 properties or complete the overall native workflow migration.
