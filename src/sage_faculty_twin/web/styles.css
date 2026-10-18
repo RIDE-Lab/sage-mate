@@ -2668,6 +2668,23 @@ body.drawer-pinned .history-rail {
     background: rgba(22, 35, 56, 0.08);
 }
 
+.workflow-phase-status {
+    display: block;
+    font-size: 0.65rem;
+    font-weight: 400;
+    color: inherit;
+}
+
+.workflow-phase-item-failed .workflow-phase-icon {
+    border-style: double;
+    border-color: currentColor;
+}
+
+.workflow-phase-item-skipped .workflow-phase-icon,
+.workflow-phase-item-queued .workflow-phase-icon {
+    border-style: dashed;
+}
+
 .workflow-phase-item-completed .workflow-phase-icon {
     border-color: rgba(36, 90, 166, 0.2);
     background: linear-gradient(145deg, rgba(238, 246, 255, 0.96), rgba(247, 240, 230, 0.96));

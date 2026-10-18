@@ -14,6 +14,35 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_phase_status_requires_actual_events_not_answer_completion():
+    import subprocess
+    script = r'''
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const source = fs.readFileSync(process.argv[1], 'utf8');
+const context = {};
+vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('const WORKFLOW_PHASE_DEFINITIONS ='),
+    source.indexOf('const WORKFLOW_STEP_SHORT_LABELS =')), context);
+vm.runInContext(source.slice(source.indexOf('function deriveWorkflowPhaseStates('),
+    source.indexOf('function buildCollapsibleSupportSectionHtml(')), context);
+const states = (steps, complete=true) => Object.fromEntries(context.deriveWorkflowPhaseStates({workflowSteps:steps,complete}).map(p=>[p.key,p.state]));
+const step = (key,status) => ({key,status});
+let result = states([step('response_render','completed')]);
+assert.equal(result.return,'completed');
+for (const phase of ['intake','decide','retrieve','answer','finalize']) assert.equal(result[phase],'pending');
+result = states([step('memory_persist','queued'),step('response_render','completed')]);
+assert.equal(result.finalize,'queued');
+assert.equal(states([step('knowledge_retrieve','skipped')]).retrieve,'skipped');
+assert.equal(states([step('knowledge_retrieve','failed'),step('memory_retrieve','completed')]).retrieve,'failed');
+assert.equal(states([step('knowledge_retrieve','running'),step('memory_retrieve','completed')]).retrieve,'active');
+assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retrieve','skipped')]).retrieve,'completed');
+assert.equal(states([step('knowledge_retrieve','completed'),step('memory_retrieve','unknown')]).retrieve,'pending');
+assert.equal(states([step('knowledge_retrieve','running'),step('knowledge_retrieve','completed')]).retrieve,'completed');
+assert.equal(states([],false).intake,'pending');
+'''
+    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
+
+
 def test_wiki_starters_cover_all_profiles_and_failed_load_fallback():
     import subprocess
     script = r'''

@@ -8108,9 +8108,9 @@ function buildWorkflowPhaseRailHtml({ currentStage = "", workflowSteps = [], com
     return `
         <div class="workflow-phase-rail" aria-label="当前处理阶段">
             ${phases.map((phase, index) => `
-                <div class="workflow-phase-item workflow-phase-item-${escapeHtml(phase.state)}" data-phase-key="${escapeHtml(phase.key)}">
+                <div class="workflow-phase-item workflow-phase-item-${escapeHtml(phase.state)}" data-phase-key="${escapeHtml(phase.key)}" title="${escapeHtml(phase.statusLabel)}" aria-label="${escapeHtml(phase.label)}：${escapeHtml(phase.statusLabel)}">
                     <span class="workflow-phase-icon" aria-hidden="true">${buildWorkflowPhaseIconSvg(phase.icon)}</span>
-                    <span class="workflow-phase-label">${escapeHtml(phase.label)}</span>
+                    <span class="workflow-phase-label">${escapeHtml(phase.label)}<small class="workflow-phase-status">${escapeHtml(phase.statusLabel)}</small></span>
                     ${index < phases.length - 1 ? '<span class="workflow-phase-link" aria-hidden="true"></span>' : ""}
                 </div>
             `).join("")}
@@ -8132,23 +8132,24 @@ function buildWorkflowPhaseIconSvg(iconName) {
 
 function deriveWorkflowPhaseStates({ currentStage = "", workflowSteps = [], complete = false } = {}) {
     const visibleSteps = buildVisibleWorkflowSteps(workflowSteps, currentStage, { includeCurrentStage: !complete });
-    const lastVisibleStep = visibleSteps[visibleSteps.length - 1] || null;
-    const activePhaseIndex = lastVisibleStep
-        ? WORKFLOW_PHASE_DEFINITIONS.findIndex((phase) => phase.key === inferWorkflowPhaseKey(lastVisibleStep))
-        : 0;
-
-    return WORKFLOW_PHASE_DEFINITIONS.map((definition, index) => {
+    // Arrival at a later phase (or answer delivery) is not evidence that earlier
+    // work completed. In particular, durable background work can still be queued.
+    const latestByKey = new Map(visibleSteps.map(step => [step.key, step]));
+    const labels = {pending: "未确认", active: "执行中", queued: "待执行",
+        failed: "失败", skipped: "已跳过", completed: "已报告步骤完成"};
+    return WORKFLOW_PHASE_DEFINITIONS.map((definition) => {
+        const steps = [...latestByKey.values()].filter(step => inferWorkflowPhaseKey(step) === definition.key);
+        const statuses = steps.map(step => step.status);
         let state = "pending";
-        if (complete) {
-            state = index <= activePhaseIndex ? "completed" : "pending";
-        } else if (index < activePhaseIndex) {
-            state = "completed";
-        } else if (index === activePhaseIndex) {
-            state = "active";
-        }
+        if (statuses.some(status => ["failed", "error"].includes(status))) state = "failed";
+        else if (statuses.some(status => ["active", "running", "retrying"].includes(status))) state = "active";
+        else if (statuses.some(status => ["queued", "pending"].includes(status))) state = "queued";
+        else if (statuses.length && statuses.every(status => status === "skipped")) state = "skipped";
+        else if (statuses.length && statuses.every(status => ["completed", "skipped"].includes(status))) state = "completed";
         return {
             ...definition,
             state,
+            statusLabel: labels[state],
         };
     });
 }
@@ -8189,7 +8190,7 @@ function buildVisibleWorkflowSteps(workflowSteps = [], currentStage = "", option
             key: "current_stage",
             title: currentTitle,
             summary: "当前正在执行这一步。",
-            detail: "前面的步骤已经完成，系统正在推进这一环。",
+            detail: "系统正在执行这一环；其他步骤的状态以各自事件为准。",
             status: "active",
         });
     }
