@@ -65,7 +65,8 @@ def test_duplicate_conflict_and_cancelled_observer_share_one_producer(tmp_path):
     asyncio.run(scenario())
 
 
-def test_restart_recovers_canonical_answer_and_rechecks_authority(tmp_path):
+@pytest.mark.parametrize("legacy_source_field", [False, True])
+def test_restart_recovers_canonical_answer_and_rechecks_authority(tmp_path, legacy_source_field):
     path = str(tmp_path / "work.db")
     async def scenario():
         state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
@@ -78,16 +79,28 @@ def test_restart_recovers_canonical_answer_and_rechecks_authority(tmp_path):
             pytest.fail("canonical answer must not regenerate")
         flow = HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer)
         item = ingress()
+        captured = item.model_dump(mode="json")
+        if legacy_source_field:
+            captured["request"].pop("knowledge_sources")
         # Durable pre-crash admission with no producer started.
         flow.journal.commit(item.delivery.stream_id, result={"owner_id": item.request.owner_id},
-                            tasks={"answer": item.model_dump(mode="json")})
+                            tasks={"answer": captured})
         await flow.aclose()
         state.close()
         state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
         flow = HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer)
         try:
             await flow.start()
+            await flow.admit(item)
             assert (await flow.wait(item, timeout=3)).answer == "already committed"
+            assert flow.journal.read(item.delivery.stream_id)["tasks"]["answer"]["payload"] == captured
+            for selection in ([], ["wiki"], ["private"]):
+                changed = item.model_copy(update={"request": item.request.model_copy(
+                    update={"knowledge_sources": selection})})
+                with pytest.raises(ValueError, match="conflict"):
+                    await flow.admit(changed)
+                with pytest.raises(ValueError, match="conflict"):
+                    await flow.wait(changed, timeout=3)
             permitted[0] = False
             with pytest.raises(PermissionError):
                 await flow.wait(item, timeout=3)

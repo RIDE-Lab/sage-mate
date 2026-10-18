@@ -185,16 +185,35 @@ class HttpWorkflow:
         ingress = HttpIngress.model_validate_json(ingress.model_dump_json())
         await self._check(ingress)
         await self.start()
+        payload = ingress.model_dump(mode="json")
+        record = await asyncio.to_thread(self.journal.read, ingress.delivery.stream_id)
+        if record is not None:
+            stored = record["tasks"]["answer"]["payload"]
+            if self._input_identity(stored) != self._input_identity(payload):
+                raise ValueError("http_work_input_conflict")
+            # Preserve the admitted bytes and journal identity across optional
+            # request-field additions; never rewrite durable work on replay.
+            payload = stored
         return await self._work.commit(ingress.delivery.stream_id,
             result={"owner_id": ingress.request.owner_id},
-            tasks={"answer": ingress.model_dump(mode="json"), "finalize": ingress.model_dump(mode="json")},
+            tasks={"answer": payload, "finalize": payload},
             dependencies={"finalize": ["answer"]}, settled=["finalize"])
+
+    @staticmethod
+    def _input_identity(payload):
+        # V1 requests written before source selection omit this optional field.
+        # Missing and null both mean unspecified, but [] and explicit scopes
+        # remain distinct. Preserve every other byte-level JSON value/field.
+        request = dict(payload["request"])
+        if request.get("knowledge_sources") is None:
+            request.pop("knowledge_sources", None)
+        return {**payload, "request": request}
 
     async def wait(self, ingress, *, timeout, start_timeout=None):
         ingress = HttpIngress.model_validate_json(ingress.model_dump_json())
         await self._check(ingress)
         record = await asyncio.to_thread(self.journal.read, ingress.delivery.stream_id)
-        if record is None or record["tasks"]["answer"]["payload"] != ingress.model_dump(mode="json"):
+        if record is None or self._input_identity(record["tasks"]["answer"]["payload"]) != self._input_identity(ingress.model_dump(mode="json")):
             raise ValueError("http_work_input_conflict")
         try:
             record = await self._work.wait(ingress.delivery.stream_id, timeout=timeout, start_timeout=start_timeout)
