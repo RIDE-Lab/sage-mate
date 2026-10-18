@@ -71,3 +71,39 @@ Production app/router/model services were not changed. Do not deploy on this
 failed QA gate or solve it by truncating sources, lowering output budgets, or
 substituting an easier question. Relevance and tokenizer-aware admission remain
 to be resolved before repeating this same end-to-end canary.
+
+## Corrected frozen qualification and isolated end-to-end result
+
+Twin792505a with locked SAGEd00ee1e, independently installed CPython3.11/147packages,
+passed1563tests with31existing skips in330.06s. The pre-existing identity-evaluation
+exclusion is unchanged; Starlette/httpx deprecation warning remains. All five Node
+groups passed. This supersedes the earlier failed SSE-format gate, not the full
+production acceptance checklist.
+
+An isolated gateway03a9377 initially still rejected the question: Twin uses
+Responses, which that first fix did not support. Control-plane a5928e8 adds the
+qualified stateless text Responses counting mapping after inspecting deployed
+vLLM's construct_input_messages and chat renderer. No provider/wire-mode switch.
+Eight gateway tests pass, including both transports and verified overflow/outage.
+
+With the corrected isolated gateway, the original capacity1 real-model canary
+passed on f8f96ec (7.97s/3.8s), then again after the preview switched to frozen
+792505a (5.31s/3.81s): while one request is active, another returns429 explicitly
+not enqueued; the latter's unchanged request ID succeeds after release; replay
+preserves answer and exchange ID; final active count is0. The selected onboarding,
+research-method and public-index source bodies were independently compared with
+the canonical read-only Wiki catalog; all are complete with full links, and no
+Prompt Engineering document was selected for the answer. These warm/cache-mixed
+observations are not a throughput or cold-latency benchmark.
+
+Isolated router metadata confirms quality_input_size_tokenizer_verified with48154
+input tokens and200 for the large source plan. An initial audit incorrectly
+expected two such calls; repeated plans can reuse cache, and the assertion now
+requires observed verified calls without claiming invocation per answer.
+Candidate retrieval still includes irrelevant documents before source selection;
+this is not claimed resolved by admission or final-answer source checks.
+
+Production remains Twin50306a7 and the original router. Admission limits have
+only been installed in the isolated store. Production capacity selection, a
+quiescent version6 migration and safe rollback/forward-recovery procedure remain
+required; old pre-capacity SAGE binaries must not write version6 state.
