@@ -71,6 +71,7 @@ from .models import (
     ChatFeedbackOperationResponse,
     ChatRequest,
     ChatResponse,
+    ExchangeExecutionResponse,
     CodeAssistRequest,
     CodeAssistResponse,
     CodeCommandRequest,
@@ -2158,6 +2159,19 @@ async def get_feedback_operation(operation_id: str, raw_request: Request, respon
     result = await asyncio.to_thread(service.get_feedback_operation, operation_id,
                                     exchange_id=exchange_id, owner_id=identity.owner_id)
     _deliver_guest_cookie(raw_request, response)
+    return result
+
+
+@llm_app.get("/chat/execution", response_model=ExchangeExecutionResponse)
+async def get_exchange_execution(raw_request: Request, response: Response,
+                                 exchange_id: str = Query(min_length=1, max_length=128)):
+    # The opaque exchange ID is not authority; resolve current identity exactly
+    # as feedback does, then require the canonical record's verified owner.
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    result = await asyncio.to_thread(service.get_exchange_execution, exchange_id,
+                                    owner_id=identity.owner_id)
+    _deliver_guest_cookie(raw_request, response)
+    response.headers["Cache-Control"] = "no-store"
     return result
 
 

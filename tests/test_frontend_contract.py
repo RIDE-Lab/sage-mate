@@ -14,6 +14,85 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_native_work_history_refresh_preserves_answer_and_closes_stale_scope():
+    import subprocess
+    script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync(process.argv[1],'utf8');
+const calls=[],streams=[];
+let releaseSnapshot;
+const context={escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
+    buildNativeExecutionHtml:()=>'<p>foreground</p>', persistActiveConversationSnapshot:()=>calls.push('persist'),
+    resolveApiOrigin:async()=>'https://testserver',
+    apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
+    EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
+vm.createContext(context);
+vm.runInContext('let activeWorkEvents=[]; let activeWorkflowMessage=null; const restoredExecutionStreams=new Set(); let executionHistoryGeneration=0;',context);
+vm.runInContext(source.slice(source.indexOf('function mergeWorkEventLists('),source.indexOf('function buildWorkflowPhaseRailHtml(')),context);
+const event=(state,id=state)=>({version:1,event_id:id,namespace:'post',request_id:'owned',task_id:'post_answer',attempt:1,state,dependency_task_ids:[],dependency_mode:'success'});
+assert(context.buildWorkAttemptHtml([]).includes('不推断已经完成'));
+assert(context.buildWorkAttemptHtml([event('started')]).includes('后台处理中'));
+assert(!context.buildWorkAttemptHtml([event('started')]).includes('data-work-state="completed"'));
+assert(context.buildWorkAttemptHtml([event('completed'),event('started')]).includes('data-work-state="completed"'));
+assert(context.buildWorkAttemptHtml([event('completed'),event('failed')]).includes('data-work-state="unknown"'));
+assert(context.buildWorkAttemptHtml([{...event('started'),task_id:'<script>'}]).includes('&lt;script&gt;'));
+assert(!context.buildWorkAttemptHtml([{...event('started'),task_id:'<script>'}]).includes('<script>'));
+assert(context.buildWorkAttemptHtml([event('completed')]).includes('不代表外部邮件'));
+assert.equal(context.mergeWorkEventLists([event('started')],[event('started'),event('completed')]).length,2);
+const native={innerHTML:''},content={querySelector:()=>native};
+const summary={dataset:{},querySelector:selector=>selector==='.message-section-content'?content:null};
+const message={dataset:{exchangeId:'exchange'},answer:'original answer',citations:'original complete citations',
+    querySelector:selector=>selector==='.message-workflow-summary'?summary:null};
+const root={querySelectorAll:()=>[message],contains:node=>node===message};
+const turn=()=>new Promise(resolve=>setImmediate(resolve));
+(async()=>{
+    const hydrated=context.hydrateExecutionEvidence(root);
+    await turn();
+    releaseSnapshot({execution_events:[],work_events:[event('started')],request_id:'public'});
+    await hydrated;
+    assert.equal(streams.length,1);
+    assert(native.innerHTML.includes('后台处理中'));
+    streams[0].onmessage({data:JSON.stringify({type:'work-event',event:event('completed')})});
+    assert(native.innerHTML.includes('data-work-state="completed"'));
+    assert.equal(message.answer,'original answer');assert.equal(message.citations,'original complete citations');
+    assert(calls.filter(c=>c!=='persist').every(c=>c.startsWith('/chat/execution?')));
+    context.stopRestoredExecutionStreams();
+    assert(streams[0].closed);
+    const saved=native.innerHTML;
+    streams[0].onmessage({data:JSON.stringify({type:'work-event',event:event('failed')})});
+    assert.equal(native.innerHTML,saved);
+    const stale=context.hydrateExecutionEvidence(root);
+    await turn();context.stopRestoredExecutionStreams();
+    releaseSnapshot({execution_events:[],work_events:[event('failed')],request_id:'old'});
+    await stale;
+    assert.equal(streams.length,1);assert.equal(native.innerHTML,saved);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+'''
+    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
+
+
+def test_legacy_workflow_cache_loses_guessed_topology_not_answer_or_business_notes():
+    import subprocess
+    script = r'''
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const source=fs.readFileSync(process.argv[1],'utf8'),removed=[],notes=[{text:'note one'},{text:'note two'}];
+const preview={textContent:'6/6 完成'},group={querySelector:()=>({children:notes}),replaceWith:(...children)=>{assert.deepEqual(children,notes);removed.push('group');}};
+const old={dataset:{},querySelector:selector=>selector==='.message-inline-process-preview'?preview:null,
+    querySelectorAll:selector=>selector==='.workflow-step-chip-group'?[group]:[{remove:()=>removed.push('rail')}]};
+const current={dataset:{executionFormat:'native-v1'},querySelectorAll:()=>{throw Error('native evidence must not be rewritten');}};
+const root={answer:'original answer',citation:'full original citation',querySelectorAll:()=>[old,current]};
+const context={};vm.createContext(context);
+vm.runInContext(source.slice(source.indexOf('function repairLegacyWorkflowSummaries('),source.indexOf('async function hydrateExecutionEvidence(')),context);
+context.repairLegacyWorkflowSummaries(root);
+assert.equal(old.dataset.executionFormat,'legacy-unrecorded');
+assert(preview.textContent.includes('无原生执行证据'));
+assert.deepEqual(removed,['rail','group']);
+assert.equal(root.answer,'original answer');assert.equal(root.citation,'full original citation');
+context.repairLegacyWorkflowSummaries(root);assert.equal(removed.length,2);
+'''
+    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
+
+
 def test_native_execution_timeline_uses_attempt_identity_not_labels_or_completion_guess():
     import subprocess
     script = r'''

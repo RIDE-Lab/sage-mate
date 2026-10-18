@@ -4,11 +4,31 @@ from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProce
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
 from sage.runtime.event_journal import EventJournal
+from sage.runtime.work_observation import WorkEventDestination, WorkObserver
 
 from .post_answer_handler import PostAnswerHandler
 from .memory_store import ConversationMemoryRecord
 from .post_answer_contract import PostAnswerTask
 from .chat_delivery import ChatDeliveryGate
+from .workflow_events import WorkflowEventBroker
+
+
+def work_events_for_exchange(state, exchange_id, *, owner_id):
+    return work_evidence_for_exchange(state, exchange_id, owner_id=owner_id)["work_events"]
+
+
+def work_evidence_for_exchange(state, exchange_id, *, owner_id):
+    """Read the committed task's owner-bound delivery, never guess it by email."""
+    record = WorkJournal(state, namespace="twin-post-answer-v1").read(exchange_id)
+    if record is None:
+        return {"request_id": None, "work_events": []}  # No invented legacy evidence.
+    task = PostAnswerTask.model_validate(record["tasks"]["post_answer"]["payload"])
+    if task.request.owner_id != owner_id or task.request_id != exchange_id:
+        raise PermissionError("post_answer_observation_owner_conflict")
+    if task.delivery is None:
+        return {"request_id": None, "work_events": []}
+    return {"request_id": task.delivery.request_id,
+            "work_events": WorkflowEventBroker(lambda: state).read_work_events(task.delivery.stream_id)}
 
 
 class PostAnswerRuntime:
@@ -21,12 +41,22 @@ class PostAnswerRuntime:
             backend="sqlite", sqlite_path=str(path))
         self.journal = WorkJournal(self._state, namespace="twin-post-answer-v1")
         self.events = EventJournal(self._state, namespace="twin-workflow-events-v1")
+        events = self.events  # The service-lifetime port must not retain its owner.
+
+        def destination(lease):
+            if lease.task_id != "post_answer":
+                return None  # Manual digest jobs have no answer-delivery stream.
+            task = PostAnswerTask.model_validate(lease.payload)
+            return (WorkEventDestination(events, task.delivery.stream_id)
+                    if task.delivery is not None else None)
+
         self._service = WorkService(
             self.journal, PostAnswerHandler(consolidate_profiles=consolidate_profiles, score=score,
                                           create_artifact_draft=create_artifact_draft,
                                           refresh_digest=refresh_digest),
             max_workers=2, poll_interval=0.05,
             completion_mutations=self._completion_events,
+            observer=WorkObserver(self.journal, destination),
         )
 
     def start(self):

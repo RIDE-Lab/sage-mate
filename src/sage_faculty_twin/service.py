@@ -9016,6 +9016,12 @@ class DigitalTwinService:
             admission_guard=admission_guard,
         )
         response = self._capture_generation_diagnostics(response)
+        if delivery is not None:
+            work_events = await asyncio.to_thread(
+                WorkflowEventBroker(lambda: self._conversation_store.state_store).read_work_events,
+                delivery.stream_id,
+            )
+            response = response.model_copy(update={"work_events": work_events})
         delivered = self._deliver_chat_response(request, response)
         if delivery is not None:
             await asyncio.to_thread(WorkflowEventBroker(lambda: self._conversation_store.state_store).finish_immediate,
@@ -10604,6 +10610,7 @@ class DigitalTwinService:
                     answer=record.answer,
                     answer_blocks=record.answer_blocks,
                     execution_events=record.execution_events,
+                    work_events=self._work_events_for_exchange(record),
                     workflow_action=record.workflow_action,
                     knowledge_hit_count=record.knowledge_hit_count,
                     created_at=record.created_at,
@@ -10611,6 +10618,24 @@ class DigitalTwinService:
                 for record in records
             ],
         )
+
+    def _work_events_for_exchange(self, record):
+        from .post_answer_runtime import work_events_for_exchange
+
+        return work_events_for_exchange(self._conversation_store.state_store,
+                                       record.memory_id, owner_id=record.owner_id)
+
+    def get_exchange_execution(self, exchange_id, *, owner_id):
+        from .models import ExchangeExecutionResponse
+        from .post_answer_runtime import work_evidence_for_exchange
+
+        record = self._conversation_store.get_owned_record(exchange_id, owner_id=owner_id)
+        if record is None:
+            raise HTTPException(status_code=404, detail="找不到对应的执行记录。")
+        evidence = work_evidence_for_exchange(self._conversation_store.state_store,
+                                            exchange_id, owner_id=owner_id)
+        return ExchangeExecutionResponse(exchange_id=exchange_id,
+            execution_events=record.execution_events, **evidence)
 
     def submit_chat_feedback(
         self, request: ChatFeedbackRequest | dict[str, Any], *, owner_id: str | None = None

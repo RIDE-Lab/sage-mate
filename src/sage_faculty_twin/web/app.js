@@ -521,6 +521,10 @@ let lastAutoCourseContext = courseContextInput?.value?.trim() || "";
 let lastHardwareSnapshot = null;
 let activeWorkflowSteps = [];
 let activeExecutionEvents = [];
+let activeWorkEvents = [];
+let activeWorkflowMessage = null;
+const restoredExecutionStreams = new Set();
+let executionHistoryGeneration = 0;
 let availabilityEditorState = null;
 let workflowMobileHandlePointerId = null;
 let workflowMobileHandleStartY = 0;
@@ -2950,6 +2954,7 @@ chatForm.addEventListener("submit", async (event) => {
         state: "pending",
         startedAt: answerStartedAt,
     });
+    activeWorkflowMessage = pendingMessage;
     const explicitDeepMode = payload.deep_thinking && payload.deep_thinking_explicit;
     renderPendingAssistantMessage(pendingMessage, "理解问题", [], {
         deepThinking: explicitDeepMode,
@@ -2983,6 +2988,7 @@ chatForm.addEventListener("submit", async (event) => {
                 : await apiRequest(chatPath, chatOptions);
             activeConversationId = data.conversation_id || activeConversationId;
             mergeNativeExecutionEvents(data.execution_events || []);
+            mergeWorkEvents(data.work_events || []);
             // HTTP completion is not durable worker completion. Keep the SSE
             // cursor alive until its terminal event, including reconnects.
             const mergedSteps = new Map((data.workflow_trace || []).map(step => [step.key, step]));
@@ -3009,7 +3015,8 @@ chatForm.addEventListener("submit", async (event) => {
                     data.workflow_trace || [],
                     data.external_evidence_required !== false,
                     data.answer_blocks || [],
-                    data.execution_events || []
+                    data.execution_events || [],
+                    activeWorkEvents
                 );
                 noteConversationAnswerPreview(data.answer);
                 updateTokenUsageBadge(data.token_usage || null);
@@ -7319,8 +7326,11 @@ function getCurrentHistorySyncEmail() {
 
 function resetConversationViewForHistoryScopeSwitch() {
     stopWorkflowTraceStream();
+    stopRestoredExecutionStreams();
     activeWorkflowSteps = [];
     activeExecutionEvents = [];
+    activeWorkEvents = [];
+    activeWorkflowMessage = null;
     activeConversationId = createConversationId();
     currentConversationTitle = DEFAULT_CONVERSATION_TITLE;
     currentConversationPreview = "";
@@ -7589,9 +7599,12 @@ async function restoreConversationFromHistory(conversationId) {
     }
 
     stopWorkflowTraceStream();
+    stopRestoredExecutionStreams();
     activeWorkflowSteps = [];
     activeConversationId = conversationId;
     activeExecutionEvents = [];
+    activeWorkEvents = [];
+    activeWorkflowMessage = null;
     if (entry?.html) {
         currentConversationTitle = conversationHistoryMeta.titleOverrides[conversationId] || entry.title || DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = entry.preview || "";
@@ -7624,9 +7637,11 @@ async function restoreConversationFromHistory(conversationId) {
 
     try {
         const transcript = await fetchConversationTranscript(conversationId);
+        if (activeConversationId !== conversationId) return;
         renderConversationTranscript(transcript);
         renderConversationHistoryList();
     } catch (error) {
+        if (activeConversationId !== conversationId) return;
         currentConversationTitle = DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = "";
         startFreshConversation();
@@ -7664,8 +7679,9 @@ function renderConversationTranscript(transcript) {
         appendMessage("user", speakerName, exchange.question, {});
         const message = appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
         renderAssistantMessage(message, exchange.answer, [], [], [], null, false,
-            exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || []);
+            exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || [], exchange.work_events || []);
     });
+    hydrateConversationInteractiveState();
     hideOnboardingCard();
     syncConversationMode();
 }
@@ -7791,6 +7807,8 @@ async function repairHistoricalCitationCards(root) {
 function hydrateConversationInteractiveState() {
     syncConversationMode();
     attachFeedbackHandlersToStream();
+    repairLegacyWorkflowSummaries(chatStream);
+    void hydrateExecutionEvidence(chatStream);
 }
 
 function attachFeedbackHandlersToStream() {
@@ -7812,8 +7830,11 @@ function startFreshConversation() {
     }
 
     stopWorkflowTraceStream();
+    stopRestoredExecutionStreams();
     activeWorkflowSteps = [];
     activeExecutionEvents = [];
+    activeWorkEvents = [];
+    activeWorkflowMessage = null;
     activeConversationId = createConversationId();
     sessionTokenTotal = 0;
     resetTokenUsageBadge();
@@ -7970,8 +7991,10 @@ function renderAssistantMessage(
     workflowTrace = [],
     externalEvidenceRequired = true,
     answerBlocks = [],
-    executionEvents = []
+    executionEvents = [],
+    workEvents = []
 ) {
+    if (exchangeId && !isError) container.dataset.exchangeId = exchangeId;
     stopAnswerProcessingTicker(container);
     const startedAt = Number(container?.dataset?.startedAt);
     const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
@@ -8045,8 +8068,8 @@ function renderAssistantMessage(
         : "";
     const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
         && Array.isArray(workflowTrace)
-        && (workflowTrace.length || executionEvents.length)
-        ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents)
+        && (workflowTrace.length || executionEvents.length || workEvents.length)
+        ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents)
         : "";
     const thinkSectionHtml = thinkContent
         ? `<div class="thinking-text-section" data-collapsed="true">
@@ -8093,8 +8116,8 @@ function renderAssistantMessage(
     chatStream.scrollTop = chatStream.scrollHeight;
 }
 
-function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = []) {
-    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length) {
+function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = []) {
+    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length) {
         return "";
     }
 
@@ -8102,7 +8125,7 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = []) {
     const preview = nativeCount ? `${nativeCount} 个原生节点` : `${workflowTrace.length} 条业务记录 · 原生执行状态未记录`;
 
     return `
-        <section class="message-workflow-summary message-section" data-expanded="false" aria-label="本次处理过程">
+        <section class="message-workflow-summary message-section" data-execution-format="native-v1" data-expanded="false" aria-label="本次处理过程">
             <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
                 <div class="message-section-toggle-copy">
                     <span class="message-process-icon" aria-hidden="true"></span>
@@ -8114,7 +8137,9 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = []) {
                 </div>
             </button>
             <div class="message-section-content" hidden>
-                ${buildNativeExecutionHtml(executionEvents)}
+                <div class="message-native-execution">${buildNativeExecutionHtml(executionEvents)}
+                    <div class="native-work-events">${buildWorkAttemptHtml(workEvents)}</div>
+                </div>
                 <p>业务记录（不代表节点执行或后台任务确认）</p>
                 <div class="message-workflow-chip-row">
                     ${buildWorkflowChipRowHtml(workflowTrace)}
@@ -8147,8 +8172,14 @@ function buildNativeExecutionHtml(events = []) {
 
 function syncNativeExecutionDisplay() {
     const pending = chatStream?.querySelector(".message-pending .thinking-trace-list");
-    if (pending && activeExecutionEvents.length) pending.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
-    if (workflowTrace) workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
+    const html = buildNativeExecutionHtml(activeExecutionEvents)
+        + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
+    if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
+    if (workflowTrace) workflowTrace.innerHTML = html;
+    if (activeWorkflowMessage?.classList.contains("message-ready")) {
+        updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
+        persistActiveConversationSnapshot();
+    }
 }
 
 function mergeNativeExecutionEvents(events) {
@@ -8157,6 +8188,121 @@ function mergeNativeExecutionEvents(events) {
     const merged = new Map(activeExecutionEvents.map(event => [event.event_id, event]));
     for (const event of events) merged.set(event.event_id, event);
     activeExecutionEvents = [...merged.values()];
+}
+
+function mergeWorkEventLists(existing, incoming) {
+    const merged = new Map(existing.map(event => [event.event_id, event]));
+    for (const event of incoming) merged.set(event.event_id, event);
+    return [...merged.values()];
+}
+
+function mergeWorkEvents(events) {
+    activeWorkEvents = mergeWorkEventLists(activeWorkEvents, events);
+}
+
+function buildWorkAttemptHtml(events = []) {
+    const attempts = new Map();
+    for (const event of events) {
+        if (event?.version !== 1 || typeof event.task_id !== "string") continue;
+        const key = JSON.stringify([event.namespace,event.request_id,event.task_id,event.attempt]);
+        const previous = attempts.get(key);
+        if (previous && previous.state !== "started" && event.state === "started") continue;
+        if (previous && previous.state !== "started" && previous.state !== event.state) {
+            attempts.set(key, {...event,state:"unknown"});
+        } else attempts.set(key,event);
+    }
+    if (!attempts.size) return '<p>尚无后台任务执行记录；不推断已经完成。</p>';
+    const labels = {started:"后台处理中",completed:"已持久化确认",retrying:"等待重试",failed:"后台任务失败",unknown:"状态冲突，需核对"};
+    return `<div class="native-work"><p>后台任务确认 · 与原生租约状态原子提交；不代表外部邮件或其他系统已送达。</p><ol>${[...attempts.values()].map(event=>{
+        const name = event.task_id === "post_answer" ? "答后处理" : event.task_id;
+        const detail = JSON.stringify({namespace:event.namespace,request_id:event.request_id,task_id:event.task_id,
+            attempt:event.attempt,dependency_task_ids:event.dependency_task_ids,dependency_mode:event.dependency_mode,
+            failure_code:event.failure_code,error_type:event.error_type},null,2);
+        return `<li data-work-state="${escapeHtml(event.state)}"><details><summary>${escapeHtml(name)} · 第 ${escapeHtml(String(event.attempt))} 次 · ${escapeHtml(labels[event.state] || "未知")}</summary><pre>${escapeHtml(detail)}</pre></details></li>`;
+    }).join("")}</ol></div>`;
+}
+
+function updateMessageExecutionEvidence(message, executionEvents, workEvents) {
+    if (!message) return;
+    let summary = message.querySelector(".message-workflow-summary");
+    if (!summary && (executionEvents.length || workEvents.length)) {
+        message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents));
+        summary = message.querySelector(".message-workflow-summary");
+    }
+    const content = summary?.querySelector(".message-section-content");
+    if (!content) return;
+    let native = content.querySelector(".message-native-execution");
+    if (!native) {
+        native = document.createElement("div");
+        native.className = "message-native-execution";
+        content.prepend(native);
+    }
+    native.innerHTML = buildNativeExecutionHtml(executionEvents)
+        + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents)}</div>`;
+    summary.dataset.executionFormat = "native-v1";
+}
+
+function stopRestoredExecutionStreams() {
+    executionHistoryGeneration += 1;
+    for (const stream of restoredExecutionStreams) stream.close();
+    restoredExecutionStreams.clear();
+}
+
+function repairLegacyWorkflowSummaries(root) {
+    if (!root) return;
+    for (const summary of root.querySelectorAll(".message-workflow-summary")) {
+        if (summary.dataset.executionFormat || summary.querySelector(".native-execution")) continue;
+        summary.querySelectorAll(".workflow-phase-rail,.workflow-step-chip-group-head").forEach(node=>node.remove());
+        for (const group of summary.querySelectorAll(".workflow-step-chip-group")) {
+            const branches = group.querySelector(".workflow-step-chip-group-branches");
+            group.replaceWith(...(branches ? [...branches.children] : []));
+        }
+        const preview = summary.querySelector(".message-inline-process-preview");
+        if (preview) preview.textContent = "历史业务记录 · 无原生执行证据";
+        summary.dataset.executionFormat = "legacy-unrecorded";
+    }
+}
+
+async function hydrateExecutionEvidence(root) {
+    if (!root) return;
+    const generation = executionHistoryGeneration;
+    let origin;
+    try { origin = await resolveApiOrigin(); } catch { return; }
+    if (generation !== executionHistoryGeneration) return;
+    for (const message of root.querySelectorAll(".message-assistant")) {
+        if (message === activeWorkflowMessage) continue; // Its current request owns the live stream.
+        const exchange = message.dataset.exchangeId || message.querySelector("[data-feedback-exchange]")?.dataset.feedbackExchange;
+        if (!exchange) continue;
+        try {
+            const snapshot = await apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000});
+            if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+            const foreground = snapshot.execution_events || [];
+            let work = snapshot.work_events || [];
+            updateMessageExecutionEvidence(message,foreground,work);
+            if (!snapshot.request_id || typeof EventSource !== "function") continue;
+            const stream = new EventSource(`${origin}/chat/workflow-events?request_id=${encodeURIComponent(snapshot.request_id)}`,{withCredentials:true});
+            restoredExecutionStreams.add(stream);
+            stream.onmessage = event => {
+                if (generation !== executionHistoryGeneration || !root.contains(message)) {
+                    stream.close(); restoredExecutionStreams.delete(stream); return;
+                }
+                let payload;
+                try { payload = JSON.parse(event.data); } catch { return; }
+                if (payload.type === "work-event" && payload.event) {
+                    work = mergeWorkEventLists(work,[payload.event]);
+                    updateMessageExecutionEvidence(message,foreground,work);
+                    persistActiveConversationSnapshot();
+                }
+                if (payload.type === "complete" || payload.type === "error") {
+                    stream.close(); restoredExecutionStreams.delete(stream);
+                }
+            };
+        } catch {
+            if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+            const summary = message.querySelector(".message-inline-process-preview");
+            if (summary) summary.textContent = "执行状态暂时无法核验；原回答未改动";
+        }
+    }
 }
 
 function buildWorkflowPhaseRailHtml({ currentStage = "", workflowSteps = [], complete = false } = {}) {
@@ -8812,11 +8958,12 @@ function renderWorkflowTrace(steps, meta = {}) {
     };
     latestWorkflowMeta = resolvedMeta;
 
-    if (activeExecutionEvents.length) {
+    if (activeExecutionEvents.length || activeWorkEvents.length) {
         workflowTrace.classList.remove("workflow-trace-dag");
         workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
         updateWorkflowStats(steps, resolvedMeta);
-        workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents);
+        workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents)
+            + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
         return;
     }
 
@@ -9312,9 +9459,14 @@ function scrollWorkflowToLatest() {
 
 async function openWorkflowTraceStream(requestId) {
     stopWorkflowTraceStream();
+    stopRestoredExecutionStreams();
+    // Older answers can still have unfinished work when the next question is
+    // submitted. Rebind their metadata-only streams, never regenerate them.
+    void hydrateExecutionEvidence(chatStream);
     activeWorkflowRequestId = requestId;
     activeWorkflowSteps = [];
     activeExecutionEvents = [];
+    activeWorkEvents = [];
 
 
     if (typeof EventSource !== "function") {
@@ -9334,6 +9486,7 @@ async function openWorkflowTraceStream(requestId) {
     );
 
     const apiOrigin = await resolveApiOrigin();
+    if (activeWorkflowRequestId !== requestId) return false;
     const streamUrl = buildApiUrl(`/chat/workflow-events?request_id=${encodeURIComponent(requestId)}`, apiOrigin);
     const source = new EventSource(streamUrl, { withCredentials: true });
     activeWorkflowStream = source;
@@ -9513,6 +9666,12 @@ function handleWorkflowStreamEvent(payload) {
         return;
     }
 
+    if (payload.type === "work-event" && payload.event?.version === 1) {
+        mergeWorkEvents([payload.event]);
+        syncNativeExecutionDisplay();
+        return;
+    }
+
     if (payload.type === "trace-step" && payload.step) {
         activeWorkflowSteps = [...activeWorkflowSteps, payload.step];
         // Hide typing dots on first trace-step
@@ -9553,6 +9712,7 @@ function handleWorkflowStreamEvent(payload) {
     if (payload.type === "answer_done") {
         const response = payload.response || {};
         mergeNativeExecutionEvents(response.execution_events || []);
+        mergeWorkEvents(response.work_events || []);
         if (typeof response.answer === "string") {
             streamingDeliveredResponse = response;
             activeConversationId = response.conversation_id || activeConversationId;
@@ -9571,7 +9731,8 @@ function handleWorkflowStreamEvent(payload) {
                 response.workflow_trace || [],
                 response.external_evidence_required !== false,
                 response.answer_blocks || [],
-                response.execution_events || []
+                response.execution_events || [],
+                activeWorkEvents
             );
             // Some SSE deployments publish answer_done before post-answer
             // evidence is attached. Do not prevent the canonical /chat

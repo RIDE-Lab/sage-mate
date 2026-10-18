@@ -1,4 +1,4 @@
-.native-execution {
+.native-execution, .native-work {
     color: var(--ink);
     background: var(--surface-inset);
     border: 1px solid var(--line-strong);
@@ -6,11 +6,13 @@
     padding: 12px;
     overflow-wrap: anywhere;
 }
-.native-execution p, .native-execution-empty { color: var(--text-secondary); }
-.native-execution ol { padding-inline-start: 20px; }
-.native-execution li { margin-block: 8px; }
-.native-execution summary { cursor: pointer; }
-.native-execution pre { white-space: pre-wrap; font-size: 11px; color: var(--text-secondary); }
+.native-execution p, .native-execution-empty, .native-work p { color: var(--text-secondary); }
+.native-execution ol, .native-work ol { padding-inline-start: 20px; }
+.native-execution li, .native-work li { margin-block: 8px; }
+.native-execution summary, .native-work summary { cursor: pointer; }
+.native-execution pre, .native-work pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; color: var(--text-secondary); }
+.native-work [data-work-state="failed"] { color: var(--error-text); }
+.native-work [data-work-state="retrying"], .native-work [data-work-state="unknown"] { color: var(--warning-text); }
 .native-execution [data-execution-state="failed"] { color: var(--error-text); }
 .native-execution [data-execution-state="recovered"],
 .native-execution [data-execution-state="cancelled"] { color: var(--warning-text); }

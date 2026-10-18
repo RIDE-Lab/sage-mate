@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sage.runtime.source_answer_plan import SourceAnswerBlock
 from sage.runtime.execution_observation import ExecutionEvent
+from sage.runtime.work_observation import WorkEvent
 
 
 class ChatAttachment(BaseModel):
@@ -270,6 +271,7 @@ class ChatResponse(BaseModel):
     workflow_trace: list[WorkflowTraceStep] = Field(default_factory=list)
     # Actual SAGE cursor attempts, not business annotations or durable task acks.
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
+    work_events: list[WorkEvent] = Field(default_factory=list)
     memory_used: bool = False
     memory_write_back: bool = False
     retrieved_items: list[MemoryAuditItem] = Field(default_factory=list)
@@ -284,6 +286,13 @@ class ChatResponse(BaseModel):
         ).strip() != self.answer:
             raise ValueError("Source blocks must match the canonical answer")
         return self
+
+
+class ExchangeExecutionResponse(BaseModel):
+    exchange_id: str
+    request_id: str | None = None
+    execution_events: list[ExecutionEvent] = Field(default_factory=list)
+    work_events: list[WorkEvent] = Field(default_factory=list)
 
 
 class ConversationHistoryItemResponse(BaseModel):
@@ -307,6 +316,7 @@ class ConversationExchangeResponse(BaseModel):
     answer: str = Field(min_length=1)
     answer_blocks: list[SourceAnswerBlock] = Field(default_factory=list)
     execution_events: list[ExecutionEvent] = Field(default_factory=list)
+    work_events: list[WorkEvent] = Field(default_factory=list)
     workflow_action: str = Field(min_length=1, max_length=64)
     knowledge_hit_count: int = Field(ge=0)
     created_at: datetime

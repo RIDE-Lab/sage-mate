@@ -78,6 +78,11 @@ def test_recovered_worker_publishes_terminal_without_request_callback(tmp_path, 
         assert reopened.list_conversation_records("conversation", owner_id="account:alice")[0].answer_blocks == record.answer_blocks
         assert page["closed"]
         assert page["events"][-1]["payload"] == {"type": "complete"}
+        attempts = [event["payload"]["event"] for event in page["events"]
+                    if event["payload"]["type"] == "work-event"]
+        assert [event["state"] for event in attempts] == ["started", "completed"]
+        assert {event["request_id"] for event in attempts} == {record.memory_id}
+        assert {event["attempt"] for event in attempts} == {1}
         assert [event["payload"]["type"] for event in page["events"]].count("answer_done") == 1
         recovered.submit_turn(task, reopened)
         assert recovered.events.read(task.delivery.stream_id) == page

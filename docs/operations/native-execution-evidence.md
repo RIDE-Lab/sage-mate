@@ -81,3 +81,28 @@ WorkService claim/lease/retry/recovery/finish events and their atomic publicatio
 still need qualification before the overall workflow visualization is complete.
 An answer_done frame is not terminal delivery, and an operator completion is not
 proof that an external booking/email effect has been acknowledged or reversed.
+# Background acknowledgement and restored history
+
+The post-answer service now binds SAGE `WorkObserver` to the existing answer
+EventJournal, on the same canonical state store. `started` is published before
+handler entry; completion, its native event, post-answer business notes and the
+stream terminal are one fenced native acknowledgement transaction. Retry/failure
+events follow the native journal decision, not answer text or HTTP status. This
+is not proof that external mail or another system received a side effect.
+
+`GET /chat/execution?exchange_id=...` resolves the current verified owner, requires
+that owner's canonical exchange, and projects fresh events from the captured
+delivery stream. It returns metadata only, never questions or answers. The
+opaque ID, supplied email or profile is not an access grant. Missing/foreign
+exchanges return 404; responses are `no-store`. HTTP replay and conversation
+history project the same current native evidence without changing the committed
+answer or initiating another model call.
+
+The browser refreshes restored messages through this endpoint and the existing
+authorized SSE stream. It updates only the collapsed process details; original
+answers, full citations and expansion state remain intact. Scope changes close
+old streams and invalidate in-flight metadata reads. Cached pre-native phase
+rails/grouping are removed, preserving business notes explicitly as historical
+annotations without native execution evidence. An absent event is unknown,
+never an inferred success. This integration is a release candidate until the
+matching installed, preview and production gates have passed.

@@ -20,6 +20,25 @@ class WorkflowEventBroker:
     def validate_cursor(self, request_id, after):
         self._journal().read(request_id, after=after, limit=1)
 
+    def read_work_events(self, request_id):
+        """Read typed native metadata from the one existing authorized stream.
+
+        This is a view, not a second store or a reason to regenerate an answer.
+        The caller must supply its server-resolved owner-scoped stream key.
+        """
+        from pydantic import TypeAdapter
+        from sage.runtime.work_observation import WorkEvent
+
+        cursor, result = 0, []
+        journal = self._journal()
+        while True:
+            page = journal.read(request_id, after=cursor, limit=100)
+            result.extend(frame["payload"]["event"] for frame in page["events"]
+                          if frame["payload"].get("type") == "work-event")
+            if page["caught_up"]:
+                return TypeAdapter(list[WorkEvent]).validate_python(result)
+            cursor = page["cursor"]
+
     async def stream(self, request_id, *, after=0):
         subscription = EventSubscription(self._journal(), heartbeat_interval=self._heartbeat_provider())
         iterator = subscription.stream(request_id, after=after)

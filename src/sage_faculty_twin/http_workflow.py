@@ -249,7 +249,12 @@ class HttpWorkflow:
             record = await asyncio.to_thread(self.journal.read, ingress.delivery.stream_id)
             raise HttpWorkRejected(record["tasks"]["answer"].get("failure_code", "unknown_failure")) from exc
         await self._check(ingress)
-        return ChatResponse.model_validate(record["tasks"]["answer"]["result"])
+        from .workflow_events import WorkflowEventBroker
+
+        response = ChatResponse.model_validate(record["tasks"]["answer"]["result"])
+        events = await asyncio.to_thread(WorkflowEventBroker(lambda: self.events._store).read_work_events,
+                                         ingress.delivery.stream_id)
+        return response.model_copy(update={"work_events": events})
 
     async def aclose(self):
         await self._work.aclose()
