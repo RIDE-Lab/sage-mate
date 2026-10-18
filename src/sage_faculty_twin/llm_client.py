@@ -593,6 +593,12 @@ class VllmChatClient:
         if "max_tokens" in converted:
             converted["max_output_tokens"] = converted.pop("max_tokens")
         converted.pop("stream_options", None)
+        response_format = converted.pop("response_format", None)
+        if response_format is not None:
+            if response_format.get("type") == "json_schema":
+                converted["text"] = {"format": {"type": "json_schema", **response_format["json_schema"]}}
+            else:
+                converted["text"] = {"format": response_format}
         tools = converted.get("tools")
         if isinstance(tools, list):
             converted["tools"] = self._responses_tools(tools)
@@ -1406,6 +1412,7 @@ class VllmChatClient:
         use_reuse_hints: bool = True,
         continue_on_length: bool = True,
         neutral_sampling: bool = False,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         if (
             enable_thinking
@@ -1442,6 +1449,8 @@ class VllmChatClient:
         }
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
+        if response_format is not None:
+            payload["response_format"] = response_format
         # True must also be explicit: the server may default to non-thinking.
         payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
         if enable_thinking:

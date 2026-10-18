@@ -40,3 +40,33 @@ failed the source-separation guard; the fixture now uses the Wiki namespace.
 These are isolated API observations, not new browser/Slack visual acceptance or
 a production deployment claim. The live gateway's exact tokenizer estimate has
 not been audited; this change does not claim to fix its estimation policy.
+
+## Expanded qualification
+
+The `source_content` field is intentionally excluded from public API serialization.
+The original API harness used a vacuous conditional check; that check is withdrawn.
+The corrected harness loads the trusted public Wiki catalog snapshot read-only
+and compares each selected record's complete content against the answer. Both
+research questions pass this independent comparison. Their 1.91s/8.87s repeat
+latencies mix cache/reuse with generation and are not a cold-speed benchmark.
+
+Clean locked e5b7492: 1552 passed, 31 existing skips, 339.37s. A separate scratch
+run including 21 SAGE tests passed1573/31skips in331.79s. Five Node groups passed.
+False-premise probe refused to infer that experiments never happened; the four
+stage onboarding guide returned complete with links. An additional explicit
+falsification request omitted suggestions because its action was unrecognized.
+Follow-up main4b6e9f6 fixes that request type; 49 focused tests passed. A new clean
+release is undergoing full regression and real-question qualification before
+deployment. The earlier successful two-question sample did not establish this
+broader request-coverage gate.
+
+The 4b6e9f6 clean suite passed1555/31skips in332.98s, but the new real comparison
+question exposed a second path: per-subject supplements reintroduced generic
+Wiki candidates and an unconstrained model emitted an extra closing brace.
+The final candidate applies the same SAGE full-source relevance policy to those
+supplements using the immutable authority snapshot, and sends SAGE's strict
+source-plan JSON schema through Chat Completions or Responses as appropriate.
+Validation remains strict; there is no JSON repair or alternate free-text path.
+The comparison then passed in13.65s with separate safety/performance proposals;
+onboarding passed in4.27s. Focused155passed/5skips and native authority/wire tests
+26passed. SAGE schema commit0ac1e92 is pinned for the final clean qualification.

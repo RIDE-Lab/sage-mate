@@ -343,12 +343,29 @@ def test_native_budget_not_squeezed_to_prose_cap_under_load(
 
 
 def test_comparison_supplement_preserves_visitor_permissions():
+    from types import SimpleNamespace
+
     class Store:
         def __init__(self):
             self.calls = []
+            self.resolutions = []
 
         def search(self, query, **kwargs):
             self.calls.append(kwargs)
+            if query == "alphadb":
+                return [KnowledgeSearchHit(document_id="public", title="AlphaDB", excerpt="short",
+                    source_name="wiki:alpha", tags=["research", "overview"], score=1)]
+            return []
+
+        def get_visible_document(self, document_id, **kwargs):
+            self.resolutions.append(kwargs)
+            return SimpleNamespace(title="AlphaDB", content="AlphaDB complete source", source_name="wiki:alpha",
+                tags=["research", "overview"], metadata={})
+
+        def _build_excerpt(self, content, tokens):
+            return content
+
+        def _tokenize(self, question):
             return []
 
     service = object.__new__(FacultyTwinWorkflowSupport)
@@ -379,3 +396,5 @@ def test_comparison_supplement_preserves_visitor_permissions():
         call["visitor_profile"] == "general_visitor" and call["admin_role"] is None
         for call in service._knowledge_store.calls
     )
+    assert service._knowledge_store.resolutions == [{"visitor_profile": "general_visitor", "admin_role": None}]
+    assert context.knowledge_hits[0].source_content == "AlphaDB complete source"

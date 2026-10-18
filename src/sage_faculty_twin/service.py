@@ -28,7 +28,7 @@ from sage.runtime.source_audit import (
 )
 from sage.runtime.source_answer_plan import (
     PLAN_SYSTEM_PROMPT, PlanSource, SourceAnswerPlan,
-    prepare_source_plan, render_source_plan, validate_source_plan,
+    prepare_source_plan, render_source_plan, validate_source_plan, source_plan_response_format,
 )
 
 from . import __version__ as _app_version
@@ -1835,6 +1835,17 @@ class FacultyTwinWorkflowSupport:
                 ))
             if subject_hits:
                 raw_hits = list({hit.document_id: hit for hit in subject_hits + raw_hits}.values())
+                from sage.runtime.evidence_relevance import subject_candidate_indices
+
+                # Supplementary lanes must satisfy the same full-source
+                # relevance policy as the primary retrieval lane.
+                raw_hits = self._resolve_knowledge_evidence(
+                    context.request, raw_hits, admin_role=context.admin_role,
+                )
+                indices = subject_candidate_indices(tuple(subjects), tuple(
+                    hit.title + "\n" + (hit.source_content or "") for hit in raw_hits
+                ))
+                raw_hits = [raw_hits[index] for index in indices]
             context.knowledge_hits = self._filter_knowledge_hits_by_intent(
                 raw_hits,
                 interaction_intent,
@@ -3792,6 +3803,7 @@ class FacultyTwinWorkflowSupport:
         thinking_token_budget: int | None = None,
         continue_on_length: bool = False,
         neutral_sampling: bool = False,
+        response_format: dict | None = None,
     ) -> str:
         answer_fn = self._llm_client.answer_question_sync
         parameters = inspect.signature(answer_fn).parameters
@@ -3805,6 +3817,7 @@ class FacultyTwinWorkflowSupport:
             "continue_on_length": continue_on_length,
             "cache_namespace": cache_namespace,
             "neutral_sampling": neutral_sampling,
+            "response_format": response_format,
         }
         accepts_var_kwargs = any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD
@@ -4475,6 +4488,7 @@ class FacultyTwinWorkflowSupport:
                     temperature=0.0,
                     max_tokens=int(self._settings.llm_policy_output_max_tokens_cap),
                     cache_namespace=f"source-plan:{request.digest}", neutral_sampling=True,
+                    response_format=source_plan_response_format(request),
                 )
             _raise_if_request_cancelled()
             context.source_answer_plan = validate_source_plan(request, response)
@@ -6046,6 +6060,7 @@ class FacultyTwinWorkflowSupport:
 
     def _resolve_knowledge_evidence(
         self, request: ChatRequest, hits: list[KnowledgeSearchHit],
+        *, admin_role: Any = ...,
     ) -> list[KnowledgeSearchHit]:
         """Resolve full stored source records with current ACLs, not UI snippets.
 
@@ -6056,7 +6071,7 @@ class FacultyTwinWorkflowSupport:
         for hit in hits:
             document = self._knowledge_retriever.get_visible_document(
                 hit.document_id, visitor_profile=getattr(request, 'visitor_profile', None),
-                admin_role=self._resolve_admin_role(),
+                admin_role=self._resolve_admin_role() if admin_role is ... else admin_role,
             )
             if document is None or document.source_name != hit.source_name:
                 continue

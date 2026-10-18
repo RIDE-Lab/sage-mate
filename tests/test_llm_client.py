@@ -20,6 +20,22 @@ from sage_faculty_twin.llm_client import (
 from sage_faculty_twin.models import InteractionIntent
 
 
+@pytest.mark.parametrize("mode", ["responses", "chat_completions"])
+def test_structured_plan_format_is_preserved_on_the_wire(mode):
+    client = object.__new__(VllmChatClient)
+    client._settings = AppSettings(llm_api_mode=mode)
+    fmt = {"type": "json_schema", "json_schema": {"name": "plan", "strict": True,
+        "schema": {"type": "object", "properties": {}, "additionalProperties": False}}}
+    payload = {"model": "sage-auto", "messages": [], "response_format": fmt}
+    wire = client._wire_payload(payload)
+    if mode == "responses":
+        assert "response_format" not in wire
+        assert wire["text"]["format"] == {"type": "json_schema", **fmt["json_schema"]}
+    else:
+        assert wire["response_format"] == fmt
+    assert payload["response_format"] == fmt
+
+
 def _model_catalog_client(configured_model: str, models: list[dict]) -> VllmChatClient:
     client = object.__new__(VllmChatClient)
     client._settings = AppSettings(model_name=configured_model)
