@@ -2994,7 +2994,10 @@ def _looks_like_teaching_question(lowered: str, question: str) -> bool:
         return False
     if bool(re.search(r"第\s*\d+\s*讲", question)):
         return True
-    teaching_markers = ("tutorial", "lecture", "experiment", "assignment", "course")
+    # An experiment is not evidence of a teaching request: scientific review
+    # also asks for experiments. Only explicit course/material signals may
+    # override the semantic classifier's domain here.
+    teaching_markers = ("tutorial", "lecture", "assignment", "course")
     if any(marker in lowered for marker in teaching_markers):
         return True
     return any(
@@ -3002,7 +3005,7 @@ def _looks_like_teaching_question(lowered: str, question: str) -> bool:
         for marker in (
             "讲义",
             "课件",
-            "实验",
+            "课程",
             "教程",
             "习题",
             "课上问题",

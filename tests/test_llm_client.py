@@ -20,6 +20,34 @@ from sage_faculty_twin.llm_client import (
 from sage_faculty_twin.models import InteractionIntent
 
 
+@pytest.mark.parametrize("question", [
+    "根据公开 Wiki，评审这个研究方向，并设计对照实验。",
+    "Review this research hypothesis and propose controlled experiments.",
+    "如何判断机制的性能收益？请设计实验，不要推断此前没有测量。",
+])
+def test_research_experiments_do_not_become_teaching(question):
+    client = object.__new__(VllmChatClient)
+    intent = client._normalize_interaction_intent(
+        question, None, InteractionIntent(
+            action="answer", domain="research", knowledge_sources=["wiki"],
+        ),
+    )
+    assert intent.domain == "research"
+    assert intent.knowledge_sources == ["wiki"]
+
+
+@pytest.mark.parametrize("question", [
+    "请解释本课程实验的作业要求。",
+    "Explain the experiment in this course assignment.",
+])
+def test_explicit_course_experiments_remain_teaching(question):
+    client = object.__new__(VllmChatClient)
+    intent = client._normalize_interaction_intent(
+        question, None, InteractionIntent(action="answer", domain="general"),
+    )
+    assert intent.domain == "teaching"
+
+
 @pytest.mark.parametrize("mode", ["responses", "chat_completions"])
 def test_structured_plan_format_is_preserved_on_the_wire(mode):
     client = object.__new__(VllmChatClient)
