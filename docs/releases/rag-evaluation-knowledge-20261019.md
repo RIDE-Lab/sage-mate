@@ -32,3 +32,31 @@ gate, not a semantic benchmark; the saved answer and sources also require review
 Public Wiki publication, independent retrieval-index refresh, live-answer
 coverage, frontend rendering and production release readiness are separate gates.
 Results are recorded after observation; the old failed probe is retained.
+
+## Observed acceptance
+
+- Wiki production builds passed locally with the installed Docusaurus CLI;
+  Pages runs39251632661 and39252815498 succeeded. Public HTML contains the
+  evaluation section, metrics, joint criterion and final artifact requirements.
+- Canonical sync ingested both main revisions into the independent Wiki store:
+  each run updated2 records, created/deleted0, and skipped37. No Wiki document
+  was copied into the private knowledge base.
+- Clean Twin release `598a726a74497211ced2774aaea14883af95e642` passed158 focused
+  tests and all13 Node suites. This is focused regression, not a new claim of
+  full-suite execution. Runtime Python, SDK dependencies, provider/model,
+  budgets, credentials and source-audit rules did not change.
+- After the metadata correction, the exact original question passed on the
+  backend in18.37s and through the public URL in23.11s. Both retrieved the new
+  RAG article and Benchmark guide, completed normally, included full source
+  blocks/URLs and all quality/performance/control/failure coverage gates, with
+  no declared evidence gap. Manual review confirmed all six method sections
+  and preserved methodology-versus-measurement caveats; no fabricated score.
+- Public Chrome submitted the same unwrapped question and completed in20.3s.
+  Its final rendered answer included all six sections and both complete source
+  URLs; Markdown, readable dark-mode text, collapsed support and final send
+  controls were observed. The old-tab refresh/gray issue remains separate;
+  a fresh public Chrome tab worked and is the browser evidence for this release.
+- Release/app/background/Slack readiness is healthy; public assets match the
+  deployed code revision. All application and Wiki changes were pushed to main,
+  without creating a branch or PR. Individual latencies are smoke observations,
+  not throughput or tail-latency benchmark claims.
