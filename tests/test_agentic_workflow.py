@@ -106,7 +106,7 @@ class IntentAwareLLMClient:
             data = json.loads(user_prompt)
             return json.dumps({"digest": data["digest"], "items": [
                 {"requirement_id": r["requirement_id"], "witnesses": [
-                    {"source_id": source["source_id"], "quote": source["content"]}
+                    {"source_id": source["source_id"], "start_line": 1, "end_line": len(source["lines"])}
                     for source in data["sources"]]} for r in data["requirements"]]})
         if system_prompt == EXPERIMENT_SYSTEM_PROMPT:
             return experiment_response(json.loads(user_prompt)["digest"])

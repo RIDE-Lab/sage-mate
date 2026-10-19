@@ -2126,7 +2126,7 @@ async def chat(
     except HttpWorkRejected as exc:
         _record_error(exc, status="rejected")
         status, detail = public_http_failure(exc.code)
-        raise _http_error(status, detail) from exc
+        raise _http_error(status, detail, code=exc.code) from exc
     except ValueError as exc:
         _record_error(exc, status="rejected")
         if str(exc) in {"journal_commit_conflict", "http_work_input_conflict"}:

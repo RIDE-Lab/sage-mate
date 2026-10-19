@@ -15,6 +15,7 @@ from uuid import uuid4
 import httpx
 
 CASES = (
+    ("guide", "请依据公开 Wiki《系统研究概览：SAGE、ECPA、StateAxis 与 vLLM-HUST》，用面向初次来访者的语言说明主题、课题组相关工作与下一步阅读入口，并附完整原文链接。"),
     ("roles", "根据公开 Wiki，ECPA 和 StateAxis 分别承担什么角色？请保留完整来源链接，不要把设计目标说成实测结论。"),
     ("boundary", "根据公开 Wiki，是否可以认定 StateAxis 从来没有做过实验？请明确区分资料未展示数据与实验不存在，并保留完整来源链接。"),
     ("research", "根据公开 Wiki，评审 StateAxis：分别列出来源原文能支持的事实、这些资料尚不能确认的内容，并提出两项能区分安全性与性能的对照实验。每项说明假设、对照、固定变量、指标及证伪观察；不要把资料未展示数据说成作者没有做实验。"),

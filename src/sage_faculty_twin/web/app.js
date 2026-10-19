@@ -3028,7 +3028,8 @@ chatForm.addEventListener("submit", async (event) => {
                 renderAssistantMessage(
                     pendingMessage,
                     cancellationMessage,
-                    [], [], [], null, true, null, activeWorkflowSteps
+                    [], [], [], null, true, null, activeWorkflowSteps,
+                    true, [], activeExecutionEvents, activeWorkEvents
                 );
                 sageCompanionController?.setRequestActive(false);
                 sageCompanionController?.setState(
@@ -3076,10 +3077,13 @@ chatForm.addEventListener("submit", async (event) => {
                 break;
             }
             if (streamingDeliveredResponse) break;
-            stopWorkflowTraceStream();
+            // A durable rejection has an ordered terminal SSE record. Keep
+            // draining its native failure events even if HTTP wins the race.
+            if (error?.code !== "answer_validation_rejected") stopWorkflowTraceStream();
             lastFailedQuestion = payload.question;
             renderWorkflowTraceError(error.message);
-            renderAssistantMessage(pendingMessage, error.message, [], [], [], null, true, null, activeWorkflowSteps);
+            renderAssistantMessage(pendingMessage, error.message, [], [], [], null, true, null,
+                activeWorkflowSteps, true, [], activeExecutionEvents, activeWorkEvents);
             noteConversationAnswerPreview(error.message);
             persistActiveConversationSnapshot();
             sageCompanionController?.setRequestActive(false);
@@ -6585,7 +6589,7 @@ async function apiRequest(path, options = {}) {
 
         if (!response.ok) {
             const text = await response.text();
-            const friendly = friendlyHttpErrorMessage(response.status, text);
+            const friendly = friendlyHttpErrorMessage(response.status, text, response.headers.get("X-Sage-Error-Code"));
             const error = new Error(friendly);
             error.status = response.status;
             error.code = response.headers.get("X-Sage-Error-Code");
@@ -6940,7 +6944,10 @@ async function saveLocalCodeConfig(event) {
     }
 }
 
-function friendlyHttpErrorMessage(status, body) {
+function friendlyHttpErrorMessage(status, body, code = null) {
+    if (code === "answer_validation_rejected") {
+        return "本轮回答未通过来源或完整性校验，未发布未经校验的答案。可展开处理过程查看失败节点。";
+    }
     const trimmed = typeof body === "string" ? body.trim() : "";
     const looksLikeHtml = trimmed.startsWith("<");
     let structuredDetail = "";
@@ -10156,7 +10163,14 @@ function handleWorkflowStreamEvent(payload) {
         sageCompanionController?.setRequestActive(false);
         sageCompanionController?.setState("worried", "处理时遇到了一点问题。别担心，我们可以重试。", { resetAfterMs: 4800 });
         stopWorkflowTraceStream();
-        renderWorkflowTraceError(payload.message || "处理失败。请稍后重试。");
+        const message = payload.message || "处理失败。请稍后重试。";
+        renderWorkflowTraceError(message);
+        if (activeWorkflowMessage) {
+            renderAssistantMessage(activeWorkflowMessage, message, [], [], [], null, true, null,
+                activeWorkflowSteps, true, [], activeExecutionEvents, activeWorkEvents);
+            noteConversationAnswerPreview(message);
+            persistActiveConversationSnapshot();
+        }
         return;
     }
 

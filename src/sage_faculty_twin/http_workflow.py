@@ -39,6 +39,7 @@ def public_http_failure(code):
         "request_cancelled": (499, "任务已取消，未继续生成回答。"),
         "authority_denied": (403, "当前身份或权限已失效，请重新验证。"),
         "invalid_request": (400, "请求内容无效，请检查后重试。"),
+        "answer_validation_rejected": (503, "本轮回答未通过来源或完整性校验，未发布未经校验的答案。可展开处理过程查看失败节点。"),
     }.get(code, (503, "本轮回答未能完整生成或通过校验，请稍后重试。"))
 
 

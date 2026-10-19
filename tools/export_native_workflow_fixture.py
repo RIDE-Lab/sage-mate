@@ -38,7 +38,7 @@ class NoEffectQuality:
     def assess(self, request):
         return json.dumps({"digest": request.digest, "items": [{"requirement_id": r.requirement_id,
             "witnesses": [] if options.repair and len(request.sources)==1 else [
-                {"source_id": s.source_id, "quote": s.content} for s in request.sources]}
+                {"source_id": s.source_id, "start_line": 1, "end_line": len(s.content.splitlines())} for s in request.sources]}
             for r in request.requirements]})
 
     def supplement(self, queries):

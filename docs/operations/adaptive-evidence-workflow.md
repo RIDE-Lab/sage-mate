@@ -94,6 +94,18 @@ source/coverage verification. Remaining evidence gaps are shown as original
 question spans, never as claims that facts do not exist. Structural validation
 does not certify the model's semantic coverage judgment or the truth of sources.
 
+Coverage wire receipts use source-local inclusive `start_line`/`end_line` ranges.
+SAGE numbers the complete source with original line endings, extracts the exact
+witness itself, and rejects unknown sources, invalid/empty ranges, stale digests
+or tampered receipts. The model no longer retypes quote strings; this removes a
+verified false rejection mechanism without approximate matching or weakening
+provenance. Final factual rendering still preserves the complete selected source.
+
+Typed HTTP validation failures retain their safe public classification and keep
+the ordered native SSE stream open until its terminal record arrives. Failure
+and cancellation bubbles retain observed execution/work events; a rejected answer
+is not reported as an offline backend or a successful quality check.
+
 Twin supplies only model and ACL-aware read ports in `evidence_ports.py`. The old
 direct source-plan generation path is replaced, not retained as a second flow.
 Supplement search and hydration use a captured verified identity/source selection;

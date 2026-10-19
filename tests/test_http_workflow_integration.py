@@ -141,7 +141,7 @@ def test_stale_producer_cannot_commit_canonical_memory_or_answer(tmp_path, early
 
 
 @pytest.mark.parametrize("code,status", [("prompt_capacity", 413), ("request_cancelled", 499),
-                                        ("answer_unavailable", 503)])
+                                        ("answer_unavailable", 503), ("answer_validation_rejected", 503)])
 def test_terminal_failure_is_replayed_without_retrying_or_leaking(tmp_path, monkeypatch, code, status):
     from sage_faculty_twin.request_context import RequestCancelledError
     from sage_faculty_twin.service import PromptCapacityError
@@ -153,6 +153,9 @@ def test_terminal_failure_is_replayed_without_retrying_or_leaking(tmp_path, monk
         calls.append(1)
         if code == "answer_unavailable":
             raise api.HTTPException(status_code=503, detail="sensitive upstream diagnostic must not be persisted")
+        if code == "answer_validation_rejected":
+            from sage.runtime.evidence_coverage import InvalidEvidenceCoverage
+            raise InvalidEvidenceCoverage("sensitive upstream diagnostic must not be persisted")
         error = PromptCapacityError if code == "prompt_capacity" else RequestCancelledError
         raise error("sensitive upstream diagnostic must not be persisted")
 
@@ -162,6 +165,7 @@ def test_terminal_failure_is_replayed_without_retrying_or_leaking(tmp_path, monk
             response = client.post("/chat?request_id=terminal", json={"student_name": "Guest", "question": "test"})
             assert response.status_code == status, response.text
             assert response.headers.get("x-sage-trace-id")
+            assert response.headers.get("x-sage-error-code") == code
             assert "sensitive upstream" not in response.text
         assert calls == [1]
         from sage_faculty_twin.guest_identity import GUEST_COOKIE_NAME

@@ -30,7 +30,7 @@ async function run() {
   const rendered = [];
   sandbox.activeChatCancellationPromise = new Promise(resolve => {settle = resolve;});
   Object.assign(sandbox, {error: {cancelled: true}, pendingMessage: {}, explicitDeepMode: false,
-    activeWorkflowSteps: [], sageCompanionController: null,
+    activeWorkflowSteps: [], activeExecutionEvents: [], activeWorkEvents: [], sageCompanionController: null,
     renderPendingAssistantMessage: (_, text) => rendered.push(text),
     renderWorkflowTraceError() {}, renderAssistantMessage: (_, text) => rendered.push(text)});
   const pending = vm.runInContext(`(async () => {for (let i=0;i<1;i++){${source.slice(start, end)}}})()`, sandbox);
