@@ -21,12 +21,16 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync(process.argv[1],'utf8');
 const calls=[],streams=[];
 let releaseSnapshot;
-const context={escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
+const context={chatStream:null, escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
     buildNativeExecutionHtml:()=>'<p>foreground</p>', persistActiveConversationSnapshot:()=>calls.push('persist'),
     resolveApiOrigin:async()=>'https://testserver',
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
     EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
 vm.createContext(context);
+for(const name of ['captureConversationScroll','restoreConversationScroll']) {
+    const start=source.indexOf('function '+name+'(');
+    vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
+}
 vm.runInContext('let activeWorkEvents=[]; let activeExecutionEvents=[]; let activeWorkflowRequestId=null; let activeWorkflowMessage=null; const restoredExecutionStreams=new Set(); let executionHistoryGeneration=0;',context);
 vm.runInContext(source.slice(source.indexOf('function mergeWorkEventLists('),source.indexOf('function buildVisibleWorkflowSteps(')),context);
 const event=(state,id=state)=>({version:1,event_id:id,namespace:'post',request_id:'owned',task_id:'post_answer',attempt:1,state,dependency_task_ids:[],dependency_mode:'success'});
@@ -50,7 +54,10 @@ const native={innerHTML:''},content={querySelector:()=>native};
 const summary={dataset:{},querySelector:selector=>selector==='.message-section-content'?content:null};
 const message={dataset:{exchangeId:'exchange'},answer:'original answer',citations:'original complete citations',
     querySelector:selector=>selector==='.message-workflow-summary'?summary:null};
-const root={querySelectorAll:()=>[message],contains:node=>node===message};
+const root={scrollTop:600,scrollHeight:5000,clientHeight:700,children:[message],
+    getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[message],contains:node=>node===message};
+message.getBoundingClientRect=()=>({top:1000-root.scrollTop,bottom:1200-root.scrollTop});
+context.chatStream=root;
 const turn=()=>new Promise(resolve=>setImmediate(resolve));
 (async()=>{
     const hydrated=context.hydrateExecutionEvidence(root);
@@ -62,6 +69,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
     streams[0].onmessage({data:JSON.stringify({type:'work-event',event:event('completed')})});
     assert(native.innerHTML.includes('data-work-state="completed"'));
     assert.equal(message.answer,'original answer');assert.equal(message.citations,'original complete citations');
+    assert.equal(root.scrollTop,600,'background hydration must preserve history reading position');
     assert(calls.filter(c=>c!=='persist').every(c=>c.startsWith('/chat/execution?')));
     context.stopRestoredExecutionStreams();
     assert(streams[0].closed);

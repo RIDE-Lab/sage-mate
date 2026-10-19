@@ -7010,6 +7010,34 @@ function renderBookingResponseStatus(element, bookingResponse, options = {}) {
     element.className = `inline-status inline-status-${state}`;
 }
 
+// Capture before each asynchronous render, not after content has grown. User
+// scrolling is authoritative: returning to the bottom naturally resumes follow.
+function captureConversationScroll() {
+    if (!chatStream) return null;
+    const root = chatStream;
+    const top = root.scrollTop;
+    const following = root.scrollHeight - root.clientHeight - top <= 4;
+    const viewportTop = root.getBoundingClientRect().top;
+    const anchor = following ? null : [...root.children].find(node =>
+        node.getBoundingClientRect().bottom > viewportTop);
+    return {root, top, following, anchor,
+        offset: anchor ? anchor.getBoundingClientRect().top - viewportTop : 0};
+}
+
+function restoreConversationScroll(snapshot) {
+    if (!snapshot || snapshot.root !== chatStream) return;
+    const {root, following, anchor, offset, top} = snapshot;
+    if (following) {
+        root.scrollTop = Math.max(0, root.scrollHeight - root.clientHeight);
+    } else if (anchor && root.contains(anchor)) {
+        // Also retain the visible message if an earlier evidence card resized.
+        // Use the current offset: native scroll anchoring may already have acted.
+        root.scrollTop += anchor.getBoundingClientRect().top - root.getBoundingClientRect().top - offset;
+    } else {
+        root.scrollTop = top;
+    }
+}
+
 function updateChatEmptyState() {
     if (!chatShell || !chatStream) return;
     const userMessages = chatStream.querySelectorAll(".message-user");
@@ -7043,7 +7071,7 @@ function updateWelcomeGreeting() {
     const greetingText = document.getElementById("greeting-text");
     const sidebarUserName = document.getElementById("sidebar-user-name");
     const railUserAvatar = document.querySelector(".rail-user-avatar");
-    
+
     if (isUserAuthenticated && currentUserAccountEmail) {
         const name = studentNameInput?.value || topbarUserBadgeName?.textContent || "";
         const firstName = name.split(/\s+/)[0] || "";
@@ -7529,6 +7557,9 @@ async function restoreConversationFromHistory(conversationId) {
         if (chatStream.querySelector(".message-user")) {
             hideOnboardingCard();
         }
+        // Navigate once, before delayed evidence hydration. Its completion must
+        // not override a user who has already started reading or asking again.
+        chatStream.scrollTop = 0;
         hydrateConversationInteractiveState();
         await repairHistoricalCitationCards(chatStream);
         if (activeConversationId !== conversationId) return;
@@ -7548,7 +7579,6 @@ async function restoreConversationFromHistory(conversationId) {
             shadowPlannerPreview: null,
             plannerComparison: null,
         });
-        chatStream.scrollTop = 0;
         return;
     }
 
@@ -7880,53 +7910,58 @@ function renderPendingAssistantMessage(
     workflowSteps = [],
     { deepThinking = false } = {}
 ) {
-    delete container.dataset.exportMarkdown;
-    const processingLabel = deepThinking ? "正在深度分析" : "正在处理";
-    container.innerHTML = `
-        <div class="message-bubble-row">
-            <div class="message-avatar" aria-hidden="true">S</div>
-            <div class="message-bubble">
-                <div class="message-role">${escapeHtml(assistantLabel)}</div>
-                <div class="message-frame message-pending-frame">
-                    <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta" aria-live="polite">已处理 0.0 秒</div>
-                    <div class="typing-dots" id="pending-typing-dots">
-                        <span class="dot"></span>
-                        <span class="dot"></span>
-                        <span class="dot"></span>
-                    </div>
-                    <div class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}">
-                        <div class="thinking-panel-head">
-                            <span class="thinking-orb" aria-hidden="true"></span>
-                            <div>
-                                <strong>${processingLabel}</strong>
-                                <p id="pending-stage-label" class="thinking-stage-label">${escapeHtml(currentStage)}</p>
-                            </div>
-                            ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        delete container.dataset.exportMarkdown;
+        const processingLabel = deepThinking ? "正在深度分析" : "正在处理";
+        container.innerHTML = `
+            <div class="message-bubble-row">
+                <div class="message-avatar" aria-hidden="true">S</div>
+                <div class="message-bubble">
+                    <div class="message-role">${escapeHtml(assistantLabel)}</div>
+                    <div class="message-frame message-pending-frame">
+                        <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta" aria-live="polite">已处理 0.0 秒</div>
+                        <div class="typing-dots" id="pending-typing-dots">
+                            <span class="dot"></span>
+                            <span class="dot"></span>
+                            <span class="dot"></span>
                         </div>
-                        <div class="thinking-progress" aria-hidden="true"><span></span></div>
-                        ${INLINE_WORKFLOW_TRACE_ENABLED
-            ? `<div class="thinking-trace" aria-label="实时处理进度" aria-live="polite">
-                            <div class="thinking-trace-list"></div>
-                        </div>`
-            : ""}
-                    </div>
-                    <div class="thinking-text-section" id="pending-thinking-text" data-collapsed="false" hidden>
-                        <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
-                        <div class="thinking-text-body"></div>
-                    </div>
-                    <div class="message-pending-support" aria-live="polite">
-                        <span class="message-section-kicker">Support</span>
-                        <span>正在整理回答依据…</span>
+                        <div class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}">
+                            <div class="thinking-panel-head">
+                                <span class="thinking-orb" aria-hidden="true"></span>
+                                <div>
+                                    <strong>${processingLabel}</strong>
+                                    <p id="pending-stage-label" class="thinking-stage-label">${escapeHtml(currentStage)}</p>
+                                </div>
+                                ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
+                            </div>
+                            <div class="thinking-progress" aria-hidden="true"><span></span></div>
+                            ${INLINE_WORKFLOW_TRACE_ENABLED
+                ? `<div class="thinking-trace" aria-label="实时处理进度" aria-live="polite">
+                                <div class="thinking-trace-list"></div>
+                            </div>`
+                : ""}
+                        </div>
+                        <div class="thinking-text-section" id="pending-thinking-text" data-collapsed="false" hidden>
+                            <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
+                            <div class="thinking-text-body"></div>
+                        </div>
+                        <div class="message-pending-support" aria-live="polite">
+                            <span class="message-section-kicker">Support</span>
+                            <span>正在整理回答依据…</span>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
-    `;
-    if (INLINE_WORKFLOW_TRACE_ENABLED) {
-        syncPendingWorkflowTrace(workflowSteps, { animateNewItems: false, currentStage });
+        `;
+        if (INLINE_WORKFLOW_TRACE_ENABLED) {
+            syncPendingWorkflowTrace(workflowSteps, { animateNewItems: false, currentStage });
+        }
+        container.dataset.lastStageAt = String(performance.now());
+        startAnswerProcessingTicker(container);
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
-    container.dataset.lastStageAt = String(performance.now());
-    startAnswerProcessingTicker(container);
 }
 
 function startAnswerProcessingTicker(container) {
@@ -7962,16 +7997,21 @@ function stopAnswerProcessingTicker(container) {
 }
 
 function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
-    const pendingLabel = chatStream?.querySelector(".message-pending #pending-stage-label");
-    if (pendingLabel) {
-        pendingLabel.textContent = currentStage;
-    }
-    const pendingMessage = chatStream?.querySelector(".message-pending");
-    if (pendingMessage) {
-        pendingMessage.dataset.lastStageAt = String(performance.now());
-    }
-    if (INLINE_WORKFLOW_TRACE_ENABLED) {
-        syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        const pendingLabel = chatStream?.querySelector(".message-pending #pending-stage-label");
+        if (pendingLabel) {
+            pendingLabel.textContent = currentStage;
+        }
+        const pendingMessage = chatStream?.querySelector(".message-pending");
+        if (pendingMessage) {
+            pendingMessage.dataset.lastStageAt = String(performance.now());
+        }
+        if (INLINE_WORKFLOW_TRACE_ENABLED) {
+            syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
+        }
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
 }
 
@@ -7990,128 +8030,132 @@ function renderAssistantMessage(
     executionEvents = [],
     workEvents = []
 ) {
-    if (exchangeId && !isError) container.dataset.exchangeId = exchangeId;
-    stopAnswerProcessingTicker(container);
-    const startedAt = Number(container?.dataset?.startedAt);
-    const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
-    const bodyClass = isError ? "message-body" : "message-body";
-    const sourceBlocksValid = hasMatchingSourceBlocks(text, answerBlocks);
-    const afterNotification = sourceBlocksValid ? text : stripNotificationText(text, bookingResult?.notification || null);
-    // Strip <think>...</think> from the final answer and optionally display it
-    const thinkParsed = sourceBlocksValid ? {main: text, think: ""} : parseStreamingThinkContent(afterNotification);
-    const cleanedText = thinkParsed.main.trimStart() || (thinkParsed.think ? "" : afterNotification);
-    container.dataset.exportMarkdown = sourceBlocksValid ? text : cleanedText;
-    const thinkContent = thinkParsed.think.trim();
-    container.classList.remove("message-pending");
-    container.classList.add("message-ready");
-    const notificationHtml = buildNotificationStatusHtml(bookingResult?.notification || null, { title: "邮件通知状态" });
-    const basisHtml = Array.isArray(basisItems) && basisItems.length
-        ? buildCollapsibleSupportSectionHtml({
-            kicker: "Support",
-            title: "本次回答依据",
-            copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
-            count: basisItems.length,
-            contentHtml: `
-                <div class="message-basis-list">
-                    ${basisItems.map((item) => buildAnswerBasisItemHtml(item)).join("")}
-                </div>
-            `,
-        })
-        : hits.length
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        if (exchangeId && !isError) container.dataset.exchangeId = exchangeId;
+        stopAnswerProcessingTicker(container);
+        const startedAt = Number(container?.dataset?.startedAt);
+        const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
+        const bodyClass = isError ? "message-body" : "message-body";
+        const sourceBlocksValid = hasMatchingSourceBlocks(text, answerBlocks);
+        const afterNotification = sourceBlocksValid ? text : stripNotificationText(text, bookingResult?.notification || null);
+        // Strip <think>...</think> from the final answer and optionally display it
+        const thinkParsed = sourceBlocksValid ? {main: text, think: ""} : parseStreamingThinkContent(afterNotification);
+        const cleanedText = thinkParsed.main.trimStart() || (thinkParsed.think ? "" : afterNotification);
+        container.dataset.exportMarkdown = sourceBlocksValid ? text : cleanedText;
+        const thinkContent = thinkParsed.think.trim();
+        container.classList.remove("message-pending");
+        container.classList.add("message-ready");
+        const notificationHtml = buildNotificationStatusHtml(bookingResult?.notification || null, { title: "邮件通知状态" });
+        const basisHtml = Array.isArray(basisItems) && basisItems.length
             ? buildCollapsibleSupportSectionHtml({
-                kicker: "Knowledge",
-                title: "相关知识",
-                copy: "这些知识条目是本次回答优先参考的资料。",
-                count: hits.length,
+                kicker: "Support",
+                title: "本次回答依据",
+                copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
+                count: basisItems.length,
                 contentHtml: `
-                    <div class="message-knowledge-list">
-                        ${hits
-                        .map(
-                            (hit) => `
-                                    <div class="message-knowledge-item">
-                                        <strong>${escapeHtml(hit.title)}</strong>
-                                        ${hit.source_name ? `<span>${escapeHtml(hit.source_name)}</span>` : ""}
-                                    </div>
-                                `
-                        )
-                        .join("")}
+                    <div class="message-basis-list">
+                        ${basisItems.map((item) => buildAnswerBasisItemHtml(item)).join("")}
                     </div>
                 `,
             })
-            : isError || !externalEvidenceRequired ? "" : buildCollapsibleSupportSectionHtml({
-                kicker: "Support",
-                title: "本次未引用可核验材料",
-                copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
-                count: 0,
-                defaultExpanded: true,
-                contentHtml: '<p class="message-basis-detail">本回答未附可核验来源，不应当作已核实的事实或文献结论。可开启联网检索，或指定需要查询的资料。</p>',
-            });
-    const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
-        ? buildCollapsibleSupportSectionHtml({
-            kicker: "Next",
-            title: "建议的后续动作",
-            copy: "这些动作会把这次对话继续往后推进，而不是停在一条回复上。",
-            count: followUpActions.length,
-            countLabel: "需确认",
-            sectionClassName: "message-section-follow-up",
-            closedLabel: "确认查看",
-            openLabel: "收起",
-            contentHtml: `
-                <div class="message-basis-list">
-                    ${followUpActions.map((action) => buildFollowUpActionHtml(action)).join("")}
-                </div>
-            `,
-        })
-        : "";
-    const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
-        && Array.isArray(workflowTrace)
-        && (workflowTrace.length || executionEvents.length || workEvents.length)
-        ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents)
-        : "";
-    const thinkSectionHtml = thinkContent
-        ? `<div class="thinking-text-section" data-collapsed="true">
-               <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
-               <div class="thinking-text-body">${escapeHtml(thinkContent)}</div>
-           </div>`
-        : "";
-    const processingMetaHtml = !isError && elapsedMs > 0
-        ? `<div class="message-processing-meta" aria-label="本次回答处理耗时">已处理 ${formatAnswerProcessingDuration(elapsedMs)}</div>
-           <div class="message-reply-divider" role="separator"></div>`
-        : "";
-    container.innerHTML = `
-        <div class="message-bubble-row">
-            <div class="message-avatar" aria-hidden="true">S</div>
-            <div class="message-bubble">
-                <div class="message-role">${escapeHtml(assistantLabel)}</div>
-                <div class="message-frame">
-                    ${processingMetaHtml}
-                    <div class="message-main-copy">
-                        <div class="message-reply-block">
-                            <div class="${bodyClass}">${formatSourceAnswer(text, answerBlocks, cleanedText)}</div>
-                            <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
-                                ${uiIconSvg("copy", "ui-icon-sm")}
-                            </button>
+            : hits.length
+                ? buildCollapsibleSupportSectionHtml({
+                    kicker: "Knowledge",
+                    title: "相关知识",
+                    copy: "这些知识条目是本次回答优先参考的资料。",
+                    count: hits.length,
+                    contentHtml: `
+                        <div class="message-knowledge-list">
+                            ${hits
+                            .map(
+                                (hit) => `
+                                        <div class="message-knowledge-item">
+                                            <strong>${escapeHtml(hit.title)}</strong>
+                                            ${hit.source_name ? `<span>${escapeHtml(hit.source_name)}</span>` : ""}
+                                        </div>
+                                    `
+                            )
+                            .join("")}
                         </div>
-                        ${thinkSectionHtml}
-                        ${workflowTraceHtml}
+                    `,
+                })
+                : isError || !externalEvidenceRequired ? "" : buildCollapsibleSupportSectionHtml({
+                    kicker: "Support",
+                    title: "本次未引用可核验材料",
+                    copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
+                    count: 0,
+                    defaultExpanded: true,
+                    contentHtml: '<p class="message-basis-detail">本回答未附可核验来源，不应当作已核实的事实或文献结论。可开启联网检索，或指定需要查询的资料。</p>',
+                });
+        const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
+            ? buildCollapsibleSupportSectionHtml({
+                kicker: "Next",
+                title: "建议的后续动作",
+                copy: "这些动作会把这次对话继续往后推进，而不是停在一条回复上。",
+                count: followUpActions.length,
+                countLabel: "需确认",
+                sectionClassName: "message-section-follow-up",
+                closedLabel: "确认查看",
+                openLabel: "收起",
+                contentHtml: `
+                    <div class="message-basis-list">
+                        ${followUpActions.map((action) => buildFollowUpActionHtml(action)).join("")}
                     </div>
-                    ${notificationHtml}
-                    ${basisHtml}
-                    ${followUpHtml}
-                    ${buildFeedbackSectionHtml(exchangeId, isError)}
-                    ${buildRetryButtonHtml(isError)}
+                `,
+            })
+            : "";
+        const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
+            && Array.isArray(workflowTrace)
+            && (workflowTrace.length || executionEvents.length || workEvents.length)
+            ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents)
+            : "";
+        const thinkSectionHtml = thinkContent
+            ? `<div class="thinking-text-section" data-collapsed="true">
+                   <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
+                   <div class="thinking-text-body">${escapeHtml(thinkContent)}</div>
+               </div>`
+            : "";
+        const processingMetaHtml = !isError && elapsedMs > 0
+            ? `<div class="message-processing-meta" aria-label="本次回答处理耗时">已处理 ${formatAnswerProcessingDuration(elapsedMs)}</div>
+               <div class="message-reply-divider" role="separator"></div>`
+            : "";
+        container.innerHTML = `
+            <div class="message-bubble-row">
+                <div class="message-avatar" aria-hidden="true">S</div>
+                <div class="message-bubble">
+                    <div class="message-role">${escapeHtml(assistantLabel)}</div>
+                    <div class="message-frame">
+                        ${processingMetaHtml}
+                        <div class="message-main-copy">
+                            <div class="message-reply-block">
+                                <div class="${bodyClass}">${formatSourceAnswer(text, answerBlocks, cleanedText)}</div>
+                                <button type="button" class="message-copy-button" data-copy-answer title="复制回答">
+                                    ${uiIconSvg("copy", "ui-icon-sm")}
+                                </button>
+                            </div>
+                            ${thinkSectionHtml}
+                            ${workflowTraceHtml}
+                        </div>
+                        ${notificationHtml}
+                        ${basisHtml}
+                        ${followUpHtml}
+                        ${buildFeedbackSectionHtml(exchangeId, isError)}
+                        ${buildRetryButtonHtml(isError)}
+                    </div>
                 </div>
             </div>
-        </div>
-    `;
-    if (isError) {
-        container.style.background = "var(--error-surface)";
+        `;
+        if (isError) {
+            container.style.background = "var(--error-surface)";
+        }
+        if (exchangeId && !isError) {
+            attachFeedbackHandlers(container, exchangeId);
+            if (container === activeWorkflowMessage) void refreshActiveWorkStatus();
+        }
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
-    if (exchangeId && !isError) {
-        attachFeedbackHandlers(container, exchangeId);
-        if (container === activeWorkflowMessage) void refreshActiveWorkStatus();
-    }
-    chatStream.scrollTop = chatStream.scrollHeight;
 }
 
 function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null) {
@@ -8624,14 +8668,19 @@ function buildNativeWorkflowHtml(events) {
 }
 
 function syncNativeExecutionDisplay() {
-    const pending = chatStream?.querySelector(".message-pending .thinking-trace-list");
-    const html = buildNativeExecutionHtml(activeExecutionEvents)
-        + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
-    if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
-    if (workflowTrace) workflowTrace.innerHTML = html;
-    if (activeWorkflowMessage?.classList.contains("message-ready")) {
-        updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
-        persistActiveConversationSnapshot();
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        const pending = chatStream?.querySelector(".message-pending .thinking-trace-list");
+        const html = buildNativeExecutionHtml(activeExecutionEvents)
+            + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
+        if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
+        if (workflowTrace) workflowTrace.innerHTML = html;
+        if (activeWorkflowMessage?.classList.contains("message-ready")) {
+            updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
+            persistActiveConversationSnapshot();
+        }
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
 }
 
@@ -8708,23 +8757,28 @@ function buildWorkAttemptHtml(events = [], workStatus = null) {
 }
 
 function updateMessageExecutionEvidence(message, executionEvents, workEvents, workStatus = null) {
-    if (!message) return;
-    let summary = message.querySelector(".message-workflow-summary");
-    if (!summary && (executionEvents.length || workEvents.length || workStatus)) {
-        message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents,workStatus));
-        summary = message.querySelector(".message-workflow-summary");
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        if (!message) return;
+        let summary = message.querySelector(".message-workflow-summary");
+        if (!summary && (executionEvents.length || workEvents.length || workStatus)) {
+            message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents,workStatus));
+            summary = message.querySelector(".message-workflow-summary");
+        }
+        const content = summary?.querySelector(".message-section-content");
+        if (!content) return;
+        let native = content.querySelector(".message-native-execution");
+        if (!native) {
+            native = document.createElement("div");
+            native.className = "message-native-execution";
+            content.prepend(native);
+        }
+        native.innerHTML = buildNativeExecutionHtml(executionEvents)
+            + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>`;
+        summary.dataset.executionFormat = "native-v1";
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
-    const content = summary?.querySelector(".message-section-content");
-    if (!content) return;
-    let native = content.querySelector(".message-native-execution");
-    if (!native) {
-        native = document.createElement("div");
-        native.className = "message-native-execution";
-        content.prepend(native);
-    }
-    native.innerHTML = buildNativeExecutionHtml(executionEvents)
-        + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>`;
-    summary.dataset.executionFormat = "native-v1";
 }
 
 function stopRestoredExecutionStreams() {
@@ -8851,28 +8905,31 @@ function buildCollapsibleSupportSectionHtml({
 }
 
 function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
-    if (!INLINE_WORKFLOW_TRACE_ENABLED) {
-        return;
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        if (!INLINE_WORKFLOW_TRACE_ENABLED) {
+            return;
+        }
+        const traceList = chatStream?.querySelector(".message-pending .thinking-trace-list");
+        if (!traceList) {
+            return;
+        }
+
+        const visibleSteps = buildVisibleWorkflowSteps(workflowSteps, options.currentStage || chatStream?.querySelector(".message-pending #pending-stage-label")?.textContent || "", {
+            includeCurrentStage: true,
+        });
+
+        if (!visibleSteps.length) {
+            traceList.innerHTML = '<div class="thinking-trace-empty">会用阶段总览和完整步骤 chips 显示当前 workflow 走到哪一环。</div>';
+            return;
+        }
+
+        traceList.innerHTML = buildPendingWorkflowTraceCompactHtml(visibleSteps, {
+            animate: options.animateNewItems !== false,
+        });
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
-    const traceList = chatStream?.querySelector(".message-pending .thinking-trace-list");
-    if (!traceList) {
-        return;
-    }
-
-    const visibleSteps = buildVisibleWorkflowSteps(workflowSteps, options.currentStage || chatStream?.querySelector(".message-pending #pending-stage-label")?.textContent || "", {
-        includeCurrentStage: true,
-    });
-
-    if (!visibleSteps.length) {
-        traceList.innerHTML = '<div class="thinking-trace-empty">会用阶段总览和完整步骤 chips 显示当前 workflow 走到哪一环。</div>';
-        return;
-    }
-
-    traceList.innerHTML = buildPendingWorkflowTraceCompactHtml(visibleSteps, {
-        animate: options.animateNewItems !== false,
-    });
-
-    chatStream.scrollTop = chatStream.scrollHeight;
 }
 
 function buildPendingWorkflowTraceCompactHtml(steps, options = {}) {
@@ -9976,41 +10033,46 @@ let streamingFinalResponseApplied = false;
 let streamingDeliveredResponse = null;
 
 function appendStreamingAnswerDelta(delta) {
-    if (!delta) return;
-    streamingAnswerBuffer += delta;
-    const pending = chatStream && chatStream.querySelector(".message-pending");
-    if (!pending) return;
-    // Hide typing dots on first content
-    const dots = pending.querySelector("#pending-typing-dots");
-    if (dots) dots.hidden = true;
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        if (!delta) return;
+        streamingAnswerBuffer += delta;
+        const pending = chatStream && chatStream.querySelector(".message-pending");
+        if (!pending) return;
+        // Hide typing dots on first content
+        const dots = pending.querySelector("#pending-typing-dots");
+        if (dots) dots.hidden = true;
 
-    // Parse <think>...</think> from the accumulated buffer
-    const parsed = parseStreamingThinkContent(streamingAnswerBuffer);
+        // Parse <think>...</think> from the accumulated buffer
+        const parsed = parseStreamingThinkContent(streamingAnswerBuffer);
 
-    // Show thinking text if present
-    if (parsed.think) {
-        const section = pending.querySelector("#pending-thinking-text");
-        if (section) {
-            section.hidden = false;
-            const thinkBody = section.querySelector(".thinking-text-body");
-            if (thinkBody) {
-                thinkBody.textContent = parsed.think;
-                thinkBody.scrollTop = thinkBody.scrollHeight;
+        // Show thinking text if present
+        if (parsed.think) {
+            const section = pending.querySelector("#pending-thinking-text");
+            if (section) {
+                section.hidden = false;
+                const thinkBody = section.querySelector(".thinking-text-body");
+                if (thinkBody) {
+                    thinkBody.textContent = parsed.think;
+                    thinkBody.scrollTop = thinkBody.scrollHeight;
+                }
             }
         }
-    }
 
-    // Show main content (excluding think tags)
-    const mainContent = parsed.main.trimStart();
-    if (mainContent) {
-        let body = pending.querySelector(".streaming-answer-body");
-        if (!body) {
-            body = document.createElement("div");
-            body.className = "streaming-answer-body message-body";
-            const frame = pending.querySelector(".message-frame") || pending;
-            frame.appendChild(body);
+        // Show main content (excluding think tags)
+        const mainContent = parsed.main.trimStart();
+        if (mainContent) {
+            let body = pending.querySelector(".streaming-answer-body");
+            if (!body) {
+                body = document.createElement("div");
+                body.className = "streaming-answer-body message-body";
+                const frame = pending.querySelector(".message-frame") || pending;
+                frame.appendChild(body);
+            }
+            body.innerHTML = formatMessageContent(mainContent);
         }
-        body.innerHTML = formatMessageContent(mainContent);
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
 }
 
@@ -10039,20 +10101,25 @@ function parseStreamingThinkContent(raw) {
 }
 
 function appendStreamingThinkDelta(delta) {
-    if (!delta) return;
-    streamingThinkBuffer += delta;
-    const pending = chatStream && chatStream.querySelector(".message-pending");
-    if (!pending) return;
-    // Hide typing dots on first content
-    const dots = pending.querySelector("#pending-typing-dots");
-    if (dots) dots.hidden = true;
-    const section = pending.querySelector("#pending-thinking-text");
-    if (!section) return;
-    section.hidden = false;
-    const body = section.querySelector(".thinking-text-body");
-    if (body) {
-        body.textContent = streamingThinkBuffer;
-        body.scrollTop = body.scrollHeight;
+    const scrollSnapshot = captureConversationScroll();
+    try {
+        if (!delta) return;
+        streamingThinkBuffer += delta;
+        const pending = chatStream && chatStream.querySelector(".message-pending");
+        if (!pending) return;
+        // Hide typing dots on first content
+        const dots = pending.querySelector("#pending-typing-dots");
+        if (dots) dots.hidden = true;
+        const section = pending.querySelector("#pending-thinking-text");
+        if (!section) return;
+        section.hidden = false;
+        const body = section.querySelector(".thinking-text-body");
+        if (body) {
+            body.textContent = streamingThinkBuffer;
+            body.scrollTop = body.scrollHeight;
+        }
+    } finally {
+        restoreConversationScroll(scrollSnapshot);
     }
 }
 
