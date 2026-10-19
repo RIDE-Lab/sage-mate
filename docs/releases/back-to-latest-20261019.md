@@ -25,3 +25,13 @@ the input. Temporary viewport override was reset.
 
 Deploy frontend assets only, preserve backup and separate frontend revision
 receipt, leave backend/model processes and existing conversations unchanged.
+
+Publication: all four public frontend assets were byte-verified against main
+61a2163; backend PID3876506 remained unchanged. Public browser acceptance is
+not complete: Chrome returned a gray client area without an HTML accessibility
+subtree after refresh, and an independent in-app public tab timed out twice.
+The localhost production-render fixture still worked and its screenshot was
+retained. This is not evidence of successful public UI interaction, nor enough
+to attribute the gray page to the application or the computer-control surface.
+Resume public interaction after the visible browser is available; no browser
+restart, process kill, model restart or authentication change was attempted.
