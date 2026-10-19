@@ -13,14 +13,14 @@ const stream = {scrollTop: 600, clientHeight: 700, get scrollHeight() {return he
     children: [], contains: () => true, getBoundingClientRect: () => ({top:0})};
 const message = {dataset:{}, style:{}, classList:{remove(){},add(){}},
     set innerHTML(value) {height += 900;}, querySelector: () => null};
-const context = {chatStream:stream, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
+const context = {chatStream:stream, document:{getElementById:()=>null}, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
     stopAnswerProcessingTicker(){}, hasMatchingSourceBlocks:()=>false,
     stripNotificationText:x=>x, parseStreamingThinkContent:x=>({main:x,think:''}),
     buildNotificationStatusHtml:()=>'', escapeHtml:x=>x, formatSourceAnswer:x=>x,
     uiIconSvg:()=>'', buildFeedbackSectionHtml:()=>'', buildRetryButtonHtml:()=>''};
 vm.createContext(context);
 if (source.includes('function captureConversationScroll(')) {
-    vm.runInContext(productionFunction('captureConversationScroll') + productionFunction('restoreConversationScroll'), context);
+    vm.runInContext(productionFunction('captureConversationScroll') + productionFunction('restoreConversationScroll') + productionFunction('syncLatestConversationButton'), context);
 }
 vm.runInContext(productionFunction('renderAssistantMessage'), context);
 for (const error of [false, true]) {
@@ -75,3 +75,56 @@ context.restoreConversationScroll(snapshot);
 assert.equal(context.chatStream.scrollTop,42,'stale snapshot must not scroll another session surface');
 context.chatStream=previousStream;
 console.log('Production deltas/progress: preserve reader, resume follow; anchor compensation and stale-root isolation passed');
+
+// Real notice controller and renderers, not a test-only substitute for scrolling.
+let announcements=0, noticeText='';
+const notice={hidden:true,get textContent(){return noticeText;},set textContent(value){noticeText=value;announcements++;}};
+const button={dataset:{},hidden:true,attributes:{},querySelector:()=>notice,
+    setAttribute(name,value){this.attributes[name]=value;}};
+context.document.getElementById=id=>id==='chat-scroll-latest'?button:null;
+let focused=false;
+const navigationOrder=[];
+stream.focus=options=>{assert.equal(options.preventScroll,true);focused=true;navigationOrder.push('focus');};
+stream.scrollTo=options=>{assert.equal(options.behavior,'instant');stream.scrollTop=options.top;navigationOrder.push('scroll');};
+stream.children=[];
+stream.scrollTop=600;
+vm.runInContext(productionFunction('scrollConversationToLatest'),context);
+context.syncLatestConversationButton();
+assert.equal(button.hidden,false);
+assert.equal(notice.hidden,true);
+assert.equal(button.attributes['aria-label'],'回到最新');
+context.appendStreamingThinkDelta('仅推理更新');
+context.syncPendingWorkflowTrace([{}]);
+assert.equal(noticeText,'','reasoning/progress must not claim a new answer');
+context.appendStreamingAnswerDelta('有新的正文');
+assert.equal(stream.scrollTop,600);
+assert.equal(noticeText,'有新内容');
+const announced=announcements;
+context.appendStreamingAnswerDelta('还有一段正文');
+assert.equal(announcements,announced,'do not announce on every token');
+context.INLINE_WORKFLOW_TRACE_ENABLED=false;
+context.renderAssistantMessage(message,'已完成',[],[],[],null,false,null,[],false);
+assert.equal(stream.scrollTop,600);
+assert.equal(noticeText,'有新回答');
+context.restoreConversationScroll(context.captureConversationScroll());
+assert.equal(noticeText,'有新回答','metadata update must not clear unread answer');
+context.scrollConversationToLatest();
+assert.deepEqual(navigationOrder,['focus','scroll'],'focus must precede instant navigation to cancel pending keyboard scroll');
+assert.equal(stream.scrollTop,height-stream.clientHeight);
+assert.equal(button.hidden,true);
+assert.equal(noticeText,'');
+assert(focused);
+context.appendStreamingAnswerDelta('点击后继续生成');
+assert.equal(stream.scrollTop,height-stream.clientHeight);
+assert.equal(button.hidden,true);
+stream.scrollTop=600;
+context.syncLatestConversationButton({completed:true});
+context.syncLatestConversationButton({reset:true});
+assert.equal(noticeText,'','conversation navigation clears previous unread state');
+assert.equal(button.hidden,false);
+const originalQuery=stream.querySelector;
+stream.querySelector=()=>null;
+context.syncLatestConversationButton({completed:true});
+assert.equal(button.hidden,true,'welcome/empty must not display button');
+stream.querySelector=originalQuery;
+console.log('Latest button: unread deltas/final, no auto-jump, one announcement, explicit click resumes follow, scope reset and empty view passed');

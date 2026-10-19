@@ -2369,6 +2369,9 @@ historyNewChatButton?.addEventListener("click", () => {
     startFreshConversation();
 });
 document.getElementById("export-conversation")?.addEventListener("click", exportCurrentConversationMarkdown);
+document.getElementById("chat-scroll-latest")?.addEventListener("click", scrollConversationToLatest);
+chatStream?.addEventListener("scroll", () => syncLatestConversationButton(), { passive: true });
+window.addEventListener("resize", () => syncLatestConversationButton());
 
 // Sidebar toggle - uses existing history-rail-collapsed system
 document.getElementById("sidebar-toggle")?.addEventListener("click", () => {
@@ -7024,7 +7027,7 @@ function captureConversationScroll() {
         offset: anchor ? anchor.getBoundingClientRect().top - viewportTop : 0};
 }
 
-function restoreConversationScroll(snapshot) {
+function restoreConversationScroll(snapshot, notice = {}) {
     if (!snapshot || snapshot.root !== chatStream) return;
     const {root, following, anchor, offset, top} = snapshot;
     if (following) {
@@ -7036,6 +7039,37 @@ function restoreConversationScroll(snapshot) {
     } else {
         root.scrollTop = top;
     }
+    syncLatestConversationButton(notice);
+}
+
+function syncLatestConversationButton({ newContent = false, completed = false, reset = false } = {}) {
+    const button = document.getElementById("chat-scroll-latest");
+    if (!button || !chatStream) return;
+    const away = chatStream.scrollHeight - chatStream.clientHeight - chatStream.scrollTop > 4;
+    const hasConversation = Boolean(chatStream.querySelector(".message-user"));
+    let notice = button.dataset.notice || "";
+    if (reset || !away || !hasConversation) notice = "";
+    else if (completed) notice = "有新回答";
+    else if (newContent && !notice) notice = "有新内容";
+    button.dataset.notice = notice;
+    button.hidden = !away || !hasConversation;
+    const label = button.querySelector(".chat-latest-notice");
+    if (label) {
+        // A token stream must not repeatedly announce an unchanged live region.
+        if (label.textContent !== notice) label.textContent = notice;
+        label.hidden = !notice;
+    }
+    button.setAttribute("aria-label", notice ? `${notice}，回到最新` : "回到最新");
+}
+
+function scrollConversationToLatest() {
+    if (!chatStream) return;
+    // Transfer focus before navigation; a still-finishing keyboard scroll must
+    // not get another chance to move the region after the explicit jump.
+    chatStream.focus({ preventScroll: true });
+    // Instant, explicit navigation: no smooth-scroll race against fresh deltas.
+    chatStream.scrollTo({ top: Math.max(0, chatStream.scrollHeight - chatStream.clientHeight), behavior: "instant" });
+    syncLatestConversationButton({ reset: true });
 }
 
 function updateChatEmptyState() {
@@ -7816,6 +7850,7 @@ function syncConversationMode() {
     }
     const hasConversation = Boolean(chatStream.querySelector(".message-user, .message-pending, .message-ready"));
     document.body.classList.toggle("conversation-active", hasConversation);
+    syncLatestConversationButton({ reset: true });
     // Restoring saved HTML bypasses appendMessage; synchronize its layout too.
     updateChatEmptyState();
     const exportButton = document.getElementById("export-conversation");
@@ -8031,6 +8066,7 @@ function renderAssistantMessage(
     workEvents = []
 ) {
     const scrollSnapshot = captureConversationScroll();
+    let answerRendered = false;
     try {
         if (exchangeId && !isError) container.dataset.exchangeId = exchangeId;
         stopAnswerProcessingTicker(container);
@@ -8149,12 +8185,13 @@ function renderAssistantMessage(
         if (isError) {
             container.style.background = "var(--error-surface)";
         }
+        answerRendered = true;
         if (exchangeId && !isError) {
             attachFeedbackHandlers(container, exchangeId);
             if (container === activeWorkflowMessage) void refreshActiveWorkStatus();
         }
     } finally {
-        restoreConversationScroll(scrollSnapshot);
+        restoreConversationScroll(scrollSnapshot, { newContent: answerRendered, completed: answerRendered && !isError });
     }
 }
 
@@ -10034,6 +10071,7 @@ let streamingDeliveredResponse = null;
 
 function appendStreamingAnswerDelta(delta) {
     const scrollSnapshot = captureConversationScroll();
+    let answerUpdated = false;
     try {
         if (!delta) return;
         streamingAnswerBuffer += delta;
@@ -10070,9 +10108,10 @@ function appendStreamingAnswerDelta(delta) {
                 frame.appendChild(body);
             }
             body.innerHTML = formatMessageContent(mainContent);
+            answerUpdated = true;
         }
     } finally {
-        restoreConversationScroll(scrollSnapshot);
+        restoreConversationScroll(scrollSnapshot, { newContent: answerUpdated });
     }
 }
 

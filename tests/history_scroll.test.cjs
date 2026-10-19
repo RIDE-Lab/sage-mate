@@ -15,8 +15,10 @@ const body = {classList: classes()};
 const context = {chatShell: shell, chatStream: {
     querySelector: () => messages ? {} : null,
     querySelectorAll: () => messages ? [{}] : [],
-}, document: {body, getElementById: id => id === 'export-conversation' ? button : greeting}};
+}, document: {body, getElementById: id => id === 'export-conversation' ? button : id === 'welcome-greeting' ? greeting : null}};
 vm.createContext(context);
+const latestStart=source.indexOf('function syncLatestConversationButton(');
+vm.runInContext(source.slice(latestStart,source.indexOf('\n}\n',latestStart)+3),context);
 vm.runInContext(source.slice(source.indexOf('function updateChatEmptyState()'), source.indexOf('// Reserve the actual composer height')), context);
 vm.runInContext(source.slice(source.indexOf('function syncConversationMode()'), source.indexOf('// Older local snapshots')), context);
 context.syncConversationMode();

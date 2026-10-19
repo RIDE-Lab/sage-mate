@@ -22,7 +22,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
         rel="stylesheet" media="print" onload="this.media='all'" />
-    <link rel="stylesheet" href="./styles.4222.css?rev=history-scroll-20261019" />
+    <link rel="stylesheet" href="./styles.4222.css?rev=latest-control-20261019" />
     <link rel="stylesheet" href="./companion.css" />
     <link rel="stylesheet" href="./static/minimal.1009.css?rev=workflow-theme-20261018" />
     <!-- First paint must not depend on fonts, JavaScript or timer delivery. -->
@@ -514,6 +514,12 @@
                 </aside>
 
                 <form id="chat-form" class="composer-shell">
+                    <button type="button" id="chat-scroll-latest" class="chat-latest-button"
+                        aria-label="回到最新" aria-controls="chat-stream" hidden>
+                        <svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-chevron-down"></use></svg>
+                        <span>回到最新</span>
+                        <span class="chat-latest-notice" aria-live="polite" aria-atomic="true" hidden></span>
+                    </button>
                     <input id="chat-file-input" type="file" name="files" multiple hidden
                         accept=".pdf,.txt,.md,.csv,.json,.py,.yaml,.yml,.log,text/plain,text/markdown,text/csv,application/json,application/pdf" />
                     <div class="composer-inner">
@@ -1473,7 +1479,7 @@
     </section>
 
     <script src="./companion.js" defer></script>
-    <script src="./app.4222.js?rev=stream-scroll-20261019" defer></script>
+    <script src="./app.4222.js?rev=latest-control-20261019" defer></script>
 </body>
 
 </html>

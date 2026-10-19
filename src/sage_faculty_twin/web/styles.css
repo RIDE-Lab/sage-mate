@@ -1977,6 +1977,38 @@ body.drawer-pinned .history-rail {
 
 .chat-stream > * { flex-shrink: 0; }
 
+/* Overlay above the composer, never in the scroll flow or over its input. */
+.composer-shell > .chat-latest-button {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 25;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 6px 12px;
+    border: 1px solid var(--line-strong);
+    border-radius: 999px;
+    color: var(--ink);
+    background: var(--surface);
+    box-shadow: 0 2px 10px rgb(0 0 0 / 8%);
+    font-size: 12px;
+    line-height: 1.4;
+    white-space: nowrap;
+    cursor: pointer;
+}
+.chat-latest-notice {
+    padding-left: 7px;
+    border-left: 1px solid var(--line-strong);
+    color: var(--muted);
+}
+.chat-latest-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
+@media (max-width: 760px) {
+    .composer-shell > .chat-latest-button { min-height: 44px; }
+}
+
 
 .chat-stream:has(> .intro-card:only-child) {
     justify-content: center;

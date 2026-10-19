@@ -21,13 +21,13 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync(process.argv[1],'utf8');
 const calls=[],streams=[];
 let releaseSnapshot;
-const context={chatStream:null, escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
+const context={chatStream:null, document:{getElementById:()=>null}, escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
     buildNativeExecutionHtml:()=>'<p>foreground</p>', persistActiveConversationSnapshot:()=>calls.push('persist'),
     resolveApiOrigin:async()=>'https://testserver',
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
     EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
 vm.createContext(context);
-for(const name of ['captureConversationScroll','restoreConversationScroll']) {
+for(const name of ['captureConversationScroll','restoreConversationScroll','syncLatestConversationButton']) {
     const start=source.indexOf('function '+name+'(');
     vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
 }
@@ -436,6 +436,20 @@ def test_chat_scrollbar_is_native_accessible_and_edge_aligned() -> None:
     assert "scrollbar-gutter: stable;" in stream_css
     assert "syncChatScrollRail" not in js
     assert "justify-content: safe center;" in css
+
+
+def test_latest_button_is_explicit_accessible_and_outside_history() -> None:
+    html = (WEB_DIR / "index.html").read_text(encoding="utf-8")
+    css = (WEB_DIR / "styles.css").read_text(encoding="utf-8")
+    js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
+    assert html.index('id="chat-form"') < html.index('id="chat-scroll-latest"')
+    assert 'type="button" id="chat-scroll-latest"' in html
+    assert 'aria-label="回到最新" aria-controls="chat-stream" hidden' in html
+    assert 'class="chat-latest-notice" aria-live="polite" aria-atomic="true" hidden' in html
+    assert '.composer-shell > .chat-latest-button {' in css
+    assert 'bottom: calc(100% + 8px);' in css
+    assert 'addEventListener("click", scrollConversationToLatest)' in js
+    assert 'if (label.textContent !== notice)' in js
 
 
 def test_interface_icons_share_one_accessible_svg_system() -> None:
