@@ -45,9 +45,8 @@ async function run(){
     assert(all.get('hust_undergraduate').some(q=>q.includes('Prefill')));
     assert(all.get('paper_writing_student').some(q=>q.includes('论文选题')));
     assert(all.get('lab_member').some(q=>q.includes('证伪')));
-    assert(all.get('lab_member').includes('RAG 系统可以从哪些环节改进检索质量？'));
-    assert(!flattened.includes('评测 RAG 系统时，怎样同时检查效果和性能？'),
-        'do not reintroduce the live-rejected question whose source lacks the requested evaluation method');
+    assert(all.get('lab_member').includes('评测 RAG 系统时，怎样同时检查效果和性能？'),
+        'retain the original joint quality/performance question; repair missing Wiki knowledge instead of curating it away');
     console.log('Natural starters: four distinct role pools, catalog/offline, exact labels/click text, metadata isolation and stale-role race passed');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});

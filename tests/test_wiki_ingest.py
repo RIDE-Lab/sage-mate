@@ -65,6 +65,35 @@ def test_research_tutorial_retains_topic_without_visibility_escalation(tmp_path,
     assert 'audience:public' in tags
 
 
+def test_research_evaluation_guide_keeps_semantic_scope_without_changing_acl(tmp_path, monkeypatch):
+    from sage_faculty_twin.models import InteractionIntent, KnowledgeSearchHit
+    from sage_faculty_twin.service import FacultyTwinWorkflowSupport
+
+    docs = tmp_path / 'docs' / 'tech-notes'
+    docs.mkdir(parents=True)
+    (docs / 'evaluation.md').write_text(
+        '---\ntitle: RAG 系统设计与实践\ndomain: research\nmaterial_type: guide\n---\n'
+        'RAG 系统需要测量效果、性能和完整请求延迟。'
+    )
+    store = _Store()
+    monkeypatch.setattr(ingest_wiki, 'AppSettings', lambda: object())
+    monkeypatch.setattr(ingest_wiki, 'LocalKnowledgeStore', lambda _: store)
+    monkeypatch.setattr(sys, 'argv', ['ingest_wiki.py', '--wiki-dir', str(tmp_path)])
+    ingest_wiki.main()
+    document = store.documents['wiki:tech-notes/evaluation']
+    assert {'research', 'guide', 'audience:public'} <= set(document.tags)
+    assert not set(document.tags) & {'audience:lab_member', 'audience:private'}
+    assert dict(document.metadata)['domain'] == 'research'
+    hit = KnowledgeSearchHit(document_id=document.document_id, title=document.title,
+        source_name=document.source_name, tags=list(document.tags), score=1,
+        excerpt='RAG 系统需要测量效果、性能和完整请求延迟。')
+    support = object.__new__(FacultyTwinWorkflowSupport)
+    intent = InteractionIntent(action='answer', domain='research',
+        retrieval_scopes=['publications', 'research_methodology'], exclude_scopes=['courseware'])
+    question = '评测 RAG 系统时，怎样同时检查效果和性能？'
+    assert support._filter_knowledge_hits_by_intent([hit], intent, question=question) == [hit]
+
+
 @dataclass(frozen=True)
 class _Record:
     document_id: str

@@ -1,5 +1,10 @@
 # Natural, role-specific starter questions
 
+The later [RAG knowledge repair](./rag-evaluation-knowledge-20261019.md) supersedes
+the RAG question replacement described below: the original question is retained
+and its missing public knowledge is repaired instead. Earlier results remain
+recorded here as historical evidence, not as approval of the workaround.
+
 The four roles now have separate pools of six authored questions: public visitors
 (research and orientation), undergraduates (concepts and first experiments),
 writing students (selection, argument and revision), and lab members (hypotheses,
