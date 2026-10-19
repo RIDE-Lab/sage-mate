@@ -743,15 +743,16 @@ def test_chat_uses_llm_intent_to_avoid_false_booking_positive(tmp_path: Path) ->
     )
     assert "agenda" in response.answer
     interaction_step = _trace_step(response, "interaction_understand")
-    booking_prepare_step = _trace_step(response, "booking_prepare")
     _trace_step(response, "memory_retrieve")
     _trace_step(response, "knowledge_retrieve")
     assert interaction_step.status == "completed"
-    assert booking_prepare_step.status == "skipped"
+    assert not any(step.key in {"booking_prepare", "booking_execute"}
+                   for step in response.workflow_trace)
+    assert not any(event.operator_key in {"prepare-booking", "execute-booking"}
+                   for event in response.execution_events)
     assert all((step.duration_ms is None) == (step.key == "memory_persist")
                for step in response.workflow_trace)
     assert interaction_step.summary == "已识别当前交互意图：answer/advising，仅提供建议。"
-    assert booking_prepare_step.summary == "未进入预约流程。"
 
 
 def test_chat_fast_paths_explicitly_scoped_research_route_without_llm_classifier(
@@ -843,7 +844,10 @@ def test_chat_answers_office_hour_query_without_starting_booking_workflow(
         _trace_step(response, "interaction_understand").summary
         == "已识别当前交互意图：answer/advising。"
     )
-    assert _trace_step(response, "booking_prepare").summary == "未进入预约流程。"
+    assert not any(step.key in {"booking_prepare", "booking_execute"}
+                   for step in response.workflow_trace)
+    assert not any(event.operator_key in {"prepare-booking", "execute-booking"}
+                   for event in response.execution_events)
 
 
 def test_chat_emits_trace_steps_via_callback(
