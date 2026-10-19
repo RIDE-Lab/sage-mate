@@ -1960,7 +1960,7 @@ body.drawer-pinned .history-rail {
     margin: 0;
     scrollbar-gutter: stable;
     scrollbar-width: auto;
-    scrollbar-color: var(--text-muted) transparent;
+    scrollbar-color: var(--muted) transparent;
 }
 
 .chat-stream::-webkit-scrollbar {
@@ -1969,7 +1969,7 @@ body.drawer-pinned .history-rail {
 }
 
 .chat-stream::-webkit-scrollbar-thumb {
-    background: var(--text-muted);
+    background: var(--muted);
     border: 2px solid transparent;
     background-clip: padding-box;
     border-radius: 999px;
