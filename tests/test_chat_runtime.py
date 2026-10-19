@@ -25,16 +25,17 @@ def expected_stages(booking, complete=True):
 
 
 class TraceContext(list):
-    def __init__(self, values, *, booking=True, complete=True, requirements=None):
+    def __init__(self, values, *, booking=True, complete=True, requirements=None, capabilities=None):
         super().__init__(values)
         self.interaction_intent = SimpleNamespace(action="book_meeting" if booking else "answer")
         self.booking_decision = SimpleNamespace(request=object() if complete else None)
         self.booking = booking
         self.complete = complete
         self.requirements = requirements
+        self.capabilities = capabilities or WorkflowCapabilities("guest", ("wiki",), True)
         self.adaptive_plan = plan_workflow(
             requirements or WorkflowRequirements(action="book_meeting" if booking else "answer"),
-            WorkflowCapabilities("guest", ("wiki",), True))
+            self.capabilities)
 
 
 class Stage:
@@ -49,7 +50,8 @@ class Stage:
         return TraceContext([*value, (self.name, self.marker)],
                             booking=getattr(value, "booking", True),
                             complete=getattr(value, "complete", True),
-                            requirements=getattr(value, "requirements", None))
+                            requirements=getattr(value, "requirements", None),
+                            capabilities=getattr(value, "capabilities", None))
 
 
 def ports(marker, **hooks):

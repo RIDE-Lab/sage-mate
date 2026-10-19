@@ -13,6 +13,23 @@ final design: the user requested a richer connected view of nested retrieval,
 source evaluation and background work. Light/dark static preview has been checked,
 but no production visual or model-quality acceptance is claimed.
 
+The subsequent Atlas view links native invocation groups using explicit parent
+execution IDs, preserving the distinction between call relationships and data
+routes. It uses all declared nodes when a valid snapshot is present and otherwise
+labels partial topology. Geometry is state-independent, cached (8 entries) and
+bounded in iteration work; layout never removes evidence/nodes/edges. A real
+three-program, no-effect visual fixture contains 28 declared nodes, including
+parallel memory/knowledge and Wiki/private source readers. No model requests,
+real bookings, private documents or production credentials are used by that
+fixture. This still does not qualify missing research-quality branches.
+
+User review rejected separate program clusters. The main view now uses one
+unified layout with one SVG, not three per-program pictures; program provenance
+and call relationships remain text-only details. The isolated browser confirms
+one workflow SVG and zero program-column labels. Clicking the Wiki icon opens
+only its matching native record. 39 native/retrieval/source integration tests and
+all eight Node groups passed. The fixture remains explicitly non-production.
+
 SAGE `6e40f2ac` owns the immutable capability-bounded execution plan. Twin
 supplies captured intent, verified adapter identity/profile and existing business
 capabilities. Intent/model output may narrow requested sources, never grant access

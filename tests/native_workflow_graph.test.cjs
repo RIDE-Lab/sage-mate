@@ -42,6 +42,11 @@ model = context.buildNativeWorkflowModel([a,collision,nestedRequest]);
 assert.equal(model.find(x=>x.request==='nested-event-group').parentEvent,null);
 assert(!context.buildNativeExecutionHtml([a,collision,nestedRequest]).includes('含 1 个子工作流'));
 let html = context.buildNativeExecutionHtml([a,b,router,left,right]);
+assert(html.includes('统一工作流网络'));
+assert(!html.includes('native-atlas-group-label'));
+assert(html.includes('data-atlas-edge="call"'));
+assert(html.includes('局部拓扑')); // Legacy events never acquire a fake complete map.
+assert(html.includes('明确记录的子流程调用'));
 for (const text of ['主工作流','子工作流','嵌套于 same label','节点明细与原生元数据',
     'data-flow-edge="routed"','data-flow-state="failed"','data-flow-state="started"',
     '节点同层不代表同时执行']) assert(html.includes(text),text);
@@ -81,7 +86,8 @@ assert(longHtml.includes(longName)); // Full name remains accessible, not a clip
 assert(compact.includes('role="button" tabindex="0"'));
 assert(compact.includes('<circle'));
 assert(!compact.includes('<rect'));
-assert(html.includes('<details class="native-flow-scope is-nested"'));
+assert(html.includes('流程标识与调用关系'));
+assert(!html.includes('<details class="native-flow-scope is-nested"')); // One graph, not three nested diagrams.
 const adaptiveHtml = context.buildNativeExecutionHtml([
     event('plan', {operator_key:'plan', downstream_node_ids:['wiki'], next_nodes:[
         {program_uri:'flow://actual',program_rev:'v1',node_id:'wiki'}]}),

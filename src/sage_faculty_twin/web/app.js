@@ -8201,7 +8201,11 @@ function buildNativeWorkflowModel(events) {
         // parent execution reference is trace-scoped, not event-group-scoped.
         const ownerKey = JSON.stringify([event.trace_id, event.execution_id]);
         if (!owners.has(ownerKey)) owners.set(ownerKey, event);
-        else if (owners.get(ownerKey)?.request_id !== event.request_id) owners.set(ownerKey, null);
+        else {
+            const old = owners.get(ownerKey);
+            if (!old || old.request_id!==event.request_id || old.program_uri!==event.program_uri
+                || old.program_rev!==event.program_rev || old.node_id!==event.node_id) owners.set(ownerKey,null);
+        }
     }
     for (const group of groups.values()) {
         const observed = [...group.nodes.values()];
@@ -8303,6 +8307,124 @@ function revealNativeNodeDetails(target) {
     matching[0].querySelector("summary")?.focus();
     matching[0].scrollIntoView({block:"nearest"});
     return true;
+}
+
+function buildNativeWorkflowAtlasHtml(groups) {
+    // One connected view of actual native subflow invocations. Call edges come
+    // from explicit parent execution IDs, not timing, labels or guessed stages.
+    if (!groups.some(group=>group.parentEvent)) return "";
+    const vertices = [], links = [], lookup = new Map();
+    const id = (group,key)=>JSON.stringify([group.key,key]);
+    for (const group of groups) {
+        for (const node of group.nodes.values()) {
+            if (!group.topologyComplete && !node.attempts.length) continue;
+            const vertex = {id:id(group,node.key),node,group,index:vertices.length};
+            vertices.push(vertex); lookup.set(vertex.id,vertex);
+        }
+        for (const edge of group.edges.values()) {
+            const from=lookup.get(id(group,edge.from)),to=lookup.get(id(group,edge.to));
+            if (from && to) links.push({from,to,routed:edge.routed,kind:"route"});
+        }
+    }
+    for (const group of groups) {
+        if (!group.parentEvent) continue;
+        const parent = vertices.find(vertex=>vertex.group.trace===group.trace
+            && vertex.node.attempts.some(attempt=>attempt.execution_id===group.parent));
+        const children = vertices.filter(vertex=>vertex.group===group && vertex.node.attempts.length);
+        const first = children.sort((a,b)=>Math.min(...a.node.attempts.map(e=>e.sequence))
+            - Math.min(...b.node.attempts.map(e=>e.sequence)))[0];
+        if (parent && first) links.push({from:parent,to:first,routed:true,kind:"call"});
+    }
+    if (!links.some(link=>link.kind==="call")) return "";
+    const width=900,height=580,margin=38;
+    // Program ownership is provenance, not a reason to split the visual map
+    // into separate columns/clusters. All native nodes share one layout space.
+    const orderedVertices=[...vertices].sort((a,b)=>a.id.localeCompare(b.id));
+    orderedVertices.forEach((vertex,index)=>{
+        const angle=-Math.PI/2+index*2*Math.PI/orderedVertices.length;
+        vertex.x=width/2+Math.cos(angle)*260;
+        vertex.y=height/2+Math.sin(angle)*210;
+        vertex.anchorX=width/2;vertex.anchorY=height/2;
+    });
+    // Cache geometry independently of live state. Layout work is bounded as a
+    // graph grows; no events, nodes or edges are truncated to achieve that.
+    const geometryKey=JSON.stringify(["unified-v2",vertices.map(vertex=>vertex.id).sort(),
+        links.map(link=>JSON.stringify([link.from.id,link.to.id,link.kind])).sort()]);
+    const cache=buildNativeWorkflowAtlasHtml.layoutCache ||= new Map();
+    const cached=cache.get(geometryKey);
+    const rounds=cached ? 0 : Math.max(1,Math.min(160,Math.floor(320000/(vertices.length*vertices.length))));
+    if (cached) vertices.forEach(vertex=>Object.assign(vertex,cached.get(vertex.id)));
+    for (let round=0;round<rounds;round++) {
+        const forces=vertices.map(vertex=>({x:(vertex.anchorX-vertex.x)*.004,
+            y:(vertex.anchorY-vertex.y)*.004}));
+        for (let i=0;i<vertices.length;i++) for (let j=i+1;j<vertices.length;j++) {
+            const a=vertices[i],b=vertices[j],dx=a.x-b.x,dy=a.y-b.y;
+            const distance=Math.hypot(dx,dy) || 1;
+            const magnitude=distance<70 ? (70-distance)*.8 : 2400/(distance*distance);
+            const fx=dx/distance*magnitude,fy=dy/distance*magnitude;
+            forces[i].x+=fx;forces[i].y+=fy;forces[j].x-=fx;forces[j].y-=fy;
+        }
+        for (const link of links) {
+            const dx=link.to.x-link.from.x,dy=link.to.y-link.from.y;
+            const distance=Math.hypot(dx,dy) || 1;
+            const magnitude=(distance-(link.kind==="call" ? 180 : 110))*.025;
+            const fx=dx/distance*magnitude,fy=dy/distance*magnitude;
+            forces[link.from.index].x+=fx;forces[link.from.index].y+=fy;
+            forces[link.to.index].x-=fx;forces[link.to.index].y-=fy;
+        }
+        const limit=8*(1-round/rounds)+.3;
+        vertices.forEach((vertex,index)=>{
+            const force=forces[index],size=Math.hypot(force.x,force.y) || 1;
+            const step=Math.min(limit,size)/size;
+            vertex.x=Math.min(width-margin,Math.max(margin,vertex.x+force.x*step));
+            vertex.y=Math.min(height-margin-20,Math.max(margin,vertex.y+force.y*step));
+        });
+    }
+    if (!cached) {
+        cache.set(geometryKey,new Map(vertices.map(vertex=>[vertex.id,{x:vertex.x,y:vertex.y}])));
+        if (cache.size>8) cache.delete(cache.keys().next().value);
+    }
+    const edges=links.map(link=>{
+        const a=link.from,b=link.to,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy) || 1;
+        const ux=dx/d,uy=dy/d,x1=a.x+ux*20,y1=a.y+uy*20,x2=b.x-ux*20,y2=b.y-uy*20;
+        const active=link.routed && [a,b].some(vertex=>vertex.node.attempts.some(e=>e.state==="started"));
+        const classes=link.kind==="call" ? "native-flow-call" : `native-flow-edge${link.routed ? " is-routed" : ""}${active ? " is-active" : ""}`;
+        const arrow=`M${x2-ux*5-uy*3},${y2-uy*5+ux*3} L${x2},${y2} L${x2-ux*5+uy*3},${y2-uy*5-ux*3}`;
+        const flowAttribute=link.kind==="route" ? ` data-flow-edge="${link.routed ? "routed" : "declared"}"` : "";
+        return `<path class="${classes}" data-atlas-edge="${link.kind}"${flowAttribute} data-from="${escapeHtml(a.id)}" data-to="${escapeHtml(b.id)}" d="M${x1},${y1} L${x2},${y2}"/><path class="${link.kind==="call" ? "native-flow-call" : `native-flow-arrow${link.routed ? " is-routed" : ""}`}" d="${arrow}"/>`;
+    }).join("");
+    const nodes=vertices.map(vertex=>{
+        const node=vertex.node,event=node.attempts[0],name=event?.operator_key || node.declaration?.operator_key
+            || event?.operator_type || node.declaration?.operator_type || "节点";
+        const rejected=node.attempts.length===1 && event.state==="completed" && event.operator_type==="filter"
+            && event.next_nodes?.length===0 && (event.downstream_node_ids?.length || node.declaration?.downstream_node_ids?.length);
+        const state=rejected ? "not_selected" : node.attempts.length===1 ? event.state : node.attempts.length ? "multiple" : "unobserved";
+        const badge={completed:"✓",failed:"×",started:"…",cancelled:"⊘",recovered:"!",unobserved:"○",not_selected:"−",multiple:"×"}[state] || "?";
+        const [label,icon]=nativeNodeAppearance(name,node.attempts.length>0);
+        const childCount=groups.filter(group=>group.parentEvent && vertex.node.attempts.some(
+            attempt=>attempt.execution_id===group.parentEvent.execution_id
+                && attempt.trace_id===group.trace)).length;
+        const title=`${name} · ${rejected ? "条件已执行，未放行" : state}${childCount ? ` · 含 ${childCount} 个子工作流` : ""} · ${node.uri}@${node.rev} · ${node.id}`;
+        return `<g class="native-flow-node" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title><circle cx="${vertex.x}" cy="${vertex.y}" r="18"/><svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
+    }).join("");
+    const calls=links.filter(link=>link.kind==="call").length;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">高亮为本次路由；低亮度为可选路径；紫色点线为明确记录的子流程调用。悬停或聚焦图标查看名称，点击查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+}
+
+function nativeNodeAppearance(name, observed) {
+    return ({bootstrap:["接收","inbox"],understand:["理解","message-spark"],plan:["规划","branch"],
+        "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
+        "write-knowledge":["知识写入","checklist"],retrieve:["检索","search"],
+        prompt:["上下文","checklist"],answer:["回答","message-spark"],render:["返回","send"],
+        "read-memory":["记忆","inbox"],"read-knowledge":["知识","search"],
+        "read-wiki":["公开 Wiki","book"],"read-private":["私有知识","search"],
+        "wiki-capability":["公开来源","branch"],"private-capability":["私有权限","branch"],
+        "booking-route":["预约路径","branch"],"dialogue-route":["对话路径","branch"],
+        "booking-ready":["字段齐备","branch"],"booking-incomplete":["待补字段","branch"],
+        "write-route":["写入授权","branch"],"read-route":["只读路径","branch"],
+        "evidence-route":["取证路径","branch"],"direct-route":["无需取证","branch"],
+        "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
+        "sys/router":["分支","branch"],filter:["条件","branch"]})[name] || [observed ? "节点" : "未观测","branch"];
 }
 
 function buildNativeWorkflowHtml(events) {
@@ -8436,21 +8558,7 @@ function buildNativeWorkflowHtml(events) {
                 : p.node.attempts.length ? "multiple" : "unobserved";
             const name = p.node.attempts[0]?.operator_key || p.node.declaration?.operator_key
                 || p.node.attempts[0]?.operator_type || p.node.declaration?.operator_type || "尚无节点记录";
-            const appearance = {bootstrap:["接收","inbox"],understand:["理解","message-spark"],
-                plan:["规划","branch"],
-                "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
-                "write-knowledge":["知识写入","checklist"],retrieve:["检索","search"],
-                prompt:["上下文","checklist"],answer:["回答","message-spark"],render:["返回","send"],
-                "read-memory":["记忆","inbox"],"read-knowledge":["知识","search"],
-                "read-wiki":["公开 Wiki","book"],"read-private":["私有知识","search"],
-                "wiki-capability":["公开来源","branch"],"private-capability":["私有权限","branch"],
-                "booking-route":["预约路径","branch"],"dialogue-route":["对话路径","branch"],
-                "booking-ready":["字段齐备","branch"],"booking-incomplete":["待补字段","branch"],
-                "write-route":["写入授权","branch"],"read-route":["只读路径","branch"],
-                "evidence-route":["取证路径","branch"],"direct-route":["无需取证","branch"],
-                "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
-                "sys/router":["分支","branch"],filter:["条件","branch"]};
-            const [caption,icon] = appearance[name] || [p.node.attempts.length ? "节点" : "未观测","branch"];
+            const [caption,icon] = nativeNodeAppearance(name,p.node.attempts.length>0);
             const title = `${name} · ${rejected ? "条件已执行，未放行" : stateText(p.node)} · ${p.states.filter(s=>s.includes("子工作流")).join(" · ")} · ${p.node.uri}@${p.node.rev} · ${p.node.id}`;
             const cx=p.x+p.width/2, cy=p.y+22;
             const badge = {completed:"✓",failed:"×",started:"…",multiple:"↻",cancelled:"⊘",recovered:"!",unobserved:"○",not_selected:"−"}[state] || "?";
@@ -8468,7 +8576,15 @@ function buildNativeWorkflowHtml(events) {
         if (group.parent) return `<details class="native-flow-scope is-nested" data-parent-execution="${escapeHtml(group.parent)}"><summary>${escapeHtml(heading)} · ${meta}</summary>${content}</details>`;
         return `<section class="native-flow-scope"><header class="native-flow-heading"><h4>${escapeHtml(heading)}</h4><span>${meta}</span></header>${content}</section>`;
     };
-    return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
+    const atlas = buildNativeWorkflowAtlasHtml(groups);
+    const identities=groups.map(group=>{
+        const parent=group.parentEvent?.operator_key || group.parentEvent?.operator_type;
+        const label=group.parent ? `子工作流 · 嵌套于 ${parent || "父节点记录缺失"}` : "主工作流";
+        const programs=[...new Set([...group.nodes.values()].map(node=>`${node.uri}@${node.rev}`))].join(" · ");
+        return `<li>${escapeHtml(label)} · ${escapeHtml(programs)}</li>`;
+    }).join("");
+    const diagrams = atlas ? `${atlas}<details class="native-flow-identity"><summary>流程标识与调用关系</summary><ul>${identities}</ul></details>` : groups.map(render).join("");
+    return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${diagrams}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
 }
 
 function syncNativeExecutionDisplay() {

@@ -21,4 +21,8 @@ process.stdout.write(`<!doctype html><html lang="zh-CN" data-theme="${theme}"><m
 <style>${styles}\nbody{display:block;overflow:auto;height:auto;padding:32px 18px}main{max-width:760px;margin:auto}h1{font-size:18px}p.qa-notice{color:var(--text-secondary);font-size:13px}section.qa-card{border:1px solid var(--line);border-radius:16px;padding:18px;background:var(--surface-solid)}</style>
 <svg style="position:absolute;width:0;height:0;overflow:hidden" aria-hidden="true">${symbols}</svg>
 <main><h1>完整路线图 · 已执行路径高亮</h1><p class="qa-notice">隔离视觉验收：真实 SAGE 拓扑与执行记录，业务端口为无副作用测试替身；不代表模型问答或生产上线验收。</p>
-<section class="qa-card">${context.buildNativeExecutionHtml(events)}</section></main></html>`);
+<section class="qa-card">${context.buildNativeExecutionHtml(events)}</section></main>
+<script>${context.revealNativeNodeDetails.toString()}
+document.addEventListener('click',event=>revealNativeNodeDetails(event.target));
+document.addEventListener('keydown',event=>{if((event.key==='Enter'||event.key===' ')&&revealNativeNodeDetails(event.target))event.preventDefault();});
+</script></html>`);
