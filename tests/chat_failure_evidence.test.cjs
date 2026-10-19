@@ -31,4 +31,9 @@ vm.runInContext(source.slice(friendlyStart,source.indexOf('\nfunction ',friendly
 assert.match(context.friendlyHttpErrorMessage(503,'secret upstream body','answer_validation_rejected'),/未通过来源/);
 assert.doesNotMatch(context.friendlyHttpErrorMessage(503,'secret upstream body','answer_validation_rejected'),/secret|后端临时不可用/);
 assert.match(context.friendlyHttpErrorMessage(503,'secret upstream body'),/后端临时不可用/);
+let settled=0;
+context.renderWorkflowTrace=()=>{};
+context.sageCompanionController={setRequestActive(value){assert.equal(value,false);},recordAnswerCompleted(){settled++;}};
+context.handleWorkflowStreamEvent({type:'complete'});
+assert.equal(settled,1,'durable completion clears a late background thinking state');
 console.log('Durable validation failure retains native evidence across HTTP/SSE ordering and safe classification');

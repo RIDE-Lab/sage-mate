@@ -10179,6 +10179,10 @@ function handleWorkflowStreamEvent(payload) {
     if (payload.type === "complete") {
         stopWorkflowTraceStream();
         renderWorkflowTrace(activeWorkflowSteps, { isStreaming: false });
+        // A late background trace step may have replaced the answer-ready
+        // companion state. Only the durable terminal event settles it again.
+        sageCompanionController?.setRequestActive(false);
+        sageCompanionController?.recordAnswerCompleted();
     }
 }
 
