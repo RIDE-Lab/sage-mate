@@ -2,7 +2,8 @@
 
 ## Candidate, not yet production-qualified
 
-The next candidate pins SAGE `0e735f8b` for content-free full program snapshots.
+The next candidate pins SAGE `ef9eb311` for content-free full program snapshots
+and explicit native entry/return/sink boundary flags.
 Each invocation emits declared node IDs, operator types/keys and declared edges
 once, separately from actual next-node routing. Terminal/out-of-order updates
 preserve the earlier declaration; malformed/conflicting snapshots cannot become
@@ -16,12 +17,21 @@ but no production visual or model-quality acceptance is claimed.
 The subsequent Atlas view links native invocation groups using explicit parent
 execution IDs, preserving the distinction between call relationships and data
 routes. It uses all declared nodes when a valid snapshot is present and otherwise
-labels partial topology. Geometry is state-independent, cached (8 entries) and
-bounded in iteration work; layout never removes evidence/nodes/edges. A real
+labels partial topology. Geometry uses deterministic left-to-right DAG ranks,
+not force relaxation; layout never removes evidence/nodes/edges. A real
 three-program, no-effect visual fixture contains 28 declared nodes, including
 parallel memory/knowledge and Wiki/private source readers. No model requests,
 real bookings, private documents or production credentials are used by that
 fixture. This still does not qualify missing research-quality branches.
+
+The latest compact layout distinguishes overall input/output with labeled
+rounded terminals, using native boundary flags rather than operator-name guesses.
+Nested entries/returns remain ordinary internal nodes. Short captions are visible;
+full IDs, scopes and attempts remain in accessible details. The entire wide/short
+graph fits the card without a forced horizontal minimum width; both themes were
+visually checked in the isolated browser. Older records without boundary metadata
+do not acquire guessed input/output terminals. Calls remain explicitly distinct
+from data routes; placement is not proof of a child-return dependency.
 
 User review rejected separate program clusters. The main view now uses one
 unified layout with one SVG, not three per-program pictures; program provenance

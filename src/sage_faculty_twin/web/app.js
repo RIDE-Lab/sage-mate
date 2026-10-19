@@ -8226,6 +8226,7 @@ function buildNativeWorkflowModel(events) {
             if (ids.size !== snapshot.nodes.length || !snapshot.nodes.every(node =>
                 node && valid(node.node_id) && valid(node.operator_type)
                 && (node.operator_key == null || valid(node.operator_key))
+                && [node.is_entry,node.is_return,node.is_sink].every(value=>value == null || typeof value === "boolean")
                 && Array.isArray(node.downstream_node_ids)
                 && node.downstream_node_ids.every(id=>valid(id) && ids.has(id)))) {
                 validTopology = false;
@@ -8234,6 +8235,7 @@ function buildNativeWorkflowModel(events) {
             const identity = JSON.stringify([snapshot.uri,snapshot.rev]);
             const normalized = snapshot.nodes.map(node=>({node_id:node.node_id,
                 operator_type:node.operator_type, operator_key:node.operator_key || null,
+                is_entry:node.is_entry === true,is_return:node.is_return === true,is_sink:node.is_sink === true,
                 downstream_node_ids:[...node.downstream_node_ids].sort()}))
                 .sort((a,b)=>a.node_id.localeCompare(b.node_id));
             const previous = declarations.get(identity);
@@ -8312,7 +8314,9 @@ function revealNativeNodeDetails(target) {
 function buildNativeWorkflowAtlasHtml(groups) {
     // One connected view of actual native subflow invocations. Call edges come
     // from explicit parent execution IDs, not timing, labels or guessed stages.
-    if (!groups.some(group=>group.parentEvent)) return "";
+    const hasBoundaries=groups.some(group=>!group.parent && group.topologyComplete
+        && [...group.nodes.values()].some(node=>node.declaration?.is_entry));
+    if (!hasBoundaries && !groups.some(group=>group.parentEvent)) return "";
     const vertices = [], links = [], lookup = new Map();
     const id = (group,key)=>JSON.stringify([group.key,key]);
     for (const group of groups) {
@@ -8335,58 +8339,51 @@ function buildNativeWorkflowAtlasHtml(groups) {
             - Math.min(...b.node.attempts.map(e=>e.sequence)))[0];
         if (parent && first) links.push({from:parent,to:first,routed:true,kind:"call"});
     }
-    if (!links.some(link=>link.kind==="call")) return "";
-    const width=900,height=580,margin=38;
+    if (!hasBoundaries && !links.some(link=>link.kind==="call")) return "";
+    const width=1160,margin=56;
     // Program ownership is provenance, not a reason to split the visual map
     // into separate columns/clusters. All native nodes share one layout space.
     const orderedVertices=[...vertices].sort((a,b)=>a.id.localeCompare(b.id));
-    orderedVertices.forEach((vertex,index)=>{
-        const angle=-Math.PI/2+index*2*Math.PI/orderedVertices.length;
-        vertex.x=width/2+Math.cos(angle)*260;
-        vertex.y=height/2+Math.sin(angle)*210;
-        vertex.anchorX=width/2;vertex.anchorY=height/2;
-    });
-    // Cache geometry independently of live state. Layout work is bounded as a
-    // graph grows; no events, nodes or edges are truncated to achieve that.
-    const geometryKey=JSON.stringify(["unified-v2",vertices.map(vertex=>vertex.id).sort(),
-        links.map(link=>JSON.stringify([link.from.id,link.to.id,link.kind])).sort()]);
-    const cache=buildNativeWorkflowAtlasHtml.layoutCache ||= new Map();
-    const cached=cache.get(geometryKey);
-    const rounds=cached ? 0 : Math.max(1,Math.min(160,Math.floor(320000/(vertices.length*vertices.length))));
-    if (cached) vertices.forEach(vertex=>Object.assign(vertex,cached.get(vertex.id)));
-    for (let round=0;round<rounds;round++) {
-        const forces=vertices.map(vertex=>({x:(vertex.anchorX-vertex.x)*.004,
-            y:(vertex.anchorY-vertex.y)*.004}));
-        for (let i=0;i<vertices.length;i++) for (let j=i+1;j<vertices.length;j++) {
-            const a=vertices[i],b=vertices[j],dx=a.x-b.x,dy=a.y-b.y;
-            const distance=Math.hypot(dx,dy) || 1;
-            const magnitude=distance<70 ? (70-distance)*.8 : 2400/(distance*distance);
-            const fx=dx/distance*magnitude,fy=dy/distance*magnitude;
-            forces[i].x+=fx;forces[i].y+=fy;forces[j].x-=fx;forces[j].y-=fy;
+    // Rank explicit routes and calls left-to-right. Geometry is not a claim
+    // that the child returns data to any particular parent successor.
+    const remaining=new Set(orderedVertices),ranks=new Map(orderedVertices.map(v=>[v,0]));
+    while (remaining.size) {
+        const ready=[...remaining].filter(v=>!links.some(e=>e.to===v && remaining.has(e.from)));
+        if (!ready.length) { // Cycles stay explicit rather than inventing an order.
+            for (const v of remaining) ranks.set(v,Math.max(...ranks.values())+1);
+            break;
         }
-        for (const link of links) {
-            const dx=link.to.x-link.from.x,dy=link.to.y-link.from.y;
-            const distance=Math.hypot(dx,dy) || 1;
-            const magnitude=(distance-(link.kind==="call" ? 180 : 110))*.025;
-            const fx=dx/distance*magnitude,fy=dy/distance*magnitude;
-            forces[link.from.index].x+=fx;forces[link.from.index].y+=fy;
-            forces[link.to.index].x-=fx;forces[link.to.index].y-=fy;
+        for (const v of ready) {
+            ranks.set(v,Math.max(0,...links.filter(e=>e.to===v).map(e=>ranks.get(e.from)+1)));
+            remaining.delete(v);
         }
-        const limit=8*(1-round/rounds)+.3;
-        vertices.forEach((vertex,index)=>{
-            const force=forces[index],size=Math.hypot(force.x,force.y) || 1;
-            const step=Math.min(limit,size)/size;
-            vertex.x=Math.min(width-margin,Math.max(margin,vertex.x+force.x*step));
-            vertex.y=Math.min(height-margin-20,Math.max(margin,vertex.y+force.y*step));
-        });
     }
-    if (!cached) {
-        cache.set(geometryKey,new Map(vertices.map(vertex=>[vertex.id,{x:vertex.x,y:vertex.y}])));
-        if (cache.size>8) cache.delete(cache.keys().next().value);
+    const lastRank=Math.max(1,...ranks.values());
+    const columns=new Map();
+    for (const vertex of orderedVertices) {
+        vertex.boundary=!vertex.group.parent && vertex.node.declaration?.is_entry ? "input"
+            : !vertex.group.parent && vertex.node.declaration?.is_return ? "output" : "";
+        const rank=vertex.boundary==="input" ? 0 : vertex.boundary==="output" ? lastRank+1 : ranks.get(vertex);
+        if (!columns.has(rank)) columns.set(rank,[]);
+        columns.get(rank).push(vertex);
+    }
+    const maxRank=Math.max(...columns.keys()),rows=Math.max(...[...columns.values()].map(c=>c.length));
+    const height=Math.max(196,rows*66+48);
+    for (const [rank,column] of columns) {
+        column.sort((a,b)=>{
+            const center=v=>{const parents=links.filter(e=>e.to===v).map(e=>e.from.y).filter(Number.isFinite);
+                return parents.length ? parents.reduce((x,y)=>x+y,0)/parents.length : height/2;};
+            return center(a)-center(b) || a.id.localeCompare(b.id);
+        });
+        column.forEach((vertex,row)=>{
+            vertex.x=margin+rank*(width-2*margin)/Math.max(1,maxRank);
+            vertex.y=height/2+(row-(column.length-1)/2)*66;
+        });
     }
     const edges=links.map(link=>{
         const a=link.from,b=link.to,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy) || 1;
-        const ux=dx/d,uy=dy/d,x1=a.x+ux*20,y1=a.y+uy*20,x2=b.x-ux*20,y2=b.y-uy*20;
+        const ux=dx/d,uy=dy/d,offsetA=a.boundary ? 34 : 20,offsetB=b.boundary ? 34 : 20;
+        const x1=a.x+ux*offsetA,y1=a.y+uy*offsetA,x2=b.x-ux*offsetB,y2=b.y-uy*offsetB;
         const active=link.routed && [a,b].some(vertex=>vertex.node.attempts.some(e=>e.state==="started"));
         const classes=link.kind==="call" ? "native-flow-call" : `native-flow-edge${link.routed ? " is-routed" : ""}${active ? " is-active" : ""}`;
         const arrow=`M${x2-ux*5-uy*3},${y2-uy*5+ux*3} L${x2},${y2} L${x2-ux*5+uy*3},${y2-uy*5-ux*3}`;
@@ -8400,15 +8397,17 @@ function buildNativeWorkflowAtlasHtml(groups) {
             && event.next_nodes?.length===0 && (event.downstream_node_ids?.length || node.declaration?.downstream_node_ids?.length);
         const state=rejected ? "not_selected" : node.attempts.length===1 ? event.state : node.attempts.length ? "multiple" : "unobserved";
         const badge={completed:"✓",failed:"×",started:"…",cancelled:"⊘",recovered:"!",unobserved:"○",not_selected:"−",multiple:"×"}[state] || "?";
-        const [label,icon]=nativeNodeAppearance(name,node.attempts.length>0);
+        const [caption,icon]=nativeNodeAppearance(name,node.attempts.length>0);
+        const label=vertex.boundary==="input" ? "输入" : vertex.boundary==="output" ? "输出" : caption;
         const childCount=groups.filter(group=>group.parentEvent && vertex.node.attempts.some(
             attempt=>attempt.execution_id===group.parentEvent.execution_id
                 && attempt.trace_id===group.trace)).length;
         const title=`${name} · ${rejected ? "条件已执行，未放行" : state}${childCount ? ` · 含 ${childCount} 个子工作流` : ""} · ${node.uri}@${node.rev} · ${node.id}`;
-        return `<g class="native-flow-node" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title><circle cx="${vertex.x}" cy="${vertex.y}" r="18"/><svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
+        const shape=vertex.boundary ? `<rect x="${vertex.x-30}" y="${vertex.y-21}" width="60" height="42" rx="13"/>` : `<circle cx="${vertex.x}" cy="${vertex.y}" r="18"/>`;
+        return `<g class="native-flow-node" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
-    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">高亮为本次路由；低亮度为可选路径；紫色点线为明确记录的子流程调用。悬停或聚焦图标查看名称，点击查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从左向右阅读：输入 → 分支处理 → 输出。高亮为本次路由，暗线为可选路径；紫色点线为明确记录的子流程调用，不表示返回依赖。点击图标查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
 }
 
 function nativeNodeAppearance(name, observed) {

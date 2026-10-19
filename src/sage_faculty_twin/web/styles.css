@@ -38,10 +38,16 @@
 .native-flow-scroll { overflow-x: auto; width: 100%; min-width: 0; max-width: 100%; margin-top: 8px; scrollbar-width: thin; }
 .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
-.native-flow-diagram.native-flow-atlas-diagram { min-width: 680px; max-width: 1000px; }
+.native-flow-diagram.native-flow-atlas-diagram { min-width: 0; max-width: none; }
 .native-flow-call { fill: none; stroke: #8055bd; stroke-width: 1.5; stroke-dasharray: 2 6; opacity: .8; }
 html[data-theme="dark"] .native-flow-call { stroke: #b9a4ef; }
-.native-workflow-atlas .native-flow-label { opacity: 0; pointer-events: none; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 5; }
+.native-workflow-atlas .native-flow-label { opacity: 1; font-size: 14px; pointer-events: none; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 4; }
+.native-flow-node rect { fill: var(--surface-solid); stroke: var(--info-text); stroke-width: 2; }
+.native-flow-node[data-flow-boundary="input"] rect { stroke: var(--info-text); }
+.native-flow-node[data-flow-boundary="output"] rect { stroke: var(--success-text); }
+.native-flow-node[data-flow-boundary="input"] .native-flow-label,
+.native-flow-node[data-flow-boundary="output"] .native-flow-label { font-size: 17px; font-weight: 750; }
+.native-flow-node:focus-visible rect, .native-flow-node:hover rect { stroke: var(--focus-ring); stroke-width: 3; }
 .native-workflow-atlas .native-flow-node:hover .native-flow-label,
 .native-workflow-atlas .native-flow-node:focus-visible .native-flow-label { opacity: 1; }
 .native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }

@@ -111,6 +111,20 @@ const snapshot = event('start',{execution_id:'snap-span',state:'started',program
 const terminal = event('start',{execution_id:'snap-span',state:'completed',next_nodes:[
     {program_uri:'flow://actual',program_rev:'v1',node_id:'chosen'}]});
 const chosen = event('chosen',{operator_key:'answer'});
+// Only native boundary metadata can turn a node into overall input/output.
+// An ordinary single invocation uses the same horizontal map as nested flows.
+const boundaries=declared.map(node=>({...node,is_entry:node.node_id==='start',
+    is_return:node.node_id==='chosen',is_sink:false}));
+const flat=context.buildNativeExecutionHtml([{...snapshot,program_topology:boundaries},chosen]);
+assert.equal((flat.match(/data-flow-boundary="input"/g)||[]).length,1);
+assert.equal((flat.match(/data-flow-boundary="output"/g)||[]).length,1);
+assert(flat.includes('>输入</text>') && flat.includes('>输出</text>'));
+assert.equal((flat.match(/class="native-flow-diagram/g)||[]).length,1);
+assert(Number(flat.match(/viewBox="0 0 1160 ([\d.]+)"/)[1])<300);
+assert(!html.includes('data-flow-boundary="input"')); // No guessing for old records.
+const malformedBoundary=context.buildNativeWorkflowModel([
+    {...snapshot,program_topology:boundaries.map(node=>({...node,is_entry:'true'}))},chosen]);
+assert.equal(malformedBoundary[0].topologyComplete,false);
 for (const stream of [[snapshot,terminal,chosen],[terminal,chosen,snapshot]]) {
     const full = context.buildNativeExecutionHtml(stream);
     assert(full.includes('完整流程图 · 4 节点 · 3 连线'));
