@@ -47,3 +47,10 @@ click-to-input text. One old tab and the in-app browser still showed the prior
 gray/timeout behavior; a fresh Chrome tab rendered the new page and actual
 generation normally. This release does not claim to fix that separate old-tab
 issue.
+
+The public browser test also exposed a content-coverage limitation: the original
+RAG evaluation starter completed safely with a declared evidence gap, so it is
+not counted as a complete quality pass. The pool replaces it with “RAG 系统可以从
+哪些环节改进检索质量？”, which asks about the methods actually covered by the public
+article. This is content curation, not a retrieval override, relaxed audit, or a
+claim that the missing evaluation material has been repaired.
