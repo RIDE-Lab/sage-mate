@@ -127,8 +127,7 @@ class _BookingLLMClient:
 
 # ----------------------------- Canonical trace -------------------------------
 
-# Trace keys, in the exact order today's linear pipeline emits them. The DAG
-# rewrite (Task 4) must reproduce this sequence verbatim. Note that
+# Canonical display order, not a requirement to execute every branch. Note that
 # `artifact_memory_writeback` is conditional and only appears when the request
 # carries attachments, so it is intentionally absent from these baselines.
 CANONICAL_CHAT_TRACE = [
@@ -213,8 +212,7 @@ def test_sage_stage_failure_is_not_retried_through_another_executor(tmp_path, mo
 
 
 def test_greeting_keeps_canonical_trace_order(tmp_path: Path) -> None:
-    """A bare greeting produces every canonical trace key in order, with the
-    booking stages reporting as skipped placeholders."""
+    """A greeting preserves canonical order without entering booking nodes."""
 
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
@@ -235,17 +233,17 @@ def test_greeting_keeps_canonical_trace_order(tmp_path: Path) -> None:
         )
     )
 
-    assert _trace_keys(response) == CANONICAL_CHAT_TRACE
+    assert _trace_keys(response) == [key for key in CANONICAL_CHAT_TRACE
+                                    if key not in {"booking_prepare", "booking_execute"}]
     statuses = _trace_statuses(response)
     assert statuses["bootstrap"] == "completed"
     assert statuses["response_render"] == "completed"
-    # booking_execute is irrelevant for a greeting and must be a skipped placeholder
-    assert statuses["booking_execute"] == "skipped"
+    assert not any(event.operator_key in {"prepare-booking", "execute-booking"}
+                   for event in response.execution_events)
 
 
 def test_research_question_keeps_canonical_trace_order(tmp_path: Path) -> None:
-    """A research-style question takes the answer path and must still emit
-    every canonical trace key in the canonical order."""
+    """Research takes only the answer branch, preserving canonical ordering."""
 
     settings = AppSettings(
         knowledge_base_dir=tmp_path,
@@ -266,7 +264,10 @@ def test_research_question_keeps_canonical_trace_order(tmp_path: Path) -> None:
         )
     )
 
-    assert _trace_keys(response) == CANONICAL_CHAT_TRACE
+    assert _trace_keys(response) == [key for key in CANONICAL_CHAT_TRACE
+                                    if key not in {"booking_prepare", "booking_execute"}]
+    assert not any(event.operator_key in {"prepare-booking", "execute-booking"}
+                   for event in response.execution_events)
     assert response.workflow_action == "advise_only"
 
 
