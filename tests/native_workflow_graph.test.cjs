@@ -31,6 +31,16 @@ assert.equal(model[0].edges.size,1);
 assert.equal([...model[0].edges.values()][0].routed,true);
 assert.equal(model[1].parentEvent.execution_id,'parent');
 assert.equal(model[1].layers[1].length,2); // Fork comes from routed refs, not labels or same wave.
+// Actual SAGE nested calls allocate another event group, within the same trace.
+const nestedRequest = {...router, request_id:'nested-event-group'};
+model = context.buildNativeWorkflowModel([a,b,nestedRequest]);
+assert.equal(model.find(x=>x.request==='nested-event-group').parentEvent,a);
+assert(context.buildNativeExecutionHtml([a,b,nestedRequest]).includes('含 1 个子工作流'));
+// Malformed duplicate execution identities are ambiguous, never guessed.
+const collision = {...a, request_id:'collision'};
+model = context.buildNativeWorkflowModel([a,collision,nestedRequest]);
+assert.equal(model.find(x=>x.request==='nested-event-group').parentEvent,null);
+assert(!context.buildNativeExecutionHtml([a,collision,nestedRequest]).includes('含 1 个子工作流'));
 let html = context.buildNativeExecutionHtml([a,b,router,left,right]);
 for (const text of ['主工作流','子工作流','嵌套于 same label','节点明细与原生元数据',
     'data-flow-edge="routed"','data-flow-state="failed"','data-flow-state="started"',

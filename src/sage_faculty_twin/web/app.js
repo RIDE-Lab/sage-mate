@@ -8138,8 +8138,9 @@ function buildNativeExecutionHtml(events = []) {
     const latest = new Map();
     for (const event of events) {
         if (event?.version !== 1 || typeof event.execution_id !== "string") continue;
-        const previous = latest.get(event.execution_id);
-        if (!previous || event.sequence > previous.sequence) latest.set(event.execution_id, event);
+        const identity = JSON.stringify([event.trace_id, event.request_id, event.execution_id]);
+        const previous = latest.get(identity);
+        if (!previous || event.sequence > previous.sequence) latest.set(identity, event);
     }
     if (!latest.size) return '<p class="native-execution-empty">尚无原生执行记录；不按步骤名称推断完成或并行。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
@@ -8174,7 +8175,11 @@ function buildNativeWorkflowModel(events) {
             key: nodeKey, uri: event.program_uri, rev: event.program_rev, id: event.node_id, attempts: [],
         });
         group.nodes.get(nodeKey).attempts.push(event);
-        owners.set(JSON.stringify([event.trace_id, event.request_id, event.execution_id]), event);
+        // A nested invocation has its own event-group/request ID. The explicit
+        // parent execution reference is trace-scoped, not event-group-scoped.
+        const ownerKey = JSON.stringify([event.trace_id, event.execution_id]);
+        if (!owners.has(ownerKey)) owners.set(ownerKey, event);
+        else if (owners.get(ownerKey)?.request_id !== event.request_id) owners.set(ownerKey, null);
     }
     for (const group of groups.values()) {
         const observed = [...group.nodes.values()];
@@ -8201,7 +8206,7 @@ function buildNativeWorkflowModel(events) {
                 }
             }
         }
-        group.parentEvent = owners.get(JSON.stringify([group.trace, group.request, group.parent])) || null;
+        group.parentEvent = owners.get(JSON.stringify([group.trace, group.parent])) || null;
         // Kahn layers describe graph structure, not actual concurrent execution.
         const indegree = new Map([...group.nodes.keys()].map(id => [id, 0]));
         for (const {to} of group.edges.values()) indegree.set(to, indegree.get(to) + 1);
@@ -8247,8 +8252,8 @@ function buildNativeWorkflowHtml(events) {
             const entries = layer.map(id => {
                 const node = group.nodes.get(id);
                 const name = node.attempts[0]?.operator_key || node.attempts[0]?.operator_type || "尚无节点记录";
-                const children = groups.filter(child => child.trace === group.trace && child.request === group.request
-                    && node.attempts.some(attempt => attempt.execution_id === child.parent)).length;
+                const children = groups.filter(child => child.parentEvent
+                    && node.attempts.includes(child.parentEvent)).length;
                 return {node, lines:wrap(name), states:wrap(stateText(node))
                     .concat(children ? [`含 ${children} 个子工作流 ↓`] : [])};
             });

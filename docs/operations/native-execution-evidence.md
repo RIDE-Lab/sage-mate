@@ -10,6 +10,11 @@ comes from those relationships, never operator names, timestamps or business not
 Same-layer placement does not assert simultaneous execution. Nested scopes name
 their recorded parent; missing parents remain explicitly unknown.
 
+SAGE `request_id` identifies an event group, not the whole nested call tree.
+Parent references therefore resolve by explicit execution ID within the same
+trace, even when a child has a different event-group ID. Conflicting duplicate
+execution identities remain unresolved; unrelated traces are never joined.
+
 Repeated executions of one graph node retain every attempt/status instead of
 inventing a latest overall success. Declared targets with no execution record
 are visibly unobserved, not skipped or complete. Cycles retain their edges and
