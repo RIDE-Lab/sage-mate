@@ -26,8 +26,6 @@ const historyList = document.getElementById("history-list");
 const historyRailToggleButton = document.getElementById("history-rail-toggle");
 const historyNewChatButton = document.getElementById("history-new-chat");
 const chatStream = document.getElementById("chat-stream");
-const chatScrollRail = document.getElementById("chat-scroll-rail");
-const chatScrollThumb = document.getElementById("chat-scroll-thumb");
 const chatShell = document.querySelector(".chat-shell");
 const modalOverlay = document.getElementById("modal-overlay");
 const sageMateSetupModal = document.getElementById("sage-mate-setup-modal");
@@ -7024,86 +7022,6 @@ function updateChatEmptyState() {
     }
 }
 
-let chatScrollHideTimer = null;
-let chatScrollDragging = false;
-let chatScrollPointerId = null;
-
-function syncChatScrollRail() {
-    if (!chatStream || !chatScrollRail || !chatScrollThumb) return;
-    const maxScroll = Math.max(0, chatStream.scrollHeight - chatStream.clientHeight);
-    if (maxScroll <= 8) {
-        chatScrollRail.hidden = true;
-        chatScrollRail.classList.remove("is-visible");
-        chatScrollRail.setAttribute("aria-hidden", "true");
-        return;
-    }
-    chatScrollRail.hidden = false;
-    chatScrollRail.setAttribute("aria-hidden", "false");
-    const trackHeight = chatScrollRail.clientHeight;
-    const thumbHeight = Math.max(42, Math.round(trackHeight * chatStream.clientHeight / chatStream.scrollHeight));
-    const travel = Math.max(1, trackHeight - thumbHeight);
-    const progress = chatStream.scrollTop / maxScroll;
-    chatScrollThumb.style.height = `${thumbHeight}px`;
-    chatScrollThumb.style.transform = `translateY(${Math.round(travel * progress)}px)`;
-}
-
-function showChatScrollRail({ persist = false } = {}) {
-    if (!chatScrollRail || chatScrollRail.hidden) return;
-    chatScrollRail.classList.add("is-visible");
-    if (chatScrollHideTimer) clearTimeout(chatScrollHideTimer);
-    if (!persist && !chatScrollDragging) {
-        chatScrollHideTimer = setTimeout(() => {
-            chatScrollRail.classList.remove("is-visible");
-        }, 900);
-    }
-}
-
-function moveChatScrollFromPointer(clientY) {
-    if (!chatStream || !chatScrollRail || !chatScrollThumb) return;
-    const rect = chatScrollRail.getBoundingClientRect();
-    const trackHeight = rect.height;
-    const thumbHeight = chatScrollThumb.offsetHeight;
-    const travel = Math.max(1, trackHeight - thumbHeight);
-    const nextTop = Math.min(travel, Math.max(0, clientY - rect.top - thumbHeight / 2));
-    const maxScroll = Math.max(0, chatStream.scrollHeight - chatStream.clientHeight);
-    chatStream.scrollTop = (nextTop / travel) * maxScroll;
-    syncChatScrollRail();
-}
-
-chatStream?.addEventListener("scroll", () => {
-    syncChatScrollRail();
-    showChatScrollRail();
-}, { passive: true });
-chatScrollRail?.addEventListener("pointerenter", () => showChatScrollRail({ persist: true }));
-chatScrollRail?.addEventListener("pointerleave", () => {
-    if (!chatScrollDragging) showChatScrollRail();
-});
-chatScrollThumb?.addEventListener("pointerdown", (event) => {
-    event.preventDefault();
-    chatScrollDragging = true;
-    chatScrollPointerId = event.pointerId;
-    chatScrollThumb.setPointerCapture?.(event.pointerId);
-    showChatScrollRail({ persist: true });
-    moveChatScrollFromPointer(event.clientY);
-});
-chatScrollThumb?.addEventListener("pointermove", (event) => {
-    if (!chatScrollDragging || event.pointerId !== chatScrollPointerId) return;
-    moveChatScrollFromPointer(event.clientY);
-});
-chatScrollThumb?.addEventListener("pointerup", (event) => {
-    if (event.pointerId !== chatScrollPointerId) return;
-    chatScrollThumb.releasePointerCapture?.(event.pointerId);
-    chatScrollDragging = false;
-    chatScrollPointerId = null;
-    showChatScrollRail();
-});
-chatScrollThumb?.addEventListener("pointercancel", (event) => {
-    if (event.pointerId !== chatScrollPointerId) return;
-    chatScrollDragging = false;
-    chatScrollPointerId = null;
-    showChatScrollRail();
-});
-window.addEventListener("resize", syncChatScrollRail);
 // Reserve the actual composer height on narrow layouts. Mode feedback,
 // wrapped tools, attachments and multiline input can all change it.
 function syncComposerClearance() {
@@ -7120,13 +7038,6 @@ if (chatForm && typeof ResizeObserver !== "undefined") {
 }
 window.addEventListener("resize", syncComposerClearance);
 requestAnimationFrame(syncComposerClearance);
-if (chatStream) {
-    new MutationObserver(() => requestAnimationFrame(syncChatScrollRail)).observe(chatStream, {
-        childList: true,
-        subtree: true,
-    });
-}
-requestAnimationFrame(syncChatScrollRail);
 
 function updateWelcomeGreeting() {
     const greetingText = document.getElementById("greeting-text");
@@ -7875,6 +7786,8 @@ function syncConversationMode() {
     }
     const hasConversation = Boolean(chatStream.querySelector(".message-user, .message-pending, .message-ready"));
     document.body.classList.toggle("conversation-active", hasConversation);
+    // Restoring saved HTML bypasses appendMessage; synchronize its layout too.
+    updateChatEmptyState();
     const exportButton = document.getElementById("export-conversation");
     if (exportButton) exportButton.disabled = !chatStream.querySelector(".message-user");
 }

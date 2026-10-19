@@ -1958,59 +1958,25 @@ body.drawer-pinned .history-rail {
     width: 100%;
     max-width: none;
     margin: 0;
-    scrollbar-width: none;
-    scrollbar-color: transparent transparent;
+    scrollbar-gutter: stable;
+    scrollbar-width: auto;
+    scrollbar-color: var(--text-muted) transparent;
 }
 
 .chat-stream::-webkit-scrollbar {
-    width: 0;
-    height: 0;
+    width: 10px;
+    height: 10px;
 }
 
-.chat-scroll-rail {
-    position: fixed;
-    top: 18vh;
-    right: 10px;
-    bottom: 16vh;
-    z-index: 45;
-    width: 16px;
-    padding: 0 4px;
+.chat-stream::-webkit-scrollbar-thumb {
+    background: var(--text-muted);
+    border: 2px solid transparent;
+    background-clip: padding-box;
     border-radius: 999px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 160ms ease;
 }
 
-.chat-scroll-rail.is-visible {
-    opacity: 1;
-    pointer-events: auto;
-}
+.chat-stream > * { flex-shrink: 0; }
 
-.chat-scroll-thumb {
-    position: absolute;
-    top: 0;
-    left: 4px;
-    width: 8px;
-    min-height: 42px;
-    padding: 0;
-    border: 0;
-    border-radius: 999px;
-    background: rgba(77, 96, 124, 0.42);
-    box-shadow: 0 2px 8px rgba(22, 35, 56, 0.12);
-    cursor: grab;
-    touch-action: none;
-}
-
-.chat-scroll-thumb:hover,
-.chat-scroll-thumb:active {
-    background: rgba(47, 78, 122, 0.7);
-}
-
-.chat-scroll-thumb:active { cursor: grabbing; }
-
-@media (max-width: 720px) {
-    .chat-scroll-rail { right: 4px; }
-}
 
 .chat-stream:has(> .intro-card:only-child) {
     justify-content: center;
@@ -9149,7 +9115,8 @@ body.profile-code-assistant .composer-tools-row {
     display: flex;
     flex-direction: column;
     align-items: stretch;
-    justify-content: center;
+    justify-content: flex-start;
+    justify-content: safe center;
     flex: 1;
     gap: clamp(22px, 3vh, 32px);
     width: min(100%, var(--content-column-max));

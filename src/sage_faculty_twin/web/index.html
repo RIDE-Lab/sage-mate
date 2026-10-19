@@ -22,7 +22,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap"
         rel="stylesheet" media="print" onload="this.media='all'" />
-    <link rel="stylesheet" href="./styles.4222.css?rev=native-workflow-icons-20261019" />
+    <link rel="stylesheet" href="./styles.4222.css?rev=history-scroll-20261019" />
     <link rel="stylesheet" href="./companion.css" />
     <link rel="stylesheet" href="./static/minimal.1009.css?rev=workflow-theme-20261018" />
     <!-- First paint must not depend on fonts, JavaScript or timer delivery. -->
@@ -210,7 +210,7 @@
                         </label>
                     </div>
                 </div>
-                <div id="chat-stream" class="chat-stream">
+                    <div id="chat-stream" class="chat-stream" tabindex="0" role="region" aria-label="当前会话">
                     <div id="welcome-greeting" class="welcome-greeting hidden">
                         <p class="welcome-eyebrow">SAGE Mate · Academic Twin</p>
                         <h1 id="greeting-text" class="greeting-text">你好</h1>
@@ -692,10 +692,6 @@
                 <button type="button" id="workflow-scroll-latest" class="workflow-shell-button">定位到最新步骤</button>
             </aside>
         </main>
-
-        <div id="chat-scroll-rail" class="chat-scroll-rail" aria-hidden="true" hidden>
-            <button id="chat-scroll-thumb" class="chat-scroll-thumb" type="button" aria-label="拖动滚动对话内容"></button>
-        </div>
 
         <div id="workflow-mobile-backdrop" class="workflow-mobile-backdrop hidden" aria-hidden="true"></div>
 
@@ -1477,7 +1473,7 @@
     </section>
 
     <script src="./companion.js" defer></script>
-    <script src="./app.4222.js?rev=native-workflow-icons-20261019" defer></script>
+    <script src="./app.4222.js?rev=history-scroll-20261019" defer></script>
 </body>
 
 </html>
