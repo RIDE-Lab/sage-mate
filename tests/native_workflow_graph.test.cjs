@@ -129,6 +129,23 @@ assert.equal(positions.length,4);
 assert(positions.filter(p=>!p.boundary).every(p=>p.x>positions.find(p=>p.boundary==='input').x
     && p.x<positions.find(p=>p.boundary==='output').x));
 assert(!html.includes('data-flow-boundary="input"')); // No guessing for old records.
+// Child placement follows actual parents even when child IDs sort before
+// parent IDs. Opaque topology IDs must not scramble parallel reading lanes.
+const laneTopology=[
+    {node_id:'root',is_entry:true,downstream_node_ids:['parent-a','parent-z']},
+    {node_id:'parent-a',downstream_node_ids:['child-z']},
+    {node_id:'parent-z',downstream_node_ids:['child-a']},
+    {node_id:'child-a',downstream_node_ids:['return']},
+    {node_id:'child-z',downstream_node_ids:['return']},
+    {node_id:'return',is_return:true,downstream_node_ids:[]},
+].map(node=>({operator_type:'map',operator_key:'plan',...node}));
+const laneHtml=context.buildNativeExecutionHtml([
+    event('root',{program_topology:laneTopology}),
+]);
+const laneY=id=>Number(laneHtml.match(new RegExp(
+    '<title>[^<]* · '+id+'</title><circle cx="[\\d.]+" cy="([\\d.]+)"'))[1]);
+assert.equal(laneY('parent-a'),laneY('child-z'));
+assert.equal(laneY('parent-z'),laneY('child-a'));
 const malformedBoundary=context.buildNativeWorkflowModel([
     {...snapshot,program_topology:boundaries.map(node=>({...node,is_entry:'true'}))},chosen]);
 assert.equal(malformedBoundary[0].topologyComplete,false);

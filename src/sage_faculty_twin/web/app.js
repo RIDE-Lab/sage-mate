@@ -8379,7 +8379,10 @@ function buildNativeWorkflowAtlasHtml(groups) {
     const maxRank=Math.max(...columns.keys()),rows=Math.max(...[...columns.values()].map(c=>c.length));
     const rowPitch=52;
     const height=Math.max(156,rows*rowPitch+40);
-    for (const [rank,column] of columns) {
+    // Parents must be positioned before their children. Map insertion order
+    // follows opaque node IDs, not execution depth; using it here makes the
+    // crossing reduction silently depend on UUID ordering.
+    for (const [rank,column] of [...columns].sort((a,b)=>a[0]-b[0])) {
         column.sort((a,b)=>{
             const center=v=>{const parents=links.filter(e=>e.to===v).map(e=>e.from.y).filter(Number.isFinite);
                 return parents.length ? parents.reduce((x,y)=>x+y,0)/parents.length : height/2;};
