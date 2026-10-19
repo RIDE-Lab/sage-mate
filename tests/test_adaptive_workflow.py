@@ -63,8 +63,20 @@ def test_natural_questions_keep_internal_retrieval_and_audit(profile, question):
     assert context.request.question == question
     assert 'wiki' in context.request.knowledge_sources
     assert context.adaptive_plan.retrieve_knowledge
-    assert context.adaptive_plan.evidence_required
+    assert context.adaptive_plan.quality == 'source_grounded'
+    # evidence_required is the native explicit-source/no-hit contract. Ordinary
+    # questions still enter source audit once actual authorized evidence arrives.
+    from sage_faculty_twin.models import KnowledgeSearchHit
+    from sage.runtime.source_audit import SourceAuditRejected
+    context.knowledge_hits = [KnowledgeSearchHit(
+        document_id='wiki-fixture', title='公开资料', excerpt='完整事实',
+        source_content='完整事实', score=1, source_name='wiki:fixture',
+        metadata={'wiki_url': 'https://example.test/complete/source'},
+    )]
     assert support._requires_source_audit(context)
+    context.answer = '未经来源计划核验的任意回答'
+    with pytest.raises(SourceAuditRejected):
+        support._validate_source_answer(context)
 
 
 def test_model_intent_cannot_authorize_knowledge_write():
