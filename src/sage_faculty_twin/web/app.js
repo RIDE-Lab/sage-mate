@@ -8143,16 +8143,141 @@ function buildNativeExecutionHtml(events = []) {
     }
     if (!latest.size) return '<p class="native-execution-empty">尚无原生执行记录；不按步骤名称推断完成或并行。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
-    return `<div class="native-execution"><p>原生节点状态；节点完成不等于答案提交、后台任务完成或消息送达。同批调度不等于同时执行。</p><ol>${[...latest.values()].map(event => {
+    return `<div class="native-execution">${buildNativeWorkflowHtml([...latest.values()])}<details class="native-node-log"><summary>节点明细与原生元数据 · ${latest.size} 次执行</summary><p>原生节点状态；节点完成不等于答案提交、后台任务完成或消息送达。同批调度不等于同时执行。</p><ol>${[...latest.values()].map(event => {
         const label = event.operator_key || event.operator_type || "原生节点";
         const state = labels[event.state] || "未知";
         const duration = typeof event.duration_ns === "number" ? ` · ${(event.duration_ns / 1e6).toFixed(1)} ms` : "";
         const wave = event.wave_size > 1 ? ` · 同批调度 ${event.wave_size} 个节点` : "";
         const metadata = JSON.stringify({execution_id:event.execution_id, parent_execution_id:event.parent_execution_id,
             program_uri:event.program_uri, program_rev:event.program_rev, node_id:event.node_id,
-            wave_id:event.wave_id, next_nodes:event.next_nodes, resolution:event.resolution}, null, 2);
+            wave_id:event.wave_id, upstream_node_ids:event.upstream_node_ids,
+            downstream_node_ids:event.downstream_node_ids, next_nodes:event.next_nodes, resolution:event.resolution}, null, 2);
         return `<li data-execution-state="${escapeHtml(event.state || "unknown")}"><details><summary>${escapeHtml(label)} · ${escapeHtml(state + duration + wave)}</summary><pre>${escapeHtml(metadata)}</pre></details></li>`;
-    }).join("")}</ol></div>`;
+    }).join("")}</ol></details></div>`;
+}
+
+function buildNativeWorkflowModel(events) {
+    // Identity and edges come from SAGE, never labels, arrival order or timing.
+    const groups = new Map(), owners = new Map();
+    const key = (uri, rev, id) => JSON.stringify([uri, rev, id]);
+    const valid = value => typeof value === "string" && value.length > 0;
+    for (const event of events) {
+        if (![event.trace_id, event.request_id, event.program_uri, event.program_rev, event.node_id].every(valid)
+            || !(event.parent_execution_id == null || valid(event.parent_execution_id))) continue;
+        const groupKey = JSON.stringify([event.trace_id, event.request_id, event.parent_execution_id || null]);
+        if (!groups.has(groupKey)) groups.set(groupKey, {
+            key: groupKey, trace: event.trace_id, request: event.request_id,
+            parent: event.parent_execution_id || null, nodes: new Map(), edges: new Map(),
+        });
+        const group = groups.get(groupKey), nodeKey = key(event.program_uri, event.program_rev, event.node_id);
+        if (!group.nodes.has(nodeKey)) group.nodes.set(nodeKey, {
+            key: nodeKey, uri: event.program_uri, rev: event.program_rev, id: event.node_id, attempts: [],
+        });
+        group.nodes.get(nodeKey).attempts.push(event);
+        owners.set(JSON.stringify([event.trace_id, event.request_id, event.execution_id]), event);
+    }
+    for (const group of groups.values()) {
+        const observed = [...group.nodes.values()];
+        const ensure = (uri, rev, id) => {
+            const nodeKey = key(uri, rev, id);
+            if (!group.nodes.has(nodeKey)) group.nodes.set(nodeKey, {key:nodeKey, uri, rev, id, attempts:[]});
+            return nodeKey;
+        };
+        const edge = (from, to, routed) => {
+            const id = JSON.stringify([from, to]);
+            const old = group.edges.get(id);
+            group.edges.set(id, {from, to, routed: Boolean(routed || old?.routed)});
+        };
+        for (const node of observed) for (const event of node.attempts) {
+            for (const id of Array.isArray(event.downstream_node_ids) ? event.downstream_node_ids : []) {
+                if (valid(id)) edge(node.key, ensure(node.uri, node.rev, id), false);
+            }
+            for (const id of Array.isArray(event.upstream_node_ids) ? event.upstream_node_ids : []) {
+                if (valid(id)) edge(ensure(node.uri, node.rev, id), node.key, false);
+            }
+            for (const ref of Array.isArray(event.next_nodes) ? event.next_nodes : []) {
+                if (ref && [ref.program_uri, ref.program_rev, ref.node_id].every(valid)) {
+                    edge(node.key, ensure(ref.program_uri, ref.program_rev, ref.node_id), true);
+                }
+            }
+        }
+        group.parentEvent = owners.get(JSON.stringify([group.trace, group.request, group.parent])) || null;
+        // Kahn layers describe graph structure, not actual concurrent execution.
+        const indegree = new Map([...group.nodes.keys()].map(id => [id, 0]));
+        for (const {to} of group.edges.values()) indegree.set(to, indegree.get(to) + 1);
+        const remaining = new Set(group.nodes.keys());
+        group.layers = [];
+        while (remaining.size) {
+            const ready = [...remaining].filter(id => indegree.get(id) === 0);
+            if (!ready.length) {
+                group.cyclic = true;
+                group.layers.push([...remaining]);
+                break;
+            }
+            group.layers.push(ready);
+            for (const id of ready) remaining.delete(id);
+            for (const {from, to} of group.edges.values()) {
+                if (ready.includes(from)) indegree.set(to, indegree.get(to) - 1);
+            }
+        }
+    }
+    return [...groups.values()].sort((a,b) => Number(Boolean(a.parent)) - Number(Boolean(b.parent)));
+}
+
+function buildNativeWorkflowHtml(events) {
+    const groups = buildNativeWorkflowModel(events);
+    if (!groups.length) return '<p class="native-flow-missing">没有完整的原生拓扑字段，只显示节点记录；不猜测工作流连线。</p>';
+    const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
+    const render = group => {
+        const columns = Math.max(...group.layers.map(layer => layer.length));
+        const width = Math.max(460, columns * 220 + 20), positions = new Map();
+        let y = 16;
+        const stateText = node => {
+            if (!node.attempts.length) return "未观测到执行";
+            const counts = new Map();
+            for (const attempt of node.attempts) counts.set(attempt.state, (counts.get(attempt.state) || 0) + 1);
+            return [...counts].map(([state, count]) => `${labels[state] || "未知"}${node.attempts.length > 1 ? ` ×${count}` : ""}`).join(" · ");
+        };
+        const wrap = text => {
+            const chars = Array.from(text), lines = [];
+            for (let i=0; i<chars.length; i+=22) lines.push(chars.slice(i,i+22).join(""));
+            return lines.length ? lines : [""];
+        };
+        for (const layer of group.layers) {
+            const entries = layer.map(id => {
+                const node = group.nodes.get(id);
+                const name = node.attempts[0]?.operator_key || node.attempts[0]?.operator_type || "尚无节点记录";
+                const children = groups.filter(child => child.trace === group.trace && child.request === group.request
+                    && node.attempts.some(attempt => attempt.execution_id === child.parent)).length;
+                return {node, lines:wrap(name), states:wrap(stateText(node))
+                    .concat(children ? [`含 ${children} 个子工作流 ↓`] : [])};
+            });
+            const height = Math.max(...entries.map(entry => 26 + 17 * (entry.lines.length + entry.states.length)));
+            const slot = width / entries.length;
+            entries.forEach((entry,index) => positions.set(entry.node.key, {...entry,
+                x:slot*index+12, y, width:slot-24, height}));
+            y += height + 30;
+        }
+        const edges = [...group.edges.values()].map(edge => {
+            const from = positions.get(edge.from), to = positions.get(edge.to);
+            const x1=from.x+from.width/2, y1=from.y+from.height, x2=to.x+to.width/2, y2=to.y;
+            const back=y2<=y1, bend=back ? Math.max(from.x+from.width,to.x+to.width)+7 : (y1+y2)/2;
+            const path = back ? `M${x1},${y1} L${bend},${y1+9} L${bend},${y2-9} L${x2},${y2}`
+                : `M${x1},${y1} C${x1},${bend} ${x2},${bend} ${x2},${y2}`;
+            return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="M${x2-4},${y2-6} L${x2},${y2} L${x2+4},${y2-6}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
+        }).join("");
+        const nodes = [...positions.values()].map(p => {
+            const state = p.node.attempts.length === 1 ? p.node.attempts[0].state : p.node.attempts.length ? "multiple" : "unobserved";
+            const title = `${p.node.uri}@${p.node.rev} · ${p.node.id}`;
+            const text = (lines,start,cls) => lines.map((line,i) => `<text x="${p.x+12}" y="${start+i*17}" class="${cls}">${escapeHtml(line)}</text>`).join("");
+            return `<g class="native-flow-node" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="9"/>${text(p.lines,p.y+22,"native-flow-label")}${text(p.states,p.y+24+p.lines.length*17,"native-flow-state")}</g>`;
+        }).join("");
+        const parentLabel = group.parentEvent?.operator_key || group.parentEvent?.operator_type;
+        const heading = group.parent ? `子工作流 · ${parentLabel ? `嵌套于 ${parentLabel}` : "父节点记录缺失"}` : "主工作流";
+        const programs = [...new Set([...group.nodes.values()].map(node => `${node.uri}@${node.rev}`))].join(" · ");
+        return `<section class="native-flow-scope${group.parent ? " is-nested" : ""}" data-parent-execution="${escapeHtml(group.parent || "")}"><h4>${escapeHtml(heading)}</h4><p class="native-flow-program">${escapeHtml(programs)}</p>${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll"><svg class="native-flow-diagram" role="img" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:${Math.min(width,460)}px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div></section>`;
+    };
+    return `<div class="native-workflow-view"><p class="native-flow-legend">原生工作流 · 实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。</p>${groups.map(render).join("")}</div>`;
 }
 
 function syncNativeExecutionDisplay() {

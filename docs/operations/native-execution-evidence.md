@@ -1,5 +1,26 @@
 # Native execution evidence
 
+## Workflow view, not a flat node log
+
+The process panel renders an actual native workflow diagram. Node identities
+include program URI/revision/node ID; scopes include trace/request and the native
+parent execution. Main and nested workflows remain distinct. Declared upstream/
+downstream edges are dotted; native `next_nodes` routes are solid. Layer placement
+comes from those relationships, never operator names, timestamps or business notes.
+Same-layer placement does not assert simultaneous execution. Nested scopes name
+their recorded parent; missing parents remain explicitly unknown.
+
+Repeated executions of one graph node retain every attempt/status instead of
+inventing a latest overall success. Declared targets with no execution record
+are visibly unobserved, not skipped or complete. Cycles retain their edges and
+are labelled rather than silently flattened. Missing topology fields fall back
+only to the separately folded node metadata log, not a guessed workflow.
+Background lease acknowledgement remains a separate observed section: neither
+graph completion nor an outgoing edge proves answer commit or external receipt.
+Restored answers hydrate the same owner-scoped metadata endpoint and rebuild the
+workflow view without changing the answer/citations or calling the model again.
+This replaces the list-only presentation, not the SAGE workflow or its executor.
+
 The resident SAGE chat graph and nested retrieval graphs have one request-scoped
 ExecutionObserver. Native events preserve real execution/node/program identities,
 parentage, ready-wave scheduling, routed successors and attempt states. Application

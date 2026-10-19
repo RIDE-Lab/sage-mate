@@ -148,6 +148,12 @@ assert(source.includes('exchange.execution_events || []'));
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 
 
+def test_native_workflow_graph_uses_authoritative_topology():
+    import subprocess
+    subprocess.run(["node", "--test", str(WEB_DIR.parents[2] / "tests/native_workflow_graph.test.cjs")],
+                   check=True, timeout=20)
+
+
 def test_business_notes_cannot_reintroduce_inferred_phase_topology():
     import subprocess
     script = r'''

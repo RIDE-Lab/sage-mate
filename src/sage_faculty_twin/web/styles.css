@@ -17,6 +17,24 @@
 .native-execution [data-execution-state="recovered"],
 .native-execution [data-execution-state="cancelled"] { color: var(--warning-text); }
 .native-execution [data-execution-state="started"] { color: var(--ink); }
+.native-flow-legend, .native-flow-program { font-size: 12px; line-height: 1.6; }
+.native-flow-scope { margin: 12px 0; }
+.native-flow-scope h4 { margin: 0; font-size: 14px; }
+.native-flow-program { margin: 2px 0 8px; overflow-wrap: anywhere; }
+.native-flow-scope.is-nested { border-inline-start: 2px solid var(--line-strong); padding-inline-start: 14px; }
+.native-flow-scroll { overflow-x: auto; }
+.native-flow-diagram { display: block; width: 100%; max-width: 460px; margin-inline: auto; }
+.native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; }
+.native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--ink); stroke-dasharray: none; }
+.native-flow-node rect { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1.5; }
+.native-flow-label { fill: var(--ink); font: 13px system-ui, sans-serif; }
+.native-flow-state { fill: var(--text-secondary); font: 11px system-ui, sans-serif; }
+.native-flow-node[data-flow-state="failed"] rect { stroke: var(--error-text); }
+.native-flow-node[data-flow-state="started"] rect { stroke: var(--info-text); }
+.native-flow-node[data-flow-state="recovered"] rect,
+.native-flow-node[data-flow-state="cancelled"] rect { stroke: var(--warning-text); }
+.native-flow-node[data-flow-state="unobserved"] rect { stroke-dasharray: 4 4; }
+.native-node-log { margin-top: 12px; border-top: 1px solid var(--line-strong); padding-top: 10px; }
 
 :root {
     --bg: #071225;
