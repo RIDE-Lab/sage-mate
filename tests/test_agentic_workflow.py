@@ -327,6 +327,7 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
         "bootstrap",
         "workflow_plan_preview",
         "interaction_understand",
+        "adaptive_plan",
         "booking_prepare",
         "booking_execute",
         "memory_retrieve",
@@ -382,10 +383,10 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
         "score_memory_usefulness",
         "render_user_response",
     ]
-    assert response.workflow_trace[2].summary == "已识别当前交互意图：book_meeting/booking。"
-    assert response.workflow_trace[3].summary == "预约字段已经齐备。"
-    assert response.workflow_trace[4].summary == "预约申请已提交，等待管理员确认。"
-    assert "尚未确认送达" in response.workflow_trace[4].detail
+    assert _trace_step(response, "interaction_understand").summary == "已识别当前交互意图：book_meeting/booking。"
+    assert _trace_step(response, "booking_prepare").summary == "预约字段已经齐备。"
+    assert _trace_step(response, "booking_execute").summary == "预约申请已提交，等待管理员确认。"
+    assert "尚未确认送达" in _trace_step(response, "booking_execute").detail
     assert any(item.basis_label == "预约规则与时段" for item in response.answer_basis)
     assert any(item.source_label == "当前预约安排配置" for item in response.answer_basis)
     _drain_booking_notifications(service)

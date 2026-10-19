@@ -51,6 +51,7 @@ def test_model_intent_cannot_authorize_knowledge_write():
         conversation_id="test", owner_name="test", used_model="test",
         interaction_intent=InteractionIntent(action="admin_add_knowledge"),
     )
-    with pytest.raises(PermissionError, match="capability"):
-        support_for().plan_adaptive_workflow(context)
-    assert context.adaptive_plan is None
+    support_for().plan_adaptive_workflow(context)
+    assert not context.adaptive_plan.write_knowledge
+    assert context.interaction_intent.action == context.workflow_action == "answer"
+    assert any(step.key == "write_authorization" for step in context.workflow_trace)

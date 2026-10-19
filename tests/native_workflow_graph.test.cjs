@@ -95,6 +95,38 @@ const historyHtml = context.buildNativeExecutionHtml([
         {program_uri:'flow://actual',program_rev:'v1',node_id:'q'}]}),event('q'),
 ]);
 assert(!historyHtml.includes('is-active')); // Historical completions never animate as running.
+const declared = [
+    {node_id:'start',operator_type:'map',operator_key:'plan',downstream_node_ids:['chosen','unused']},
+    {node_id:'chosen',operator_type:'map',operator_key:'answer',downstream_node_ids:[]},
+    {node_id:'unused',operator_type:'map',operator_key:'prepare-booking',downstream_node_ids:['submit']},
+    {node_id:'submit',operator_type:'map',operator_key:'execute-booking',downstream_node_ids:[]},
+];
+const snapshot = event('start',{execution_id:'snap-span',state:'started',program_topology:declared});
+const terminal = event('start',{execution_id:'snap-span',state:'completed',next_nodes:[
+    {program_uri:'flow://actual',program_rev:'v1',node_id:'chosen'}]});
+const chosen = event('chosen',{operator_key:'answer'});
+for (const stream of [[snapshot,terminal,chosen],[terminal,chosen,snapshot]]) {
+    const full = context.buildNativeExecutionHtml(stream);
+    assert(full.includes('完整流程图 · 4 节点 · 3 连线'));
+    assert(full.includes('>提交预约</text>'));
+    assert(full.includes('data-flow-state="unobserved"'));
+    assert(!full.includes('is-active')); // Declaration does not imply execution.
+    const parsed = context.buildNativeWorkflowModel([snapshot,chosen])[0];
+    assert.equal(parsed.nodes.size,4);
+    assert.equal([...parsed.edges.values()].filter(edge=>edge.routed).length,0);
+}
+const invalid = context.buildNativeExecutionHtml([
+    {...snapshot, program_topology:[...declared,declared[0]]},chosen,
+]);
+assert(!invalid.includes('完整流程图'));
+assert(!invalid.includes('>提交预约</text>'));
+const rejectedCondition = context.buildNativeExecutionHtml([
+    event('guard',{operator_type:'filter',operator_key:'booking-route',
+        downstream_node_ids:['submit'],next_nodes:[]}),
+]);
+assert(rejectedCondition.includes('data-flow-state="not_selected"'));
+assert(rejectedCondition.includes('条件已执行，未放行'));
+assert(!rejectedCondition.includes('is-active'));
 const opened = {open:false}, otherDetails = {open:false};
 let focused = 0, scrolled = 0;
 const entry = {getAttribute:()=> 'exact-key', querySelector:selector=>selector==='details' ? opened : {focus:()=>focused++},

@@ -889,6 +889,8 @@ _CANONICAL_TRACE_ORDER: tuple[str, ...] = (
     "bootstrap",
     "workflow_plan_preview",
     "interaction_understand",
+    "write_authorization",
+    "adaptive_plan",
     "booking_prepare",
     "booking_execute",
     "memory_retrieve",
@@ -1469,6 +1471,19 @@ class FacultyTwinWorkflowSupport:
         intent = context.interaction_intent
         if intent is None:
             raise ValueError("adaptive_workflow_requires_captured_intent")
+        if intent.action == "admin_add_knowledge" and not context.is_admin_request:
+            # A model's proposed write is not authority. Preserve the existing
+            # read-only advice path instead of turning denial into a retryable
+            # native exception (which would exhaust the HTTP deadline).
+            intent = intent.model_copy(update={"action": "answer"})
+            context.interaction_intent = intent
+            context.workflow_action = "answer"
+            self._append_trace(
+                context, key="write_authorization", title="写入权限检查",
+                summary="未授权的知识写入意图已拒绝，仅继续只读问答。",
+                detail="模型提出的管理员操作不能授予写入能力；本轮不会启动知识写入节点。",
+                duration_ms=0,
+            )
         memory = self.prepare_memory_retrieval(context)
         knowledge = self.prepare_knowledge_retrieval(context)
         identity = (context.request.owner_id or "guest:").split(":", 1)[0]
@@ -1503,6 +1518,19 @@ class FacultyTwinWorkflowSupport:
                     f"记忆检索：{'是' if plan.retrieve_memory else '否'}；"
                     "模型意图不授予身份权限；检索时仍复核资料访问权限。"), duration_ms=0,
         )
+        # Keep business decision receipts explicit without scheduling skipped
+        # native operators. These notes never become execution events/edges.
+        skipped = []
+        if not plan.needs_retrieval:
+            skipped.extend((("memory_retrieve", "对话记忆检索"), ("knowledge_retrieve", "知识检索")))
+        if plan.quality == "direct":
+            skipped.extend((("prompt_build", "构建上下文"), ("llm_answer", "生成回答")))
+        for key, title in skipped:
+            self._append_trace(
+                context, key=key, title=title, status="skipped", duration_ms=0,
+                summary=f"本轮 {plan.route} 路线无需此步骤。",
+                detail="这是规划时的跳过决定，不是节点已执行；实际执行状态仅以 SAGE 原生记录为准。",
+            )
         return context
 
     def prepare_booking(self, context: ChatWorkflowContext) -> ChatWorkflowContext:

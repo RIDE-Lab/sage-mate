@@ -91,6 +91,9 @@ def test_native_intent_branch_does_not_execute_rejected_booking_nodes(booking, c
         assert observed.count("prepare-booking") == int(booking)
         assert observed.count("execute-booking") == int(booking and complete)
         assert observed.count("render") == 1
+        declarations = [node for event in events for node in event.program_topology]
+        assert sum(node.operator_key == "execute-booking" for node in declarations) == 1
+        assert sum(node.operator_key == "write-knowledge" for node in declarations) == 1
         expected = expected_stages(booking, complete)
         assert response == [(name,"branch") for name in expected]
         assert runtime._endpoint._requests == {}

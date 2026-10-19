@@ -14,7 +14,7 @@ from sage.runtime.work_journal import StaleTaskLeaseError, WorkJournal
 from sage_faculty_twin.chat_runtime import ChatRuntime
 from sage_faculty_twin.retrieval_runtime import RetrievalRuntime
 from sage_faculty_twin.workflow_events import WorkflowEventBroker
-from test_chat_runtime import ports
+from test_chat_runtime import TraceContext, ports
 from test_retrieval_runtime import Ports
 
 
@@ -34,7 +34,7 @@ def test_chat_retrieval_nested_native_parentage_and_actual_overlapping_starts():
     events = []
     try:
         with ExecutionObserver(events.append, trace_id="owned-stream").bind():
-            response, _ = chat.answer([], ports("synthetic", retrieve=lambda: retrieval.retrieve(
+            response, _ = chat.answer(TraceContext([], booking=False), ports("synthetic", retrieve=lambda: retrieval.retrieve(
                 Ports("synthetic"), memory="private-input", knowledge="wiki-input", timeout=5)), timeout=8)
         assert response
         parent = next(event for event in events if event.operator_key == "retrieve" and event.state == "started")

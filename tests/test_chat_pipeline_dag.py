@@ -134,6 +134,7 @@ CANONICAL_CHAT_TRACE = [
     "bootstrap",
     "workflow_plan_preview",
     "interaction_understand",
+    "adaptive_plan",
     "booking_prepare",
     "booking_execute",
     "memory_retrieve",
@@ -404,9 +405,10 @@ def test_canonical_trace_order_matches_published_constant() -> None:
     # keys our fixture asserts plus conditional memory and full-source audits.
     assert tuple(CANONICAL_CHAT_TRACE) == tuple(
         key for key in _CANONICAL_TRACE_ORDER
-        if key not in {"artifact_memory_writeback", "source_audit"}
+        if key not in {"artifact_memory_writeback", "source_audit", "write_authorization"}
     )
     assert _CANONICAL_TRACE_ORDER.index("source_audit") < _CANONICAL_TRACE_ORDER.index("memory_persist")
+    assert _CANONICAL_TRACE_ORDER.index("write_authorization") < _CANONICAL_TRACE_ORDER.index("adaptive_plan")
 
 
 # ------------------------- ChatContextMergeFunction --------------------------

@@ -8146,7 +8146,18 @@ function buildNativeExecutionHtml(events = []) {
         if (event?.version !== 1 || typeof event.execution_id !== "string") continue;
         const identity = JSON.stringify([event.trace_id, event.request_id, event.execution_id]);
         const previous = latest.get(identity);
-        if (!previous || event.sequence > previous.sequence) latest.set(identity, event);
+        if (!previous || event.sequence > previous.sequence) latest.set(identity, {
+            ...event,
+            // SAGE sends the static program once, on the first start. Preserve
+            // that declaration when the terminal event replaces its live span.
+            program_topology: event.program_topology?.length ? event.program_topology
+                : previous?.program_topology || [],
+        });
+        else if (!previous.program_topology?.length && event.program_topology?.length) {
+            // Replayed pages can arrive out of order; keep the latest execution
+            // state while accepting its earlier content-free declaration.
+            latest.set(identity, {...previous,program_topology:event.program_topology});
+        }
     }
     if (!latest.size) return '<p class="native-execution-empty">尚无原生执行记录；不按步骤名称推断完成或并行。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
@@ -8176,8 +8187,12 @@ function buildNativeWorkflowModel(events) {
         if (!groups.has(groupKey)) groups.set(groupKey, {
             key: groupKey, trace: event.trace_id, request: event.request_id,
             parent: event.parent_execution_id || null, nodes: new Map(), edges: new Map(),
+            topologySnapshots: [], topologyComplete: false,
         });
         const group = groups.get(groupKey), nodeKey = key(event.program_uri, event.program_rev, event.node_id);
+        if (Array.isArray(event.program_topology) && event.program_topology.length) {
+            group.topologySnapshots.push({uri:event.program_uri, rev:event.program_rev, nodes:event.program_topology});
+        }
         if (!group.nodes.has(nodeKey)) group.nodes.set(nodeKey, {
             key: nodeKey, uri: event.program_uri, rev: event.program_rev, id: event.node_id, attempts: [],
         });
@@ -8200,6 +8215,44 @@ function buildNativeWorkflowModel(events) {
             const old = group.edges.get(id);
             group.edges.set(id, {from, to, routed: Boolean(routed || old?.routed)});
         };
+        const declarations = new Map();
+        let validTopology = group.topologySnapshots.length > 0;
+        for (const snapshot of group.topologySnapshots) {
+            const ids = new Set(snapshot.nodes.map(node=>node?.node_id));
+            if (ids.size !== snapshot.nodes.length || !snapshot.nodes.every(node =>
+                node && valid(node.node_id) && valid(node.operator_type)
+                && (node.operator_key == null || valid(node.operator_key))
+                && Array.isArray(node.downstream_node_ids)
+                && node.downstream_node_ids.every(id=>valid(id) && ids.has(id)))) {
+                validTopology = false;
+                break;
+            }
+            const identity = JSON.stringify([snapshot.uri,snapshot.rev]);
+            const normalized = snapshot.nodes.map(node=>({node_id:node.node_id,
+                operator_type:node.operator_type, operator_key:node.operator_key || null,
+                downstream_node_ids:[...node.downstream_node_ids].sort()}))
+                .sort((a,b)=>a.node_id.localeCompare(b.node_id));
+            const previous = declarations.get(identity);
+            if (previous && JSON.stringify(previous.nodes) !== JSON.stringify(normalized)) {
+                validTopology = false;
+                break;
+            }
+            declarations.set(identity, {...snapshot,nodes:normalized});
+        }
+        if (validTopology && !observed.every(node => declarations.get(
+            JSON.stringify([node.uri,node.rev]))?.nodes.some(item=>item.node_id===node.id))) {
+            validTopology = false;
+        }
+        group.topologyComplete = validTopology;
+        if (validTopology) for (const snapshot of declarations.values()) {
+            for (const node of snapshot.nodes) {
+                const id = ensure(snapshot.uri,snapshot.rev,node.node_id);
+                group.nodes.get(id).declaration = node;
+                for (const child of node.downstream_node_ids) {
+                    edge(id,ensure(snapshot.uri,snapshot.rev,child),false);
+                }
+            }
+        }
         for (const node of observed) for (const event of node.attempts) {
             for (const id of Array.isArray(event.downstream_node_ids) ? event.downstream_node_ids : []) {
                 if (valid(id)) edge(node.key, ensure(node.uri, node.rev, id), false);
@@ -8257,9 +8310,14 @@ function buildNativeWorkflowHtml(events) {
     if (!groups.length) return '<p class="native-flow-missing">没有完整的原生拓扑字段，只显示节点记录；不猜测工作流连线。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
     const render = group => {
-        const visible = new Set([...group.nodes.values()].filter(node=>node.attempts.length).map(node=>node.key));
+        const visible = new Set([...group.nodes.values()].filter(node=>
+            group.topologyComplete || node.attempts.length).map(node=>node.key));
         for (const edge of group.edges.values()) if (edge.routed) { visible.add(edge.from); visible.add(edge.to); }
-        const visibleLayers = group.layers.map(layer=>layer.filter(id=>visible.has(id))).filter(layer=>layer.length);
+        const visibleLayers = group.layers.map(layer=>layer.filter(id=>visible.has(id)).sort((a,b)=>{
+            const label = id => group.nodes.get(id).declaration?.operator_key
+                || group.nodes.get(id).attempts[0]?.operator_key || id;
+            return label(a).localeCompare(label(b));
+        })).filter(layer=>layer.length);
         const visibleEdges = [...group.edges.values()].filter(edge=>visible.has(edge.from) && visible.has(edge.to));
         const unobserved = [...group.nodes.values()].filter(node=>!visible.has(node.key));
         const columns = Math.min(6, visibleLayers.length);
@@ -8311,12 +8369,49 @@ function buildNativeWorkflowHtml(events) {
             });
             y += rowHeight + 20;
         }
+        // Complete optional routes need a map, not long folded wires crossing
+        // unrelated nodes. Put nodes on the perimeter and route inside it.
+        // This is layout only: no inferred, removed or substituted graph edges.
+        const routeMap = group.topologyComplete && visible.size > 8;
+        if (routeMap) {
+            const ordered = layers.flat();
+            const center = width/2, radius = 220;
+            y = 570;
+            ordered.forEach((entry,index) => {
+                const angle = -Math.PI/2 + index*2*Math.PI/ordered.length;
+                positions.set(entry.node.key, {...entry, row:0, column:index,
+                    x:center+radius*Math.cos(angle)-slot/2,
+                    y:280+radius*Math.sin(angle)-22,width:slot,height:68});
+            });
+        }
         const edges = visibleEdges.map(edge => {
             const from = positions.get(edge.from), to = positions.get(edge.to);
             const active = edge.routed && [from, to].some(p =>
                 p.node.attempts.some(attempt => attempt.state === "started"));
             let path, arrow;
-            if (from.row === to.row && from.column !== to.column) {
+            if (routeMap) {
+                const ax=from.x+from.width/2, ay=from.y+22;
+                const bx=to.x+to.width/2, by=to.y+22;
+                const distance=Math.hypot(bx-ax,by-ay) || 1;
+                const dx=(bx-ax)/distance, dy=(by-ay)/distance;
+                const x1=ax+dx*20,y1=ay+dy*20,x2=bx-dx*20,y2=by-dy*20;
+                const mx=(x1+x2)/2,my=(y1+y2)/2;
+                const qx=mx+(width/2-mx)*.3,qy=my+(280-my)*.3;
+                const tangent=Math.hypot(x2-qx,y2-qy) || 1;
+                const tx=(x2-qx)/tangent,ty=(y2-qy)/tangent;
+                path=`M${x1},${y1} Q${qx},${qy} ${x2},${y2}`;
+                arrow=`M${x2-tx*5-ty*3},${y2-ty*5+tx*3} L${x2},${y2} L${x2-tx*5+ty*3},${y2-ty*5-tx*3}`;
+                if (distance < 100) {
+                    const a=Math.atan2(ay-280,ax-width/2),b=Math.atan2(by-280,bx-width/2);
+                    const delta=Math.atan2(Math.sin(b-a),Math.cos(b-a)),direction=Math.sign(delta);
+                    const start=a+direction*20/220,end=a+delta-direction*20/220;
+                    const sx=width/2+220*Math.cos(start),sy=280+220*Math.sin(start);
+                    const ex=width/2+220*Math.cos(end),ey=280+220*Math.sin(end);
+                    const ux=-Math.sin(end)*direction,uy=Math.cos(end)*direction;
+                    path=`M${sx},${sy} A220,220 0 0 ${direction>0 ? 1 : 0} ${ex},${ey}`;
+                    arrow=`M${ex-ux*5-uy*3},${ey-uy*5+ux*3} L${ex},${ey} L${ex-ux*5+uy*3},${ey-uy*5-ux*3}`;
+                }
+            } else if (from.row === to.row && from.column !== to.column) {
                 const direction = Math.sign(to.x-from.x);
                 const x1 = from.x + from.width/2 + direction*19, y1 = from.y+22;
                 const x2 = to.x + to.width/2 - direction*19, y2 = to.y+22;
@@ -8333,8 +8428,14 @@ function buildNativeWorkflowHtml(events) {
             return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}${active ? " is-active" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="${arrow}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
         }).join("");
         const nodes = [...positions.values()].map(p => {
-            const state = p.node.attempts.length === 1 ? p.node.attempts[0].state : p.node.attempts.length ? "multiple" : "unobserved";
-            const name = p.node.attempts[0]?.operator_key || p.node.attempts[0]?.operator_type || "尚无节点记录";
+            const attempt = p.node.attempts[0];
+            const rejected = p.node.attempts.length === 1 && attempt.state === "completed"
+                && attempt.operator_type === "filter" && attempt.next_nodes?.length === 0
+                && (attempt.downstream_node_ids?.length || p.node.declaration?.downstream_node_ids?.length);
+            const state = rejected ? "not_selected" : p.node.attempts.length === 1 ? attempt.state
+                : p.node.attempts.length ? "multiple" : "unobserved";
+            const name = p.node.attempts[0]?.operator_key || p.node.declaration?.operator_key
+                || p.node.attempts[0]?.operator_type || p.node.declaration?.operator_type || "尚无节点记录";
             const appearance = {bootstrap:["接收","inbox"],understand:["理解","message-spark"],
                 plan:["规划","branch"],
                 "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
@@ -8350,9 +8451,9 @@ function buildNativeWorkflowHtml(events) {
                 "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
                 "sys/router":["分支","branch"],filter:["条件","branch"]};
             const [caption,icon] = appearance[name] || [p.node.attempts.length ? "节点" : "未观测","branch"];
-            const title = `${name} · ${stateText(p.node)} · ${p.states.filter(s=>s.includes("子工作流")).join(" · ")} · ${p.node.uri}@${p.node.rev} · ${p.node.id}`;
+            const title = `${name} · ${rejected ? "条件已执行，未放行" : stateText(p.node)} · ${p.states.filter(s=>s.includes("子工作流")).join(" · ")} · ${p.node.uri}@${p.node.rev} · ${p.node.id}`;
             const cx=p.x+p.width/2, cy=p.y+22;
-            const badge = {completed:"✓",failed:"×",started:"…",multiple:"↻",cancelled:"⊘",recovered:"!",unobserved:"○"}[state] || "?";
+            const badge = {completed:"✓",failed:"×",started:"…",multiple:"↻",cancelled:"⊘",recovered:"!",unobserved:"○",not_selected:"−"}[state] || "?";
             const interaction = p.node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"';
             return `<g class="native-flow-node" ${interaction} aria-label="${escapeHtml(title)}" data-native-node-key="${escapeHtml(p.node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><circle cx="${cx}" cy="${cy}" r="18"/><svg x="${cx-9}" y="${cy-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${icon}"/></svg><text x="${cx}" y="${p.y+55}" text-anchor="middle" class="native-flow-label">${caption}</text><text x="${cx+13}" y="${cy+17}" class="native-flow-state" aria-hidden="true">${badge}</text></g>`;
         }).join("");
@@ -8360,12 +8461,14 @@ function buildNativeWorkflowHtml(events) {
         const heading = group.parent ? `子工作流 · ${parentLabel ? `嵌套于 ${parentLabel}` : "父节点记录缺失"}` : "主工作流";
         const programs = [...new Set([...group.nodes.values()].map(node => `${node.uri}@${node.rev}`))].join(" · ");
         const unknown = unobserved.length ? `<details class="native-flow-identity"><summary>未观测到执行的声明节点 · ${unobserved.length}</summary><ul>${unobserved.map(node=>`<li>${escapeHtml(`${node.uri}@${node.rev} · ${node.id}`)}</li>`).join("")}</ul></details>` : "";
-        const content = `${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll" tabindex="0" aria-label="${escapeHtml(heading)}，窄屏可横向滚动"><svg class="native-flow-diagram" role="group" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:460px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div>${unknown}<details class="native-flow-identity"><summary>流程标识</summary><p class="native-flow-program">${escapeHtml(programs)}</p></details>`;
-        const meta = `${visible.size} 节点 · ${visibleEdges.length} 连线`;
+        const observedCount = [...group.nodes.values()].filter(node=>node.attempts.length).length;
+        const center = routeMap ? `<g class="native-flow-center" aria-label="已观测 ${observedCount} / ${visible.size} 节点"><text x="300" y="262" text-anchor="middle">${observedCount} / ${visible.size}</text><text x="300" y="284" text-anchor="middle" class="native-flow-center-caption">已观测节点 · SAGE 原生记录</text></g>` : "";
+        const content = `${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll" tabindex="0" aria-label="${escapeHtml(heading)}，窄屏可横向滚动"><svg class="native-flow-diagram" role="group" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:460px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${center}${nodes}</svg></div>${unknown}<details class="native-flow-identity"><summary>流程标识</summary><p class="native-flow-program">${escapeHtml(programs)}</p></details>`;
+        const meta = `${group.topologyComplete ? "完整流程图 · " : "局部记录 · "}${visible.size} 节点 · ${visibleEdges.length} 连线`;
         if (group.parent) return `<details class="native-flow-scope is-nested" data-parent-execution="${escapeHtml(group.parent)}"><summary>${escapeHtml(heading)} · ${meta}</summary>${content}</details>`;
         return `<section class="native-flow-scope"><header class="native-flow-heading"><h4>${escapeHtml(heading)}</h4><span>${meta}</span></header>${content}</section>`;
     };
-    return `<div class="native-workflow-view"><div class="native-flow-key"><span>原生工作流</span><span class="native-flow-key-routed">已记录路由</span><span class="native-flow-key-declared">声明结构</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。未观测的声明节点保留在详情，不冒充本次执行。</p></details></div>`;
+    return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
 }
 
 function syncNativeExecutionDisplay() {

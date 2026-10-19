@@ -2,6 +2,17 @@
 
 ## Candidate, not yet production-qualified
 
+The next candidate pins SAGE `0e735f8b` for content-free full program snapshots.
+Each invocation emits declared node IDs, operator types/keys and declared edges
+once, separately from actual next-node routing. Terminal/out-of-order updates
+preserve the earlier declaration; malformed/conflicting snapshots cannot become
+a complete map. Historical events without snapshots remain a partial view.
+
+The circular main-only map is an intermediate visual prototype, NOT the accepted
+final design: the user requested a richer connected view of nested retrieval,
+source evaluation and background work. Light/dark static preview has been checked,
+but no production visual or model-quality acceptance is claimed.
+
 SAGE `6e40f2ac` owns the immutable capability-bounded execution plan. Twin
 supplies captured intent, verified adapter identity/profile and existing business
 capabilities. Intent/model output may narrow requested sources, never grant access
@@ -37,6 +48,15 @@ Twin focused business/source/durability/HTTP/source-plan gate: 96 passed. These
 scratch tests use explicit supported bm25 knowledge/memory indexes in offline mode;
 they do not qualify neural retrieval quality or production latency. Frontend
 native-graph tests pass, including real edge provenance and history animation.
+
+Expanded baseline full run on the first candidate `9521892`: 1,729 passed,
+31 existing skips and 12 failures in 479.11 seconds. Diagnosis found an
+unauthorized-operation exception incorrectly becoming a deadline/retry failure,
+missing skipped-decision business receipts, a new planning-note ordering issue,
+and a nested-retrieval test still using the booking fixture. Targeted repair run:
+143 passed with two trace-fixture failures; both were then corrected with the same
+assertions keyed by semantic stage rather than stale positional offsets and
+passed separately (2 tests). This is NOT a passing full-regression claim.
 
 Still required before production: evidence requirement coverage and bounded repair,
 actual research-vs-factual quality branches, full immutable regression, real QA
