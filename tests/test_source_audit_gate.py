@@ -76,6 +76,31 @@ def test_changed_source_invalidates_receipt(tmp_path):
         support._validate_source_answer(context)
 
 
+def test_selected_sources_keep_complete_candidate_binding_without_manual_overflow(tmp_path):
+    support, context = setup_gate(tmp_path)
+    context.request.question = "ExampleState 是什么？"
+    context.knowledge_hits[0].title = "Wiki | ExampleState"
+    context.knowledge_hits[0].source_content = "ExampleState 管理状态。"
+    context.knowledge_hits.append(KnowledgeSearchHit(document_id="manual", title="Wiki | unrelated manual",
+        excerpt="preview", source_content="unrelated tutorial\n"*20000, score=0.5))
+    calls = []
+    def call(**kwargs):
+        calls.append(kwargs)
+        assert "unrelated tutorial" not in kwargs["user_prompt"]
+        return plan_response(kwargs["user_prompt"])
+    support._call_compact_retry_sync = call
+    response = support.render_chat_response(context)
+    assert len(calls) == 2
+    assert len(context.evidence_work.candidates) == 2
+    assert context.source_answer_plan.source_ids == ("knowledge:0",)
+    assert "unrelated tutorial" not in response.answer
+    assert len(response.answer_basis) == 1
+    support._validate_source_answer(context)
+    context.knowledge_hits[1].source_content += "changed"
+    with pytest.raises(SourceAuditRejected):
+        support._validate_source_answer(context)
+
+
 @pytest.mark.parametrize("raw", ["OK", "{}", "null"])
 def test_invalid_plan_never_publishes_or_repairs(tmp_path, raw):
     support, context = setup_gate(tmp_path)

@@ -8443,6 +8443,8 @@ function nativeNodeAppearance(name, observed) {
         "write-route":["写入授权","branch"],"read-route":["只读路径","branch"],
         "evidence-route":["取证路径","branch"],"direct-route":["无需取证","branch"],
         "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
+        "select-evidence":["来源选择","search","选源"],
+        "select-repaired-evidence":["补检选源","search","选源"],
         "assess-coverage":["覆盖检查","checklist","覆盖"],"coverage-gap":["缺少依据","branch"],
         "coverage-ready":["依据齐备","branch"],"supplement-evidence":["定向补检","search","补检"],
         "reassess-coverage":["覆盖复查","checklist","复查"],"compose-source-plan":["来源计划","book","编排"],

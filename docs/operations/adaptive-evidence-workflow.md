@@ -106,6 +106,25 @@ the ordered native SSE stream open until its terminal record arrives. Failure
 and cancellation bubbles retain observed execution/work events; a rejected answer
 is not reported as an offline backend or a successful quality check.
 
+Source relevance is now a native SAGE stage before coverage, and again after
+repair. The immutable complete authorized candidate snapshot and its digest are
+distinct from the selected model input. Literal identifiers in the original
+question prefer matching full sources; no discriminating match leaves semantic
+retrieval unchanged. This is a source-selection hint, not a fact verifier.
+Repair always reselects against the complete accumulated candidates, keeping
+stable source IDs. Final rendering verifies both candidate integrity and the
+selected request; Twin binds the candidate snapshot to its ACL-resolved hits.
+Selected source bodies/links remain complete; unrelated manuals need not be
+concatenated into a coverage request merely because retrieval returned them.
+
+Experiment plans now contain typed fault events (`kind`, `target`, `at_step`),
+not an independently authored fault-model label and freeform schedule. SAGE
+derives the declared injected-fault boundary from every event kind and renders
+the same pre-recorded operation-indexed schedule for both groups. Empty events
+explicitly mean no injected failure, not a claim of crash resilience. Unknown,
+malformed and out-of-order events are rejected. This does not certify feasibility
+or scientific relevance; live semantic review remains a release gate.
+
 Twin supplies only model and ACL-aware read ports in `evidence_ports.py`. The old
 direct source-plan generation path is replaced, not retained as a second flow.
 Supplement search and hydration use a captured verified identity/source selection;

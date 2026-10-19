@@ -4497,7 +4497,7 @@ class FacultyTwinWorkflowSupport:
             return
         work = context.evidence_work
         if (work is None or context.source_answer_plan != work.plan
-                or self._source_plan_sources(context) != work.request.sources
+                or self._source_plan_sources(context) != work.candidates
                 or context.request.question != work.request.question
                 or context.answer != render_evidence_work(work)):
             raise SourceAuditRejected("回答与来源约束计划不一致，未发布。")

@@ -55,6 +55,9 @@ def main():
             starts = [event.get("operator_key") for event in events if event.get("state")=="started"]
             blocks = data.get("answer_blocks", [])
             hits = data.get("knowledge_hits", [])
+            selected_ids = {block.get("source_id") for block in blocks if block.get("kind")=="source"}
+            selected_hits = [hit for index, hit in enumerate(hits) if f"knowledge:{index}" in selected_ids]
+            overview_url = "https://lab.sage.org.ai/sage-wiki/docs/achievements/sage-system-overview"
             canonical = "\n\n".join(block.get("markdown", "") for block in blocks).strip()
             checks = {"http_success": response.status_code==200,
                 "canonical_blocks": bool(blocks) and canonical==data.get("answer"),
@@ -63,11 +66,14 @@ def main():
                 "no_private_reader": "read-private" not in starts,
                 "bounded_supplement": starts.count("supplement-evidence") <= 1,
                 "structured_experiment_plan": name!="research" or "plan-experiments" in starts,
+                "selected_source_ids_resolve": len(selected_hits)==len(selected_ids),
                 "source_urls_preserved": all(not hit.get("metadata", {}).get("wiki_url") or
-                    hit["metadata"]["wiki_url"] in data.get("answer", "") for hit in hits),
+                    hit["metadata"]["wiki_url"] in data.get("answer", "") for hit in selected_hits),
                 "source_bodies_preserved": all(hit.get("document_id", "").startswith("wiki::") and
                     (record := records.get(hit["document_id"].partition("::")[2])) is not None
-                    and record.content in data.get("answer", "") for hit in hits),
+                    and record.content in data.get("answer", "") for hit in selected_hits),
+                "requested_source_retrieved": name not in {"guide", "roles", "research"} or
+                    any(str(hit.get("metadata", {}).get("wiki_url", "")).rstrip("/")==overview_url for hit in selected_hits),
                 "requested_subjects_present": name!="roles" or all(subject in data.get("answer", "")
                     for subject in ("ECPA", "StateAxis"))}
             failures += not all(checks.values())
