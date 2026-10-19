@@ -125,6 +125,23 @@ explicitly mean no injected failure, not a claim of crash resilience. Unknown,
 malformed and out-of-order events are rejected. This does not certify feasibility
 or scientific relevance; live semantic review remains a release gate.
 
+Live qualification subsequently found a second fault label hidden in freeform
+shared conditions. Version 3 experiment requests therefore use a fixed conditions
+object (model, hardware, workload, software, precision, warm-up operations and
+replay seed), rather than a model-authored list of labels. Fault declarations
+belong only in typed events. Performance sampling is independent paired workload
+replays with shared inputs/seeds within each pair, not correlated request rows or
+per-second metric units. The request version changes the digest/cache identity;
+old experiment schemas are not silently accepted. Free-text values still require
+semantic review; a structural pass does not guarantee a feasible experiment.
+
+Filtered response hits now carry `evidence_source_id`, the original source-plan
+ID, so clients can match canonical source blocks without guessing from array
+positions. Old search/history records without a source plan may lack this field.
+The real QA observer retains its owner and request ID across queued 429/observer
+504 responses; hard capacity rejection remains a failed gate, not a successful
+enqueue. It never cancels the producer just because its own observation expires.
+
 Twin supplies only model and ACL-aware read ports in `evidence_ports.py`. The old
 direct source-plan generation path is replaced, not retained as a second flow.
 Supplement search and hydration use a captured verified identity/source selection;

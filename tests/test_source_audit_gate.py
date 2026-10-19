@@ -81,22 +81,27 @@ def test_selected_sources_keep_complete_candidate_binding_without_manual_overflo
     context.request.question = "ExampleState 是什么？"
     context.knowledge_hits[0].title = "Wiki | ExampleState"
     context.knowledge_hits[0].source_content = "ExampleState 管理状态。"
-    context.knowledge_hits.append(KnowledgeSearchHit(document_id="manual", title="Wiki | unrelated manual",
+    context.knowledge_hits.insert(0, KnowledgeSearchHit(document_id="manual", title="Wiki | unrelated manual",
         excerpt="preview", source_content="unrelated tutorial\n"*20000, score=0.5))
     calls = []
     def call(**kwargs):
         calls.append(kwargs)
         assert "unrelated tutorial" not in kwargs["user_prompt"]
-        return plan_response(kwargs["user_prompt"])
+        data = json.loads(kwargs["user_prompt"])
+        if "requirements" in data:
+            return plan_response(kwargs["user_prompt"])
+        return json.dumps({"digest": data["digest"], "source_ids": [s["source_id"] for s in data["sources"]],
+            "inferences": []})
     support._call_compact_retry_sync = call
     response = support.render_chat_response(context)
     assert len(calls) == 2
     assert len(context.evidence_work.candidates) == 2
-    assert context.source_answer_plan.source_ids == ("knowledge:0",)
+    assert context.source_answer_plan.source_ids == ("knowledge:1",)
     assert "unrelated tutorial" not in response.answer
     assert len(response.answer_basis) == 1
+    assert response.knowledge_hits[0].evidence_source_id == "knowledge:1"
     support._validate_source_answer(context)
-    context.knowledge_hits[1].source_content += "changed"
+    context.knowledge_hits[0].source_content += "changed"
     with pytest.raises(SourceAuditRejected):
         support._validate_source_answer(context)
 

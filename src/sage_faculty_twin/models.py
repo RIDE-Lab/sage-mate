@@ -494,6 +494,9 @@ class KnowledgeDocumentActionResponse(BaseModel):
 
 class KnowledgeSearchHit(BaseModel):
     document_id: str
+    # Runtime source-plan identity, independent of the filtered response order.
+    # Legacy search/history records without an answer plan legitimately lack it.
+    evidence_source_id: str | None = Field(default=None, pattern=r"^knowledge:\d+$")
     title: str
     excerpt: str
     # Internal authorized evidence, not the UI preview or an API response field.

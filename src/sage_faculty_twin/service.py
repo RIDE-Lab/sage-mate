@@ -4617,7 +4617,8 @@ class FacultyTwinWorkflowSupport:
                 else None
             ),
             knowledge_hits=(
-                [hit for index, hit in enumerate(context.knowledge_hits)
+                [hit.model_copy(update={"evidence_source_id": f"knowledge:{index}"})
+                 for index, hit in enumerate(context.knowledge_hits)
                  if f"knowledge:{index}" in context.source_answer_plan.source_ids]
                 if context.source_answer_plan is not None else context.knowledge_hits
             ),

@@ -22,6 +22,22 @@ CASES = (
 )
 
 
+def observe_owned_chat(client, body, request_id, *, timeout=330):
+    started, polls = time.monotonic(), 0
+    while True:
+        remaining = timeout-(time.monotonic()-started)
+        if remaining <= 0:
+            raise TimeoutError("owned QA observer deadline; producer was not cancelled")
+        response = client.post("/chat", params={"request_id": request_id}, json=body, timeout=remaining)
+        # Isolated HTTP only; do not change production cookie/security policy.
+        for cookie in client.cookies.jar:
+            cookie.secure = False
+        if response.status_code not in {429, 504} or response.headers.get("X-Sage-Error-Code")=="work_capacity_exhausted":
+            return response, polls
+        polls += 1
+        time.sleep(min(2, max(0, timeout-(time.monotonic()-started))))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base-url", default="http://127.0.0.1:59676")
@@ -43,20 +59,19 @@ def main():
             if args.case and name != args.case:
                 continue
             started = time.monotonic()
-            response = client.post("/chat", params={"request_id": "evidence-qa-"+uuid4().hex}, json={
+            request_id = "evidence-qa-"+uuid4().hex
+            body = {
                 "student_name": "工作流验收合成访客", "visitor_profile": "general_visitor",
                 "question": question, "knowledge_sources": ["wiki"], "deep_thinking": False,
-                "skill_routing": False})
-            # Isolated HTTP only; do not change production cookie/security policy.
-            for cookie in client.cookies.jar:
-                cookie.secure = False
+                "skill_routing": False}
+            response, polls = observe_owned_chat(client, body, request_id)
             data = response.json()
             events = data.get("execution_events", [])
             starts = [event.get("operator_key") for event in events if event.get("state")=="started"]
             blocks = data.get("answer_blocks", [])
             hits = data.get("knowledge_hits", [])
             selected_ids = {block.get("source_id") for block in blocks if block.get("kind")=="source"}
-            selected_hits = [hit for index, hit in enumerate(hits) if f"knowledge:{index}" in selected_ids]
+            selected_hits = [hit for hit in hits if hit.get("evidence_source_id") in selected_ids]
             overview_url = "https://lab.sage.org.ai/sage-wiki/docs/achievements/sage-system-overview"
             canonical = "\n\n".join(block.get("markdown", "") for block in blocks).strip()
             checks = {"http_success": response.status_code==200,
@@ -66,7 +81,8 @@ def main():
                 "no_private_reader": "read-private" not in starts,
                 "bounded_supplement": starts.count("supplement-evidence") <= 1,
                 "structured_experiment_plan": name!="research" or "plan-experiments" in starts,
-                "selected_source_ids_resolve": len(selected_hits)==len(selected_ids),
+                "selected_source_ids_resolve": {hit.get("evidence_source_id") for hit in selected_hits}==selected_ids
+                    and len(selected_hits)==len(selected_ids),
                 "source_urls_preserved": all(not hit.get("metadata", {}).get("wiki_url") or
                     hit["metadata"]["wiki_url"] in data.get("answer", "") for hit in selected_hits),
                 "source_bodies_preserved": all(hit.get("document_id", "").startswith("wiki::") and
@@ -78,6 +94,7 @@ def main():
                     for subject in ("ECPA", "StateAxis"))}
             failures += not all(checks.values())
             print(json.dumps({"case": name, "question": question, "status": response.status_code,
+                "request_id": request_id, "observer_polls": polls,
                 "seconds": round(time.monotonic()-started, 3), "checks": checks,
                 "wiki_snapshot_revision": revision,
                 "answer": data.get("answer"),
