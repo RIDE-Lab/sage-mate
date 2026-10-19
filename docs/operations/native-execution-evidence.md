@@ -1,5 +1,30 @@
 # Native execution evidence
 
+## Current accepted release
+
+Production runtime is `ebe6634bbfda269c828455933c2907fb06e0a08f` with the
+unchanged SAGE `4c4abffed927925856daf6ac468789dc391d587f` dependency. A fresh
+locked environment passed 1,727 tests with 31 existing skips and zero failures or
+errors in 460.60 seconds. The baseline identity-evaluation exclusion and resource
+limits were unchanged. Its parent compact-layout release separately passed the
+same suite in 459.63 seconds; that earlier result was not substituted for the final
+CSS/grid correction. Seven Node frontend groups and 51 focused tests also passed.
+
+Final-candidate browser acceptance covered real Wiki output (11.7 seconds), both
+themes, parent/child topology, collapsed details, 390px overflow containment and
+actual keyboard scrolling, plus reopening the same answer after an application
+restart without asking again. The installed candidate's additional real-model
+stream test completed in 9.24 seconds, verified complete source content, native
+events before answer commit, atomic background acknowledgement and guest isolation.
+
+Production switching retained all application state and credentials: graceful
+writer shutdown, integrity-checked three-store backup, matching app/Wiki release
+pointers, then healthy HTTP/background services and a waiting Wiki timer. Public
+HTML carries `native-workflow-compact-v2-20261019`; public JS/CSS hashes match main.
+After restart the completed Slack request still had one attempt for each task and
+one accepted delivery receipt out of one part: no repeat question or delivery.
+Legacy quarantine hashes and restrictive permissions were rechecked unchanged.
+
 ## 2026-10-19 qualification and deployment
 
 Runtime `9bf304448beff7b74518ad8095f659a1433b9e20`, installed SAGE
@@ -22,11 +47,35 @@ Production HTML and JavaScript/CSS hashes were verified against main.
 
 The one authorized Slack acceptance question was sent through the actual slash
 command. Its native answer/deliver/finalize tasks completed on attempt one, with
-one of one delivery receipts accepted. **This is not a client-rendering pass:**
-Slack's accessible tree and screenshot disagreed and the computer-control service
-subsequently timed out. Actual new-message Markdown display remains an outstanding
-acceptance item. Do not resend the question without new authorization or report
-the complete migration goal as accepted solely from the server receipt.
+one of one delivery receipts accepted. Initially Slack's accessible tree and
+screenshot disagreed; the computer-control service subsequently timed out, so
+that initial observation was not counted as a client-rendering pass.
+
+The follow-up client gate is now accepted: the actual new 09:01 message showed
+native headings, a three-column table with all three data rows, bold text, bullet
+lists, and complete Wiki URL targets. The fresh accessible tree and screenshot
+agreed, and the human independently confirmed seeing this new table reply. The
+older raw-Markdown reply above it was not substituted as evidence. No additional
+question was sent. One caveat is recorded rather than hidden: the prior stale
+editor introduced a duplicated/garbled prefix before the intended full question.
+This verifies the real answer-rendering path, not exact input-text fidelity.
+
+## Compact workflow presentation
+
+Graph layers now use a compact three-column serpentine layout instead of a tall
+single column. Folding rows never creates an edge: all arrows still come from
+the same declared/routed relationships. Parent-linked retrieval remains its own
+card with both actual branches. Program identifiers, explanatory notes, attempt
+metadata and business notes are collapsed by default. Status text remains explicit
+and is never inferred from color. Both themes retain readable text and link contrast.
+
+Real 390px testing caught intrinsic SVG width stretching the parent grid and
+clipping the right branch even though the document itself did not overflow.
+Explicit zero-minimum grid/container tracks now contain overflow within the
+focusable diagram scroller. A real keyboard test moved its scroll offset to
+160px and exposed the right-side nodes while the card stayed within the viewport.
+Existing browser history reopened without asking again; original answer text,
+source links, parent references and execution statuses were preserved.
 
 The owned loopback preview and its SSH forward were stopped after qualification;
 their synthetic data and reports were retained. No second production executor
