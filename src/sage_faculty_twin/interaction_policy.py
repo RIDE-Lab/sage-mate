@@ -340,6 +340,8 @@ class InteractionPolicyEngine:
                 intent=InteractionIntent(
                     action="answer",
                     domain="advising",
+                    task_mode=proposed.task_mode,
+                    task_directive=proposed.task_directive,
                     retrieval_scopes=["meeting_policy", "profile"],
                     exclude_scopes=["courseware"],
                     decision_mode="direct_answer",
@@ -358,6 +360,8 @@ class InteractionPolicyEngine:
                 intent=InteractionIntent(
                     action="answer",
                     domain="research" if research_review else "general",
+                    task_mode=proposed.task_mode,
+                    task_directive=proposed.task_directive,
                     retrieval_scopes=["publications", "profile"] if research_review else [],
                     exclude_scopes=["courseware"] if research_review else [],
                     decision_mode="direct_answer",
@@ -378,6 +382,8 @@ class InteractionPolicyEngine:
                 intent=InteractionIntent(
                     action="answer",
                     domain="research" if research_request else "general",
+                    task_mode=proposed.task_mode,
+                    task_directive=proposed.task_directive,
                     retrieval_scopes=(
                         ["publications", "profile"] if research_request else []
                     ),

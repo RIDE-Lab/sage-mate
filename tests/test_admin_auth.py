@@ -1345,7 +1345,7 @@ def test_admin_can_view_and_resolve_escalations(
         service._llm_client,
         "classify_interaction_intent_sync",
         lambda question, course_context=None, recent_session_context=None:
-            InteractionIntent(action="answer", domain="general", confidence=0.9),
+            InteractionIntent(action="answer", domain="general", task_mode="facts", confidence=0.9),
     )
 
     response = client.post(

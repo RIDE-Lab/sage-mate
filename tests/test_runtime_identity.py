@@ -309,6 +309,7 @@ def test_end_to_end_chat_uses_runtime_evidence_without_llm_facts(tmp_path: Path)
     service._runtime_identity_provider = provider
     service._llm_client.classify_interaction_intent_sync = lambda *_args, **_kwargs: (
         InteractionIntent(
+            task_mode="facts",
             action="answer",
             domain="research",
             retrieval_scopes=["profile"],
@@ -364,6 +365,7 @@ def test_end_to_end_receipt_answer_does_not_claim_live_serving(tmp_path: Path) -
     )
     service._llm_client.classify_interaction_intent_sync = lambda *_args, **_kwargs: (
         InteractionIntent(
+            task_mode="facts",
             action="answer",
             domain="general",
             retrieval_scopes=[],

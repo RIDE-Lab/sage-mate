@@ -60,6 +60,8 @@ class OnlinePresenceHeartbeatResponse(BaseModel):
 
 
 class InteractionIntent(BaseModel):
+    task_mode: Literal['facts', 'research'] | None = None
+    task_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
     self_contained: bool = False
     action: str = Field(
@@ -77,6 +79,13 @@ class InteractionIntent(BaseModel):
     clarification_message: str | None = Field(default=None, max_length=512)
     escalation_reason: str | None = Field(default=None, max_length=512)
     confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+    def requests_research(self, question: str) -> bool:
+        from sage.runtime.answer_task import AnswerTask
+
+        if self.task_mode is None:
+            return False
+        return AnswerTask(self.task_mode, self.task_directive).validate(question).research_requested
 
 
 class WorkflowTraceStep(BaseModel):

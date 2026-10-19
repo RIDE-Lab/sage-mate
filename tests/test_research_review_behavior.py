@@ -68,6 +68,7 @@ def test_initial_prompt_contains_review_contract_without_a_correction_turn(
         question=question,
     )
     intent = InteractionIntent(
+        task_mode="research", task_directive="请评价这个研究",
         action="answer",
         domain="research",
         decision_mode="direct_answer",
@@ -140,6 +141,7 @@ def test_review_with_workload_wording_does_not_use_faculty_fact_shortcut(
         question="请评价是否继续研究：旧机制在当前工作负载得到负结果。",
     )
     intent = InteractionIntent(
+        task_mode="research", task_directive="请评价是否继续研究",
         action="answer",
         domain="research",
         decision_mode="advise_only",

@@ -235,6 +235,7 @@ def test_runtime_question_cites_receipt_and_maintenance_reports_sync(
     )
     service._llm_client.classify_interaction_intent_sync = lambda *_args, **_kwargs: (
         InteractionIntent(
+            task_mode="facts",
             action="answer",
             domain="research",
             retrieval_scopes=["profile"],

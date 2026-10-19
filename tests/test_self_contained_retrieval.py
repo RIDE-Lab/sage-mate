@@ -38,7 +38,7 @@ def test_topic_fast_path_does_not_bypass_source_classification(tmp_path, monkeyp
     context = context_for(None)
     context.request.question = '根据公开 Wiki 介绍系统研究方向'
     monkeypatch.setattr(support, '_build_fast_path_interaction_intent', lambda ctx: InteractionIntent(domain='research'))
-    classifier = Mock(return_value=InteractionIntent(domain='research', knowledge_sources=['wiki']))
+    classifier = Mock(return_value=InteractionIntent(domain='research', task_mode='facts', knowledge_sources=['wiki']))
     support._llm_client = Mock(supports_fast_intent_bypass=True, classify_interaction_intent_sync=classifier)
     intent, source = support._resolve_interaction_intent(context)
     classifier.assert_called_once()
@@ -57,15 +57,15 @@ def test_failed_source_classification_does_not_silently_widen(tmp_path, monkeypa
         support._resolve_interaction_intent(context)
 
 
-def test_explicit_source_constraint_allows_topic_fast_path(tmp_path, monkeypatch):
+def test_explicit_source_constraint_still_requires_semantic_task(tmp_path, monkeypatch):
     support = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))._build_support()
     context = context_for(None, knowledge_sources=['wiki'])
     context.request.question = '介绍系统研究方向'
     monkeypatch.setattr(support, '_build_fast_path_interaction_intent', lambda ctx: InteractionIntent(domain='research'))
-    classifier = Mock(side_effect=AssertionError('Explicit selection needs no reclassification'))
+    classifier = Mock(return_value=InteractionIntent(domain='research', task_mode='facts'))
     support._llm_client = Mock(supports_fast_intent_bypass=True, classify_interaction_intent_sync=classifier)
     support.understand_interaction(context)
-    classifier.assert_not_called()
+    classifier.assert_called_once()
     assert context.request.knowledge_sources == ['wiki']
 
 
@@ -174,8 +174,8 @@ def test_unknown_or_grounded_requests_do_not_skip(tmp_path, intent, fields):
 
 def test_classifier_preserves_explicit_decision_and_defaults_to_retrieval():
     client = object.__new__(VllmChatClient)
-    assert client._coerce_interaction_intent(_InteractionIntentPayload(self_contained=True)).self_contained
-    assert not client._coerce_interaction_intent(_InteractionIntentPayload()).self_contained
+    assert client._coerce_interaction_intent(_InteractionIntentPayload(task_mode='facts', self_contained=True)).self_contained
+    assert not client._coerce_interaction_intent(_InteractionIntentPayload(task_mode='facts')).self_contained
 
 
 def test_broad_retrieval_scope_is_not_proof_of_booking_evidence(tmp_path):

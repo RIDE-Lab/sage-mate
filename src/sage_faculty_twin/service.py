@@ -25,6 +25,7 @@ from sage.runtime import FlowNetEnvironment
 from sage.runtime.adaptive_workflow import (
     AdaptiveWorkflowPlan, WorkflowCapabilities, WorkflowRequirements, plan_workflow,
 )
+from sage.runtime.answer_task import AnswerTask
 from sage.runtime.work_journal import PreparedLeaseGuard
 from sage.runtime.source_audit import (
     AnswerValidationRejected, SourceAuditRejected,
@@ -1454,6 +1455,7 @@ class FacultyTwinWorkflowSupport:
                 f"当前理解来源：{source}；检索范围：{', '.join(intent.retrieval_scopes) or '默认'}；"
                 f"排除范围：{', '.join(intent.exclude_scopes) or '无'}；"
                 f"决策模式：{intent.decision_mode}；置信度 {intent.confidence:.2f}。"
+                f"任务目的：{intent.task_mode or '未提供'}；研究请求片段：{intent.task_directive or '无'}。"
             )
 
         self._append_trace(
@@ -1501,7 +1503,7 @@ class FacultyTwinWorkflowSupport:
             action=intent.action,
             resolved=context.route != "answer" or context.answer is not None,
             self_contained=self._is_self_contained_request(context),
-            research_review=is_research_review_request(context.request.question, domain=intent.domain),
+            research_review=intent.requests_research(context.request.question),
             knowledge=knowledge.needs_retrieval,
             memory=not bool(memory.skip_summary),
             web=context.request.web_search,
@@ -2312,11 +2314,12 @@ class FacultyTwinWorkflowSupport:
         multipart_guidance = multipart_answer_guidance(context.request.question)
         if multipart_guidance:
             context.system_prompt += "\n" + multipart_guidance
-        if context.interaction_intent and context.interaction_intent.domain == "research":
+        if context.interaction_intent and context.interaction_intent.requests_research(context.request.question):
             context.system_prompt += "\n" + self._experiment_validity_guidance()
             context.system_prompt += build_research_review_guidance(
                 context.request.question,
                 domain=context.interaction_intent.domain,
+                requested=True,
             )
             context.system_prompt += self._owner_review_style_guidance(
                 context.request,
@@ -3113,7 +3116,7 @@ class FacultyTwinWorkflowSupport:
         question = request.question.strip()
         lowered = question.lower()
         intent_domain = context.interaction_intent.domain if context.interaction_intent else ""
-        if is_research_review_request(question, domain="research"):
+        if context.interaction_intent and context.interaction_intent.requests_research(question):
             # A review can contain fact-marker substrings (for example,
             # ``当前工作负载`` contains ``当前工作``).  It needs synthesis,
             # not the evidence-only biography shortcut.
@@ -3657,11 +3660,12 @@ class FacultyTwinWorkflowSupport:
                 "Specify the paired comparison and let the experiment pre-register "
                 "a practically meaningful threshold separately.\n"
             )
-        if context.interaction_intent and context.interaction_intent.domain == "research":
+        if context.interaction_intent and context.interaction_intent.requests_research(context.request.question):
             compact_system_prompt += "\n" + self._experiment_validity_guidance()
             compact_system_prompt += build_research_review_guidance(
                 context.request.question,
                 domain=context.interaction_intent.domain,
+                requested=True,
             )
             compact_system_prompt += self._owner_review_style_guidance(
                 context.request,
@@ -4522,8 +4526,9 @@ class FacultyTwinWorkflowSupport:
                 with bind_trace_event_sink(lambda _kind, _payload: None):
                     remaining = request_remaining_seconds()
                     context.evidence_work = runtime.run(context.request.question, self._source_plan_sources(context),
-                        TwinEvidencePorts(self, context), research=is_research_review_request(context.request.question,
-                            domain=context.interaction_intent.domain if context.interaction_intent else None),
+                        TwinEvidencePorts(self, context), task=AnswerTask(
+                            context.interaction_intent.task_mode or "facts",
+                            context.interaction_intent.task_directive) if context.interaction_intent else AnswerTask("facts"),
                         timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds)
             finally:
                 if provider is None:
@@ -6965,9 +6970,11 @@ class FacultyTwinWorkflowSupport:
             context.request.knowledge_sources is not None
             or (fast_intent is not None and fast_intent.self_contained)
         )
-        if fast_intent is not None and bool(
+        # Topic heuristics cannot decide whether prospective work was
+        # requested. Only self-contained turns bypass the semantic port.
+        if fast_intent is not None and fast_intent.self_contained and source_selection_known and bool(
             getattr(self._llm_client, "supports_fast_intent_bypass", False)
-        ) and source_selection_known:
+        ):
             guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)
             return guarded_intent, "heuristic-fast+policy" if guarded else "heuristic-fast"
 
@@ -6986,6 +6993,10 @@ class FacultyTwinWorkflowSupport:
                 )
                 if not isinstance(intent, InteractionIntent):
                     intent = InteractionIntent.model_validate(intent)
+                if bool(getattr(self._llm_client, "supports_fast_intent_bypass", False)):
+                    if intent.task_mode is None:
+                        raise ValueError("answer task missing from classifier")
+                    intent.requests_research(context.request.question)
                 guarded_intent, guarded = self._apply_policy_guardrails(context.request, intent)
                 return guarded_intent, "llm+policy" if guarded else "llm"
             except Exception as exc:
@@ -6993,6 +7004,8 @@ class FacultyTwinWorkflowSupport:
                     # A topic-only fallback cannot recover a lost source
                     # restriction. Fail before retrieval instead of widening it.
                     raise RuntimeError("knowledge_source_selection_unresolved") from exc
+                if bool(getattr(self._llm_client, "supports_fast_intent_bypass", False)):
+                    raise RuntimeError("answer_task_classification_unresolved") from exc
 
         if fast_intent is not None:
             guarded_intent, guarded = self._apply_policy_guardrails(context.request, fast_intent)

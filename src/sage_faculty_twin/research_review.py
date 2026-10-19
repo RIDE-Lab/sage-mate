@@ -139,6 +139,7 @@ def build_research_review_guidance(
     question: str,
     *,
     domain: str | None,
+    requested: bool | None = None,
 ) -> str:
     """Build the common first-turn scientific-review contract.
 
@@ -147,7 +148,7 @@ def build_research_review_guidance(
     verification and paper-readiness assessment.
     """
 
-    if not is_research_review_request(question, domain=domain):
+    if requested is False or (requested is None and not is_research_review_request(question, domain=domain)):
         return ""
 
     compact_question = re.sub(r"\s+", "", question.lower())

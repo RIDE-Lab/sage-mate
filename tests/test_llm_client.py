@@ -147,6 +147,7 @@ def test_model_catalog_preserves_explicit_routes_and_stale_fallback(
 def test_coerce_interaction_intent_removes_conflicting_excluded_scopes() -> None:
     client = object.__new__(VllmChatClient)
     payload = _InteractionIntentPayload(
+        task_mode="facts",
         action="answer",
         domain="research",
         retrieval_scopes=["profile", "publications", "profile"],
@@ -162,7 +163,7 @@ def test_coerce_interaction_intent_removes_conflicting_excluded_scopes() -> None
 @pytest.mark.parametrize('origins', [None, [], ['wiki'], ['private'], ['wiki', 'private']])
 def test_intent_coercion_preserves_requested_source_origins(origins):
     client = object.__new__(VllmChatClient)
-    intent = client._coerce_interaction_intent(_InteractionIntentPayload(knowledge_sources=origins))
+    intent = client._coerce_interaction_intent(_InteractionIntentPayload(task_mode="facts", knowledge_sources=origins))
     assert intent.knowledge_sources == origins
 
 
@@ -464,7 +465,8 @@ def test_coerce_interaction_intent_uses_internal_confidence_policy() -> None:
             "needs_clarification": false,
             "clarification_message": null,
             "escalation_reason": null,
-            "confidence": "high"
+            "confidence": "high",
+            "task_mode": "facts"
         }
         """
     )
@@ -491,6 +493,7 @@ def test_parse_interaction_intent_payload_repairs_invalid_shape() -> None:
         return json.dumps(
             {
                 "action": "book_meeting",
+                "task_mode": "facts",
                 "domain": "booking",
                 "retrieval_scopes": ["meeting_policy"],
                 "exclude_scopes": ["courseware"],
@@ -504,7 +507,7 @@ def test_parse_interaction_intent_payload_repairs_invalid_shape() -> None:
     client.answer_question_sync = answer_question_sync
 
     payload = client._parse_interaction_intent_payload(
-        '{"action":"book_meeting","domain":"booking","retrieval_scopes":"meeting_policy"}'
+        '{"task_mode":"facts","action":"book_meeting","domain":"booking","retrieval_scopes":"meeting_policy"}'
     )
 
     assert payload.action == "book_meeting"
