@@ -46,6 +46,8 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
         return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = plan
     response = support.render_chat_response(context)
+    assert response.evidence_coverage.request_digest == context.evidence_work.request.digest
+    assert response.evidence_coverage.missing_parts == []
     answer = response.answer
     from sage_faculty_twin.models import ChatResponse
     restored = ChatResponse.model_validate_json(response.model_dump_json())

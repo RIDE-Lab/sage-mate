@@ -248,7 +248,27 @@ class ChatRequestTiming(BaseModel):
     llm_metrics_recorded: bool = False
 
 
+class EvidenceCoverageView(BaseModel):
+    """Display projection of SAGE's validated receipt, not a second evaluator."""
+    version: Literal[1] = 1
+    method: Literal['source_line_witness'] = 'source_line_witness'
+    request_digest: str = Field(pattern=r'^[a-f0-9]{64}$')
+    requirement_count: int = Field(ge=1)
+    missing_parts: list[str]
+
+    @classmethod
+    def from_work(cls, work):
+        if work is None:
+            return None
+        from sage.runtime.evidence_coverage import missing_question_spans
+
+        return cls(request_digest=work.request.digest,
+                   requirement_count=len(work.request.requirements),
+                   missing_parts=list(missing_question_spans(work.request, work.assessment)))
+
+
 class ChatResponse(BaseModel):
+    evidence_coverage: EvidenceCoverageView | None = None
     external_evidence_required: bool = True
     answer: str
     answer_blocks: list[SourceAnswerBlock] = Field(default_factory=list)
@@ -314,6 +334,7 @@ class ConversationHistoryListResponse(BaseModel):
 
 
 class ConversationExchangeResponse(BaseModel):
+    evidence_coverage: EvidenceCoverageView | None = None
     exchange_id: str
     question: str = Field(min_length=1, max_length=4000)
     answer: str = Field(min_length=1)

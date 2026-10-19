@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 
 from sage_faculty_twin.memory_store import ConversationMemoryRecord
+from sage_faculty_twin.models import EvidenceCoverageView
 from sage_faculty_twin.service import DigitalTwinService
 
 
@@ -57,7 +58,9 @@ def _build_service(records: list[ConversationMemoryRecord]) -> DigitalTwinServic
 def test_history_requires_owner_as_well_as_matching_email():
     records = [replace(_build_record(memory_id=str(index), conversation_id="same",
         student_name="Same", student_email="same@example.com", question=f"private-{index}",
-        answer=f"answer-{index}", offset_seconds=index), owner_id=owner)
+        answer=f"answer-{index}", offset_seconds=index), owner_id=owner,
+        evidence_coverage=EvidenceCoverageView(request_digest=f'{index:064x}', requirement_count=1,
+                                               missing_parts=[f'private-gap-{index}']))
         for index, owner in enumerate(("account:a", "account:b", None))]
     service = _build_service(records)
     for index, owner in enumerate(("account:a", "account:b", None)):
@@ -67,6 +70,7 @@ def test_history_requires_owner_as_well_as_matching_email():
         transcript = service.get_chat_conversation(conversation_id="same", student_email="same@example.com", owner_id=owner)
         assert len(transcript.exchanges) == 1
         assert transcript.exchanges[0].question == f"private-{index}"
+        assert transcript.exchanges[0].evidence_coverage.missing_parts == [f'private-gap-{index}']
     with pytest.raises(HTTPException) as error:
         service.get_chat_conversation(conversation_id="same", student_email="same@example.com", owner_id="account:other")
     assert error.value.status_code == 404

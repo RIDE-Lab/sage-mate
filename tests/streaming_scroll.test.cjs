@@ -14,11 +14,15 @@ const stream = {scrollTop: 600, clientHeight: 700, get scrollHeight() {return he
 const message = {dataset:{}, style:{}, classList:{remove(){},add(){}},
     set innerHTML(value) {height += 900;}, querySelector: () => null};
 const context = {chatStream:stream, document:{getElementById:()=>null}, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
+    isUserAuthenticated:false, currentUserAccountProfile:'',
     stopAnswerProcessingTicker(){}, hasMatchingSourceBlocks:()=>false,
     stripNotificationText:x=>x, parseStreamingThinkContent:x=>({main:x,think:''}),
     buildNotificationStatusHtml:()=>'', escapeHtml:x=>x, formatSourceAnswer:x=>x,
     uiIconSvg:()=>'', buildFeedbackSectionHtml:()=>'', buildRetryButtonHtml:()=>''};
 vm.createContext(context);
+for (const name of ['buildResponseEvidenceModel', 'buildResponseEvidenceHtml', 'buildResponseWorkSummaryHtml']) {
+    vm.runInContext(productionFunction(name), context);
+}
 if (source.includes('function captureConversationScroll(')) {
     vm.runInContext(productionFunction('captureConversationScroll') + productionFunction('restoreConversationScroll') + productionFunction('syncLatestConversationButton'), context);
 }

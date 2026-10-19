@@ -29,7 +29,7 @@ from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProce
 from sage.runtime.source_answer_plan import SourceAnswerBlock
 
 from .config import AppSettings
-from .models import BookingResponse, ChatAttachment, ChatRequest, WebSearchHit
+from .models import BookingResponse, ChatAttachment, ChatRequest, WebSearchHit, EvidenceCoverageView
 from .profile_summarizer import ConversationProfileSummarizer
 
 
@@ -85,6 +85,7 @@ class ConversationMemoryRecord:
     owner_id: str | None = None
     answer_blocks: list[SourceAnswerBlock] = field(default_factory=list)
     execution_events: list[ExecutionEvent] = field(default_factory=list)
+    evidence_coverage: EvidenceCoverageView | None = None
 
     def __post_init__(self):
         _validate_owner_id(self.owner_id)
@@ -103,6 +104,8 @@ class ConversationMemoryRecord:
             "course_context": self.course_context,
             "question": self.question,
             "answer": self.answer,
+            **({"evidence_coverage": self.evidence_coverage.model_dump(mode="json")}
+               if self.evidence_coverage is not None else {}),
             **({"answer_blocks": [asdict(block) for block in self.answer_blocks]}
                if self.answer_blocks else {}),
             **({"execution_events": [event.to_dict() for event in self.execution_events]}
@@ -129,6 +132,8 @@ class ConversationMemoryRecord:
             ),
             question=str(payload["question"]),
             answer=str(payload["answer"]),
+            evidence_coverage=(EvidenceCoverageView.model_validate(payload['evidence_coverage'])
+                               if payload.get('evidence_coverage') is not None else None),
             answer_blocks=[SourceAnswerBlock(**item)
                            for item in payload.get("answer_blocks", [])],
             execution_events=TypeAdapter(list[ExecutionEvent]).validate_python(payload.get("execution_events", [])),

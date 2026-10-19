@@ -6,7 +6,7 @@ from pydantic import ValidationError
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.work_journal import WorkJournal
 
-from sage_faculty_twin.models import AvailabilitySchedule, ChatRequest, ChatResponse
+from sage_faculty_twin.models import AvailabilitySchedule, ChatRequest, ChatResponse, EvidenceCoverageView
 from sage_faculty_twin.memory_store import AttachmentMemoryRecord, ConversationMemoryRecord
 from sage_faculty_twin.post_answer_contract import PostAnswerTask
 
@@ -84,20 +84,22 @@ def test_result_and_exact_task_inputs_survive_journal_reopen(tmp_path):
 
 
 def test_committed_record_identity_and_full_attachment_roundtrip():
+    coverage = EvidenceCoverageView(request_digest='a' * 64, requirement_count=1, missing_parts=['research'])
     record = ConversationMemoryRecord(
         memory_id="turn", conversation_id="conversation", student_name="Alice",
         student_email=None, course_context=None, question="research", answer="complete answer",
         workflow_action="answer", interaction_domain=None, knowledge_hit_count=0,
         booking_summary=None, created_at=datetime(2026, 6, 1, tzinfo=UTC),
         attachments=[AttachmentMemoryRecord("research.txt", "text/plain", "full evidence " * 1000)],
+        evidence_coverage=coverage,
     )
     response = ChatResponse(answer="complete answer", owner_name="owner", used_model="model",
-                            conversation_id="conversation", exchange_id="turn", memory_write_back=True)
+                            conversation_id="conversation", exchange_id="turn", memory_write_back=True, evidence_coverage=coverage)
     task = make_task(record=record, response=response)
     restored = PostAnswerTask.model_validate_json(task.model_dump_json())
     assert restored.record.to_dict() == record.to_dict()
     for key, value in [("memory_id", "other"), ("answer", "changed"),
-                       ("student_name", "other"), ("conversation_id", "other")]:
+                       ("student_name", "other"), ("conversation_id", "other"), ("evidence_coverage", None)]:
         payload = task.model_dump(mode="json")
         payload["record"][key] = value
         with pytest.raises(ValidationError, match="record_identity_conflict"):

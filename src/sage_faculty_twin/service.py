@@ -4603,7 +4603,10 @@ class FacultyTwinWorkflowSupport:
         canonical_trace = _canonicalize_workflow_trace(context.workflow_trace)
         context.workflow_trace = canonical_trace
 
+        from .models import EvidenceCoverageView
+
         return ChatResponse(
+            evidence_coverage=EvidenceCoverageView.from_work(context.evidence_work),
             answer=context.answer,
             answer_blocks=(
                 list(render_evidence_work_blocks(context.evidence_work))
@@ -9307,6 +9310,7 @@ class DigitalTwinService:
         if context.prepared_memory_record is not None:
             context.prepared_memory_record = replace(
                 context.prepared_memory_record, answer_blocks=response.answer_blocks,
+                evidence_coverage=response.evidence_coverage,
                 execution_events=response.execution_events,
             )
         memory_commit_trace = None
@@ -10617,6 +10621,7 @@ class DigitalTwinService:
                     question=record.question,
                     answer=record.answer,
                     answer_blocks=record.answer_blocks,
+                    evidence_coverage=record.evidence_coverage,
                     execution_events=record.execution_events,
                     work_events=self._work_events_for_exchange(record),
                     workflow_action=record.workflow_action,

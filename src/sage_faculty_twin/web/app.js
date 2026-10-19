@@ -3033,7 +3033,8 @@ chatForm.addEventListener("submit", async (event) => {
                     data.external_evidence_required !== false,
                     data.answer_blocks || [],
                     data.execution_events || [],
-                    activeWorkEvents
+                    activeWorkEvents,
+                    data.evidence_coverage || null
                 );
                 noteConversationAnswerPreview(data.answer);
                 updateTokenUsageBadge(data.token_usage || null);
@@ -7683,7 +7684,7 @@ function renderConversationTranscript(transcript) {
         appendMessage("user", speakerName, exchange.question, {});
         const message = appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
         renderAssistantMessage(message, exchange.answer, [], [], [], null, false,
-            exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || [], exchange.work_events || []);
+            exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || [], exchange.work_events || [], exchange.evidence_coverage || null);
     });
     hydrateConversationInteractiveState();
     hideOnboardingCard();
@@ -7994,13 +7995,15 @@ function renderPendingAssistantMessage(
                                 ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
                             </div>
                             <div class="thinking-progress" aria-hidden="true"><span></span></div>
+                            <div class="pending-work-state" aria-live="polite"></div>
                             ${INLINE_WORKFLOW_TRACE_ENABLED
-                ? `<div class="thinking-trace" aria-label="实时处理进度" aria-live="polite">
+                ? `<details class="thinking-trace response-advanced" aria-label="高级执行详情">
+                                <summary>高级详情 · 实时工作流</summary>
                                 <div class="thinking-trace-list"></div>
-                            </div>`
+                            </details>`
                 : ""}
                         </div>
-                        <div class="thinking-text-section" id="pending-thinking-text" data-collapsed="false" hidden>
+                        <div class="thinking-text-section" id="pending-thinking-text" data-collapsed="true" hidden>
                             <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
                             <div class="thinking-text-body"></div>
                         </div>
@@ -8036,11 +8039,7 @@ function startAnswerProcessingTicker(container) {
         const lastStageAt = Number(container.dataset.lastStageAt || startedAt);
         const idleMs = Math.max(0, performance.now() - lastStageAt);
         if (stageLabel && idleMs >= 8000) {
-            stageLabel.textContent = elapsedMs >= 45000
-                ? "模型响应较慢，仍在继续；无需重复提交"
-                : elapsedMs >= 20000
-                ? "模型正在生成较长回答，请稍候"
-                : "正在等待模型资源，已为你保留请求";
+            stageLabel.textContent = "暂未收到新的处理进度；正在等待更新，无需重复提交";
         }
     };
     update();
@@ -8086,7 +8085,8 @@ function renderAssistantMessage(
     externalEvidenceRequired = true,
     answerBlocks = [],
     executionEvents = [],
-    workEvents = []
+    workEvents = [],
+    evidenceCoverage = null
 ) {
     const scrollSnapshot = captureConversationScroll();
     let answerRendered = false;
@@ -8144,7 +8144,7 @@ function renderAssistantMessage(
                     title: "本次未引用可核验材料",
                     copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
                     count: 0,
-                    defaultExpanded: true,
+                    defaultExpanded: false,
                     contentHtml: '<p class="message-basis-detail">本回答未附可核验来源，不应当作已核实的事实或文献结论。可开启联网检索，或指定需要查询的资料。</p>',
                 });
         const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
@@ -8171,7 +8171,7 @@ function renderAssistantMessage(
             : "";
         const thinkSectionHtml = thinkContent
             ? `<div class="thinking-text-section" data-collapsed="true">
-                   <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
+                   <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">模型思考文本 · 不作为事实依据</button>
                    <div class="thinking-text-body">${escapeHtml(thinkContent)}</div>
                </div>`
             : "";
@@ -8179,6 +8179,11 @@ function renderAssistantMessage(
             ? `<div class="message-processing-meta" aria-label="本次回答处理耗时">已处理 ${formatAnswerProcessingDuration(elapsedMs)}</div>
                <div class="message-reply-divider" role="separator"></div>`
             : "";
+        const evidenceView = buildResponseEvidenceModel({
+            basisItems, hits, answerBlocks: sourceBlocksValid ? answerBlocks : [],
+            externalEvidenceRequired, bookingResult, followUpActions, isError, evidenceCoverage,
+            verifiedProfile: isUserAuthenticated ? currentUserAccountProfile : "general_visitor",
+        });
         container.innerHTML = `
             <div class="message-bubble-row">
                 <div class="message-avatar" aria-hidden="true">S</div>
@@ -8186,6 +8191,8 @@ function renderAssistantMessage(
                     <div class="message-role">${escapeHtml(assistantLabel)}</div>
                     <div class="message-frame">
                         ${processingMetaHtml}
+                        ${buildResponseEvidenceHtml(evidenceView)}
+                        ${buildResponseWorkSummaryHtml(workEvents)}
                         <div class="message-main-copy">
                             <div class="message-reply-block">
                                 <div class="${bodyClass}">${formatSourceAnswer(text, answerBlocks, cleanedText)}</div>
@@ -8218,6 +8225,98 @@ function renderAssistantMessage(
     }
 }
 
+// Presentation only: never infer factual coverage or external delivery from a
+// graph, generated prose, selected visitor persona or a completed work lease.
+function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = [],
+    externalEvidenceRequired = true, bookingResult = null, followUpActions = [],
+    isError = false, verifiedProfile = "general_visitor", evidenceCoverage = null} = {}) {
+    const sourceBlocks = answerBlocks.filter(block => block?.kind === "source");
+    const sources = sourceBlocks.length ? sourceBlocks : basisItems;
+    const sourceCount = new Set(sources.map((item, index) =>
+        item.source_id || item.source_url || `record:${index}`)).size;
+    const research = ["paper_writing_student", "lab_member"].includes(verifiedProfile);
+    const hasInferences = answerBlocks.some(block => block?.kind === "inference");
+    const source = sourceCount ? `附 ${sourceCount} 条来源记录` : hits.length
+        ? `检索命中 ${hits.length} 条；未附引用记录`
+        : externalEvidenceRequired ? "未附可核验来源" : "未记录外部引用";
+    const coverage = evidenceCoverage?.version === 1 && evidenceCoverage.method === "source_line_witness"
+        && Number.isInteger(evidenceCoverage.requirement_count) && evidenceCoverage.requirement_count > 0
+        && Array.isArray(evidenceCoverage.missing_parts) && evidenceCoverage.missing_parts.every(part => typeof part === "string")
+        ? evidenceCoverage : null;
+    const missingParts = coverage?.missing_parts || [];
+    const gap = isError ? "本次回答未成功交付；不应依据流程节点判定成功。"
+        : missingParts.length ? `SAGE 覆盖检查：${missingParts.length} 项问题尚缺来源依据；不表示相关事实不存在。`
+        : coverage ? "SAGE 已为各问题片段匹配来源行；这是模型辅助的覆盖检查，不是独立事实核验。"
+        : sourceCount ? "有来源不代表已覆盖所有问题，也不保证来源结论正确。"
+        : externalEvidenceRequired ? "当前无法核对事实依据。可补充资料或指定要查询的来源。"
+        : "本次未记录来源覆盖情况；不据此判断事实已核实。";
+    let operation = "";
+    if (bookingResult) {
+        operation = bookingResult.accepted === true && bookingResult.booking
+            ? `预约请求已登记 · 记录状态：${bookingResult.booking.status || "未知"}；不等于会议已确认或通知已送达`
+            : bookingResult.accepted === false ? "预约请求未被接受；未确认预约成功"
+            : "预约结果不完整；需核对，不能确认预约成功";
+    }
+    const suggestions = followUpActions.filter(action => action.status === "suggested").length;
+    const queued = followUpActions.filter(action => ["queued", "pending"].includes(action.status)).length;
+    const sent = followUpActions.filter(action => action.status === "sent").length;
+    const unknown = followUpActions.filter(action => !["suggested", "queued", "pending", "sent", "skipped"].includes(action.status)).length;
+    const actionStates = [suggestions && `${suggestions} 项建议尚未执行`, queued && `${queued} 项后续动作等待处理`,
+        sent && `${sent} 项动作记录为已发送（不代表收件方已收到）`, unknown && `${unknown} 项动作状态未知`].filter(Boolean);
+    return {source, gap, operation: [operation, ...actionStates].filter(Boolean).join("；"),
+        research: research ? "研究使用：区分来源陈述与实验建议；来源未展示数据不等于实验未做。" : "",
+        inference: hasInferences ? "含单列推论或建议，不是来源已证实的事实。" : "",
+        warning: isError || missingParts.length > 0 || (!sourceCount && externalEvidenceRequired), sourceCount, missingParts,
+        hasSourceDetails: basisItems.length > 0 || hits.length > 0};
+}
+
+function buildResponseEvidenceHtml(model) {
+    return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="来源与依据边界" data-evidence-view="v1">
+        <strong>${escapeHtml(model.source)}</strong>
+        ${model.hasSourceDetails ? '<button type="button" class="response-source-button" data-show-response-sources>查看来源与记录</button>' : ""}
+        <p>${escapeHtml(model.gap)}</p>
+        ${model.missingParts.length ? `<ul class="response-evidence-gaps">${model.missingParts.map(part => `<li>${escapeHtml(part)}</li>`).join("")}</ul><p>可补充对应资料，或明确哪些部分需要进一步检索。</p>` : ""}
+        ${model.inference ? `<p>${escapeHtml(model.inference)}</p>` : ""}
+        ${model.research ? `<p class="response-research-boundary">${escapeHtml(model.research)}</p>` : ""}
+        ${model.operation ? `<p class="response-operation">操作状态 · ${escapeHtml(model.operation)}</p>` : ""}
+    </aside>`;
+}
+
+function buildResponseWorkSummaryHtml(events = [], status = null) {
+    if (!events.length && !status) return "";
+    const labels = {pending:"等待处理",running:"处理中",done:"持久化完成",failed:"失败",blocked:"已阻止",
+        started:"处理中",completed:"持久化确认",retrying:"等待重试"};
+    let entries;
+    if (status?.version === 1 && Array.isArray(status.tasks)) {
+        entries = status.tasks.map(task => ({name: task.task_id, label:
+            task.status === "running" && task.lease_expired ? "租约过期，等待回收"
+            : task.status === "failed" && task.last_failure_code === "request_cancelled" ? "已取消"
+            : labels[task.status] || "未知"}));
+    } else {
+        const tasks = new Map();
+        for (const event of events) {
+            if (event?.version !== 1 || typeof event.task_id !== "string"
+                || !Number.isInteger(event.attempt)) continue;
+            const key = JSON.stringify([event.namespace, event.request_id, event.task_id]);
+            const previous = tasks.get(key);
+            if (previous && previous.attempt > event.attempt) continue;
+            if (previous && previous.attempt === event.attempt) {
+                if (event.state === "started") continue;
+                if (previous.state !== "started" && previous.state !== event.state) {
+                    tasks.set(key, {...event, state: "conflict"});
+                    continue;
+                }
+            }
+            tasks.set(key, event);
+        }
+        entries = [...tasks.values()].map(event => ({name:event.task_id,
+            label:labels[event.state] || "状态未知或冲突"}));
+    }
+    return `<div class="response-work-summary" aria-label="后台处理状态"><strong>后台处理</strong>
+        ${entries.length ? `<ul>${entries.map(entry => `<li>${escapeHtml(entry.name === "post_answer" ? "答后处理" : entry.name)} · ${escapeHtml(entry.label)}</li>`).join("")}</ul>` : "<p>状态记录不完整，无法确认</p>"}
+        <small>后台完成不代表邮件送达或会议确认。详情见高级工作流。</small></div>`;
+}
+
 function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null) {
     if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length && !workStatus) {
         return "";
@@ -8227,11 +8326,11 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], wor
     const preview = nativeCount ? `${nativeCount} 个原生节点` : `${workflowTrace.length} 条业务记录 · 原生执行状态未记录`;
 
     return `
-        <section class="message-workflow-summary message-section" data-execution-format="native-v1" data-expanded="false" aria-label="本次处理过程">
+        <section class="message-workflow-summary message-section" data-execution-format="native-v1" data-expanded="false" aria-label="高级执行详情">
             <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
                 <div class="message-section-toggle-copy">
                     <span class="message-process-icon" aria-hidden="true"></span>
-                    <strong class="message-section-title">处理过程</strong>
+                    <strong class="message-section-title">高级详情 · 工作流</strong>
                     <span class="message-inline-process-preview">${escapeHtml(preview)}</span>
                 </div>
                 <div class="message-section-toggle-meta">
@@ -8734,6 +8833,8 @@ function syncNativeExecutionDisplay() {
         const html = buildNativeExecutionHtml(activeExecutionEvents)
             + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
         if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
+        const pendingState = chatStream?.querySelector(".message-pending .pending-work-state");
+        if (pendingState) pendingState.innerHTML = buildResponseWorkSummaryHtml(activeWorkEvents);
         if (workflowTrace) workflowTrace.innerHTML = html;
         if (activeWorkflowMessage?.classList.contains("message-ready")) {
             updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
@@ -8825,6 +8926,14 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents, wo
             message.querySelector(".message-frame")?.insertAdjacentHTML("beforeend",buildWorkflowStatusSummaryHtml([],executionEvents,workEvents,workStatus));
             summary = message.querySelector(".message-workflow-summary");
         }
+        const workSummary = message.querySelector(".response-work-summary");
+        const workHtml = buildResponseWorkSummaryHtml(workEvents, workStatus);
+        if (workSummary) workSummary.outerHTML = workHtml;
+        else if (workHtml) {
+            const evidence = message.querySelector(".response-evidence");
+            if (evidence) evidence.insertAdjacentHTML("afterend", workHtml);
+            else message.querySelector(".message-main-copy")?.insertAdjacentHTML("beforebegin", workHtml);
+        }
         const content = summary?.querySelector(".message-section-content");
         if (!content) return;
         let native = content.querySelector(".message-native-execution");
@@ -8849,7 +8958,20 @@ function stopRestoredExecutionStreams() {
 
 function repairLegacyWorkflowSummaries(root) {
     if (!root) return;
+    // Saved HTML predates typed evidence summaries. Links and green nodes are
+    // not proof of source coverage or external delivery.
+    for (const message of root.querySelectorAll(".message-ready")) {
+        if (!message.querySelector(".response-evidence")) {
+            message.querySelector(".message-main-copy")?.insertAdjacentHTML("afterbegin",
+                buildResponseEvidenceHtml(buildResponseEvidenceModel({externalEvidenceRequired:false})));
+        }
+        for (const hint of message.querySelectorAll(".response-research-boundary")) {
+            hint.hidden = !(isUserAuthenticated && ["paper_writing_student", "lab_member"].includes(currentUserAccountProfile));
+        }
+    }
     for (const summary of root.querySelectorAll(".message-workflow-summary")) {
+        const title = summary.querySelector(".message-section-title");
+        if (title) title.textContent = "高级详情 · 工作流";
         if (summary.dataset.executionFormat || summary.querySelector(".native-execution")) continue;
         summary.querySelectorAll(".workflow-phase-rail,.workflow-step-chip-group-head").forEach(node=>node.remove());
         for (const group of summary.querySelectorAll(".workflow-step-chip-group")) {
@@ -8980,7 +9102,7 @@ function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
         });
 
         if (!visibleSteps.length) {
-            traceList.innerHTML = '<div class="thinking-trace-empty">会用阶段总览和完整步骤 chips 显示当前 workflow 走到哪一环。</div>';
+            traceList.innerHTML = '<div class="thinking-trace-empty">等待原生执行记录；不推断任务已完成。</div>';
             return;
         }
 
@@ -10279,7 +10401,8 @@ function handleWorkflowStreamEvent(payload) {
                 response.external_evidence_required !== false,
                 response.answer_blocks || [],
                 response.execution_events || [],
-                activeWorkEvents
+                activeWorkEvents,
+                response.evidence_coverage || null
             );
             // Some SSE deployments publish answer_done before post-answer
             // evidence is attached. Do not prevent the canonical /chat
@@ -10355,6 +10478,17 @@ function handleWorkflowTraceToggle(event) {
 }
 
 function handleMessageSectionToggle(event) {
+    const sourceButton = event.target.closest("[data-show-response-sources]");
+    if (sourceButton && chatStream?.contains(sourceButton)) {
+        const section = sourceButton.closest(".message-ready")?.querySelector(".message-section-support");
+        const toggle = section?.querySelector(".message-section-toggle");
+        if (toggle) {
+            if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+            section.scrollIntoView({block:"start", behavior:"auto"});
+            toggle.focus({preventScroll:true});
+        }
+        return;
+    }
     const toggle = event.target.closest(".message-section-toggle");
     if (!toggle || !chatStream || !chatStream.contains(toggle)) {
         return;

@@ -27,6 +27,8 @@ const context={chatStream:null, document:{getElementById:()=>null}, escapeHtml:s
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
     EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
 vm.createContext(context);
+const summaryStart=source.indexOf('function buildResponseWorkSummaryHtml(');
+vm.runInContext(source.slice(summaryStart,source.indexOf('\nfunction ',summaryStart+1)),context);
 for(const name of ['captureConversationScroll','restoreConversationScroll','syncLatestConversationButton']) {
     const start=source.indexOf('function '+name+'(');
     vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
@@ -109,11 +111,19 @@ const source=fs.readFileSync(process.argv[1],'utf8'),removed=[],notes=[{text:'no
 const preview={textContent:'6/6 完成'},group={querySelector:()=>({children:notes}),replaceWith:(...children)=>{assert.deepEqual(children,notes);removed.push('group');}};
 const old={dataset:{},querySelector:selector=>selector==='.message-inline-process-preview'?preview:null,
     querySelectorAll:selector=>selector==='.workflow-step-chip-group'?[group]:[{remove:()=>removed.push('rail')}]};
-const current={dataset:{executionFormat:'native-v1'},querySelectorAll:()=>{throw Error('native evidence must not be rewritten');}};
-const root={answer:'original answer',citation:'full original citation',querySelectorAll:()=>[old,current]};
-const context={};vm.createContext(context);
+const current={dataset:{executionFormat:'native-v1'},querySelector:()=>null,querySelectorAll:()=>{throw Error('native evidence must not be rewritten');}};
+let evidenceHtml='';
+const message={querySelector:selector=>selector==='.response-evidence'?(evidenceHtml?{}:null):
+    selector==='.message-main-copy'?{insertAdjacentHTML:(_,html)=>{evidenceHtml=html;}}:null,querySelectorAll:()=>[]};
+const root={answer:'original answer',citation:'full original citation',querySelectorAll:selector=>selector==='.message-ready'?[message]:[old,current]};
+const context={isUserAuthenticated:false,currentUserAccountProfile:''};vm.createContext(context);
+for(const name of ['escapeHtml','buildResponseEvidenceModel','buildResponseEvidenceHtml']) {
+    const start=source.indexOf('function '+name+'(');
+    vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
+}
 vm.runInContext(source.slice(source.indexOf('function repairLegacyWorkflowSummaries('),source.indexOf('async function hydrateExecutionEvidence(')),context);
 context.repairLegacyWorkflowSummaries(root);
+assert(evidenceHtml.includes('未记录来源覆盖情况'));
 assert.equal(old.dataset.executionFormat,'legacy-unrecorded');
 assert(preview.textContent.includes('无原生执行证据'));
 assert.deepEqual(removed,['rail','group']);
@@ -160,6 +170,23 @@ def test_native_workflow_graph_uses_authoritative_topology():
     import subprocess
     subprocess.run(["node", "--test", str(WEB_DIR.parents[2] / "tests/native_workflow_graph.test.cjs")],
                    check=True, timeout=20)
+
+
+def test_response_evidence_layers_and_same_answer_comparison(tmp_path):
+    import hashlib
+    import json
+    import subprocess
+
+    root = WEB_DIR.parents[2]
+    subprocess.run(['node', '--test', str(root / 'tests/response_evidence.test.cjs')], check=True, timeout=20)
+    subprocess.run(['node', str(root / 'tools/compare_response_evidence.cjs'), str(tmp_path)], check=True, timeout=20)
+    report = json.loads((tmp_path / 'comparison.json').read_text())
+    assert report['humanEvaluation'] == 'deferred by user'
+    assert len(report['cases']) == 6
+    for case in report['cases']:
+        assert all(case['technicalOnly'].values())
+        assert case['answerHash'] == hashlib.sha256(case['answer'].encode()).hexdigest()
+        assert set(case['arms']) == {'A', 'B', 'C'}
 
 
 def test_business_notes_cannot_reintroduce_inferred_phase_topology():
@@ -686,7 +713,7 @@ def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     ]
     assert 'class="message-workflow-summary message-section"' in summary_fn
     assert 'aria-expanded="false"' in summary_fn
-    assert '<strong class="message-section-title">处理过程</strong>' in summary_fn
+    assert '<strong class="message-section-title">高级详情 · 工作流</strong>' in summary_fn
     assert '<div class="message-section-content" hidden>' in summary_fn
     assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
         "buildNativeExecutionHtml(executionEvents)"
@@ -706,7 +733,8 @@ def test_live_progress_uses_one_compact_surface_inside_the_message() -> None:
         js.index("function buildPendingWorkflowTraceCompactHtml"):
         js.index("function buildWorkflowChipRowHtml")
     ]
-    assert 'aria-label="实时处理进度"' in pending_fn
+    assert 'aria-label="高级执行详情"' in pending_fn
+    assert '<details class="thinking-trace response-advanced"' in pending_fn
     assert "thinking-phase-rail" not in pending_fn
     assert "thinking-trace-chip-row" not in compact_fn
     assert "业务记录" in compact_fn

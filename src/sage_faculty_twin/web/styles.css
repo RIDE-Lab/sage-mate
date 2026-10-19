@@ -3496,6 +3496,28 @@ body.conversation-active .intro-card .message-body {
     margin: 0 auto;
 }
 
+.response-evidence, .response-work-summary {
+    color: var(--ink);
+    background: var(--surface-inset);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 8px 0 12px;
+    font-size: 12px;
+    line-height: 1.65;
+    overflow-wrap: anywhere;
+}
+.response-evidence p, .response-work-summary p { margin: 3px 0 0; color: var(--text-secondary); }
+.response-evidence.has-gap { border-inline-start: 3px solid var(--warning-text, var(--ink)); }
+.response-source-button { margin-inline-start: 10px; border: 0; background: transparent; color: var(--ink); text-decoration: underline; cursor: pointer; font: inherit; padding: 2px; }
+.response-source-button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.response-evidence .response-operation { color: var(--ink); border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
+.response-work-summary ul { margin: 3px 0; padding-inline-start: 18px; }
+.response-work-summary small { color: var(--text-secondary); }
+.response-advanced > summary { cursor: pointer; color: var(--text-secondary); padding: 6px 0; font-size: 12px; }
+.response-advanced:not([open]) { margin: 0; }
+.response-advanced:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
 .chat-shell.chat-empty .onboarding-card {
     width: min(100%, var(--content-column-max));
     max-width: var(--content-column-max);
