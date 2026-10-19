@@ -8397,7 +8397,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
             vertex.y=height/2+(row-(column.length-1)/2)*rowPitch;
         });
     }
-    const edges=links.map(link=>{
+    const edges=links.map((link,index)=>{
         const a=link.from,b=link.to,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy) || 1;
         // Intersect the terminal rectangle, not an oversized circular radius:
         // diagonal edges remain attached without eating short arrow segments.
@@ -8408,7 +8408,11 @@ function buildNativeWorkflowAtlasHtml(groups) {
         const classes=link.kind==="call" ? "native-flow-call" : `native-flow-edge${link.routed ? " is-routed" : ""}${active ? " is-active" : ""}`;
         const arrow=`M${x2-ux*5-uy*3},${y2-uy*5+ux*3} L${x2},${y2} L${x2-ux*5+uy*3},${y2-uy*5-ux*3}`;
         const flowAttribute=link.kind==="route" ? ` data-flow-edge="${link.routed ? "routed" : "declared"}"` : "";
-        return `<path class="${classes}" data-atlas-edge="${link.kind}"${flowAttribute} data-from="${escapeHtml(a.id)}" data-to="${escapeHtml(b.id)}" d="M${x1},${y1} L${x2},${y2}"/><path class="${link.kind==="call" ? "native-flow-call" : `native-flow-arrow${link.routed ? " is-routed" : ""}`}" d="${arrow}"/>`;
+        const line=`M${x1},${y1} L${x2},${y2}`;
+        // A normalized, CSS-only comet overlays the real edge; it is not a
+        // second dependency and never animates an inactive/historical route.
+        const stream=active ? `<path class="native-flow-stream" data-stream-kind="${link.kind}" aria-hidden="true" pathLength="100" style="animation-delay:${-(index%7)*.19}s" d="${line}"/>` : "";
+        return `<path class="${classes}" data-atlas-edge="${link.kind}"${flowAttribute} data-from="${escapeHtml(a.id)}" data-to="${escapeHtml(b.id)}" d="${line}"/>${stream}<path class="${link.kind==="call" ? "native-flow-call" : `native-flow-arrow${link.routed ? " is-routed" : ""}`}" d="${arrow}"/>`;
     }).join("");
     const nodes=vertices.map(vertex=>{
         const node=vertex.node,event=node.attempts[0],name=event?.operator_key || node.declaration?.operator_key

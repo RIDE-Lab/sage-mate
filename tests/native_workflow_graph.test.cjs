@@ -45,6 +45,8 @@ let html = context.buildNativeExecutionHtml([a,b,router,left,right]);
 assert(html.includes('统一工作流网络'));
 assert(!html.includes('native-atlas-group-label'));
 assert(html.includes('data-atlas-edge="call"'));
+assert(html.includes('class="native-flow-stream"'));
+assert(html.includes('aria-hidden="true" pathLength="100"'));
 assert(html.includes('局部拓扑')); // Legacy events never acquire a fake complete map.
 assert(html.includes('明确记录的子流程调用'));
 for (const text of ['主工作流','子工作流','嵌套于 same label','节点明细与原生元数据',
@@ -101,6 +103,11 @@ const historyHtml = context.buildNativeExecutionHtml([
         {program_uri:'flow://actual',program_rev:'v1',node_id:'q'}]}),event('q'),
 ]);
 assert(!historyHtml.includes('is-active')); // Historical completions never animate as running.
+assert(!historyHtml.includes('class="native-flow-stream"'));
+const flowCss=fs.readFileSync(path.join(__dirname,'../src/sage_faculty_twin/web/styles.css'),'utf8');
+assert(flowCss.includes('@keyframes native-flow-travel'));
+assert(flowCss.includes('@keyframes native-flow-breathe'));
+assert(flowCss.includes('.native-flow-stream { display: none; animation: none; }'));
 const declared = [
     {node_id:'start',operator_type:'map',operator_key:'plan',downstream_node_ids:['chosen','unused']},
     {node_id:'chosen',operator_type:'map',operator_key:'answer',downstream_node_ids:[]},

@@ -63,10 +63,23 @@ html[data-theme="dark"] .native-flow-call { stroke: #b9a4ef; }
 .native-workflow-atlas .native-flow-node:focus-visible .native-flow-label { opacity: 1; }
 .native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }
 .native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--info-text); stroke-dasharray: none; stroke-width: 2; }
-.native-flow-edge.is-active { stroke: var(--info-text); stroke-dasharray: 6 9; animation: native-flow-travel 1.2s linear infinite; }
-@keyframes native-flow-travel { to { stroke-dashoffset: -30; } }
+.native-flow-edge.is-routed { filter: drop-shadow(0 0 2px color-mix(in srgb, var(--info-text) 30%, transparent)); }
+.native-flow-edge.is-active { stroke: var(--info-text); stroke-width: 2.5; }
+.native-flow-stream { fill: none; pointer-events: none; stroke: #087eaf; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 10 90; filter: drop-shadow(0 0 3px #21b9e4) drop-shadow(0 0 6px #21b9e4); animation: native-flow-travel 1.8s linear infinite; }
+.native-flow-stream[data-stream-kind="call"] { stroke: #8854d0; filter: drop-shadow(0 0 4px #b88af4); }
+html[data-theme="dark"] .native-flow-stream { stroke: #d4fbff; filter: drop-shadow(0 0 3px #50dcff) drop-shadow(0 0 8px #399fff); }
+html[data-theme="dark"] .native-flow-stream[data-stream-kind="call"] { stroke: #eee0ff; filter: drop-shadow(0 0 5px #c39aff); }
+.native-flow-node[data-flow-state="started"] > circle,
+.native-flow-node[data-flow-state="started"] > rect { animation: native-flow-breathe 1.8s ease-in-out infinite; }
+@keyframes native-flow-travel { from { stroke-dashoffset: 10; } to { stroke-dashoffset: -90; } }
+@keyframes native-flow-breathe { 0%, 100% { filter: drop-shadow(0 0 2px var(--info-text)); } 50% { filter: drop-shadow(0 0 9px var(--info-text)); } }
+.native-flow-diagram:not(.native-flow-atlas-diagram) .native-flow-edge.is-active { stroke-dasharray: 6 9; animation: native-flow-legacy-travel 1.2s linear infinite; }
+@keyframes native-flow-legacy-travel { to { stroke-dashoffset: -30; } }
 @media (prefers-reduced-motion: reduce) {
-    .native-flow-edge.is-active { animation: none; stroke-dasharray: none; }
+    .native-flow-stream { display: none; animation: none; }
+    .native-flow-diagram:not(.native-flow-atlas-diagram) .native-flow-edge.is-active { animation: none; stroke-dasharray: none; }
+    .native-flow-node[data-flow-state="started"] > circle,
+    .native-flow-node[data-flow-state="started"] > rect { animation: none; }
 }
 .native-flow-node { cursor: pointer; outline: none; }
 .native-flow-node circle { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1; }
