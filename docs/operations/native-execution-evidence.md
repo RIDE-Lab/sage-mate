@@ -1,5 +1,37 @@
 # Native execution evidence
 
+## 2026-10-19 qualification and deployment
+
+Runtime `9bf304448beff7b74518ad8095f659a1433b9e20`, installed SAGE
+`4c4abffed927925856daf6ac468789dc391d587f`: fresh locked CPython 3.11
+environment, 1,727 passed / 31 existing skips / zero failures or errors.
+The baseline identity-evaluation exclusion was unchanged. Seven frontend Node
+groups and 39 focused frontend contracts also passed. Production now runs this
+release; the Wiki timer uses its matching interpreter and source paths. Three
+canonical SQLite stores were backed up using SQLite's backup API with all writers
+stopped, and each backup passed integrity checks before the switch. Inference
+services and credentials were not changed.
+
+In the isolated real-model preview, full Wiki evidence, native streamed execution,
+atomic background acknowledgement and cross-guest isolation passed. Existing
+browser history reopened without reasking or changing answer/source text. Both
+themes visibly showed the main graph and the retrieval child graph with its
+two routed branches. A real browser failure exposed event-group-scoped parent
+lookup; the corrected trace-scoped explicit reference is covered by regression.
+Production HTML and JavaScript/CSS hashes were verified against main.
+
+The one authorized Slack acceptance question was sent through the actual slash
+command. Its native answer/deliver/finalize tasks completed on attempt one, with
+one of one delivery receipts accepted. **This is not a client-rendering pass:**
+Slack's accessible tree and screenshot disagreed and the computer-control service
+subsequently timed out. Actual new-message Markdown display remains an outstanding
+acceptance item. Do not resend the question without new authorization or report
+the complete migration goal as accepted solely from the server receipt.
+
+The owned loopback preview and its SSH forward were stopped after qualification;
+their synthetic data and reports were retained. No second production executor
+was introduced by this visualization.
+
 ## Workflow view, not a flat node log
 
 The process panel renders an actual native workflow diagram. Node identities
