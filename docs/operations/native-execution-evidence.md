@@ -2,7 +2,21 @@
 
 ## Current accepted release
 
-Production now runs `2f6343e32414e9e819f5d6206633753d9729eb84` with SAGE
+Production now runs `ee9f1c487068cc4b2a882e022c34fcc366321bcd`: the first-paint
+repair removes whole-document opacity hiding. Fresh full regression: 1,730 passed,
+31 existing skips, zero failures/errors in 502.72 seconds; eight frontend Node
+groups pass. SAGE remains `dc92f393`. The public HTML hash equals main.
+
+The public Chrome visual gate is now accepted through native foreground browser
+controls: full Wiki answer, restored history without reasking, exact node detail
+interaction and both themes were observed. Earlier failed/empty browser-control
+observations were retained, not reclassified as passes. See
+[Chrome public acceptance](chrome-public-acceptance.md) for the controlled
+old/new first-paint reproduction and the separate automation-bridge limitation.
+
+## Previous icon/intent release
+
+That deployment ran `2f6343e32414e9e819f5d6206633753d9729eb84` with SAGE
 `dc92f39310d4be5127fefb9a24d31d89876a6a7a`. Fresh immutable locked environment:
 1,730 passed, 31 existing skips, zero failures/errors, 475.36 seconds. All seven
 Node frontend groups and 23 SDK branch/observation tests passed. The baseline
