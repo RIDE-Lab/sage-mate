@@ -8433,6 +8433,8 @@ function nativeNodeAppearance(name, observed) {
         "reassess-coverage":["覆盖复查","checklist","复查"],"compose-source-plan":["来源计划","book","编排"],
         "research-proposals":["研究复核","branch"],"no-proposal-review":["无需复核","branch"],
         "review-proposals":["建议复核","checklist","复核"],"verify-evidence-answer":["发布校验","check","校验"],
+        "plan-experiments":["实验计划","checklist","实验"],
+        "research-experiments":["研究实验","branch"],"no-experiment-plan":["无需实验","branch"],
         "sys/router":["分支","branch"],filter:["条件","branch"]})[name] || [observed ? "节点" : "未观测","branch"];
 }
 

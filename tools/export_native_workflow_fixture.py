@@ -18,6 +18,7 @@ from sage_faculty_twin.chat_runtime import ChatRuntime
 from sage_faculty_twin.knowledge_source_runtime import KnowledgeSourceRuntime
 from sage_faculty_twin.retrieval_runtime import RetrievalRuntime
 from test_chat_runtime import TraceContext, ports
+from research_fixture import experiment_response
 
 events = []
 parser = argparse.ArgumentParser()
@@ -45,10 +46,10 @@ class NoEffectQuality:
 
     def compose(self, request, assessment):
         return json.dumps({"digest": request.digest, "source_ids": [s.source_id for s in request.sources],
-            "inferences": ["Synthetic prospective proposal, not a model-quality result."] if options.research else []})
+            "inferences": []})
 
-    def review(self, request, plan):
-        return json.dumps({"digest": request.digest, "source_ids": plan.source_ids, "inferences": plan.inferences})
+    def plan_experiments(self, request, plan):
+        return experiment_response(request.digest)
 
 
 def memory(value):

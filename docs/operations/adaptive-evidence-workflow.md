@@ -2,7 +2,7 @@
 
 ## Candidate, not yet production-qualified
 
-The next candidate pins SAGE `d0351d88` for content-free full program snapshots
+The next candidate pins SAGE `2da30287` for content-free full program snapshots
 and explicit native entry/return/sink boundary flags.
 Each invocation emits declared node IDs, operator types/keys and declared edges
 once, separately from actual next-node routing. Terminal/out-of-order updates
@@ -89,7 +89,7 @@ passed separately (2 tests). This is NOT a passing full-regression claim.
 
 SAGE now owns `EvidenceWorkflowRuntime`: lossless question partitions, exact
 authorized-source coverage witnesses, a conditional single supplement/reassessment
-round, constrained source composition, actual research proposal review and final
+round, constrained source composition, typed research experiment planning and final
 source/coverage verification. Remaining evidence gaps are shown as original
 question spans, never as claims that facts do not exist. Structural validation
 does not certify the model's semantic coverage judgment or the truth of sources.
@@ -124,3 +124,42 @@ not evidence of real model quality, neural retrieval performance or live ACLs.
 Still required before production: latest immutable full regression, real QA
 coverage/research quality and latency, browser visual/recovery gates, and a
 rollback-safe immutable production cutover. Production has not switched.
+
+## Real QA exposed a semantic failure; release held
+
+Immutable Twin `562f618` passed full regression after initializing its exact
+`deps/vllm-hust-dev-hub` gitlink: 1,745 passed, 31 skipped in 494.96 seconds.
+The earlier 8 failures/68 setup errors were the missing pinned dependency, not
+an application regression. Do not omit dependency initialization in fresh runs.
+
+Public-only isolated QA then returned intact source bodies and links, canonical
+answer blocks and genuine coverage/verification nodes. Descriptive warm totals:
+roles 9.580s, boundary 12.059s, research 37.021s. These are not a controlled
+speedup claim. Manual inspection rejected the research answer: freeform model
+review still used nonsignificance as a falsifier and an unmatched fault control.
+That candidate must NOT be released merely because structural checks are green.
+
+SAGE now owns typed invariant/performance experiments. The model supplies only
+mechanism settings, shared conditions, fault/event schedule and measurements;
+SAGE owns counterexample and confidence-bound rules, forbids freeform falsifier
+fields, binds the experiment receipt to source selection, and produces canonical
+prospective prose. Source composition emits no freeform inferences. Native stage
+`plan-experiments` truthfully denotes this planning, followed by runtime final
+verification; it is not advertised as an independent semantic model auditor.
+Candidate implementations are not represented as the project's current design.
+
+Latest SAGE full gate: 620 passed, 1 skipped / 37.37s; Twin focused gate: 79
+passed / 57.93s. A real configured `sage-auto` experiment-stage call produced
+valid typed plans in 13.040s; manual checks confirmed matched shared faults and
+the runtime's distinct scientific decision rules. This stage-only result is
+NOT a new full-chat/browser qualification. Fresh locked app regression and real
+pipeline/browser/recovery acceptance remain required before production cutover.
+
+Qualification tooling: `tools/preview_evidence_workflow.py` creates a loopback
+preview with only a public Wiki snapshot, RAM-only inherited credentials and
+isolated typed mutable paths, no Slack/mail/calendar effects and no local GPU.
+`tools/accept_evidence_workflow.py` independently checks full source content via
+the isolated SageVDB catalog, not the excluded internal `source_content` API
+field. `tools/qualify_research_experiments.py` exercises the same configured model
+without changing providers or reducing output budgets. No tool writes private
+production data or logs credentials.

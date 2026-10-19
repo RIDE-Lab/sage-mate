@@ -144,7 +144,7 @@ def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_f
 
 
 @pytest.mark.parametrize("transport", ["http", "slack"])
-@pytest.mark.parametrize("error_type", ["InvalidSourcePlan", "InvalidEvidenceCoverage"])
+@pytest.mark.parametrize("error_type", ["InvalidSourcePlan", "InvalidEvidenceCoverage", "InvalidResearchPlan"])
 def test_wrapped_invalid_source_plan_is_terminal(transport, error_type):
     from types import SimpleNamespace
     from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError

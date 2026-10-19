@@ -3,7 +3,8 @@
 import json
 
 from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT, coverage_response_format
-from sage.runtime.evidence_workflow import COVERED_PLAN_SYSTEM_PROMPT, PROPOSAL_REVIEW_SYSTEM_PROMPT
+from sage.runtime.evidence_workflow import COVERED_PLAN_SYSTEM_PROMPT
+from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT, experiment_response_format
 from sage.runtime.source_answer_plan import PlanSource, source_plan_response_format
 
 from .request_context import raise_if_request_cancelled
@@ -55,8 +56,7 @@ class TwinEvidencePorts:
             json.dumps(payload, ensure_ascii=False), namespace=f"source-plan:{request.digest}",
             response_format=source_plan_response_format(request))
 
-    def review(self, request, plan):
+    def plan_experiments(self, request, plan):
         payload = json.loads(request.payload)
-        payload["draft_plan"] = {"source_ids": plan.source_ids, "inferences": plan.inferences}
-        return self._call(PROPOSAL_REVIEW_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False),
-            namespace=f"source-proposal-review:{request.digest}", response_format=source_plan_response_format(request))
+        return self._call(EXPERIMENT_SYSTEM_PROMPT, json.dumps(payload, ensure_ascii=False),
+            namespace=f"source-experiments:{request.digest}", response_format=experiment_response_format(request))

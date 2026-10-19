@@ -178,7 +178,7 @@ class SlackWorkflow:
             return WorkFailure(code)
         if isinstance(error, AnswerValidationRejected) or (
             isinstance(error, FlowRequestOutcomeError)
-            and error.error_type in {"SourceAuditRejected", "AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage"}
+            and error.error_type in {"SourceAuditRejected", "AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage", "InvalidResearchPlan"}
         ):
             return WorkFailure("answer_validation_rejected")
         status = getattr(error, "status_code", getattr(error, "code", None))

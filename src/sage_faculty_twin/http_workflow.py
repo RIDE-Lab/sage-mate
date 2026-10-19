@@ -147,7 +147,7 @@ class HttpWorkflow:
             return WorkFailure("source_audit_rejected")
         if isinstance(error, AnswerValidationRejected) or (
             isinstance(error, FlowRequestOutcomeError)
-            and error.error_type in {"AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage"}
+            and error.error_type in {"AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage", "InvalidResearchPlan"}
         ):
             return WorkFailure("answer_validation_rejected")
         if isinstance(error, HttpWorkRejected):
