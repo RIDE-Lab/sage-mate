@@ -28,3 +28,13 @@ render (15741/15741). These are synthetic fixture checks, not live model output.
 
 Publish frontend only with backed-up assets and a separate frontend revision
 receipt. Backend, model processes and existing history are not migrated.
+
+Public acceptance: frontend15546de was byte-verified for HTML, JavaScript and
+both stylesheets. Chrome restored the existing two-round public QA session;
+while a new, verified full-Chinese Wiki research question was generating, the
+reader scrolled to the middle of the first answer. The new answer completed in
+31.0 seconds and the viewport retained the same older text and visual offset.
+The submit control changed from stop to send without navigating to the bottom.
+Backend PID3876506 remained unchanged. A preceding automation attempt lost
+Chinese characters through native typing; it is not intended-question quality
+evidence. The accepted attempt used paste and checked input before submission.
