@@ -37,6 +37,8 @@ def main():
             intent = traces.get('interaction_understand', {}).get('detail', '')
             blocks = data.get('answer_blocks', [])
             prospective = any(block.get('kind') == 'inference' for block in blocks)
+            planned = any(e.get('operator_key') == 'plan-experiments' and e.get('state') == 'completed'
+                          for e in data.get('execution_events', []))
             coverage = data.get('evidence_coverage') or {}
             checks = {
                 'http_ok': response.status_code == 200,
@@ -47,6 +49,7 @@ def main():
                 'semantic_task': f"任务目的：{'facts' if mode == 'facts' else 'research'}" in intent,
                 'correct_branch': ('执行路线：research' in route) == (mode != 'facts'),
                 'prospective_only_when_requested': prospective == (mode != 'facts'),
+                'native_experiment_execution_matches_task': planned == (mode != 'facts'),
             }
             if mode == 'facts':
                 checks['original_missing_evidence_retained'] = bool(coverage.get('missing_parts'))
