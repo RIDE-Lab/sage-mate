@@ -96,6 +96,7 @@ def harness(monkeypatch, tmp_path):
     instance.cancellation_targets = lambda: {}  # This fixture's producer has no destination effects.
     h.service = SimpleNamespace(answer=answer, ensure_initialized=lambda: instance,
         is_initialized=lambda: True, aclose=close, health=lambda: {"status": "ok"},
+        serving_readiness=lambda: {"status": "ok", "background_readiness": "ready"},
         get_slack_link_account=lambda uid: h.accounts.get(uid))
     monkeypatch.setattr(api_module, "service", h.service)
     def post(method, payload):

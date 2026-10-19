@@ -1620,7 +1620,7 @@ async def health(response: Response) -> dict[str, object]:
             "owner_role": settings.owner_role,
             "homepage_public_url": settings.homepage_public_url,
         }
-    snapshot = await asyncio.to_thread(service.health)
+    snapshot = await asyncio.to_thread(service.serving_readiness)
     http_readiness = _http_readiness()
     degraded = snapshot.get("status") == "degraded" or http_readiness == "degraded"
     if degraded:

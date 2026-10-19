@@ -11,6 +11,31 @@ from sage_faculty_twin.service import DigitalTwinService
 from test_http_workflow_integration import http_client
 
 
+def test_public_readiness_does_not_collect_full_diagnostics(tmp_path, monkeypatch):
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))
+    instance.start_background_work()
+
+    def diagnostic_scan_forbidden(*args, **kwargs):
+        raise AssertionError("public readiness must not scan memory, identity or analytics")
+
+    try:
+        with http_client(instance, monkeypatch, close_service=False) as client:
+            proxy = api.LazyDigitalTwinService()
+            proxy._instance = instance
+            monkeypatch.setattr(api, "service", proxy)
+            monkeypatch.setattr(instance, "health", diagnostic_scan_forbidden)
+            monkeypatch.setattr(instance._runtime_identity_provider, "snapshot", diagnostic_scan_forbidden)
+            monkeypatch.setattr(instance._conversation_store, "runtime_snapshot", diagnostic_scan_forbidden)
+            monkeypatch.setattr(instance._planner_metrics_store, "build_summary", diagnostic_scan_forbidden)
+            response = client.get("/health")
+            assert response.status_code == 200
+            assert response.json()["readiness"] == "ready"
+            assert response.json()["background_readiness"] == "ready"
+            assert "background_work_states" not in response.json()
+    finally:
+        asyncio.run(instance.aclose())
+
+
 @pytest.mark.parametrize("kind", ["post_answer", "feedback", "knowledge_index", "booking_notifications"])
 def test_failed_native_worker_degrades_public_health_and_reconstruction_recovers(tmp_path, monkeypatch, kind):
     instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name="fixture"))

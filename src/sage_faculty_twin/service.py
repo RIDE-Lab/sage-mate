@@ -11340,6 +11340,26 @@ class DigitalTwinService:
             "booking_notifications": self._meeting_service.notification_work_status(),
         }
 
+    def serving_readiness(self) -> dict[str, str]:
+        """Read native lifecycle state without scanning data or diagnostic stores."""
+        workers = self.background_work_status()
+        unavailable = [key for key, status in workers.items() if status is not None
+                       and status.phase in {"failed", "stopped", "draining", "closed"}]
+        background_readiness = ("degraded" if unavailable else "ready" if (
+            workers["post_answer"] is not None and workers["feedback"] is not None
+            and all(status.ready for status in workers.values() if status is not None)) else "not_started")
+        return {
+            "status": "degraded" if unavailable else "ok",
+            "background_readiness": background_readiness,
+            "background_work_states": json.dumps({key: status.to_dict() if status is not None else None
+                                                 for key, status in workers.items()}, ensure_ascii=False),
+            "app_version": _app_version,
+            "owner_name": self._settings.owner_name,
+            "owner_role": self._settings.owner_role,
+            "homepage_public_url": self._settings.homepage_public_url,
+            "model_name": self._llm_client.model_name,
+        }
+
     def health(self) -> dict[str, str]:
         runtime_identity = self._runtime_identity_provider.snapshot()
         due_follow_ups = self._follow_up_store.list_due_actions()
@@ -11356,17 +11376,8 @@ class DigitalTwinService:
             iter((planner_metrics.get("rejection_reasons") or {}).keys()), ""
         )
         top_rejected_step = next(iter((planner_metrics.get("rejected_steps") or {}).keys()), "")
-        workers = self.background_work_status()
-        unavailable = [key for key, status in workers.items() if status is not None
-                       and status.phase in {"failed", "stopped", "draining", "closed"}]
-        background_readiness = ("degraded" if unavailable else "ready" if (
-            workers["post_answer"] is not None and workers["feedback"] is not None
-            and all(status.ready for status in workers.values() if status is not None)) else "not_started")
         payload = {
-            "status": "degraded" if unavailable else "ok",
-            "background_readiness": background_readiness,
-            "background_work_states": json.dumps({key: status.to_dict() if status is not None else None
-                                                 for key, status in workers.items()}, ensure_ascii=False),
+            **self.serving_readiness(),
             "app_version": _app_version,
             "owner_name": self._settings.owner_name,
             "owner_role": self._settings.owner_role,
