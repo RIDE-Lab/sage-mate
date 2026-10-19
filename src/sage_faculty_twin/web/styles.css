@@ -17,23 +17,41 @@
 .native-execution [data-execution-state="recovered"],
 .native-execution [data-execution-state="cancelled"] { color: var(--warning-text); }
 .native-execution [data-execution-state="started"] { color: var(--ink); }
-.native-flow-legend, .native-flow-program { font-size: 12px; line-height: 1.6; }
-.native-flow-scope { margin: 12px 0; }
-.native-flow-scope h4 { margin: 0; font-size: 14px; }
-.native-flow-program { margin: 2px 0 8px; overflow-wrap: anywhere; }
-.native-flow-scope.is-nested { border-inline-start: 2px solid var(--line-strong); padding-inline-start: 14px; }
-.native-flow-scroll { overflow-x: auto; }
-.native-flow-diagram { display: block; width: 100%; max-width: 460px; margin-inline: auto; }
-.native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; }
-.native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--ink); stroke-dasharray: none; }
-.native-flow-node rect { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1.5; }
-.native-flow-label { fill: var(--ink); font: 13px system-ui, sans-serif; }
+.native-execution { background: transparent; border: 0; padding: 0; }
+.native-work, .native-work-current { background: var(--surface-solid); border-color: var(--line); margin-top: 10px; font-size: 12px; line-height: 1.7; }
+.native-work p, .native-work-current p { margin-top: 0; font-size: 11px; }
+.native-business-log { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--text-secondary); font-size: 12px; }
+.native-business-log summary { cursor: pointer; }
+.native-flow-legend, .native-flow-program { font-size: 12px; line-height: 1.7; }
+.native-flow-key { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; font-size: 11px; color: var(--text-secondary); }
+.native-flow-key > span:first-child { color: var(--ink); font-size: 12px; font-weight: 600; margin-inline-end: auto; }
+.native-flow-key-routed::before, .native-flow-key-declared::before { content: ""; display: inline-block; width: 18px; border-top: 1.5px solid currentColor; margin-inline-end: 6px; vertical-align: middle; }
+.native-flow-key-declared::before { border-top-style: dashed; }
+.native-flow-scope { margin: 12px 0; padding: 14px 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-solid); }
+.native-flow-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
+.native-flow-heading h4 { margin: 0; font-size: 13px; font-weight: 650; }
+.native-flow-heading > span { color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.native-flow-program { margin: 6px 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
+.native-flow-scope.is-nested { border-inline-start: 3px solid var(--line-strong); }
+.native-flow-scroll { overflow-x: auto; margin-top: 8px; scrollbar-width: thin; }
+.native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
+.native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }
+.native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--text-secondary); stroke-dasharray: none; }
+.native-flow-node rect { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1; }
+.native-flow-label { fill: var(--ink); font: 13px system-ui, sans-serif; font-weight: 550; }
 .native-flow-state { fill: var(--text-secondary); font: 11px system-ui, sans-serif; }
+.native-flow-node[data-flow-state="completed"] .native-flow-state { fill: var(--success-text); }
+.native-flow-node[data-flow-state="completed"] rect { stroke: var(--success-border); }
 .native-flow-node[data-flow-state="failed"] rect { stroke: var(--error-text); }
 .native-flow-node[data-flow-state="started"] rect { stroke: var(--info-text); }
 .native-flow-node[data-flow-state="recovered"] rect,
 .native-flow-node[data-flow-state="cancelled"] rect { stroke: var(--warning-text); }
 .native-flow-node[data-flow-state="unobserved"] rect { stroke-dasharray: 4 4; }
+.native-flow-identity, .native-flow-notes { color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
+.native-flow-identity { margin-top: 2px; }
+.native-flow-notes { margin: 12px 0; }
+.native-flow-notes p { margin: 8px 0 0; }
 .native-node-log { margin-top: 12px; border-top: 1px solid var(--line-strong); padding-top: 10px; }
 
 :root {

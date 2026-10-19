@@ -64,4 +64,18 @@ assert.equal([...context.buildNativeWorkflowModel([cross])[0].nodes.values()].fi
 assert(!context.buildNativeExecutionHtml([event('x',{operator_key:'<script>alert(1)</script>'})]).includes('<script>'));
 assert(context.buildNativeExecutionHtml([{version:1,execution_id:'legacy',sequence:1,state:'started'}]).includes('没有完整的原生拓扑字段'));
 assert(!html.includes('WORKFLOW_PHASE_DEFINITIONS'));
+// Nine sequential graph layers fit three compact rows, without losing an edge.
+const chain = Array.from({length:9}, (_,i)=>event('chain-'+i,{operator_key:'operator-'+i,
+    next_nodes:i===8 ? [] : [{program_uri:'flow://actual',program_rev:'v1',node_id:'chain-'+(i+1)}]}));
+const compact = context.buildNativeExecutionHtml(chain);
+assert.equal((compact.match(/data-flow-node=/g)||[]).length,9);
+assert.equal((compact.match(/data-flow-edge=/g)||[]).length,8);
+assert(Number(compact.match(/viewBox="0 0 600 ([\d.]+)"/)[1]) < 400);
+assert(compact.includes('9 节点 · 8 连线'));
+assert(compact.includes('折行只改变布局，不增加连线'));
+assert(compact.includes('<details class="native-flow-identity">'));
+assert(compact.includes('tabindex="0"')); // Narrow-screen keyboard scrolling.
+const longName = '完整保留中文节点名ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const longHtml = context.buildNativeExecutionHtml([event('long',{operator_key:longName})]);
+assert.equal(Array.from(longHtml.matchAll(/class="native-flow-label">([^<]*)<\/text>/g), m=>m[1]).join(''),longName);
 console.log('Authoritative topology, nested forks, missing nodes, retries, cycles and escaping passed');

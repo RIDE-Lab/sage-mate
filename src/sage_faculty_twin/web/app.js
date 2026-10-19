@@ -8125,10 +8125,11 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], wor
                 <div class="message-native-execution">${buildNativeExecutionHtml(executionEvents)}
                     <div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>
                 </div>
-                <p>业务记录（不代表节点执行或后台任务确认）</p>
-                <div class="message-workflow-chip-row">
-                    ${buildWorkflowChipRowHtml(workflowTrace)}
-                </div>
+                <details class="native-business-log">
+                    <summary>业务记录 · ${workflowTrace.length} 条</summary>
+                    <p>不代表节点执行或后台任务确认</p>
+                    <div class="message-workflow-chip-row">${buildWorkflowChipRowHtml(workflowTrace)}</div>
+                </details>
             </div>
         </section>
     `;
@@ -8234,9 +8235,11 @@ function buildNativeWorkflowHtml(events) {
     if (!groups.length) return '<p class="native-flow-missing">没有完整的原生拓扑字段，只显示节点记录；不猜测工作流连线。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
     const render = group => {
-        const columns = Math.max(...group.layers.map(layer => layer.length));
-        const width = Math.max(460, columns * 220 + 20), positions = new Map();
-        let y = 16;
+        const columns = Math.min(3, group.layers.length);
+        const width = 600, gutter = 24, inset = 18;
+        const slot = (width - inset * 2 - gutter * (columns - 1)) / columns;
+        const positions = new Map();
+        let y = 18;
         const stateText = node => {
             if (!node.attempts.length) return "未观测到执行";
             const counts = new Map();
@@ -8245,44 +8248,73 @@ function buildNativeWorkflowHtml(events) {
         };
         const wrap = text => {
             const chars = Array.from(text), lines = [];
-            for (let i=0; i<chars.length; i+=22) lines.push(chars.slice(i,i+22).join(""));
+            let line = "", units = 0;
+            // A glyph-width budget, not a content limit: every character stays.
+            for (const char of chars) {
+                const size = char.codePointAt(0) > 255 ? 2 : 1;
+                if (units + size > 20 && line) { lines.push(line); line = ""; units = 0; }
+                line += char; units += size;
+            }
+            if (line) lines.push(line);
             return lines.length ? lines : [""];
         };
-        for (const layer of group.layers) {
-            const entries = layer.map(id => {
+        const layers = group.layers.map(layer => layer.map(id => {
                 const node = group.nodes.get(id);
                 const name = node.attempts[0]?.operator_key || node.attempts[0]?.operator_type || "尚无节点记录";
                 const children = groups.filter(child => child.parentEvent
                     && node.attempts.includes(child.parentEvent)).length;
                 return {node, lines:wrap(name), states:wrap(stateText(node))
                     .concat(children ? [`含 ${children} 个子工作流 ↓`] : [])};
+            }));
+        // Fold graph layers into a compact serpentine; positions are layout only.
+        // All arrows still come exclusively from the authoritative edge set.
+        for (let offset=0, row=0; offset<layers.length; offset+=columns, row++) {
+            const batch = layers.slice(offset, offset+columns);
+            let rowHeight = 0;
+            batch.forEach((entries,index) => {
+                const column = row % 2 ? columns-1-index : index;
+                let top = y;
+                for (const entry of entries) {
+                    const height = 26 + 16 * (entry.lines.length + entry.states.length);
+                    positions.set(entry.node.key, {...entry, row, column,
+                        x:inset+column*(slot+gutter), y:top, width:slot, height});
+                    top += height + 16;
+                }
+                rowHeight = Math.max(rowHeight, top-y-16);
             });
-            const height = Math.max(...entries.map(entry => 26 + 17 * (entry.lines.length + entry.states.length)));
-            const slot = width / entries.length;
-            entries.forEach((entry,index) => positions.set(entry.node.key, {...entry,
-                x:slot*index+12, y, width:slot-24, height}));
-            y += height + 30;
+            y += rowHeight + 34;
         }
         const edges = [...group.edges.values()].map(edge => {
             const from = positions.get(edge.from), to = positions.get(edge.to);
-            const x1=from.x+from.width/2, y1=from.y+from.height, x2=to.x+to.width/2, y2=to.y;
-            const back=y2<=y1, bend=back ? Math.max(from.x+from.width,to.x+to.width)+7 : (y1+y2)/2;
-            const path = back ? `M${x1},${y1} L${bend},${y1+9} L${bend},${y2-9} L${x2},${y2}`
-                : `M${x1},${y1} C${x1},${bend} ${x2},${bend} ${x2},${y2}`;
-            return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="M${x2-4},${y2-6} L${x2},${y2} L${x2+4},${y2-6}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
+            let path, arrow;
+            if (from.row === to.row && from.column !== to.column) {
+                const direction = Math.sign(to.x-from.x);
+                const x1 = from.x + (direction > 0 ? from.width : 0), y1 = from.y+from.height/2;
+                const x2 = to.x + (direction > 0 ? 0 : to.width), y2 = to.y+to.height/2;
+                const bend = (x1+x2)/2;
+                path = `M${x1},${y1} C${bend},${y1} ${bend},${y2} ${x2},${y2}`;
+                arrow = `M${x2-direction*5},${y2-3} L${x2},${y2} L${x2-direction*5},${y2+3}`;
+            } else {
+                const x1=from.x+from.width/2, y1=from.y+from.height, x2=to.x+to.width/2, y2=to.y;
+                const back=y2<=y1, bend=back ? width-6 : (y1+y2)/2;
+                path = back ? `M${x1},${y1} L${bend},${y1+8} L${bend},${y2-8} L${x2},${y2}`
+                    : `M${x1},${y1} C${x1},${bend} ${x2},${bend} ${x2},${y2}`;
+                arrow = `M${x2-3},${y2-5} L${x2},${y2} L${x2+3},${y2-5}`;
+            }
+            return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="${arrow}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
         }).join("");
         const nodes = [...positions.values()].map(p => {
             const state = p.node.attempts.length === 1 ? p.node.attempts[0].state : p.node.attempts.length ? "multiple" : "unobserved";
             const title = `${p.node.uri}@${p.node.rev} · ${p.node.id}`;
-            const text = (lines,start,cls) => lines.map((line,i) => `<text x="${p.x+12}" y="${start+i*17}" class="${cls}">${escapeHtml(line)}</text>`).join("");
-            return `<g class="native-flow-node" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="9"/>${text(p.lines,p.y+22,"native-flow-label")}${text(p.states,p.y+24+p.lines.length*17,"native-flow-state")}</g>`;
+            const text = (lines,start,cls) => lines.map((line,i) => `<text x="${p.x+12}" y="${start+i*16}" class="${cls}">${escapeHtml(line)}</text>`).join("");
+            return `<g class="native-flow-node" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="10"/>${text(p.lines,p.y+22,"native-flow-label")}${text(p.states,p.y+25+p.lines.length*16,"native-flow-state")}</g>`;
         }).join("");
         const parentLabel = group.parentEvent?.operator_key || group.parentEvent?.operator_type;
         const heading = group.parent ? `子工作流 · ${parentLabel ? `嵌套于 ${parentLabel}` : "父节点记录缺失"}` : "主工作流";
         const programs = [...new Set([...group.nodes.values()].map(node => `${node.uri}@${node.rev}`))].join(" · ");
-        return `<section class="native-flow-scope${group.parent ? " is-nested" : ""}" data-parent-execution="${escapeHtml(group.parent || "")}"><h4>${escapeHtml(heading)}</h4><p class="native-flow-program">${escapeHtml(programs)}</p>${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll"><svg class="native-flow-diagram" role="img" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:${Math.min(width,460)}px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div></section>`;
+        return `<section class="native-flow-scope${group.parent ? " is-nested" : ""}" data-parent-execution="${escapeHtml(group.parent || "")}"><header class="native-flow-heading"><h4>${escapeHtml(heading)}</h4><span>${group.nodes.size} 节点 · ${group.edges.size} 连线</span></header>${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll" tabindex="0" aria-label="${escapeHtml(heading)}，窄屏可横向滚动"><svg class="native-flow-diagram" role="img" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:460px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div><details class="native-flow-identity"><summary>流程标识</summary><p class="native-flow-program">${escapeHtml(programs)}</p></details></section>`;
     };
-    return `<div class="native-workflow-view"><p class="native-flow-legend">原生工作流 · 实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。</p>${groups.map(render).join("")}</div>`;
+    return `<div class="native-workflow-view"><div class="native-flow-key"><span>原生工作流</span><span class="native-flow-key-routed">已记录路由</span><span class="native-flow-key-declared">声明结构</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。折行只改变布局，不增加连线。</p></details></div>`;
 }
 
 function syncNativeExecutionDisplay() {
@@ -9049,7 +9081,8 @@ function renderWorkflowTrace(steps, meta = {}) {
     workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
     updateWorkflowStats(steps, resolvedMeta);
     workflowTrace.innerHTML = buildNativeExecutionHtml([])
-        + '<p>业务记录（非原生执行状态）</p>' + buildWorkflowChipRowHtml(steps);
+        + '<details class="native-business-log"><summary>业务记录（非原生执行状态）</summary>'
+        + buildWorkflowChipRowHtml(steps) + '</details>';
 }
 
 function renderWorkflowTraceError(message) {
