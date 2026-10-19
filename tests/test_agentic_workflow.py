@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 from sage.runtime.source_answer_plan import PLAN_SYSTEM_PROMPT
+from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT
+from sage.runtime.evidence_workflow import COVERED_PLAN_SYSTEM_PROMPT, PROPOSAL_REVIEW_SYSTEM_PROMPT
 
 from sage_faculty_twin.benchmark_adapter import LampQuestionSample, build_lamp_request
 from sage_faculty_twin.config import AppSettings, settings
@@ -98,7 +100,13 @@ class IntentAwareLLMClient:
         **kwargs,
     ) -> str:
         del kwargs
-        if system_prompt == PLAN_SYSTEM_PROMPT:
+        if system_prompt == COVERAGE_SYSTEM_PROMPT:
+            data = json.loads(user_prompt)
+            return json.dumps({"digest": data["digest"], "items": [
+                {"requirement_id": r["requirement_id"], "witnesses": [
+                    {"source_id": source["source_id"], "quote": source["content"]}
+                    for source in data["sources"]]} for r in data["requirements"]]})
+        if system_prompt in {PLAN_SYSTEM_PROMPT, COVERED_PLAN_SYSTEM_PROMPT, PROPOSAL_REVIEW_SYSTEM_PROMPT}:
             # Workflow fixture selects available sources. Relevance/real-model
             # quality is a separate live gate; no generated fact is approved here.
             data = json.loads(user_prompt)
@@ -780,7 +788,11 @@ def test_chat_fast_paths_explicitly_scoped_research_route_without_llm_classifier
     )
 
     assert response.workflow_action == "answer"
-    assert response.decision_mode == "direct_answer"
+    assert response.decision_mode == "source_plan"
+    assert response.knowledge_hits == []
+    assert "仍待补充的依据" in response.answer
+    assert any(e.operator_key == "supplement-evidence" and e.state == "completed"
+               for e in response.execution_events)
     interaction_step = _trace_step(response, "interaction_understand")
     assert "answer/research" in interaction_step.summary
     assert "heuristic-fast" in interaction_step.detail
@@ -810,7 +822,11 @@ def test_chat_fast_paths_explicitly_scoped_teaching_route_without_llm_classifier
     )
 
     assert response.workflow_action == "answer"
-    assert response.decision_mode == "direct_answer"
+    assert response.decision_mode == "source_plan"
+    assert response.knowledge_hits == []
+    assert "仍待补充的依据" in response.answer
+    assert any(e.operator_key == "supplement-evidence" and e.state == "completed"
+               for e in response.execution_events)
     interaction_step = _trace_step(response, "interaction_understand")
     assert "answer/teaching" in interaction_step.summary
     assert "heuristic-fast" in interaction_step.detail

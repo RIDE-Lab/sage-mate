@@ -8376,7 +8376,11 @@ function buildNativeWorkflowAtlasHtml(groups) {
             return center(a)-center(b) || a.id.localeCompare(b.id);
         });
         column.forEach((vertex,row)=>{
-            vertex.x=margin+rank*(width-2*margin)/Math.max(1,maxRank);
+            // Reserve room for the wider overall terminals without shrinking
+            // every icon or reversing the short input/output arrow segments.
+            const terminalGap=hasBoundaries ? 16 : 0;
+            vertex.x=margin+rank*(width-2*margin-2*terminalGap)/Math.max(1,maxRank)
+                +(rank>0 ? terminalGap : 0)+(rank===maxRank ? terminalGap : 0);
             vertex.y=height/2+(row-(column.length-1)/2)*66;
         });
     }
@@ -8397,14 +8401,15 @@ function buildNativeWorkflowAtlasHtml(groups) {
             && event.next_nodes?.length===0 && (event.downstream_node_ids?.length || node.declaration?.downstream_node_ids?.length);
         const state=rejected ? "not_selected" : node.attempts.length===1 ? event.state : node.attempts.length ? "multiple" : "unobserved";
         const badge={completed:"✓",failed:"×",started:"…",cancelled:"⊘",recovered:"!",unobserved:"○",not_selected:"−",multiple:"×"}[state] || "?";
-        const [caption,icon]=nativeNodeAppearance(name,node.attempts.length>0);
-        const label=vertex.boundary==="input" ? "输入" : vertex.boundary==="output" ? "输出" : caption;
+        const [caption,icon,shortCaption]=nativeNodeAppearance(name,node.attempts.length>0);
+        const label=vertex.boundary==="input" ? "输入" : vertex.boundary==="output" ? "输出" : shortCaption || caption;
+        const control=(event?.operator_type || node.declaration?.operator_type)==="filter" || name==="sys/router";
         const childCount=groups.filter(group=>group.parentEvent && vertex.node.attempts.some(
             attempt=>attempt.execution_id===group.parentEvent.execution_id
                 && attempt.trace_id===group.trace)).length;
-        const title=`${name} · ${rejected ? "条件已执行，未放行" : state}${childCount ? ` · 含 ${childCount} 个子工作流` : ""} · ${node.uri}@${node.rev} · ${node.id}`;
+        const title=`${caption} · ${name} · ${rejected ? "条件已执行，未放行" : state}${childCount ? ` · 含 ${childCount} 个子工作流` : ""} · ${node.uri}@${node.rev} · ${node.id}`;
         const shape=vertex.boundary ? `<rect x="${vertex.x-30}" y="${vertex.y-21}" width="60" height="42" rx="13"/>` : `<circle cx="${vertex.x}" cy="${vertex.y}" r="18"/>`;
-        return `<g class="native-flow-node" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
+        return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
     return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从左向右阅读：输入 → 分支处理 → 输出。高亮为本次路由，暗线为可选路径；紫色点线为明确记录的子流程调用，不表示返回依赖。点击图标查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
@@ -8412,17 +8417,22 @@ function buildNativeWorkflowAtlasHtml(groups) {
 
 function nativeNodeAppearance(name, observed) {
     return ({bootstrap:["接收","inbox"],understand:["理解","message-spark"],plan:["规划","branch"],
-        "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
-        "write-knowledge":["知识写入","checklist"],retrieve:["检索","search"],
-        prompt:["上下文","checklist"],answer:["回答","message-spark"],render:["返回","send"],
+        "prepare-booking":["补全预约","checklist","补全"],"execute-booking":["提交预约","check","预约"],
+        "write-knowledge":["知识写入","checklist","写入"],retrieve:["检索","search"],
+        prompt:["上下文","checklist","组装"],answer:["回答","message-spark"],render:["返回","send"],
         "read-memory":["记忆","inbox"],"read-knowledge":["知识","search"],
-        "read-wiki":["公开 Wiki","book"],"read-private":["私有知识","search"],
+        "read-wiki":["公开 Wiki","book","Wiki"],"read-private":["私有知识","search","私库"],
         "wiki-capability":["公开来源","branch"],"private-capability":["私有权限","branch"],
         "booking-route":["预约路径","branch"],"dialogue-route":["对话路径","branch"],
         "booking-ready":["字段齐备","branch"],"booking-incomplete":["待补字段","branch"],
         "write-route":["写入授权","branch"],"read-route":["只读路径","branch"],
         "evidence-route":["取证路径","branch"],"direct-route":["无需取证","branch"],
         "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
+        "assess-coverage":["覆盖检查","checklist","覆盖"],"coverage-gap":["缺少依据","branch"],
+        "coverage-ready":["依据齐备","branch"],"supplement-evidence":["定向补检","search","补检"],
+        "reassess-coverage":["覆盖复查","checklist","复查"],"compose-source-plan":["来源计划","book","编排"],
+        "research-proposals":["研究复核","branch"],"no-proposal-review":["无需复核","branch"],
+        "review-proposals":["建议复核","checklist","复核"],"verify-evidence-answer":["发布校验","check","校验"],
         "sys/router":["分支","branch"],filter:["条件","branch"]})[name] || [observed ? "节点" : "未观测","branch"];
 }
 

@@ -41,7 +41,8 @@
 .native-flow-diagram.native-flow-atlas-diagram { min-width: 0; max-width: none; }
 .native-flow-call { fill: none; stroke: #8055bd; stroke-width: 1.5; stroke-dasharray: 2 6; opacity: .8; }
 html[data-theme="dark"] .native-flow-call { stroke: #b9a4ef; }
-.native-workflow-atlas .native-flow-label { opacity: 1; font-size: 14px; pointer-events: none; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 4; }
+.native-workflow-atlas .native-flow-label { opacity: 1; font-size: 16px; pointer-events: none; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 4; }
+.native-workflow-atlas .native-flow-node[data-flow-control="true"] .native-flow-label { opacity: 0; }
 .native-flow-node rect { fill: var(--surface-solid); stroke: var(--info-text); stroke-width: 2; }
 .native-flow-node[data-flow-boundary="input"] rect { stroke: var(--info-text); }
 .native-flow-node[data-flow-boundary="output"] rect { stroke: var(--success-text); }

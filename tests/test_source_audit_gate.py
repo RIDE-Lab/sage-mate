@@ -2,7 +2,7 @@ import json
 
 import pytest
 from sage.runtime.source_audit import SourceAuditRejected
-from sage.runtime.source_answer_plan import InvalidSourcePlan
+from sage.runtime.flownet import FlowRequestOutcomeError
 
 from sage_faculty_twin.config import AppSettings
 from sage_faculty_twin.models import ChatRequest, KnowledgeSearchHit
@@ -13,6 +13,7 @@ def setup_gate(tmp_path):
     support = object.__new__(FacultyTwinWorkflowSupport)
     support._settings = AppSettings(knowledge_base_dir=tmp_path)
     support._trace_callback = None
+    support._admin_session_payload = None
     context = ChatWorkflowContext(
         request=ChatRequest(student_name="访客", question="请根据 Wiki 说明状态"),
         conversation_id="audit-test", owner_name="test", used_model="test",
@@ -28,6 +29,11 @@ def setup_gate(tmp_path):
 
 def plan_response(payload):
     data = json.loads(payload)
+    if "requirements" in data:
+        return json.dumps({"digest": data["digest"], "items": [
+            {"requirement_id": r["requirement_id"], "witnesses": [{
+                "source_id": data["sources"][0]["source_id"], "quote": data["sources"][0]["content"]}]}
+            for r in data["requirements"]]})
     return json.dumps({"digest": data["digest"], "source_ids": ["knowledge:0"], "inferences": []})
 
 
@@ -53,7 +59,7 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
     assert "https://example.org/full/path/" in answer
     assert "作者没有测量" not in answer
     support._validate_source_answer(context)
-    assert len(calls) == 1
+    assert len(calls) == 2  # Native coverage and composition; no gratuitous repair/review.
     assert context.source_audit_digest
     context.answer += "作者没有测量"
     with pytest.raises(SourceAuditRejected):
@@ -65,7 +71,7 @@ def test_changed_source_invalidates_receipt(tmp_path):
     support._call_compact_retry_sync = lambda **kw: plan_response(kw["user_prompt"])
     support._prepare_source_answer(context)
     context.knowledge_hits[0].source_content += "changed"
-    with pytest.raises(InvalidSourcePlan):
+    with pytest.raises(SourceAuditRejected):
         support._validate_source_answer(context)
 
 
@@ -73,8 +79,9 @@ def test_changed_source_invalidates_receipt(tmp_path):
 def test_invalid_plan_never_publishes_or_repairs(tmp_path, raw):
     support, context = setup_gate(tmp_path)
     support._call_compact_retry_sync = lambda **kw: raw
-    with pytest.raises(InvalidSourcePlan):
+    with pytest.raises(FlowRequestOutcomeError) as caught:
         support.render_chat_response(context)
+    assert caught.value.error_type == "InvalidEvidenceCoverage"
     assert context.answer is None
     assert not context.persisted_memory_record
 
@@ -84,8 +91,9 @@ def test_transport_error_propagates(tmp_path):
     def unavailable(**kw):
         raise TimeoutError("test")
     support._call_compact_retry_sync = unavailable
-    with pytest.raises(TimeoutError):
+    with pytest.raises(FlowRequestOutcomeError) as caught:
         support.render_chat_response(context)
+    assert caught.value.error_type == "TimeoutError"
 
 
 def test_source_plan_bypasses_free_generation_and_draft_stream(tmp_path):
@@ -111,14 +119,39 @@ def test_unselected_sources_are_not_cited(tmp_path):
     support._validate_source_answer(context)
 
 
+def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_free_generation(tmp_path):
+    from types import SimpleNamespace
+    from sage.runtime.adaptive_workflow import WorkflowCapabilities, WorkflowRequirements, plan_workflow
+    support, context = setup_gate(tmp_path)
+    context.knowledge_hits = []
+    context.adaptive_plan = plan_workflow(WorkflowRequirements(requested_sources=("wiki",)),
+        WorkflowCapabilities("guest", ("wiki",), False))
+    calls = []
+    def model(**kwargs):
+        calls.append(kwargs)
+        pytest.fail("no-source assessment must not spend a model request")
+    support._call_compact_retry_sync = model
+    support._call_answer_question_sync = lambda *a, **kw: pytest.fail("ungrounded free generation")
+    support._knowledge_retriever = SimpleNamespace(search=lambda *a, **kw: [])
+    support.answer_with_llm(context)
+    result = support.render_chat_response(context)
+    assert context.evidence_work.repair_attempted
+    assert not calls and len(context.workflow_trace) == 2  # Audit and render, not duplicate audit.
+    assert "仍待补充的依据" in result.answer and context.request.question in result.answer
+    assert result.knowledge_hits == []
+    assert "\n\n".join(block.markdown for block in result.answer_blocks).strip() == result.answer
+    support._validate_source_answer(context)
+
+
 @pytest.mark.parametrize("transport", ["http", "slack"])
-def test_wrapped_invalid_source_plan_is_terminal(transport):
+@pytest.mark.parametrize("error_type", ["InvalidSourcePlan", "InvalidEvidenceCoverage"])
+def test_wrapped_invalid_source_plan_is_terminal(transport, error_type):
     from types import SimpleNamespace
     from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
     from sage_faculty_twin.http_workflow import HttpWorkflow
     from sage_faculty_twin.slack_workflow import SlackWorkflow
     error = FlowRequestOutcomeError(
-        request_id="test", outcome_status="failed", error_type="InvalidSourcePlan",
+        request_id="test", outcome_status="failed", error_type=error_type,
         message="stale", error_stage="generate", outcome_metadata={}, outputs=[],
     )
     workflow = object.__new__(HttpWorkflow if transport == "http" else SlackWorkflow)

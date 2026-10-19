@@ -30,9 +30,10 @@ from sage.runtime.source_audit import (
     AnswerValidationRejected, SourceAuditRejected,
 )
 from sage.runtime.source_answer_plan import (
-    PLAN_SYSTEM_PROMPT, PlanSource, SourceAnswerPlan,
-    prepare_source_plan, render_source_plan, render_source_plan_blocks,
-    validate_source_plan, source_plan_response_format,
+    PlanSource, SourceAnswerPlan,
+)
+from sage.runtime.evidence_workflow import (
+    EvidenceWork, EvidenceWorkflowRuntime, render_evidence_work, render_evidence_work_blocks,
 )
 
 from . import __version__ as _app_version
@@ -40,6 +41,7 @@ from .trace_context import bind_trace_event_sink
 from .analytics_store import ConversationAnalyticsStore
 from .retrieval_runtime import RetrievalRuntime
 from .chat_runtime import ChatRuntime
+from .evidence_ports import TwinEvidencePorts
 from .deployment_receipts import DeploymentReceiptStore
 from .request_context import (
     RequestCancelledError,
@@ -1035,6 +1037,7 @@ class ChatWorkflowContext:
     answer: str | None = None
     source_audit_digest: str | None = None
     source_answer_plan: SourceAnswerPlan | None = None
+    evidence_work: EvidenceWork | None = None
     answer_repair_attempted: bool = False
     system_prompt: str | None = None
     user_prompt: str | None = None
@@ -1203,6 +1206,7 @@ class FacultyTwinWorkflowSupport:
         knowledge_retriever: KnowledgeSources | None = None,
         feedback_runtime_provider=None,
         delivery: DeliveryIntent | None = None,
+        evidence_runtime_provider=None,
     ) -> None:
         self._settings = settings
         self._booking_workflows = meeting_service.workflows
@@ -1212,6 +1216,7 @@ class FacultyTwinWorkflowSupport:
         self._analytics_store = analytics_store
         self._feedback_runtime_provider = feedback_runtime_provider
         self._delivery = delivery
+        self._evidence_runtime_provider = evidence_runtime_provider
         self._booking_operation_id = delivery.stream_id if delivery is not None else uuid4().hex
         self._artifact_memory_draft_store = artifact_memory_draft_store
         self._knowledge_gap_draft_store = knowledge_gap_draft_store
@@ -2806,7 +2811,7 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
-        if context.runtime_identity is not None:
+        if getattr(context, "runtime_identity", None) is not None:
             lowered = context.request.question.lower()
             english = any(
                 marker in lowered
@@ -4476,7 +4481,13 @@ class FacultyTwinWorkflowSupport:
 
     @staticmethod
     def _requires_source_audit(context: ChatWorkflowContext) -> bool:
-        return any(hit.source_content is not None for hit in context.knowledge_hits)
+        if getattr(context, "runtime_identity", None) is not None:
+            return False  # Authoritative runtime facts are not model-assessed Wiki facts.
+        if getattr(context, "evidence_work", None) is not None:
+            return True
+        plan = getattr(context, "adaptive_plan", None)
+        return any(hit.source_content is not None for hit in context.knowledge_hits) or (
+            plan is not None and plan.evidence_required and context.route == "answer" and context.answer is None)
 
     def _validate_source_answer(self, context: ChatWorkflowContext) -> None:
         """Verify the exact source-constrained rendering before durable commit."""
@@ -4484,51 +4495,55 @@ class FacultyTwinWorkflowSupport:
             if context.source_answer_plan is not None:
                 raise SourceAuditRejected("来源集合在回答期间发生变化。")
             return
-        request = self._source_plan_request(context)
-        if context.source_answer_plan is None or context.answer != render_source_plan(request, context.source_answer_plan):
+        work = context.evidence_work
+        if (work is None or context.source_answer_plan != work.plan
+                or self._source_plan_sources(context) != work.request.sources
+                or context.request.question != work.request.question
+                or context.answer != render_evidence_work(work)):
             raise SourceAuditRejected("回答与来源约束计划不一致，未发布。")
-        context.source_audit_digest = request.digest
+        context.source_audit_digest = work.request.digest
 
     @staticmethod
-    def _source_plan_request(context: ChatWorkflowContext):
-        return prepare_source_plan(context.request.question, tuple(
+    def _source_plan_sources(context: ChatWorkflowContext):
+        return tuple(
             PlanSource(
                 f"knowledge:{index}", hit.title, str(hit.metadata.get("wiki_url") or ""),
                 hit.source_content if hit.source_content is not None else hit.excerpt,
             ) for index, hit in enumerate(context.knowledge_hits)
-        ), allow_inferences=is_research_review_request(
-            context.request.question,
-            domain=context.interaction_intent.domain if context.interaction_intent else None,
-        ))
+        )
 
     def _prepare_source_answer(self, context: ChatWorkflowContext) -> None:
         started_at = perf_counter()
-        request = self._source_plan_request(context)
-        if context.source_answer_plan is None:
+        if context.evidence_work is None:
             _raise_if_request_cancelled()
-            with bind_trace_event_sink(lambda _kind, _payload: None):
-                response = self._call_compact_retry_sync(
-                    system_prompt=PLAN_SYSTEM_PROMPT, user_prompt=request.payload,
-                    temperature=0.0,
-                    max_tokens=int(self._settings.llm_policy_output_max_tokens_cap),
-                    cache_namespace=f"source-plan:{request.digest}", neutral_sampling=True,
-                    response_format=source_plan_response_format(request),
-                )
+            provider = getattr(self, "_evidence_runtime_provider", None)
+            runtime = provider() if provider is not None else EvidenceWorkflowRuntime()
+            try:
+                with bind_trace_event_sink(lambda _kind, _payload: None):
+                    remaining = request_remaining_seconds()
+                    context.evidence_work = runtime.run(context.request.question, self._source_plan_sources(context),
+                        TwinEvidencePorts(self, context), research=is_research_review_request(context.request.question,
+                            domain=context.interaction_intent.domain if context.interaction_intent else None),
+                        timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds)
+            finally:
+                if provider is None:
+                    runtime.close()
             _raise_if_request_cancelled()
-            context.source_answer_plan = validate_source_plan(request, response)
-        context.answer = render_source_plan(request, context.source_answer_plan)
+        context.source_answer_plan = context.evidence_work.plan
+        context.answer = render_evidence_work(context.evidence_work)
         context.workflow_action = "answer"
         context.decision_mode = "source_plan"
         self._validate_source_answer(context)
         self._append_trace(
             context, key="source_audit", title="来源原文完整性校验",
             summary="事实部分由 SAGE 从所选来源原文生成，未改写或截断。",
-            detail="校验绑定问题与当前可见来源；原文可追溯不代表来源内容已被独立证实。",
+            detail=(f"覆盖检查保留 {len(context.evidence_work.assessment.missing_ids)} 项待补依据；"
+                    "问题、来源、回答均已绑定。原文可追溯不代表来源内容已被独立证实。"),
             duration_ms=self._elapsed_ms(started_at),
         )
 
     def render_chat_response(self, context: ChatWorkflowContext) -> ChatResponse:
-        if self._requires_source_audit(context) and context.source_answer_plan is None:
+        if self._requires_source_audit(context) and context.evidence_work is None:
             self._prepare_source_answer(context)
         if context.answer is None:
             # A planner may legitimately finish a fact request without routing
@@ -4591,9 +4606,8 @@ class FacultyTwinWorkflowSupport:
         return ChatResponse(
             answer=context.answer,
             answer_blocks=(
-                list(render_source_plan_blocks(
-                    self._source_plan_request(context), context.source_answer_plan,
-                )) if context.source_answer_plan is not None else []
+                list(render_evidence_work_blocks(context.evidence_work))
+                if context.evidence_work is not None else []
             ),
             owner_name=context.owner_name,
             used_model=context.used_model,
@@ -8948,6 +8962,9 @@ class DigitalTwinService:
         self._retrieval_runtime = None
         self._retrieval_runtime_lock = threading.Lock()
         self._retrieval_finalizer = None
+        self._evidence_runtime = None
+        self._evidence_runtime_lock = threading.Lock()
+        self._evidence_finalizer = None
         self._chat_runtime = None
         self._chat_runtime_lock = threading.Lock()
         self._chat_finalizer = None
@@ -11648,6 +11665,13 @@ class DigitalTwinService:
                 self._chat_finalizer = weakref.finalize(self, self._chat_runtime.close)
             return self._chat_runtime
 
+    def _get_evidence_runtime(self) -> EvidenceWorkflowRuntime:
+        with self._evidence_runtime_lock:
+            if self._evidence_runtime is None:
+                self._evidence_runtime = EvidenceWorkflowRuntime()
+                self._evidence_finalizer = weakref.finalize(self, self._evidence_runtime.close)
+            return self._evidence_runtime
+
     def _describe_sage_runtime(self) -> str:
         return self._sage_runtime_class.__name__
 
@@ -11708,6 +11732,7 @@ class DigitalTwinService:
             planner_comparison=planner_comparison,
             knowledge_retriever=self._knowledge_retriever,
             feedback_runtime_provider=self._get_feedback_runtime,
+            evidence_runtime_provider=self._get_evidence_runtime,
             delivery=delivery,
         )
 

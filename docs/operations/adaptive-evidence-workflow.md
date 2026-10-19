@@ -2,7 +2,7 @@
 
 ## Candidate, not yet production-qualified
 
-The next candidate pins SAGE `ef9eb311` for content-free full program snapshots
+The next candidate pins SAGE `d0351d88` for content-free full program snapshots
 and explicit native entry/return/sink boundary flags.
 Each invocation emits declared node IDs, operator types/keys and declared edges
 once, separately from actual next-node routing. Terminal/out-of-order updates
@@ -85,7 +85,42 @@ and a nested-retrieval test still using the booking fixture. Targeted repair run
 assertions keyed by semantic stage rather than stale positional offsets and
 passed separately (2 tests). This is NOT a passing full-regression claim.
 
-Still required before production: evidence requirement coverage and bounded repair,
-actual research-vs-factual quality branches, full immutable regression, real QA
-quality/latency and browser visual/recovery gates. Do not describe a route label
-such as `research` as an already-implemented independent research-quality loop.
+## Native evidence quality integration (not yet live-qualified)
+
+SAGE now owns `EvidenceWorkflowRuntime`: lossless question partitions, exact
+authorized-source coverage witnesses, a conditional single supplement/reassessment
+round, constrained source composition, actual research proposal review and final
+source/coverage verification. Remaining evidence gaps are shown as original
+question spans, never as claims that facts do not exist. Structural validation
+does not certify the model's semantic coverage judgment or the truth of sources.
+
+Twin supplies only model and ACL-aware read ports in `evidence_ports.py`. The old
+direct source-plan generation path is replaced, not retained as a second flow.
+Supplement search and hydration use a captured verified identity/source selection;
+model suggestions cannot broaden it. Source-grounded requests with zero hits also
+enter the same flow; empty-source assessments are deterministic and spend no model
+request, then attempt authorized repair before returning an explicit unknown.
+Runtime identity answers remain bound to the authoritative runtime provider.
+The SAGE plan distinguishes an explicit evidence requirement from opportunistic
+retrieval, preserving ordinary advice and conversation memory when Wiki is empty.
+Two prior fast-classifier fixtures now additionally require real supplement
+execution and an explicit gap for their empty, explicitly selected Wiki, rather
+than accepting unconstrained factual prose. Their classifier-free gate is unchanged.
+
+Canonical answer text and presentation blocks come from SAGE's same final
+renderer. A permanent child validation failure retains its leaf type through the
+native parent boundary; HTTP/Slack treat it as terminal, not retryable generation.
+
+First SAGE-wide run failed 29 tests because the scratch copy omitted tracked
+benchmark tools (567 passed, 1 skipped). Copying those tools without changing
+assertions yielded 596 passed, 1 skipped. Latest SAGE snapshot (including explicit
+evidence policy) passed 597 tests, 1 skipped in 36.98 seconds. The first integrated Twin focused gate passed 100 tests in
+60.36 seconds. Expanded integration initially exposed 19 failures from the overly
+broad empty-source gate; preserving resolved/contextual routes reduced that to
+134 passed and 2 source-contract expectations. Those two strengthened fixtures
+and the complete source gate subsequently passed (21 tests). Synthetic tests are
+not evidence of real model quality, neural retrieval performance or live ACLs.
+
+Still required before production: latest immutable full regression, real QA
+coverage/research quality and latency, browser visual/recovery gates, and a
+rollback-safe immutable production cutover. Production has not switched.
