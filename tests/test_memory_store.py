@@ -654,6 +654,33 @@ def test_sage_vdb_ann_profile_index_uses_real_backend_and_reports_it(
     }
 
 
+def test_long_profile_real_ann_survives_durable_restart(tmp_path: Path) -> None:
+    pytest.importorskip("sagevdb")
+    pytest.importorskip("sage_anns")
+    settings = AppSettings(
+        knowledge_base_dir=tmp_path / "knowledge",
+        conversation_memory_dir=tmp_path / "memory",
+        conversation_memory_collection_type="neural_continual",
+        conversation_memory_index_type="sage_vdb_ann",
+        sagevdb_backend="sage-anns", sagevdb_anns_algorithm="faiss_hnsw", sagevdb_dimension=128,
+    )
+    profile = ProfileMemoryRecord(
+        profile_id="synthetic-long-profile", student_key="synthetic-user",
+        student_name="Synthetic Test", student_email=None, category="course_context",
+        summary="完整画像摘要🌟" * 3000, evidence="完整证据" * 3000,
+        updated_at=datetime(2026, 10, 19, tzinfo=UTC),
+    )
+    first = NeuroMemConversationStore(settings)
+    first._commit_profile_records([profile])
+    reopened = NeuroMemConversationStore(settings)
+    assert reopened._profiles[profile.profile_id].to_dict() == profile.to_dict()
+    assert reopened._profile_collection.indexes["search"].active_backend == "sage-anns:faiss_hnsw"
+    entries = reopened._profile_collection.retrieve("search", profile.retrieval_text(), top_k=1)
+    assert len(entries) == 1
+    assert entries[0]["metadata"]["profile_payload"] == profile.to_dict()
+    assert entries[0]["text"] == profile.retrieval_text()
+
+
 def test_stale_sage_vdb_snapshot_config_is_migrated_without_faiss_fallback(
     tmp_path: Path,
 ) -> None:

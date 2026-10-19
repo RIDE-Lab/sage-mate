@@ -1047,7 +1047,7 @@ wheels = [
 [[package]]
 name = "isage-neuromem"
 version = "0.2.1.12"
-source = { git = "https://github.com/RIDE-Lab/neuromem.git?rev=aef26791ecf8a30bc641ee586cb404bd637bb329#aef26791ecf8a30bc641ee586cb404bd637bb329" }
+source = { git = "https://github.com/RIDE-Lab/neuromem.git?rev=9374c3465022e8d02235a5cf470898d26209570b#9374c3465022e8d02235a5cf470898d26209570b" }
 dependencies = [
     { name = "aioboto3" },
     { name = "aiohttp" },
@@ -2691,7 +2691,7 @@ requires-dist = [
     { name = "isage", extras = ["delivery-markdown"], git = "https://github.com/RIDE-Lab/SAGE.git?rev=4ec3ecb0b701df4bdf1f9c9e69ef24faf64c4b7f" },
     { name = "isage-anns", specifier = ">=0.2.0" },
     { name = "isage-anns", marker = "extra == 'vdb-anns'", specifier = ">=0.2.0" },
-    { name = "isage-neuromem", git = "https://github.com/RIDE-Lab/neuromem.git?rev=aef26791ecf8a30bc641ee586cb404bd637bb329" },
+    { name = "isage-neuromem", git = "https://github.com/RIDE-Lab/neuromem.git?rev=9374c3465022e8d02235a5cf470898d26209570b" },
     { name = "isage-vdb", git = "https://github.com/intellistream/sageVDB.git?rev=311d65e972fb3cb4e5a2904a4c499a51dafae38d" },
     { name = "numpy", specifier = ">=1.24.0" },
     { name = "numpy", marker = "extra == 'vdb'", specifier = ">=1.24.0" },
