@@ -161,7 +161,7 @@ def test_streamed_chat_does_not_report_failed_answer_as_result(
         line.removeprefix("data: ") for line in response.text.splitlines()
         if line.startswith("data: ")
     ))
-    assert event == {"type": "error", "status": 503,
+    assert event == {"type": "error", "status": 503, "code": "answer_unavailable",
                      "detail": "本轮回答未能完整生成或通过校验，请稍后重试。"}
 
 
