@@ -91,6 +91,12 @@
                 <svg class="ui-icon theme-icon theme-icon-moon" aria-hidden="true"><use href="#icon-moon"></use></svg>
                 <span class="sr-only">切换主题</span>
             </button>
+            <button type="button" id="export-conversation" class="session-export-button" disabled
+                title="将当前会话的全部提问与回答导出为 Markdown" aria-label="导出当前会话为 Markdown">
+                <svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4"/></svg>
+                <span>导出</span>
+            </button>
+            <span id="conversation-export-status" class="session-export-status" role="status" aria-live="polite"></span>
             <!-- Status info moved to drawer, opened by rail icon -->
             <!-- User badge moved to sidebar, topbar-actions removed -->
             <button type="button" id="topbar-user-badge" class="topbar-user-badge hidden" aria-label="当前账号"

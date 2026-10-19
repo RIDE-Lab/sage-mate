@@ -2370,6 +2370,7 @@ historyNewChatButton?.addEventListener("click", () => {
     closeDrawers();
     startFreshConversation();
 });
+document.getElementById("export-conversation")?.addEventListener("click", exportCurrentConversationMarkdown);
 
 // Sidebar toggle - uses existing history-rail-collapsed system
 document.getElementById("sidebar-toggle")?.addEventListener("click", () => {
@@ -7185,6 +7186,7 @@ function appendMessage(role, label, text, options = {}) {
         : "";
     const avatarLabel = role === "user" ? "你" : "S";
     article.className = `message message-${role}${stateClass}${emphasisClass}`;
+    if (options.state !== "pending") article.dataset.exportMarkdown = String(text ?? "");
     if (Number.isFinite(options.startedAt)) {
         article.dataset.startedAt = String(options.startedAt);
     }
@@ -7873,6 +7875,90 @@ function syncConversationMode() {
     }
     const hasConversation = Boolean(chatStream.querySelector(".message-user, .message-pending, .message-ready"));
     document.body.classList.toggle("conversation-active", hasConversation);
+    const exportButton = document.getElementById("export-conversation");
+    if (exportButton) exportButton.disabled = !chatStream.querySelector(".message-user");
+}
+
+// Older local snapshots retained rendered HTML, not original Markdown. Recover
+// its semantic structure rather than exporting innerText and losing URLs/code.
+function legacyMessageMarkdown(node) {
+    if (node.nodeType === 3) return node.textContent || "";
+    const tag = node.tagName?.toLowerCase();
+    if (["script", "style", "button", "svg"].includes(tag)) return "";
+    const children = () => [...(node.childNodes || [])].map(legacyMessageMarkdown).join("");
+    if (tag === "br") return "\n";
+    if (tag === "pre") {
+        const text = node.textContent || "";
+        const fence = "`".repeat(Math.max(3, ...[...text.matchAll(/`+/g)].map(m=>m[0].length+1)));
+        return `\n\n${fence}\n${text}${text.endsWith("\n") ? "" : "\n"}${fence}\n\n`;
+    }
+    if (tag === "code") {
+        const text = node.textContent || "";
+        const fence = "`".repeat(Math.max(1, ...[...text.matchAll(/`+/g)].map(m=>m[0].length+1)));
+        return `${fence} ${text} ${fence}`;
+    }
+    if (tag === "a") return `[${children()}](${node.getAttribute("href") || ""})`;
+    if (tag === "img") return `![${node.getAttribute("alt") || ""}](${node.getAttribute("src") || ""})`;
+    if (tag === "strong" || tag === "b") return `**${children()}**`;
+    if (tag === "em" || tag === "i") return `*${children()}*`;
+    if (/^h[1-6]$/.test(tag || "")) return `\n\n${"#".repeat(Number(tag[1]))} ${children()}\n\n`;
+    if (tag === "hr") return "\n\n---\n\n";
+    if (tag === "blockquote") return "\n\n"+children().trim().split("\n").map(line=>"> "+line).join("\n")+"\n\n";
+    if (tag === "ul" || tag === "ol") {
+        return "\n"+[...node.children].filter(e=>e.tagName.toLowerCase()==="li").map((li,index)=>{
+            const prefix = tag === "ol" ? `${Number(node.getAttribute("start") || 1)+index}. ` : "- ";
+            return prefix+legacyMessageMarkdown(li).trim().split("\n").join("\n"+" ".repeat(prefix.length));
+        }).join("\n")+"\n";
+    }
+    if (tag === "table") {
+        const rows = [...node.querySelectorAll("tr")].map(row=>[...row.children]
+            .map(cell=>legacyMessageMarkdown(cell).trim().replace(/\|/g,"\\|").replace(/\n/g,"<br>")));
+        if (!rows.length) return "";
+        const line = cells => "| "+cells.join(" | ")+" |";
+        return "\n\n"+[line(rows[0]),line(rows[0].map(()=>"---")),...rows.slice(1).map(line)].join("\n")+"\n\n";
+    }
+    const text = children();
+    return ["p", "div"].includes(tag) ? "\n\n"+text+"\n\n" : text;
+}
+
+function buildSessionMarkdown(root, title = "Twin 会话") {
+    const parts = [`# ${String(title).replace(/[\r\n]+/g," ")}`];
+    let questions = 0;
+    for (const message of root.querySelectorAll(":scope > .message-user, :scope > .message-assistant")) {
+        const user = message.classList.contains("message-user");
+        if (user) questions++;
+        else if (!questions) continue; // Landing introductions aren't Q&A.
+        parts.push(`## ${user ? "提问" : "回答"} ${questions}`);
+        if (message.classList.contains("message-pending")) {
+            parts.push("> 回答尚在生成，此次导出未包含未完成内容。");
+            continue;
+        }
+        const body = message.querySelector(".message-reply-block .message-body, .message-body");
+        const markdown = typeof message.dataset.exportMarkdown === "string"
+            ? message.dataset.exportMarkdown : body ? legacyMessageMarkdown(body).trim() : "";
+        if (!markdown && !user) throw new Error("存在无法读取的回答，未导出不完整会话。");
+        parts.push(markdown);
+    }
+    if (!questions) throw new Error("当前会话暂无可导出的提问。");
+    return parts.join("\n\n")+"\n";
+}
+
+function exportCurrentConversationMarkdown() {
+    const status = document.getElementById("conversation-export-status");
+    try {
+        const markdown = buildSessionMarkdown(chatStream, currentConversationTitle || "Twin 会话");
+        const url = URL.createObjectURL(new Blob([markdown], {type:"text/markdown;charset=utf-8"}));
+        const anchor = document.createElement("a");
+        anchor.href = url;
+        anchor.download = `twin-session-${new Date().toISOString().replace(/[:.]/g,"-")}.md`;
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        globalThis.setTimeout(()=>URL.revokeObjectURL(url),1000);
+        if (status) status.textContent = "当前会话已导出为 Markdown。";
+    } catch (error) {
+        if (status) status.textContent = error.message || "导出失败，请重试。";
+    }
 }
 
 function renderPendingAssistantMessage(
@@ -7881,6 +7967,7 @@ function renderPendingAssistantMessage(
     workflowSteps = [],
     { deepThinking = false } = {}
 ) {
+    delete container.dataset.exportMarkdown;
     const processingLabel = deepThinking ? "正在深度分析" : "正在处理";
     container.innerHTML = `
         <div class="message-bubble-row">
@@ -8000,6 +8087,7 @@ function renderAssistantMessage(
     // Strip <think>...</think> from the final answer and optionally display it
     const thinkParsed = sourceBlocksValid ? {main: text, think: ""} : parseStreamingThinkContent(afterNotification);
     const cleanedText = thinkParsed.main.trimStart() || (thinkParsed.think ? "" : afterNotification);
+    container.dataset.exportMarkdown = sourceBlocksValid ? text : cleanedText;
     const thinkContent = thinkParsed.think.trim();
     container.classList.remove("message-pending");
     container.classList.add("message-ready");

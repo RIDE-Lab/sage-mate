@@ -1,3 +1,8 @@
+.session-export-button { display: inline-flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-solid); color: var(--ink); cursor: pointer; font-size: 12px; }
+.session-export-button:hover:not(:disabled) { background: var(--surface-hover); border-color: var(--focus-ring); }
+.session-export-button:disabled { opacity: .4; cursor: default; }
+.session-export-status:empty { display: none; }
+.session-export-status { position: fixed; top: 64px; right: 20px; max-width: min(320px, calc(100vw - 40px)); padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-solid); color: var(--ink); font-size: 12px; z-index: 150; }
 .native-execution, .native-work, .native-work-current {
     color: var(--ink);
     background: var(--surface-inset);
