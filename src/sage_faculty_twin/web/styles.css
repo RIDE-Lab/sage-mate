@@ -18,6 +18,7 @@
 .native-execution [data-execution-state="cancelled"] { color: var(--warning-text); }
 .native-execution [data-execution-state="started"] { color: var(--ink); }
 .native-execution { background: transparent; border: 0; padding: 0; }
+.message-native-execution, .native-workflow-view, .native-flow-scope { min-width: 0; max-width: 100%; }
 .native-work, .native-work-current { background: var(--surface-solid); border-color: var(--line); margin-top: 10px; font-size: 12px; line-height: 1.7; }
 .native-work p, .native-work-current p { margin-top: 0; font-size: 11px; }
 .native-business-log { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--text-secondary); font-size: 12px; }
@@ -33,7 +34,7 @@
 .native-flow-heading > span { color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .native-flow-program { margin: 6px 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
 .native-flow-scope.is-nested { border-inline-start: 3px solid var(--line-strong); }
-.native-flow-scroll { overflow-x: auto; margin-top: 8px; scrollbar-width: thin; }
+.native-flow-scroll { overflow-x: auto; width: 100%; min-width: 0; max-width: 100%; margin-top: 8px; scrollbar-width: thin; }
 .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
 .native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }
@@ -2607,6 +2608,8 @@ body.drawer-pinned .history-rail {
 
 .message-workflow-summary .message-section-content {
     display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
     gap: 12px;
     padding: 12px;
     border-top: 1px solid rgba(22, 35, 56, 0.07);

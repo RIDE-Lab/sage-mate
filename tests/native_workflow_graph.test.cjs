@@ -78,4 +78,7 @@ assert(compact.includes('tabindex="0"')); // Narrow-screen keyboard scrolling.
 const longName = '完整保留中文节点名ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const longHtml = context.buildNativeExecutionHtml([event('long',{operator_key:longName})]);
 assert.equal(Array.from(longHtml.matchAll(/class="native-flow-label">([^<]*)<\/text>/g), m=>m[1]).join(''),longName);
+const css = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/styles.css'), 'utf8');
+assert(/\.message-workflow-summary \.message-section-content\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(css));
+assert(/\.native-flow-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*min-width:\s*0/.test(css));
 console.log('Authoritative topology, nested forks, missing nodes, retries, cycles and escaping passed');
