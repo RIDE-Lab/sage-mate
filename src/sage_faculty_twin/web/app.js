@@ -8340,7 +8340,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         if (parent && first) links.push({from:parent,to:first,routed:true,kind:"call"});
     }
     if (!hasBoundaries && !links.some(link=>link.kind==="call")) return "";
-    const width=1160,margin=56;
+    const width=1160,margin=70;
     // Program ownership is provenance, not a reason to split the visual map
     // into separate columns/clusters. All native nodes share one layout space.
     const orderedVertices=[...vertices].sort((a,b)=>a.id.localeCompare(b.id));
@@ -8363,12 +8363,15 @@ function buildNativeWorkflowAtlasHtml(groups) {
     for (const vertex of orderedVertices) {
         vertex.boundary=!vertex.group.parent && vertex.node.declaration?.is_entry ? "input"
             : !vertex.group.parent && vertex.node.declaration?.is_return ? "output" : "";
-        const rank=vertex.boundary==="input" ? 0 : vertex.boundary==="output" ? lastRank+1 : ranks.get(vertex);
+        // Dedicated terminal columns: an independent child/root branch must
+        // never share the input column and obscure where reading begins.
+        const rank=vertex.boundary==="input" ? 0 : vertex.boundary==="output" ? lastRank+2 : ranks.get(vertex)+1;
         if (!columns.has(rank)) columns.set(rank,[]);
         columns.get(rank).push(vertex);
     }
     const maxRank=Math.max(...columns.keys()),rows=Math.max(...[...columns.values()].map(c=>c.length));
-    const height=Math.max(196,rows*66+48);
+    const rowPitch=52;
+    const height=Math.max(156,rows*rowPitch+40);
     for (const [rank,column] of columns) {
         column.sort((a,b)=>{
             const center=v=>{const parents=links.filter(e=>e.to===v).map(e=>e.from.y).filter(Number.isFinite);
@@ -8381,12 +8384,15 @@ function buildNativeWorkflowAtlasHtml(groups) {
             const terminalGap=hasBoundaries ? 16 : 0;
             vertex.x=margin+rank*(width-2*margin-2*terminalGap)/Math.max(1,maxRank)
                 +(rank>0 ? terminalGap : 0)+(rank===maxRank ? terminalGap : 0);
-            vertex.y=height/2+(row-(column.length-1)/2)*66;
+            vertex.y=height/2+(row-(column.length-1)/2)*rowPitch;
         });
     }
     const edges=links.map(link=>{
         const a=link.from,b=link.to,dx=b.x-a.x,dy=b.y-a.y,d=Math.hypot(dx,dy) || 1;
-        const ux=dx/d,uy=dy/d,offsetA=a.boundary ? 34 : 20,offsetB=b.boundary ? 34 : 20;
+        // Intersect the terminal rectangle, not an oversized circular radius:
+        // diagonal edges remain attached without eating short arrow segments.
+        const offset=v=>v.boundary ? Math.min(57/Math.max(Math.abs(dx/d),.001),24/Math.max(Math.abs(dy/d),.001))+4 : 20;
+        const ux=dx/d,uy=dy/d,offsetA=offset(a),offsetB=offset(b);
         const x1=a.x+ux*offsetA,y1=a.y+uy*offsetA,x2=b.x-ux*offsetB,y2=b.y-uy*offsetB;
         const active=link.routed && [a,b].some(vertex=>vertex.node.attempts.some(e=>e.state==="started"));
         const classes=link.kind==="call" ? "native-flow-call" : `native-flow-edge${link.routed ? " is-routed" : ""}${active ? " is-active" : ""}`;
@@ -8408,8 +8414,10 @@ function buildNativeWorkflowAtlasHtml(groups) {
             attempt=>attempt.execution_id===group.parentEvent.execution_id
                 && attempt.trace_id===group.trace)).length;
         const title=`${caption} · ${name} · ${rejected ? "条件已执行，未放行" : state}${childCount ? ` · 含 ${childCount} 个子工作流` : ""} · ${node.uri}@${node.rev} · ${node.id}`;
-        const shape=vertex.boundary ? `<rect x="${vertex.x-30}" y="${vertex.y-21}" width="60" height="42" rx="13"/>` : `<circle cx="${vertex.x}" cy="${vertex.y}" r="18"/>`;
-        return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${vertex.x-9}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${vertex.x}" y="${vertex.y+33}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+13}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
+        const shape=vertex.boundary ? `<rect x="${vertex.x-57}" y="${vertex.y-24}" width="114" height="48" rx="24"/>` : `<circle cx="${vertex.x}" cy="${vertex.y}" r="18"/>`;
+        const iconX=vertex.x-(vertex.boundary ? 40 : 9);
+        const labelX=vertex.x+(vertex.boundary ? 9 : 0),labelY=vertex.y+(vertex.boundary ? 6 : 33);
+        return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${iconX}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${labelX}" y="${labelY}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+(vertex.boundary ? 43 : 13)}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
     return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从左向右阅读：输入 → 分支处理 → 输出。高亮为本次路由，暗线为可选路径；紫色点线为明确记录的子流程调用，不表示返回依赖。点击图标查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;

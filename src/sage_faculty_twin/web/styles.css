@@ -48,6 +48,16 @@ html[data-theme="dark"] .native-flow-call { stroke: #b9a4ef; }
 .native-flow-node[data-flow-boundary="output"] rect { stroke: var(--success-text); }
 .native-flow-node[data-flow-boundary="input"] .native-flow-label,
 .native-flow-node[data-flow-boundary="output"] .native-flow-label { font-size: 17px; font-weight: 750; }
+.native-workflow-atlas .native-flow-node[data-flow-boundary="input"] rect { fill: var(--info-bg, var(--surface-solid)); stroke-width: 2.5; }
+.native-workflow-atlas .native-flow-node[data-flow-boundary="output"] rect { fill: var(--success-bg, var(--surface-solid)); stroke-width: 2.5; }
+.native-workflow-atlas .native-flow-node[data-flow-boundary]:not([data-flow-boundary=""]) .native-flow-label { opacity: 1; stroke: none; font-size: 21px; }
+.native-workflow-atlas .native-flow-node[data-flow-boundary="input"] .native-flow-label { fill: var(--info-text); }
+.native-workflow-atlas .native-flow-node[data-flow-boundary="output"] .native-flow-label { fill: var(--success-text); }
+.native-workflow-atlas .native-flow-node[data-flow-state="failed"] rect { stroke: var(--error-text); }
+.native-workflow-atlas .native-flow-node[data-flow-state="failed"] .native-flow-label { fill: var(--error-text); }
+.native-workflow-atlas .native-flow-node[data-flow-state="started"] rect { stroke: var(--info-text); filter: drop-shadow(0 0 4px var(--info-text)); }
+.native-workflow-atlas .native-flow-node[data-flow-state="unobserved"] rect { stroke-dasharray: 4 4; }
+.native-workflow-atlas .native-flow-node[data-flow-state="cancelled"] rect { stroke: var(--warning-text); }
 .native-flow-node:focus-visible rect, .native-flow-node:hover rect { stroke: var(--focus-ring); stroke-width: 3; }
 .native-workflow-atlas .native-flow-node:hover .native-flow-label,
 .native-workflow-atlas .native-flow-node:focus-visible .native-flow-label { opacity: 1; }

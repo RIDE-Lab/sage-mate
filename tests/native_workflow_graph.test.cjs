@@ -121,6 +121,13 @@ assert.equal((flat.match(/data-flow-boundary="output"/g)||[]).length,1);
 assert(flat.includes('>输入</text>') && flat.includes('>输出</text>'));
 assert.equal((flat.match(/class="native-flow-diagram/g)||[]).length,1);
 assert(Number(flat.match(/viewBox="0 0 1160 ([\d.]+)"/)[1])<300);
+assert(Number(flat.match(/viewBox="0 0 1160 ([\d.]+)"/)[1])<=196);
+assert.equal((flat.match(/width="114" height="48" rx="24"/g)||[]).length,2);
+const positions=[...flat.matchAll(/data-flow-boundary="(input|output|)"[^>]*data-flow-node="[^"]*"[^>]*><title>[^<]*<\/title>(?:<rect x="([\d.]+)"[^>]*|<circle cx="([\d.]+)"[^>]*)/g)]
+    .map(match=>({boundary:match[1],x:match[2] ? Number(match[2])+57 : Number(match[3])}));
+assert.equal(positions.length,4);
+assert(positions.filter(p=>!p.boundary).every(p=>p.x>positions.find(p=>p.boundary==='input').x
+    && p.x<positions.find(p=>p.boundary==='output').x));
 assert(!html.includes('data-flow-boundary="input"')); // No guessing for old records.
 const malformedBoundary=context.buildNativeWorkflowModel([
     {...snapshot,program_topology:boundaries.map(node=>({...node,is_entry:'true'}))},chosen]);
