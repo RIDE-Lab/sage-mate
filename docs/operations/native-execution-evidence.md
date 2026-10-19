@@ -2,6 +2,51 @@
 
 ## Current accepted release
 
+Production now runs `2f6343e32414e9e819f5d6206633753d9729eb84` with SAGE
+`dc92f39310d4be5127fefb9a24d31d89876a6a7a`. Fresh immutable locked environment:
+1,730 passed, 31 existing skips, zero failures/errors, 475.36 seconds. All seven
+Node frontend groups and 23 SDK branch/observation tests passed. The baseline
+identity-evaluation exclusion and resource limits were unchanged.
+
+Ordinary questions bypass both booking stages in the actual SAGE graph. Missing
+booking fields run preparation only; a real isolated HTTP request confirmed one
+prepare, zero submit, one render and two pending fields. Complete-booking,
+continuation and cancellation regressions retain their original business checks.
+Four old tests required booking placeholders even on non-booking requests; these
+now require absent business/native booking events while preserving exact ordering
+of the selected path. Earlier red full reports were retained, not overwritten.
+
+The interface uses small icons, short Chinese captions, exact native arrows and
+folded child workflows/details. Candidate browser acceptance covered real Wiki
+output (8.5 seconds), both themes, keyboard detail activation, child topology,
+390px contained overflow and actual 80px keyboard scrolling. Old and new history
+were restored without reasking: old executions retain their booking nodes, new
+ordinary executions do not acquire booking nodes. Icons do not rewrite history.
+
+The final installed runtime's real stream test completed in 9.50 seconds, with
+complete sources, one render, no booking execution, atomic background ACK and
+guest isolation. Actual restart replay returned the same answer in 0.25 seconds.
+Cancellation returned HTTP 499 in 0.30 seconds, sealed both destinations, and
+remained cancelled after restart without replaying the answer.
+
+Before production switching, installed runtime Python sources were checked against
+the exact published SAGE tree, and unchanged NeuroMem/SageVDB against the previous
+qualified installation. Graceful writer shutdown and integrity-checked backups of
+all three databases preceded matching app/Wiki pointer updates. HTTP/background
+and Slack health are ready, restart count zero, Wiki timer waiting. Slack retains
+three completed roots and one accepted delivery part on attempt one: no resend.
+Public HTML has `native-workflow-icons-20261019`; public JS/CSS hashes match main.
+The public HTTPS real-question test then passed complete source/native event/
+background/owner isolation checks in 23.11 seconds; same-request replay took 0.97s.
+
+Limitation: the post-deployment public Chrome navigation timed out. Native Chrome
+inspection also showed a blank public tab after a reload, so this is not counted
+as a fresh public browser visual pass. The actual isolated candidate visual tests
+and matching public resource hashes are separate evidence, not a claim that this
+Chrome problem was repaired. No extra Slack question was sent.
+
+## Previous accepted release
+
 Production runtime is `ebe6634bbfda269c828455933c2907fb06e0a08f` with the
 unchanged SAGE `4c4abffed927925856daf6ac468789dc391d587f` dependency. A fresh
 locked environment passed 1,727 tests with 31 existing skips and zero failures or
