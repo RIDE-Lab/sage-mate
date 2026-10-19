@@ -3349,6 +3349,7 @@ codeApprovalPopover?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+    if (revealNativeNodeDetails(event.target)) return;
     if (!codeApprovalMenu || codeApprovalMenu.classList.contains("hidden")) {
         return;
     }
@@ -3359,6 +3360,10 @@ document.addEventListener("click", (event) => {
 });
 
 document.addEventListener("keydown", (event) => {
+    if ((event.key === "Enter" || event.key === " ") && revealNativeNodeDetails(event.target)) {
+        event.preventDefault();
+        return;
+    }
     if (event.key === "Escape") {
         closeCodeApprovalMenu();
         if (isMobileSidebarViewport() && document.body.classList.contains("sidebar-expanded")) {
@@ -8154,7 +8159,8 @@ function buildNativeExecutionHtml(events = []) {
             program_uri:event.program_uri, program_rev:event.program_rev, node_id:event.node_id,
             wave_id:event.wave_id, upstream_node_ids:event.upstream_node_ids,
             downstream_node_ids:event.downstream_node_ids, next_nodes:event.next_nodes, resolution:event.resolution}, null, 2);
-        return `<li data-execution-state="${escapeHtml(event.state || "unknown")}"><details><summary>${escapeHtml(label)} · ${escapeHtml(state + duration + wave)}</summary><pre>${escapeHtml(metadata)}</pre></details></li>`;
+        const nodeKey = JSON.stringify([event.program_uri,event.program_rev,event.node_id]);
+        return `<li data-native-node-key="${escapeHtml(nodeKey)}" data-execution-state="${escapeHtml(event.state || "unknown")}"><details><summary>${escapeHtml(label)} · ${escapeHtml(state + duration + wave)}</summary><pre>${escapeHtml(metadata)}</pre></details></li>`;
     }).join("")}</ol></details></div>`;
 }
 
@@ -8230,12 +8236,33 @@ function buildNativeWorkflowModel(events) {
     return [...groups.values()].sort((a,b) => Number(Boolean(a.parent)) - Number(Boolean(b.parent)));
 }
 
+function revealNativeNodeDetails(target) {
+    const node = target?.closest?.(".native-flow-node[data-native-node-key]");
+    if (!node) return false;
+    const root = node.closest(".native-execution"), key = node.getAttribute("data-native-node-key");
+    const log = root?.querySelector(".native-node-log");
+    if (!log) return false;
+    const matching = [...log.querySelectorAll("[data-native-node-key]")]
+        .filter(entry=>entry.getAttribute("data-native-node-key") === key);
+    if (!matching.length) return false;
+    log.open = true;
+    for (const entry of matching) entry.querySelector("details").open = true;
+    matching[0].querySelector("summary")?.focus();
+    matching[0].scrollIntoView({block:"nearest"});
+    return true;
+}
+
 function buildNativeWorkflowHtml(events) {
     const groups = buildNativeWorkflowModel(events);
     if (!groups.length) return '<p class="native-flow-missing">没有完整的原生拓扑字段，只显示节点记录；不猜测工作流连线。</p>';
     const labels = {started:"执行中", completed:"节点完成", failed:"执行失败", cancelled:"已取消", recovered:"异常恢复"};
     const render = group => {
-        const columns = Math.min(3, group.layers.length);
+        const visible = new Set([...group.nodes.values()].filter(node=>node.attempts.length).map(node=>node.key));
+        for (const edge of group.edges.values()) if (edge.routed) { visible.add(edge.from); visible.add(edge.to); }
+        const visibleLayers = group.layers.map(layer=>layer.filter(id=>visible.has(id))).filter(layer=>layer.length);
+        const visibleEdges = [...group.edges.values()].filter(edge=>visible.has(edge.from) && visible.has(edge.to));
+        const unobserved = [...group.nodes.values()].filter(node=>!visible.has(node.key));
+        const columns = Math.min(6, visibleLayers.length);
         const width = 600, gutter = 24, inset = 18;
         const slot = (width - inset * 2 - gutter * (columns - 1)) / columns;
         const positions = new Map();
@@ -8258,7 +8285,7 @@ function buildNativeWorkflowHtml(events) {
             if (line) lines.push(line);
             return lines.length ? lines : [""];
         };
-        const layers = group.layers.map(layer => layer.map(id => {
+        const layers = visibleLayers.map(layer => layer.map(id => {
                 const node = group.nodes.get(id);
                 const name = node.attempts[0]?.operator_key || node.attempts[0]?.operator_type || "尚无节点记录";
                 const children = groups.filter(child => child.parentEvent
@@ -8275,27 +8302,27 @@ function buildNativeWorkflowHtml(events) {
                 const column = row % 2 ? columns-1-index : index;
                 let top = y;
                 for (const entry of entries) {
-                    const height = 26 + 16 * (entry.lines.length + entry.states.length);
+                    const height = 68;
                     positions.set(entry.node.key, {...entry, row, column,
                         x:inset+column*(slot+gutter), y:top, width:slot, height});
                     top += height + 16;
                 }
                 rowHeight = Math.max(rowHeight, top-y-16);
             });
-            y += rowHeight + 34;
+            y += rowHeight + 20;
         }
-        const edges = [...group.edges.values()].map(edge => {
+        const edges = visibleEdges.map(edge => {
             const from = positions.get(edge.from), to = positions.get(edge.to);
             let path, arrow;
             if (from.row === to.row && from.column !== to.column) {
                 const direction = Math.sign(to.x-from.x);
-                const x1 = from.x + (direction > 0 ? from.width : 0), y1 = from.y+from.height/2;
-                const x2 = to.x + (direction > 0 ? 0 : to.width), y2 = to.y+to.height/2;
+                const x1 = from.x + from.width/2 + direction*19, y1 = from.y+22;
+                const x2 = to.x + to.width/2 - direction*19, y2 = to.y+22;
                 const bend = (x1+x2)/2;
                 path = `M${x1},${y1} C${bend},${y1} ${bend},${y2} ${x2},${y2}`;
                 arrow = `M${x2-direction*5},${y2-3} L${x2},${y2} L${x2-direction*5},${y2+3}`;
             } else {
-                const x1=from.x+from.width/2, y1=from.y+from.height, x2=to.x+to.width/2, y2=to.y;
+                const x1=from.x+from.width/2, y1=from.y+41, x2=to.x+to.width/2, y2=to.y+3;
                 const back=y2<=y1, bend=back ? width-6 : (y1+y2)/2;
                 path = back ? `M${x1},${y1} L${bend},${y1+8} L${bend},${y2-8} L${x2},${y2}`
                     : `M${x1},${y1} C${x1},${bend} ${x2},${bend} ${x2},${y2}`;
@@ -8305,16 +8332,30 @@ function buildNativeWorkflowHtml(events) {
         }).join("");
         const nodes = [...positions.values()].map(p => {
             const state = p.node.attempts.length === 1 ? p.node.attempts[0].state : p.node.attempts.length ? "multiple" : "unobserved";
-            const title = `${p.node.uri}@${p.node.rev} · ${p.node.id}`;
-            const text = (lines,start,cls) => lines.map((line,i) => `<text x="${p.x+12}" y="${start+i*16}" class="${cls}">${escapeHtml(line)}</text>`).join("");
-            return `<g class="native-flow-node" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><rect x="${p.x}" y="${p.y}" width="${p.width}" height="${p.height}" rx="10"/>${text(p.lines,p.y+22,"native-flow-label")}${text(p.states,p.y+25+p.lines.length*16,"native-flow-state")}</g>`;
+            const name = p.node.attempts[0]?.operator_key || p.node.attempts[0]?.operator_type || "尚无节点记录";
+            const appearance = {bootstrap:["接收","inbox"],understand:["理解","message-spark"],
+                "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
+                "write-knowledge":["知识写入","checklist"],retrieve:["检索","search"],
+                prompt:["上下文","checklist"],answer:["回答","message-spark"],render:["返回","send"],
+                "read-memory":["记忆","inbox"],"read-knowledge":["知识","search"],
+                "sys/router":["分支","branch"],filter:["条件","branch"]};
+            const [caption,icon] = appearance[name] || [p.node.attempts.length ? "节点" : "未观测","branch"];
+            const title = `${name} · ${stateText(p.node)} · ${p.states.filter(s=>s.includes("子工作流")).join(" · ")} · ${p.node.uri}@${p.node.rev} · ${p.node.id}`;
+            const cx=p.x+p.width/2, cy=p.y+22;
+            const badge = {completed:"✓",failed:"×",started:"…",multiple:"↻",cancelled:"⊘",recovered:"!",unobserved:"○"}[state] || "?";
+            const interaction = p.node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"';
+            return `<g class="native-flow-node" ${interaction} aria-label="${escapeHtml(title)}" data-native-node-key="${escapeHtml(p.node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(p.node.key)}"><title>${escapeHtml(title)}</title><circle cx="${cx}" cy="${cy}" r="18"/><svg x="${cx-9}" y="${cy-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${icon}"/></svg><text x="${cx}" y="${p.y+55}" text-anchor="middle" class="native-flow-label">${caption}</text><text x="${cx+13}" y="${cy+17}" class="native-flow-state" aria-hidden="true">${badge}</text></g>`;
         }).join("");
         const parentLabel = group.parentEvent?.operator_key || group.parentEvent?.operator_type;
         const heading = group.parent ? `子工作流 · ${parentLabel ? `嵌套于 ${parentLabel}` : "父节点记录缺失"}` : "主工作流";
         const programs = [...new Set([...group.nodes.values()].map(node => `${node.uri}@${node.rev}`))].join(" · ");
-        return `<section class="native-flow-scope${group.parent ? " is-nested" : ""}" data-parent-execution="${escapeHtml(group.parent || "")}"><header class="native-flow-heading"><h4>${escapeHtml(heading)}</h4><span>${group.nodes.size} 节点 · ${group.edges.size} 连线</span></header>${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll" tabindex="0" aria-label="${escapeHtml(heading)}，窄屏可横向滚动"><svg class="native-flow-diagram" role="img" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:460px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div><details class="native-flow-identity"><summary>流程标识</summary><p class="native-flow-program">${escapeHtml(programs)}</p></details></section>`;
+        const unknown = unobserved.length ? `<details class="native-flow-identity"><summary>未观测到执行的声明节点 · ${unobserved.length}</summary><ul>${unobserved.map(node=>`<li>${escapeHtml(`${node.uri}@${node.rev} · ${node.id}`)}</li>`).join("")}</ul></details>` : "";
+        const content = `${group.cyclic ? '<p>存在回环，保留原生连线；不按记录顺序摊平成执行顺序。</p>' : ""}<div class="native-flow-scroll" tabindex="0" aria-label="${escapeHtml(heading)}，窄屏可横向滚动"><svg class="native-flow-diagram" role="group" aria-label="${escapeHtml(heading)}：原生节点与路由关系" viewBox="0 0 ${width} ${y}" style="min-width:460px"><title>${escapeHtml(heading)}：实线为已记录路由，虚线为声明结构</title>${edges}${nodes}</svg></div>${unknown}<details class="native-flow-identity"><summary>流程标识</summary><p class="native-flow-program">${escapeHtml(programs)}</p></details>`;
+        const meta = `${visible.size} 节点 · ${visibleEdges.length} 连线`;
+        if (group.parent) return `<details class="native-flow-scope is-nested" data-parent-execution="${escapeHtml(group.parent)}"><summary>${escapeHtml(heading)} · ${meta}</summary>${content}</details>`;
+        return `<section class="native-flow-scope"><header class="native-flow-heading"><h4>${escapeHtml(heading)}</h4><span>${meta}</span></header>${content}</section>`;
     };
-    return `<div class="native-workflow-view"><div class="native-flow-key"><span>原生工作流</span><span class="native-flow-key-routed">已记录路由</span><span class="native-flow-key-declared">声明结构</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。折行只改变布局，不增加连线。</p></details></div>`;
+    return `<div class="native-workflow-view"><div class="native-flow-key"><span>原生工作流</span><span class="native-flow-key-routed">已记录路由</span><span class="native-flow-key-declared">声明结构</span></div>${groups.map(render).join("")}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">实线：已记录路由；虚线：声明结构。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。未观测的声明节点保留在详情，不冒充本次执行。</p></details></div>`;
 }
 
 function syncNativeExecutionDisplay() {

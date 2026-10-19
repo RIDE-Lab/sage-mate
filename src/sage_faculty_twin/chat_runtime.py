@@ -37,6 +37,41 @@ def execute_booking(context):
     return _ports.get()["execute_booking"].execute(context)
 
 
+def _booking_requested(context):
+    # Intent is captured by understand and is not modified by booking stages.
+    # Both native guards read the same decision, never mutable route/state.
+    intent = context.interaction_intent
+    if intent is None:
+        raise ValueError("chat_branch_requires_captured_intent")
+    return intent.action == "book_meeting"
+
+
+@stateless(uri="stateless://twin/chat/booking-requested", namespace="twin")
+def booking_requested(context):
+    return _booking_requested(context)
+
+
+@stateless(uri="stateless://twin/chat/booking-not-requested", namespace="twin")
+def booking_not_requested(context):
+    return not _booking_requested(context)
+
+
+def _booking_ready(context):
+    # The captured decision remains stable after settlement and across guards.
+    decision = context.booking_decision
+    return decision is not None and decision.request is not None
+
+
+@stateless(uri="stateless://twin/chat/booking-ready", namespace="twin")
+def booking_ready(context):
+    return _booking_ready(context)
+
+
+@stateless(uri="stateless://twin/chat/booking-incomplete", namespace="twin")
+def booking_incomplete(context):
+    return not _booking_ready(context)
+
+
 @stateless(uri="stateless://twin/chat/write-knowledge", namespace="twin")
 def write_knowledge(context):
     return _ports.get()["write_knowledge"].execute(context)
@@ -64,9 +99,12 @@ def render(context):
 
 @flow(uri="flow://twin/chat", namespace="twin")
 def chat_flow(init_stream):
-    return (init_stream.map(bootstrap, operator_key="bootstrap").map(understand, operator_key="understand")
-            .map(prepare_booking, operator_key="prepare-booking").map(execute_booking, operator_key="execute-booking")
-            .map(write_knowledge, operator_key="write-knowledge").map(retrieve, operator_key="retrieve")
+    understood = init_stream.map(bootstrap, operator_key="bootstrap").map(understand, operator_key="understand")
+    prepared = understood.filter(booking_requested).map(prepare_booking, operator_key="prepare-booking")
+    booking = prepared.filter(booking_ready).map(execute_booking, operator_key="execute-booking").connect(
+        prepared.filter(booking_incomplete))
+    selected = booking.connect(understood.filter(booking_not_requested))
+    return (selected.map(write_knowledge, operator_key="write-knowledge").map(retrieve, operator_key="retrieve")
             .map(prompt, operator_key="prompt").map(answer, operator_key="answer").map(render, operator_key="render"))
 
 

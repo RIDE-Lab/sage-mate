@@ -28,27 +28,31 @@
 .native-flow-key > span:first-child { color: var(--ink); font-size: 12px; font-weight: 600; margin-inline-end: auto; }
 .native-flow-key-routed::before, .native-flow-key-declared::before { content: ""; display: inline-block; width: 18px; border-top: 1.5px solid currentColor; margin-inline-end: 6px; vertical-align: middle; }
 .native-flow-key-declared::before { border-top-style: dashed; }
-.native-flow-scope { margin: 12px 0; padding: 14px 12px 8px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-solid); }
+.native-flow-scope { margin: 8px 0; padding: 4px 0; border: 0; background: transparent; }
 .native-flow-heading { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 6px 12px; }
 .native-flow-heading h4 { margin: 0; font-size: 13px; font-weight: 650; }
 .native-flow-heading > span { color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
 .native-flow-program { margin: 6px 0; overflow-wrap: anywhere; font-family: ui-monospace, monospace; }
-.native-flow-scope.is-nested { border-inline-start: 3px solid var(--line-strong); }
+.native-flow-scope.is-nested { border-top: 1px solid var(--line); padding-top: 8px; font-size: 12px; color: var(--text-secondary); }
+.native-flow-scope.is-nested > summary { cursor: pointer; }
 .native-flow-scroll { overflow-x: auto; width: 100%; min-width: 0; max-width: 100%; margin-top: 8px; scrollbar-width: thin; }
 .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
 .native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }
 .native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--text-secondary); stroke-dasharray: none; }
-.native-flow-node rect { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1; }
-.native-flow-label { fill: var(--ink); font: 13px system-ui, sans-serif; font-weight: 550; }
-.native-flow-state { fill: var(--text-secondary); font: 11px system-ui, sans-serif; }
+.native-flow-node { cursor: pointer; outline: none; }
+.native-flow-node circle { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1; }
+.native-flow-node:focus-visible circle, .native-flow-node:hover circle { stroke: var(--focus-ring); stroke-width: 2; }
+.native-flow-icon { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.native-flow-label { fill: var(--ink); font: 12px system-ui, sans-serif; font-weight: 500; }
+.native-flow-state { fill: var(--text-secondary); font: bold 12px system-ui, sans-serif; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 3; }
 .native-flow-node[data-flow-state="completed"] .native-flow-state { fill: var(--success-text); }
-.native-flow-node[data-flow-state="completed"] rect { stroke: var(--success-border); }
-.native-flow-node[data-flow-state="failed"] rect { stroke: var(--error-text); }
-.native-flow-node[data-flow-state="started"] rect { stroke: var(--info-text); }
-.native-flow-node[data-flow-state="recovered"] rect,
-.native-flow-node[data-flow-state="cancelled"] rect { stroke: var(--warning-text); }
-.native-flow-node[data-flow-state="unobserved"] rect { stroke-dasharray: 4 4; }
+.native-flow-node[data-flow-state="completed"] circle { stroke: var(--success-border); }
+.native-flow-node[data-flow-state="failed"] circle { stroke: var(--error-text); }
+.native-flow-node[data-flow-state="started"] circle { stroke: var(--info-text); }
+.native-flow-node[data-flow-state="recovered"] circle,
+.native-flow-node[data-flow-state="cancelled"] circle { stroke: var(--warning-text); }
+.native-flow-node[data-flow-state="unobserved"] circle { stroke-dasharray: 4 4; }
 .native-flow-identity, .native-flow-notes { color: var(--text-secondary); font-size: 11px; line-height: 1.7; }
 .native-flow-identity { margin-top: 2px; }
 .native-flow-notes { margin: 12px 0; }

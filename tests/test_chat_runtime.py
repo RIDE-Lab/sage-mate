@@ -1,7 +1,9 @@
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier, Event
+from types import SimpleNamespace
 
 import pytest
+from sage.runtime.execution_observation import ExecutionObserver
 from sage.runtime.flownet import FlowRequestOutcomeError
 
 from sage_faculty_twin.chat_runtime import ChatRuntime
@@ -14,6 +16,15 @@ STAGES = ("bootstrap", "understand", "prepare_booking", "execute_booking",
           "write_knowledge", "retrieve", "prompt", "answer", "render")
 
 
+class TraceContext(list):
+    def __init__(self, values, *, booking=True, complete=True):
+        super().__init__(values)
+        self.interaction_intent = SimpleNamespace(action="book_meeting" if booking else "answer")
+        self.booking_decision = SimpleNamespace(request=object() if complete else None)
+        self.booking = booking
+        self.complete = complete
+
+
 class Stage:
     def __init__(self, name, marker, hook=None):
         self.name = name
@@ -23,7 +34,9 @@ class Stage:
     def execute(self, value):
         if self.hook:
             self.hook()
-        return [*value, (self.name, self.marker)]
+        return TraceContext([*value, (self.name, self.marker)],
+                            booking=getattr(value, "booking", True),
+                            complete=getattr(value, "complete", True))
 
 
 def ports(marker, **hooks):
@@ -37,14 +50,39 @@ def test_graph_is_reused_and_concurrent_ports_do_not_cross_requests():
         identity = runtime._endpoint.flow_instance.instance_id
 
         def request(index):
-            return runtime.answer([], ports(index, understand=lambda: barrier.wait(3)), timeout=5)
+            return runtime.answer(TraceContext([], booking=bool(index % 2)),
+                                  ports(index, understand=lambda: barrier.wait(3)), timeout=5)
 
         with ThreadPoolExecutor(max_workers=2) as callers:
             outputs = list(callers.map(request, range(6)))
         for index, (response, context) in enumerate(outputs):
-            assert response == [(name, index) for name in STAGES]
+            assert response == [(name, index) for name in STAGES
+                                if index % 2 or name not in {"prepare_booking", "execute_booking"}]
             assert context == response[:-1]
         assert runtime._endpoint.flow_instance.instance_id == identity
+        assert runtime._endpoint._requests == {}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("booking,complete", [(False, True), (True, False), (True, True)])
+def test_native_intent_branch_does_not_execute_rejected_booking_nodes(booking, complete):
+    runtime = ChatRuntime()
+    events, effects = [], []
+    try:
+        with ExecutionObserver(events.append).bind():
+            response, _ = runtime.answer(TraceContext([], booking=booking, complete=complete),
+                ports("branch", prepare_booking=lambda: effects.append("prepare"),
+                      execute_booking=lambda: effects.append("submit")), timeout=5)
+        assert effects == (["prepare", "submit"] if booking and complete else ["prepare"] if booking else [])
+        observed = [e.operator_key for e in events if e.state == "started"]
+        assert observed.count("prepare-booking") == int(booking)
+        assert observed.count("execute-booking") == int(booking and complete)
+        assert observed.count("render") == 1
+        expected = [name for name in STAGES if
+                    (name != "prepare_booking" or booking) and
+                    (name != "execute_booking" or booking and complete)]
+        assert response == [(name,"branch") for name in expected]
         assert runtime._endpoint._requests == {}
     finally:
         runtime.close()

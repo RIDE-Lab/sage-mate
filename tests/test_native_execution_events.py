@@ -115,6 +115,8 @@ def test_real_http_execution_precedes_answer_commit_and_survives_canonical_histo
         data = response.json()
         native = data["execution_events"]
         assert native and all(event["trace_id"] for event in native)
+        assert not any(event["operator_key"] in {"prepare-booking", "execute-booking"} for event in native)
+        assert not any(step["key"] in {"booking_prepare", "booking_execute"} for step in data["workflow_trace"])
         assert any(event["operator_key"] == "render" and event["state"] == "completed" for event in native)
         assert all("parallel_group" not in note for note in data["workflow_trace"])
         stream = client.get("/chat/workflow-events?request_id=native-evidence")

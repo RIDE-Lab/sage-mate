@@ -70,14 +70,32 @@ const chain = Array.from({length:9}, (_,i)=>event('chain-'+i,{operator_key:'oper
 const compact = context.buildNativeExecutionHtml(chain);
 assert.equal((compact.match(/data-flow-node=/g)||[]).length,9);
 assert.equal((compact.match(/data-flow-edge=/g)||[]).length,8);
-assert(Number(compact.match(/viewBox="0 0 600 ([\d.]+)"/)[1]) < 400);
+assert(Number(compact.match(/viewBox="0 0 600 ([\d.]+)"/)[1]) < 240);
 assert(compact.includes('9 节点 · 8 连线'));
 assert(compact.includes('折行只改变布局，不增加连线'));
 assert(compact.includes('<details class="native-flow-identity">'));
 assert(compact.includes('tabindex="0"')); // Narrow-screen keyboard scrolling.
 const longName = '完整保留中文节点名ABCDEFGHIJKLMNOPQRSTUVWXYZ';
 const longHtml = context.buildNativeExecutionHtml([event('long',{operator_key:longName})]);
-assert.equal(Array.from(longHtml.matchAll(/class="native-flow-label">([^<]*)<\/text>/g), m=>m[1]).join(''),longName);
+assert(longHtml.includes(longName)); // Full name remains accessible, not a clipped caption.
+assert(compact.includes('role="button" tabindex="0"'));
+assert(compact.includes('<circle'));
+assert(!compact.includes('<rect'));
+assert(html.includes('<details class="native-flow-scope is-nested"'));
+const opened = {open:false}, otherDetails = {open:false};
+let focused = 0, scrolled = 0;
+const entry = {getAttribute:()=> 'exact-key', querySelector:selector=>selector==='details' ? opened : {focus:()=>focused++},
+    scrollIntoView:()=>scrolled++};
+const unmatched = {getAttribute:()=> 'other-key',querySelector:()=>otherDetails};
+const log = {open:false, querySelectorAll:()=>[entry,unmatched]};
+const root = {querySelector:()=>log};
+const clicked = {getAttribute:()=> 'exact-key',closest:()=>root};
+assert(context.revealNativeNodeDetails({closest:()=>clicked}));
+assert(log.open && opened.open);
+assert(!otherDetails.open);
+assert.equal(focused,1); assert.equal(scrolled,1);
+assert(!context.revealNativeNodeDetails({closest:()=>null}));
+assert(!context.revealNativeNodeDetails({closest:()=>({...clicked,getAttribute:()=> 'unobserved'})}));
 const css = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/styles.css'), 'utf8');
 assert(/\.message-workflow-summary \.message-section-content\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(css));
 assert(/\.native-flow-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*min-width:\s*0/.test(css));
