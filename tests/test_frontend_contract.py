@@ -493,6 +493,11 @@ def test_sage_companion_is_local_accessible_and_lifecycle_driven() -> None:
     assert "${message} 点击${action}伙伴面板" in companion_js
     assert 'sageCompanionController?.setState("thinking"' in js
     assert js.count("sageCompanionController?.recordAnswerCompleted();") == 2
+    # HTTP and answer_done count the answer idempotently; durable completion
+    # additionally settles a late background visual state without recounting.
+    assert js.count("sageCompanionController?.recordAnswerCompleted()") == 3
+    assert 'if (sageCompanionController?.recordAnswerCompleted() === false)' in js
+    assert 'sageCompanionController.setState("idle", "回答已完成。")' in js
     assert 'sageCompanionController?.setState("worried"' in js
     persist_block = companion_js[companion_js.index("persist() {"):companion_js.index("idleMessage() {")]
     assert "question:" not in persist_block

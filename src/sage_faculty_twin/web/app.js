@@ -10182,7 +10182,11 @@ function handleWorkflowStreamEvent(payload) {
         // A late background trace step may have replaced the answer-ready
         // companion state. Only the durable terminal event settles it again.
         sageCompanionController?.setRequestActive(false);
-        sageCompanionController?.recordAnswerCompleted();
+        if (sageCompanionController?.recordAnswerCompleted() === false) {
+            // Completion counting is intentionally idempotent, but a late
+            // trace may still have changed its visual state after that count.
+            sageCompanionController.setState("idle", "回答已完成。");
+        }
     }
 }
 
