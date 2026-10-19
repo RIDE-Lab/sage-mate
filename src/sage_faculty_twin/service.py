@@ -22,6 +22,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from fastapi import HTTPException, status
 from sage.foundation import BaseCoMapFunction, MapFunction, SinkFunction
 from sage.runtime import FlowNetEnvironment
+from sage.runtime.adaptive_workflow import (
+    AdaptiveWorkflowPlan, WorkflowCapabilities, WorkflowRequirements, plan_workflow,
+)
 from sage.runtime.work_journal import PreparedLeaseGuard
 from sage.runtime.source_audit import (
     AnswerValidationRejected, SourceAuditRejected,
@@ -1057,6 +1060,7 @@ class ChatWorkflowContext:
     prepared_memory_record: ConversationMemoryRecord | None = None
     artifact_draft_intent: ArtifactDraftIntent | None = None
     planner_decision: PlannerDecision | None = None
+    adaptive_plan: AdaptiveWorkflowPlan | None = None
     shadow_planner_decision: PlannerDecision | None = None
     shadow_planner_status: str = "shadow_disabled"
     shadow_planner_message: str | None = None
@@ -1452,6 +1456,52 @@ class FacultyTwinWorkflowSupport:
             summary=summary,
             detail=detail,
             duration_ms=self._elapsed_ms(started_at),
+        )
+        return context
+
+    def plan_adaptive_workflow(self, context: ChatWorkflowContext) -> ChatWorkflowContext:
+        """Supply authenticated business capabilities to the shared SAGE policy.
+
+        HTTP/Slack adapters overwrite owner/profile from their verified identity;
+        the intent model may narrow sources, never grant membership or writes.
+        KnowledgeSources rechecks document ACLs when searching and hydrating.
+        """
+        intent = context.interaction_intent
+        if intent is None:
+            raise ValueError("adaptive_workflow_requires_captured_intent")
+        memory = self.prepare_memory_retrieval(context)
+        knowledge = self.prepare_knowledge_retrieval(context)
+        identity = (context.request.owner_id or "guest:").split(":", 1)[0]
+        identity = identity if identity in {"account", "api_token", "slack"} else "guest"
+        if context.is_admin_request:
+            identity = "admin"
+        private_allowed = KnowledgeSources._private_allowed(
+            context.request.visitor_profile, self._resolve_admin_role())
+        plan = plan_workflow(WorkflowRequirements(
+            action=intent.action,
+            resolved=context.route != "answer" or context.answer is not None,
+            self_contained=self._is_self_contained_request(context),
+            research_review=is_research_review_request(context.request.question, domain=intent.domain),
+            knowledge=knowledge.needs_retrieval,
+            memory=not bool(memory.skip_summary),
+            web=context.request.web_search,
+            requested_sources=(tuple(context.request.knowledge_sources)
+                               if context.request.knowledge_sources is not None else None),
+        ), WorkflowCapabilities(
+            identity=identity, sources=("wiki", "private") if private_allowed else ("wiki",),
+            memory=not bool(memory.skip_summary),
+            write_knowledge=context.is_admin_request,
+        ))
+        context.adaptive_plan = plan
+        # Narrow the actual adapter request, not just the visible graph.
+        if plan.retrieve_knowledge:
+            context.request = context.request.model_copy(update={"knowledge_sources": list(plan.sources)})
+        self._append_trace(
+            context, key="adaptive_plan", title="选择本轮工作流",
+            summary=f"执行路线：{plan.route}；质量策略：{plan.quality}。",
+            detail=(f"身份类型：{plan.identity}；允许的本轮来源：{', '.join(plan.sources) or '无'}；"
+                    f"记忆检索：{'是' if plan.retrieve_memory else '否'}；"
+                    "模型意图不授予身份权限；检索时仍复核资料访问权限。"), duration_ms=0,
         )
         return context
 
@@ -8551,6 +8601,15 @@ class InteractionUnderstandingStage(MapFunction):
         return self._support.understand_interaction(data)
 
 
+class AdaptivePlanStage(MapFunction):
+    def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
+        super().__init__()
+        self._support = support
+
+    def execute(self, data: ChatWorkflowContext) -> ChatWorkflowContext:
+        return self._support.plan_adaptive_workflow(data)
+
+
 class BookingPreparationStage(MapFunction):
     def __init__(self, support: FacultyTwinWorkflowSupport) -> None:
         super().__init__()
@@ -11798,6 +11857,7 @@ class DigitalTwinService:
         ports = {
             "bootstrap": BootstrapChatContextStage(support),
             "understand": InteractionUnderstandingStage(support),
+            "plan": AdaptivePlanStage(support),
             "prepare_booking": BookingPreparationStage(support),
             "execute_booking": BookingExecutionStage(support),
             "write_knowledge": KnowledgeWriteStage(support),

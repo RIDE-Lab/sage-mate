@@ -82,6 +82,19 @@ assert(compact.includes('role="button" tabindex="0"'));
 assert(compact.includes('<circle'));
 assert(!compact.includes('<rect'));
 assert(html.includes('<details class="native-flow-scope is-nested"'));
+const adaptiveHtml = context.buildNativeExecutionHtml([
+    event('plan', {operator_key:'plan', downstream_node_ids:['wiki'], next_nodes:[
+        {program_uri:'flow://actual',program_rev:'v1',node_id:'wiki'}]}),
+    event('wiki', {operator_key:'read-wiki',state:'started'}),
+]);
+assert(adaptiveHtml.includes('>规划</text>'));
+assert(adaptiveHtml.includes('>公开 Wiki</text>'));
+assert(adaptiveHtml.includes('native-flow-edge is-routed is-active'));
+const historyHtml = context.buildNativeExecutionHtml([
+    event('p', {downstream_node_ids:['q'],next_nodes:[
+        {program_uri:'flow://actual',program_rev:'v1',node_id:'q'}]}),event('q'),
+]);
+assert(!historyHtml.includes('is-active')); // Historical completions never animate as running.
 const opened = {open:false}, otherDetails = {open:false};
 let focused = 0, scrolled = 0;
 const entry = {getAttribute:()=> 'exact-key', querySelector:selector=>selector==='details' ? opened : {focus:()=>focused++},
@@ -99,4 +112,5 @@ assert(!context.revealNativeNodeDetails({closest:()=>({...clicked,getAttribute:(
 const css = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/styles.css'), 'utf8');
 assert(/\.message-workflow-summary \.message-section-content\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(css));
 assert(/\.native-flow-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*min-width:\s*0/.test(css));
+assert(css.includes('@media (prefers-reduced-motion: reduce)'));
 console.log('Authoritative topology, nested forks, missing nodes, retries, cycles and escaping passed');

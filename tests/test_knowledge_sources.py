@@ -104,6 +104,31 @@ def test_source_graph_runs_nested_inside_existing_retrieval_graph():
         sources.close()
 
 
+@pytest.mark.parametrize('profile,expected', [
+    ('general_visitor', {'read-wiki'}),
+    ('lab_member', {'read-wiki', 'read-private'}),
+])
+def test_verified_source_capabilities_select_real_native_operators(profile, expected):
+    from sage.runtime.execution_observation import ExecutionObserver
+
+    class Store:
+        def list_documents(self):
+            return []
+        def search(self, query, **kwargs):
+            return []
+
+    sources = KnowledgeSources(Store(), Store())
+    events = []
+    try:
+        with ExecutionObserver(events.append).bind():
+            assert sources.search('synthetic-route-test', visitor_profile=profile) == []
+        operators = {event.operator_key for event in events if event.state == 'started'}
+        assert operators & {'read-wiki', 'read-private'} == expected
+        assert sources._runtime._endpoint._requests == {}
+    finally:
+        sources.close()
+
+
 def test_guest_only_wiki_member_both_and_full_evidence(tmp_path):
     _, private, wiki, sources = stores(tmp_path)
     guest = sources.search('quartz research', visitor_profile='general_visitor')

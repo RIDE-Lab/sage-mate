@@ -8313,6 +8313,8 @@ function buildNativeWorkflowHtml(events) {
         }
         const edges = visibleEdges.map(edge => {
             const from = positions.get(edge.from), to = positions.get(edge.to);
+            const active = edge.routed && [from, to].some(p =>
+                p.node.attempts.some(attempt => attempt.state === "started"));
             let path, arrow;
             if (from.row === to.row && from.column !== to.column) {
                 const direction = Math.sign(to.x-from.x);
@@ -8328,16 +8330,24 @@ function buildNativeWorkflowHtml(events) {
                     : `M${x1},${y1} C${x1},${bend} ${x2},${bend} ${x2},${y2}`;
                 arrow = `M${x2-3},${y2-5} L${x2},${y2} L${x2+3},${y2-5}`;
             }
-            return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="${arrow}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
+            return `<path d="${path}" class="native-flow-edge${edge.routed ? " is-routed" : ""}${active ? " is-active" : ""}" data-flow-edge="${edge.routed ? "routed" : "declared"}" data-from="${escapeHtml(edge.from)}" data-to="${escapeHtml(edge.to)}"/><path d="${arrow}" class="native-flow-arrow${edge.routed ? " is-routed" : ""}"/>`;
         }).join("");
         const nodes = [...positions.values()].map(p => {
             const state = p.node.attempts.length === 1 ? p.node.attempts[0].state : p.node.attempts.length ? "multiple" : "unobserved";
             const name = p.node.attempts[0]?.operator_key || p.node.attempts[0]?.operator_type || "尚无节点记录";
             const appearance = {bootstrap:["接收","inbox"],understand:["理解","message-spark"],
+                plan:["规划","branch"],
                 "prepare-booking":["补全预约","checklist"],"execute-booking":["提交预约","check"],
                 "write-knowledge":["知识写入","checklist"],retrieve:["检索","search"],
                 prompt:["上下文","checklist"],answer:["回答","message-spark"],render:["返回","send"],
                 "read-memory":["记忆","inbox"],"read-knowledge":["知识","search"],
+                "read-wiki":["公开 Wiki","book"],"read-private":["私有知识","search"],
+                "wiki-capability":["公开来源","branch"],"private-capability":["私有权限","branch"],
+                "booking-route":["预约路径","branch"],"dialogue-route":["对话路径","branch"],
+                "booking-ready":["字段齐备","branch"],"booking-incomplete":["待补字段","branch"],
+                "write-route":["写入授权","branch"],"read-route":["只读路径","branch"],
+                "evidence-route":["取证路径","branch"],"direct-route":["无需取证","branch"],
+                "compose-route":["组织回答","branch"],"resolved-route":["已有结果","branch"],
                 "sys/router":["分支","branch"],filter:["条件","branch"]};
             const [caption,icon] = appearance[name] || [p.node.attempts.length ? "节点" : "未观测","branch"];
             const title = `${name} · ${stateText(p.node)} · ${p.states.filter(s=>s.includes("子工作流")).join(" · ")} · ${p.node.uri}@${p.node.rev} · ${p.node.id}`;

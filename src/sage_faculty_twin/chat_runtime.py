@@ -27,6 +27,11 @@ def understand(context):
     return _ports.get()["understand"].execute(context)
 
 
+@stateless(uri="stateless://twin/chat/plan", namespace="twin")
+def plan(context):
+    return _ports.get()["plan"].execute(context)
+
+
 @stateless(uri="stateless://twin/chat/prepare-booking", namespace="twin")
 def prepare_booking(context):
     return _ports.get()["prepare_booking"].execute(context)
@@ -97,15 +102,64 @@ def render(context):
     return _ports.get()["render"].execute(context), context
 
 
+def _plan(context):
+    if context.adaptive_plan is None:
+        raise ValueError("chat_branch_requires_adaptive_plan")
+    return context.adaptive_plan
+
+
+@stateless(uri="stateless://twin/chat/write-requested", namespace="twin")
+def write_requested(context):
+    return _plan(context).write_knowledge
+
+
+@stateless(uri="stateless://twin/chat/write-not-requested", namespace="twin")
+def write_not_requested(context):
+    return not _plan(context).write_knowledge
+
+
+@stateless(uri="stateless://twin/chat/retrieval-requested", namespace="twin")
+def retrieval_requested(context):
+    return _plan(context).needs_retrieval
+
+
+@stateless(uri="stateless://twin/chat/retrieval-not-requested", namespace="twin")
+def retrieval_not_requested(context):
+    return not _plan(context).needs_retrieval
+
+
+@stateless(uri="stateless://twin/chat/answer-required", namespace="twin")
+def answer_required(context):
+    # Both sibling guards use the captured immutable plan, never answer/route
+    # mutated by a concurrently scheduled downstream adapter.
+    return _plan(context).quality != "direct"
+
+
+@stateless(uri="stateless://twin/chat/answer-not-required", namespace="twin")
+def answer_not_required(context):
+    return _plan(context).quality == "direct"
+
+
 @flow(uri="flow://twin/chat", namespace="twin")
 def chat_flow(init_stream):
-    understood = init_stream.map(bootstrap, operator_key="bootstrap").map(understand, operator_key="understand")
-    prepared = understood.filter(booking_requested).map(prepare_booking, operator_key="prepare-booking")
-    booking = prepared.filter(booking_ready).map(execute_booking, operator_key="execute-booking").connect(
-        prepared.filter(booking_incomplete))
-    selected = booking.connect(understood.filter(booking_not_requested))
-    return (selected.map(write_knowledge, operator_key="write-knowledge").map(retrieve, operator_key="retrieve")
-            .map(prompt, operator_key="prompt").map(answer, operator_key="answer").map(render, operator_key="render"))
+    understood = (init_stream.map(bootstrap, operator_key="bootstrap")
+                  .map(understand, operator_key="understand").map(plan, operator_key="plan"))
+    prepared = understood.filter(booking_requested, operator_key="booking-route").map(
+        prepare_booking, operator_key="prepare-booking")
+    booking = prepared.filter(booking_ready, operator_key="booking-ready").map(
+        execute_booking, operator_key="execute-booking").connect(
+        prepared.filter(booking_incomplete, operator_key="booking-incomplete"))
+    selected = booking.connect(understood.filter(booking_not_requested, operator_key="dialogue-route"))
+    written = selected.filter(write_requested, operator_key="write-route").map(
+        write_knowledge, operator_key="write-knowledge").connect(
+        selected.filter(write_not_requested, operator_key="read-route"))
+    retrieved = written.filter(retrieval_requested, operator_key="evidence-route").map(
+        retrieve, operator_key="retrieve").connect(
+        written.filter(retrieval_not_requested, operator_key="direct-route"))
+    answered = retrieved.filter(answer_required, operator_key="compose-route").map(
+        prompt, operator_key="prompt").map(answer, operator_key="answer").connect(
+        retrieved.filter(answer_not_required, operator_key="resolved-route"))
+    return answered.map(render, operator_key="render")
 
 
 class ChatRuntime:

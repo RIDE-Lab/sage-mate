@@ -40,6 +40,11 @@
 .native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
 .native-flow-edge, .native-flow-arrow { fill: none; stroke: var(--text-secondary); stroke-width: 1.5; stroke-dasharray: 4 4; stroke-linecap: round; stroke-linejoin: round; }
 .native-flow-edge.is-routed, .native-flow-arrow.is-routed { stroke: var(--text-secondary); stroke-dasharray: none; }
+.native-flow-edge.is-active { stroke: var(--info-text); stroke-dasharray: 6 9; animation: native-flow-travel 1.2s linear infinite; }
+@keyframes native-flow-travel { to { stroke-dashoffset: -30; } }
+@media (prefers-reduced-motion: reduce) {
+    .native-flow-edge.is-active { animation: none; stroke-dasharray: none; }
+}
 .native-flow-node { cursor: pointer; outline: none; }
 .native-flow-node circle { fill: var(--surface-solid); stroke: var(--line-strong); stroke-width: 1; }
 .native-flow-node:focus-visible circle, .native-flow-node:hover circle { stroke: var(--focus-ring); stroke-width: 2; }

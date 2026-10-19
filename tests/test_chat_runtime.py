@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 from sage.runtime.execution_observation import ExecutionObserver
 from sage.runtime.flownet import FlowRequestOutcomeError
+from sage.runtime.adaptive_workflow import WorkflowCapabilities, WorkflowRequirements, plan_workflow
 
 from sage_faculty_twin.chat_runtime import ChatRuntime
 from sage_faculty_twin.request_context import (
@@ -12,17 +13,28 @@ from sage_faculty_twin.request_context import (
 )
 
 
-STAGES = ("bootstrap", "understand", "prepare_booking", "execute_booking",
+STAGES = ("bootstrap", "understand", "plan", "prepare_booking", "execute_booking",
           "write_knowledge", "retrieve", "prompt", "answer", "render")
 
 
+def expected_stages(booking, complete=True):
+    return [name for name in STAGES if name != "write_knowledge" and
+            (name != "prepare_booking" or booking) and
+            (name != "execute_booking" or booking and complete) and
+            (name not in {"retrieve", "prompt", "answer"} or not booking)]
+
+
 class TraceContext(list):
-    def __init__(self, values, *, booking=True, complete=True):
+    def __init__(self, values, *, booking=True, complete=True, requirements=None):
         super().__init__(values)
         self.interaction_intent = SimpleNamespace(action="book_meeting" if booking else "answer")
         self.booking_decision = SimpleNamespace(request=object() if complete else None)
         self.booking = booking
         self.complete = complete
+        self.requirements = requirements
+        self.adaptive_plan = plan_workflow(
+            requirements or WorkflowRequirements(action="book_meeting" if booking else "answer"),
+            WorkflowCapabilities("guest", ("wiki",), True))
 
 
 class Stage:
@@ -36,7 +48,8 @@ class Stage:
             self.hook()
         return TraceContext([*value, (self.name, self.marker)],
                             booking=getattr(value, "booking", True),
-                            complete=getattr(value, "complete", True))
+                            complete=getattr(value, "complete", True),
+                            requirements=getattr(value, "requirements", None))
 
 
 def ports(marker, **hooks):
@@ -56,8 +69,7 @@ def test_graph_is_reused_and_concurrent_ports_do_not_cross_requests():
         with ThreadPoolExecutor(max_workers=2) as callers:
             outputs = list(callers.map(request, range(6)))
         for index, (response, context) in enumerate(outputs):
-            assert response == [(name, index) for name in STAGES
-                                if index % 2 or name not in {"prepare_booking", "execute_booking"}]
+            assert response == [(name, index) for name in expected_stages(bool(index % 2))]
             assert context == response[:-1]
         assert runtime._endpoint.flow_instance.instance_id == identity
         assert runtime._endpoint._requests == {}
@@ -79,9 +91,7 @@ def test_native_intent_branch_does_not_execute_rejected_booking_nodes(booking, c
         assert observed.count("prepare-booking") == int(booking)
         assert observed.count("execute-booking") == int(booking and complete)
         assert observed.count("render") == 1
-        expected = [name for name in STAGES if
-                    (name != "prepare_booking" or booking) and
-                    (name != "execute_booking" or booking and complete)]
+        expected = expected_stages(booking, complete)
         assert response == [(name,"branch") for name in expected]
         assert runtime._endpoint._requests == {}
     finally:
@@ -102,7 +112,30 @@ def test_failed_stage_is_not_replayed_and_graph_recovers():
                                      write_knowledge=lambda: calls.append("after")), timeout=3)
         assert calls == ["failed"]
         response, _ = runtime.answer([], ports("good"), timeout=3)
-        assert response == [(name, "good") for name in STAGES]
+        assert response == [(name, "good") for name in expected_stages(True)]
+        assert runtime._endpoint._requests == {}
+    finally:
+        runtime.close()
+
+
+@pytest.mark.parametrize("requirements,executed", [
+    (WorkflowRequirements(resolved=True), []),
+    (WorkflowRequirements(self_contained=True), ["prompt", "answer"]),
+    (WorkflowRequirements(research_review=True), ["retrieve", "prompt", "answer"]),
+])
+def test_native_adaptive_routes_do_not_execute_unselected_work(requirements, executed):
+    runtime = ChatRuntime()
+    events = []
+    try:
+        with ExecutionObserver(events.append).bind():
+            response, _ = runtime.answer(TraceContext([], booking=False, requirements=requirements),
+                                         ports("adaptive"), timeout=5)
+        expected = ["bootstrap", "understand", "plan", *executed, "render"]
+        assert response == [(name, "adaptive") for name in expected]
+        observed = [event.operator_key for event in events if event.state == "started"]
+        for name in {"retrieve", "prompt", "answer", "write_knowledge"}:
+            assert observed.count(name.replace("_", "-")) == int(name in executed)
+        assert observed.count("render") == 1
         assert runtime._endpoint._requests == {}
     finally:
         runtime.close()

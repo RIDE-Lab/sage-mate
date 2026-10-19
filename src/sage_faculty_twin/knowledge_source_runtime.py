@@ -12,26 +12,34 @@ _stores = ContextVar('twin_knowledge_source_stores')
 @stateless(uri='stateless://twin/knowledge-sources/wiki', namespace='twin')
 def read_wiki(request):
     wiki, _ = _stores.get()
-    hits = []
-    if request['wiki']:
-        hits = wiki.search(request['query'], top_k=request['limit'], visitor_profile='general_visitor')
+    hits = wiki.search(request['query'], top_k=request['limit'], visitor_profile='general_visitor')
     return 'wiki', hits
 
 
 @stateless(uri='stateless://twin/knowledge-sources/private', namespace='twin')
 def read_private(request):
     _, private = _stores.get()
-    hits = []
-    if request['private']:
-        hits = private.search(request['query'], top_k=request['limit'],
-                              visitor_profile=request['visitor_profile'], admin_role=request['admin_role'])
+    hits = private.search(request['query'], top_k=request['limit'],
+                          visitor_profile=request['visitor_profile'], admin_role=request['admin_role'])
     return 'private', hits
+
+
+@stateless(uri='stateless://twin/knowledge-sources/wiki-requested', namespace='twin')
+def wiki_requested(request):
+    return request['wiki']
+
+
+@stateless(uri='stateless://twin/knowledge-sources/private-requested', namespace='twin')
+def private_requested(request):
+    return request['private']
 
 
 @flow(uri='flow://twin/knowledge-sources', namespace='twin')
 def knowledge_sources_flow(init_stream):
-    return init_stream.map(read_wiki, operator_key='read-wiki').connect(
-        init_stream.map(read_private, operator_key='read-private'))
+    return init_stream.filter(wiki_requested, operator_key='wiki-capability').map(
+        read_wiki, operator_key='read-wiki').connect(
+        init_stream.filter(private_requested, operator_key='private-capability').map(
+            read_private, operator_key='read-private'))
 
 
 class KnowledgeSourceRuntime:
@@ -46,6 +54,13 @@ class KnowledgeSourceRuntime:
             raise
 
     def search(self, *, wiki, private, request, timeout):
+        # Snapshot the adapter's capability decision before native scheduling.
+        request = dict(request)
+        if any(type(request.get(origin)) is not bool for origin in ('wiki', 'private')):
+            raise ValueError('source_branch_requires_boolean_capability')
+        expected = {origin for origin in ('wiki', 'private') if request[origin]}
+        if not expected:
+            raise ValueError('source_branch_requires_enabled_origin')
         cancellation = child_request_cancellation()
         unregister = register_request_cancel_callback(cancellation.cancel)
         token = _stores.set((wiki, private))
@@ -58,10 +73,10 @@ class KnowledgeSourceRuntime:
             unregister()
         results = {}
         for origin, hits in outputs:
-            if origin not in {'wiki', 'private'} or origin in results:
+            if origin not in expected or origin in results:
                 raise RuntimeError('invalid_knowledge_source_branch_output')
             results[origin] = hits
-        if set(results) != {'wiki', 'private'}:
+        if set(results) != expected:
             raise RuntimeError('incomplete_knowledge_source_branch_outputs')
         return results
 
