@@ -54,3 +54,14 @@ not counted as a complete quality pass. The pool replaces it with “RAG 系统�
 哪些环节改进检索质量？”, which asks about the methods actually covered by the public
 article. This is content curation, not a retrieval override, relaxed audit, or a
 claim that the missing evaluation material has been repaired.
+
+The corrected question passed isolated live QA in17.16s and public live QA in
+68.48s, with normal completion, the relevant Wiki source, full links, source
+blocks and no declared coverage gap. These are individual latencies, not a speed
+benchmark. Final code release `e3333071827ef6e741ef963ea1b5fd6c2ef753cf` is active;
+its delta from the full-regression baseline contains only the reviewed frontend,
+its Node regression and this document. All13 Node suites passed on the final
+remote release. Public assets match that revision. Final Chrome refresh/new-chat
+acceptance visibly showed the corrected RAG question alongside the two other
+lab-member questions, with readable dark-mode rendering. Both app and Slack
+readiness remained healthy. No temporary branch or pull request was created.
