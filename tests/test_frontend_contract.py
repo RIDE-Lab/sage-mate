@@ -195,45 +195,11 @@ assert(!source.includes('WORKFLOW_PARALLEL_GROUP_LABELS'));
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 
 
-def test_wiki_starters_cover_all_profiles_and_failed_load_fallback():
+def test_natural_starters_cover_all_roles_and_failed_catalog_fallback():
     import subprocess
-    script = r'''
-const fs = require('fs');
-const vm = require('vm');
-const assert = require('assert');
-const source = fs.readFileSync(process.argv[1], 'utf8');
-const start = source.indexOf('async function renderSeedChips(');
-const end = source.indexOf('// --- Beginner-friendly', start);
-const node = () => ({dataset:{}, append(){}, addEventListener(){}});
-(async () => {
-  for (const profile of ['general_visitor','hust_undergraduate','paper_writing_student','lab_member']) {
-    for (const available of [true, false]) {
-      let loaded = 0;
-      const container = {children:[], replaceChildren(...items){this.children=items;}, querySelectorAll(){return this.children;}};
-      const wiki = {label:{general_visitor:'系统研究概览',hust_undergraduate:'推理入门',paper_writing_student:'论文写作',lab_member:'开放研究问题'}[profile],source_name:'wiki:fixture',url:'https://example.test/wiki'};
-      const context = {document:{getElementById:()=>container,createElement:node},
-        visitorProfileInput:{value:profile},publicWikiQuestions:available?[wiki]:[],
-        SEED_CHIP_COUNT:3,uiIconSvg:()=>'',
-        loadPublicWikiQuestions:async()=>{loaded++;}};
-      vm.createContext(context);
-      vm.runInContext(source.slice(source.indexOf('const WIKI_QUESTION_PROFILES ='),source.indexOf('const SEED_CHIP_COUNT =')), context);
-      vm.runInContext(source.slice(start,end), context);
-      await context.renderSeedChips(profile);
-      assert.equal(loaded,1);
-      assert.equal(container.children.length,available?1:3);
-      assert(container.children[0].dataset.seedQuestion.includes('公开 Wiki'));
-      assert(container.children[0].dataset.seedQuestion.includes('完整原文链接'));
-      if(available) assert(container.children[0].dataset.seedQuestion.includes(wiki.label));
-      const selected = context.wikiStarterQuestions(profile,available?[wiki]:[]);
-      if(available) assert.equal(selected[0].url,wiki.url);
-      assert.equal(container.children[0].dataset.seedContext,'公开 Wiki 导读');
-    }
-  }
-})().catch(error=>{console.error(error);process.exit(1);});
-'''
-    subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
-    source = (WEB_DIR / "app.js").read_text(encoding="utf-8")
-    assert "SEED_CHIP_POOL" not in source
+    subprocess.run(["node", str(WEB_DIR.parents[2] / "tests/natural_starters.test.cjs")],
+                   check=True, timeout=20)
+
 
 
 def test_authenticated_account_has_slack_binding_entry():

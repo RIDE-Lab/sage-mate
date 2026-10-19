@@ -11284,8 +11284,8 @@ class DigitalTwinService:
             title = document.title.removeprefix('Wiki | ').strip()
             pages[source] = {
                 'label': title,
-                'question': f'请依据 Wiki《{title}》介绍核心内容、适用场景，并附原文链接。',
-                'context': '公开 Wiki 导读',
+                'question': f'《{title}》主要讲了什么，适合解决哪些问题？',
+                'context': '公开资料导览',
                 'source_name': source,
                 'url': document.metadata.get('wiki_url', ''),
             }

@@ -646,17 +646,17 @@ let apiOriginResolutionPromise = null;
 const VISITOR_PROFILE_CONFIGS = {
     general_visitor: {
         label: "一般访客",
-        defaultContext: "公开 Wiki 导读",
-        defaultQuestion: "Wiki 里有哪些公开资料？请推荐入门阅读顺序并附原文链接。",
+        defaultContext: "初次来访 · 研究与公开资料",
+        defaultQuestion: "课题组主要研究哪些问题？",
         drawerHint: "从公开 Wiki 了解研究方法、推理系统与论文写作。",
         introLines: [
             "从 Wiki 开始，了解研究方法、推理系统与论文写作。",
             "可以问概念、比较方法，或索取原文链接。",
         ],
         quickActions: [
-            { label: "Wiki 导览", question: "Wiki 里有哪些公开资料？请推荐入门阅读顺序并附原文链接。", context: "公开 Wiki 导读" },
-            { label: "研究入门", question: "请依据 Wiki 介绍科研入门的方法和阅读路线，并附原文链接。", context: "公开 Wiki 导读" },
-            { label: "论文写作", question: "请依据 Wiki 介绍论文写作课程的公开材料，并附原文链接。", context: "公开 Wiki 导读" },
+            { label: "了解课题组", question: "课题组主要研究哪些问题？", context: "初次来访" },
+            { label: "研究入门", question: "刚开始接触科研，第一个月可以怎么安排？", context: "科研入门" },
+            { label: "论文写作", question: "怎样把一个粗略想法收敛成论文选题？", context: "论文写作" },
         ],
     },
     hust_undergraduate: {
@@ -1415,41 +1415,64 @@ function buildLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 }
 
 // Public Wiki discovery is shared by guests and signed-in members alike.
-const WIKI_QUESTION_FALLBACK = VISITOR_PROFILE_CONFIGS.general_visitor.quickActions;
 const WIKI_QUESTION_PROFILES = {
     general_visitor: {
-        topics: /系统研究概览|公开研究与教学|使用边界|推荐阅读|科研入门/,
-        focus: "用面向初次来访者的语言说明主题、课题组相关工作与下一步阅读入口",
-        fallback: ["课题组有哪些公开研究方向？", "有哪些适合初次来访者阅读的公开资料？", "分身系统可以帮助我做什么，有哪些边界？"],
+        context: "初次来访 · 研究与公开资料",
+        questions: [
+            ["课题组主要研究哪些问题？", /系统研究概览|公开研究与教学/],
+            ["SAGE、ECPA 和 StateAxis 有什么区别？", /系统研究概览/],
+            ["想了解课题组的工作，可以从哪里开始？", /系统研究概览|推荐阅读|科研入门/],
+            ["刚开始接触科研，第一个月可以怎么安排？", /科研入门|新成员入门/],
+            ["这个分身能帮我做什么，哪些事情不能代办？", /使用边界/],
+            ["大模型生成一段回答，背后经历了哪些步骤？", /推理入门/],
+        ],
     },
     hust_undergraduate: {
-        topics: /推理入门|环境搭建|工具与框架|Prompt Engineering 实践|论文阅读路径|科研入门/,
-        focus: "面向本科生解释前置知识、核心概念与可从资料中找到的入门练习；没有练习则明确说明",
-        fallback: ["大模型推理的 Prefill 和 Decode 有什么区别？", "开始学习推理系统需要哪些前置知识和工具？", "如何安排推理系统的入门阅读顺序？"],
+        context: "本科生 · 推理系统入门",
+        questions: [
+            ["Prefill 和 Decode 有什么区别？", /推理入门/],
+            ["KV Cache 为什么能让模型回答得更快？", /KV Cache|推理入门/],
+            ["学习大模型推理系统，需要先掌握哪些知识？", /推理入门|工具与框架|科研入门/],
+            ["读系统论文时，怎样抓住问题、方法和实验？", /论文阅读路径|新成员入门|科研入门/],
+            ["怎样完成第一次能复现的系统实验？", /新成员入门|科研入门|端到端验收/],
+            ["写提示词时，怎样把需求说清楚？", /Prompt Engineering 实践/],
+        ],
     },
     paper_writing_student: {
-        topics: /论文写作|写作能力|高质量论文|论文问题诊断|综述写作|论文修改/,
-        focus: "面向论文写作课同学梳理写作方法、自查问题与修改步骤；不要假定我已提供稿件",
-        fallback: ["论文写作的公开课程资料应该按什么顺序阅读？", "如何检查论文的研究问题与论证结构？", "中文综述和系统论文各有哪些写作规范？"],
+        context: "论文写作课 · 选题与修改",
+        questions: [
+            ["怎样把一个粗略想法收敛成论文选题？", /从选题到高质量论文|好的研究问题/],
+            ["论文的研究问题、方法和实验怎样连成一条主线？", /论文写作|高质量论文|论文修改/],
+            ["修改系统论文时，哪些问题值得优先检查？", /系统论文修改|论文问题诊断/],
+            ["怎样写出有组织、有判断的文献综述？", /综述写作/],
+            ["平时怎样练习，才能真正提高论文写作能力？", /培养写作能力/],
+            ["论文初稿完成后，怎样安排一轮有效的修改？", /论文问题诊断|论文修改|系统论文修改/],
+        ],
     },
     lab_member: {
-        topics: /开放研究问题|Benchmark|研究问题|系统研究概览|RAG 系统|端到端验收|分布式推理|KV Cache/,
-        focus: "面向组内研究者梳理问题定义、设计权衡与验证边界；将资料事实与额外研究建议明确分开",
-        fallback: ["推理状态管理有哪些公开的研究问题和验证边界？", "如何设计可复核的推理系统 Benchmark？", "SAGE、ECPA 与 StateAxis 分别承担什么角色？"],
+        context: "组内研究 · 假设与实验设计",
+        questions: [
+            ["推理状态管理有哪些值得验证的研究问题？", /推理状态管理开放研究问题/],
+            ["怎样区分系统优化的真实收益和实验干扰？", /Benchmark|开放研究问题|端到端验收/],
+            ["KV Cache 迁移和重计算，什么时候各自更划算？", /推理状态管理|分布式推理|KV Cache/],
+            ["评测 RAG 系统时，怎样同时检查效果和性能？", /RAG 系统/],
+            ["怎样判断一个实验假设是否真的被证伪？", /好的研究问题|开放研究问题/],
+            ["推理服务上线前，端到端验收应该覆盖什么？", /端到端验收/],
+        ],
     },
 };
 
-function wikiStarterQuestions(profile, questions) {
+function wikiStarterQuestions(profile, pages) {
     const design = WIKI_QUESTION_PROFILES[profile] || WIKI_QUESTION_PROFILES.general_visitor;
-    const matching = questions.filter((item) => design.topics.test(item.label));
-    if (!matching.length) {
-        return design.fallback.map((question) => ({label: question,
-            question: `请依据公开 Wiki 回答：${question}请附完整原文链接；资料未覆盖的内容请明确说明。`,
-            context: '公开 Wiki 导读'}));
-    }
-    return matching.map((item) => ({...item,
-        question: `请依据公开 Wiki《${item.label}》，${design.focus}，并附完整原文链接。`,
-        context: '公开 Wiki 导读'}));
+    const pool = design.questions.map(([question, topics]) => {
+        const page = pages.find(item => typeof item.label === "string" && topics.test(item.label));
+        // Catalog metadata ranks discoverable topics, never rewrites user text.
+        // Retrieval scope, ACLs and source constraints belong to the backend.
+        return {label: question, question, context: design.context,
+            ...(page ? {source_name: page.source_name, url: page.url} : {})};
+    });
+    const supported = pool.filter(item => item.source_name);
+    return supported.length >= 3 ? supported : pool;
 }
 
 const SEED_CHIP_COUNT = 3;
@@ -1531,10 +1554,10 @@ const ONBOARDING_RESEARCH_EXAMPLES = {
         "我有一个粗略科研想法，请先读取项目上下文，再生成 propose-only 的实验实现建议。",
     ],
     general_visitor: [
-        "请依据 Wiki 推荐推理系统的入门阅读路线，并附原文链接。",
-        "请依据 Wiki 解释 KV cache 的作用与常见优化方法，并附原文链接。",
-        "请依据 Wiki 总结论文写作的七种视角，并附原文链接。",
-        "请依据 Wiki 介绍如何把粗略想法转化为可验证的研究问题。",
+        "学习推理系统，可以从哪些内容开始？",
+        "KV Cache 有什么作用，常见的优化思路有哪些？",
+        "读写一篇论文时，可以从哪些不同视角检查质量？",
+        "怎样把一个粗略想法变成可以验证的研究问题？",
     ],
     hust_undergraduate: [
         "我目前在学大模型推理引擎课程，实验进度到了 Tutorial 5。请帮我梳理核心知识点和实验重点。",
@@ -1773,8 +1796,8 @@ const ONBOARDING_STEPS = {
     ],
     general_visitor: [
         {
-            copy: "从公开 Wiki 开始：",
-            question: "我想了解 Wiki 中的______。请依据原文解释核心概念，并附页面链接。",
+            copy: "先选一个感兴趣的话题：",
+            question: "我想了解______，可以先帮我解释核心概念吗？",
             hints: [
                 "可以问推理系统、科研方法或论文写作等公开内容。",
                 "没有想法？点随机按钮生成一个示例，直接用或改一改再提交。",
@@ -1784,7 +1807,7 @@ const ONBOARDING_STEPS = {
         },
         {
             copy: "再深入一步：",
-            question: "请依据 Wiki，为______推荐由浅入深的阅读顺序，并说明每篇的重点和原文链接。",
+            question: "我想系统学习______，可以怎样安排由浅入深的阅读顺序？",
             hints: [
                 "会得到一个按难度排序的阅读清单。",
                 "可以从感兴趣的具体方向入手，比如\u201c大模型推理优化\u201d或\u201c分布式系统\u201d。",
@@ -2191,7 +2214,7 @@ function getLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
 
 function pickLuckyQuestion(profile = visitorProfileInput?.value) {
     if (profile === 'general_visitor') {
-        const candidates = publicWikiQuestions.length ? publicWikiQuestions : WIKI_QUESTION_FALLBACK;
+        const candidates = wikiStarterQuestions(profile, publicWikiQuestions);
         const fresh = candidates.filter((item) => !luckyQuestionHistory.includes(item.question));
         const pool = fresh.length ? fresh : candidates;
         return pool[Math.floor(Math.random() * pool.length)] || null;
