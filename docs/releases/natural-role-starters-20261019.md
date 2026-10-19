@@ -21,3 +21,29 @@ unmodified natural questions against an isolated public Wiki snapshot, without
 private accounts or Slack/email/calendar side effects. Release acceptance must
 record focused/full regression and real-answer checks separately from rendered
 browser acceptance and production cutover.
+
+## Qualification and rollout
+
+Code release `c536b6f69a6876b60de0f3632796429efc7b38aa` passed13 Node suites,
+123 focused cases (1 existing skip), and the full clean-release regression:
+1772 passed,31 skipped,0 failed (1803 collected;1 existing Starlette warning).
+The first archive-based run lacked the pinned dev-hub submodule; its missing
+deployment-receipt script was reproduced explicitly. Restoring the unchanged
+production pin made all9 receipt cases pass; the entire suite was then rerun on
+the clean Git release, rather than counting a partial retry as a full pass.
+
+Four unmodified natural questions retrieved relevant public Wiki sources and
+preserved full source links/answer blocks. Candidate browser acceptance covered
+the visitor pool, exact click text, completed answer, Markdown/table and collapsed
+support. The real catalog supports six questions for each of the four roles.
+
+Production was switched to this code release only after those gates passed.
+Application/background readiness and Slack readiness are healthy; runtime paths,
+credentials, models, budgets and dependency pins were preserved. Public HTML,
+JavaScript and CSS match the committed bytes. A public natural Prefill/Decode
+request completed in19.73s with Wiki evidence, full links and a normal finish.
+Public Chrome additionally showed the signed-in lab-member pool and exact
+click-to-input text. One old tab and the in-app browser still showed the prior
+gray/timeout behavior; a fresh Chrome tab rendered the new page and actual
+generation normally. This release does not claim to fix that separate old-tab
+issue.
