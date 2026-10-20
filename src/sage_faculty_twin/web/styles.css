@@ -43,7 +43,7 @@
 .native-flow-scroll { overflow-x: auto; width: 100%; min-width: 0; max-width: 100%; margin-top: 8px; scrollbar-width: thin; }
 .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .native-flow-diagram { display: block; width: 100%; max-width: 600px; margin-inline: auto; }
-.native-flow-diagram.native-flow-atlas-diagram { min-width: 0; max-width: none; }
+.native-flow-diagram.native-flow-atlas-diagram { max-width: none; }
 .native-flow-call { fill: none; stroke: #8055bd; stroke-width: 1.5; stroke-dasharray: 2 6; opacity: .8; }
 html[data-theme="dark"] .native-flow-call { stroke: #b9a4ef; }
 .native-workflow-atlas .native-flow-label { opacity: 1; font-size: 16px; pointer-events: none; paint-order: stroke; stroke: var(--surface-solid); stroke-width: 4; }
