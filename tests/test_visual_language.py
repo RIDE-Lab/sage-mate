@@ -28,4 +28,4 @@ def test_visual_refresh_preserves_native_states_and_accessible_focus():
     assert "outline: 2px solid var(--brand-ink)" in css
     assert ".message-retry-button" in css
     html = (THEME.parent / "index.html").read_text()
-    assert "twin-ws-visual-20261020" in html
+    assert "twin-ws-layout-20261020" in html

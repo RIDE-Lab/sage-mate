@@ -2374,6 +2374,7 @@ if (workflowTrace) {
 }
 
 chatStream?.addEventListener("click", handleMessageSectionToggle);
+chatStream?.addEventListener("keydown", handleMessageSectionEscape);
 chatStream?.addEventListener("click", handleIntroQuickActionClick);
 chatStream?.addEventListener("change", handleCodeWorkspaceSelectionChange);
 chatStream?.addEventListener("keydown", handleCodeAssistantLandingKeydown);
@@ -8110,6 +8111,7 @@ function renderAssistantMessage(
             ? buildCollapsibleSupportSectionHtml({
                 kicker: "Support",
                 title: "本次回答依据",
+                compact: true,
                 copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
                 count: basisItems.length,
                 contentHtml: `
@@ -8122,6 +8124,7 @@ function renderAssistantMessage(
                 ? buildCollapsibleSupportSectionHtml({
                     kicker: "Knowledge",
                     title: "相关知识",
+                    compact: true,
                     copy: "这些知识条目是本次回答优先参考的资料。",
                     count: hits.length,
                     contentHtml: `
@@ -9062,13 +9065,14 @@ function buildCollapsibleSupportSectionHtml({
     defaultExpanded = false,
     closedLabel = "查看",
     openLabel = "收起",
+    compact = false,
 }) {
     const resolvedCountLabel = countLabel || (Number.isFinite(count) ? `${count} 条` : closedLabel);
     return `
-        <section class="message-section ${escapeHtml(sectionClassName)}" data-expanded="${defaultExpanded}">
+        <section class="message-section ${compact ? "message-section-compact " : ""}${escapeHtml(sectionClassName)}" data-expanded="${defaultExpanded}">
             <button type="button" class="message-section-toggle" aria-expanded="${defaultExpanded}" data-closed-label="${escapeHtml(closedLabel)}" data-open-label="${escapeHtml(openLabel)}">
                 <div class="message-section-toggle-copy">
-                    <span class="message-section-kicker">${escapeHtml(kicker)}</span>
+                    ${compact ? uiIconSvg("inbox", "ui-icon-sm") : `<span class="message-section-kicker">${escapeHtml(kicker)}</span>`}
                     <strong class="message-section-title">${escapeHtml(title)}</strong>
                 </div>
                 <div class="message-section-toggle-meta">
@@ -9414,7 +9418,7 @@ function buildFeedbackSectionHtml(exchangeId, isError) {
             <div class="message-feedback-actions">
                 <button type="button" class="ghost-button message-feedback-button" data-feedback-up ${alreadySubmitted ? "disabled" : ""}>有帮助</button>
                 <button type="button" class="ghost-button message-feedback-button" data-feedback-down ${alreadySubmitted ? "disabled" : ""}>没答好</button>
-                <span class="message-feedback-status">${alreadySubmitted ? "已提交反馈。" : "这条回答有帮助吗？"}</span>
+                <span class="message-feedback-status" role="status">${alreadySubmitted ? "已提交反馈。" : ""}</span>
             </div>
             <div class="message-feedback-form hidden">
                 <textarea rows="3" class="message-feedback-textarea" placeholder="例如：没答到哪一点、缺了哪类资料、建议补什么。"></textarea>
@@ -10511,6 +10515,18 @@ function handleMessageSectionToggle(event) {
     if (chevron) {
         chevron.textContent = nextExpanded ? openLabel : closedLabel;
     }
+}
+
+function handleMessageSectionEscape(event) {
+    if (event.key !== "Escape") return;
+    const section = event.target.closest(".message-section[data-expanded='true']");
+    if (!section || !chatStream?.contains(section)) return;
+    const toggle = section.querySelector(".message-section-toggle");
+    if (!toggle) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggle.click();
+    toggle.focus({preventScroll: true});
 }
 
 // Task 4: Copy-to-clipboard handler (delegated on chatStream)

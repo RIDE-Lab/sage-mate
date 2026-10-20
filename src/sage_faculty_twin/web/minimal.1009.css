@@ -710,6 +710,24 @@ html[data-theme="dark"] {
     opacity: 1;
 }
 
+/* Compact controls share the workstation's progressive disclosure pattern.
+   The full source content and gap/action summaries remain unchanged. */
+.message-section.message-section-compact { border: 0; background: transparent; }
+.message-section-compact > .message-section-toggle {
+    display: flex; justify-content: space-between; gap: 12px;
+    min-height: 40px; padding: 8px 0; border-radius: 6px;
+}
+.message-section-compact .message-section-toggle-copy {
+    display: flex; flex-direction: row; align-items: center; gap: 7px;
+}
+.message-section-compact .message-section-title { font-size: 0.82rem; font-weight: 500; }
+.message-section-compact .message-section-content { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+.message-feedback { border: 0 !important; background: transparent !important; padding: 6px 0 !important; margin-top: 8px; }
+.message-feedback-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.message-feedback-button { min-height: 32px; padding: 5px 9px; font-size: 0.75rem; }
+.message-feedback-status:empty { display: none; }
+.message-feedback-form:not(.hidden) { margin-top: 10px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-soft); }
+
 html[data-theme="dark"] body,
 html[data-theme="dark"] .chat-layout,
 html[data-theme="dark"] .chat-shell,
