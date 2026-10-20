@@ -9469,7 +9469,8 @@ function attachFeedbackHandlers(container, exchangeId) {
 
     cancelButton?.addEventListener("click", () => {
         form?.classList.add("hidden");
-        status.textContent = "这条回答有帮助吗？";
+        status.textContent = "";
+        downButton.focus({preventScroll: true});
     });
 
     submitButton?.addEventListener("click", async () => {
