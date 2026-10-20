@@ -7812,9 +7812,22 @@ async function repairHistoricalCitationCards(root) {
 
 function hydrateConversationInteractiveState() {
     syncConversationMode();
+    compactHistoricalSupportSections(chatStream);
     attachFeedbackHandlersToStream();
     repairLegacyWorkflowSummaries(chatStream);
     void hydrateExecutionEvidence(chatStream);
+}
+
+function compactHistoricalSupportSections(root) {
+    if (!root) return;
+    root.querySelectorAll(".message-section-support").forEach((section) => {
+        // Only actual evidence lists use the compact treatment. Never fold or
+        // disguise missing-evidence warnings, operation results or errors.
+        if (!section.querySelector(".message-basis-list, .message-knowledge-list")) return;
+        section.classList.add("message-section-compact");
+        const kicker = section.querySelector(".message-section-kicker");
+        if (kicker) kicker.outerHTML = uiIconSvg("inbox", "ui-icon-sm");
+    });
 }
 
 function attachFeedbackHandlersToStream() {

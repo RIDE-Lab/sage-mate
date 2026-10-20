@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/sage_faculty_twin/web/app.js'), 'utf8');
 const context = {submittedFeedbackExchangeIds:new Set(), uiIconSvg:()=>'<svg></svg>', chatStream:{contains:()=>true}, restoreFeedbackExchange:()=>{}};
-for (const name of ['escapeHtml','buildCollapsibleSupportSectionHtml','buildFeedbackSectionHtml','handleMessageSectionEscape','attachFeedbackHandlers']) {
+for (const name of ['escapeHtml','buildCollapsibleSupportSectionHtml','buildFeedbackSectionHtml','handleMessageSectionEscape','attachFeedbackHandlers','compactHistoricalSupportSections']) {
   const start=source.indexOf(`function ${name}(`);
   const next=/\n(?:async )?function /.exec(source.slice(start+1));
   const end=next ? start+1+next.index : source.length;
@@ -35,3 +35,13 @@ context.attachFeedbackHandlers({querySelector:selector=>controls[selector]},'own
 handlers.downclick(); assert.equal(hidden,false);
 handlers.cancelclick(); assert.equal(hidden,true); assert.equal(status.textContent,''); assert.equal(returnedFocus,1);
 console.log('Compact source/feedback actions retain full evidence, honest gaps and Escape focus restoration');
+let compacted=0;
+const oldKicker={outerHTML:'Support'};
+const evidence={querySelector:selector=>selector.includes('message-basis-list') ? {} : oldKicker,classList:{add(){compacted++;}}};
+const gap={querySelector:()=>null,classList:{add(){throw Error('must not compact missing evidence');}}};
+const originalEvidence='<p>unchanged complete source and links</p>';
+evidence.innerHTML=originalEvidence;
+context.compactHistoricalSupportSections({querySelectorAll:()=>[evidence,gap]});
+assert.equal(compacted,1); assert.equal(oldKicker.outerHTML,'<svg></svg>');
+assert.equal(evidence.innerHTML,originalEvidence);
+assert.ok(source.includes('compactHistoricalSupportSections(chatStream)'));
