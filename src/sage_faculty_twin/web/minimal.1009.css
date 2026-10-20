@@ -700,6 +700,16 @@ html[data-theme="dark"] {
     text-underline-offset: 3px;
 }
 
+.message-main-copy a:hover,
+.message-citations a:hover {
+    text-decoration: underline;
+}
+
+.composer-row textarea::placeholder {
+    color: var(--muted);
+    opacity: 1;
+}
+
 html[data-theme="dark"] body,
 html[data-theme="dark"] .chat-layout,
 html[data-theme="dark"] .chat-shell,
