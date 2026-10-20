@@ -45,3 +45,56 @@ Rollback restores the saved two asset files without restarting the app; the
 private deployment receipt includes the guarded rollback command. Avoid blindly
 checking out the backend repository, which intentionally has this tracked static
 overlay and must retain its existing runtime/dependency qualification.
+
+## Minimal interaction release, 2026-10-20
+
+Latest frontend revision on main is
+`faa266e8d416216c4c31b5e112ff180471bc50d3`, deployed06:13:05Z. Application
+backend remains112e924 and PID1058851 is unchanged. The explicit overlay now
+contains app.js, index.html and minimal.1009.css; all Python files are identical
+to the running qualified backend. No new workflow, routing or permission path.
+
+Source/knowledge cards use one compact icon/title/count/show row instead of the
+large English-kicker card. Full evidence and links remain available on expansion;
+missing-evidence warnings do not get compacted or hidden. Advanced workflow
+remains folded. Feedback is a quiet helpful/not-helpful row; the explanation
+form appears only on request. Cancel clears its prompt and returns keyboard
+focus; Escape collapses sources and returns focus to their toggle.
+
+Real public old-history acceptance caught a saved-HTML difference: new answers
+were compact but old source cards retained the old markup. The faa266e migration
+changes only evidence controls during history hydration, retaining original
+answer, source body, links, expansion state and provenance. It does not regenerate
+or reassign old conversations, or disguise source gaps.
+
+46 frontend/contrast/contract checks and15 Node interaction groups pass on Mac
+and A100. The Node extractor recognizes both ordinary and async function
+boundaries; a previously detected harness failure was fixed and rerun explicitly,
+not ignored behind a later passing command. No full backend regression claimed.
+
+Native Chrome acceptance included a real public-Wiki ECPA/StateAxis answer
+(12.3s candidate page timing), full source expansion, Escape focus restoration,
+feedback open/cancel without submitting feedback, and390x844 light/dark reading.
+Final candidate restored older saved HTML and verified the migration. Public
+Chrome restored the13:02 old answer from the history rail without re-asking,
+showed the compact source control, expanded its complete source and collapsed
+with Escape. Actual Markdown download completed; the saved file retained the
+question, original answer and complete public links. Refresh may show the welcome
+view; select the retained conversation in history rather than assuming data loss.
+The final public version also answered a new ECPA/StateAxis follow-up in19.0s
+(page timing), kept its source and advanced graph folded, and passed feedback
+open/cancel focus restoration without submitting feedback.
+
+Public app.js SHA256:
+`da4e32de53580e171cc1a4bf9654f0b9b2b7913a961f676d706a7ffbac5c15f0`.
+Public stylesheet SHA256:
+`1876686c39d23619a6c2c08fa1d2f3f1800e1251134acacc0f570006cde2a754`.
+Asset URLs carry the new twin-ws-layout-history-20261020 revision.
+
+Rollback uses the guarded private deployment helper and saved previous-web
+bytes, restoring the three frontend files without an app restart. The immediate
+previous1334654 overlay and original630a363 overlay are both retained.
+Limitations: anonymous restricted local-code/hardware requests return403 and
+unavailable historical feedback can return404; these were not masked by the UI
+release. Existing original answers and historical feedback-state text are not
+rewritten. Browser checks are not a new human usefulness study.
