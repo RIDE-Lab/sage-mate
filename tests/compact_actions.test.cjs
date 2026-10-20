@@ -4,7 +4,9 @@ const vm = require('node:vm');
 const source = fs.readFileSync(require('node:path').join(__dirname, '../src/sage_faculty_twin/web/app.js'), 'utf8');
 const context = {submittedFeedbackExchangeIds:new Set(), uiIconSvg:()=>'<svg></svg>', chatStream:{contains:()=>true}, restoreFeedbackExchange:()=>{}};
 for (const name of ['escapeHtml','buildCollapsibleSupportSectionHtml','buildFeedbackSectionHtml','handleMessageSectionEscape','attachFeedbackHandlers']) {
-  const start=source.indexOf(`function ${name}(`), end=source.indexOf('\nfunction ', start+1);
+  const start=source.indexOf(`function ${name}(`);
+  const next=/\n(?:async )?function /.exec(source.slice(start+1));
+  const end=next ? start+1+next.index : source.length;
   assert.ok(start>=0); vm.runInNewContext(source.slice(start,end),context);
 }
 const markdown='<p>full source</p>'.repeat(1000);
