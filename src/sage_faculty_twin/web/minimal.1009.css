@@ -24,6 +24,8 @@
     --radius-xl: 12px;
     --radius-lg: 10px;
     --radius-md: 8px;
+    --brand-ink: #0f766e;
+    --brand-soft: #edf7f5;
 }
 
 body {
@@ -249,19 +251,19 @@ select {
 
 .seed-chip {
     padding: 7px 11px;
-    border-color: #85857e;
-    border-radius: 8px;
-    background: #ffffff;
-    color: #5f5f5a;
+    border-color: var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    color: var(--ink);
     font-size: 0.82rem;
     font-weight: 500;
     box-shadow: none;
 }
 
 .seed-chip:hover {
-    color: var(--ink);
-    border-color: var(--line-strong);
-    background: #f7f7f5;
+    color: var(--brand-ink);
+    border-color: var(--brand-ink);
+    background: var(--brand-soft);
 }
 
 .composer-shell {
@@ -276,14 +278,14 @@ select {
     min-height: 54px;
     padding: 7px 9px;
     border: 1px solid var(--line-strong);
-    border-radius: 12px;
+    border-radius: 16px;
     background: #ffffff;
     box-shadow: none;
 }
 
 .composer-row:focus-within {
-    border-color: #9a9a94;
-    box-shadow: 0 0 0 1px #9a9a94;
+    border-color: var(--brand-ink);
+    box-shadow: 0 0 0 3px var(--brand-soft);
 }
 
 .composer-plus-button,
@@ -419,7 +421,7 @@ html[data-theme] .message-user .message-bubble {
 
 .message-main-copy {
     color: var(--ink);
-    line-height: 1.68;
+    line-height: 1.78;
 }
 
 .message-retry-button,
@@ -434,8 +436,8 @@ html[data-theme] .message-user .message-bubble {
 .message-citations,
 .message-followups {
     border-color: var(--line);
-    border-radius: 8px;
-    background: #fafaf8;
+    border-radius: 12px;
+    background: var(--surface-soft);
     box-shadow: none;
 }
 
@@ -672,7 +674,7 @@ html[data-theme="dark"] {
     --text-primary: #f4f4f1;
     --text-secondary: #d0d0ca;
     --muted: #bcbcb5;
-    --line: #494943;
+    --line: #353c3e;
     --line-strong: #85857e;
     --control-border: #85857e;
     --accent: #f4f4f1;
@@ -681,6 +683,21 @@ html[data-theme="dark"] {
     --assistant: #202020;
     --user: #303030;
     --shadow: none;
+    --brand-ink: #5eead4;
+    --brand-soft: #203633;
+}
+
+/* Share the workstation's calm accent without recoloring semantic states or
+   changing the native workflow's execution colors. */
+:where(button, a, input, textarea, select, summary):focus-visible {
+    outline: 2px solid var(--brand-ink);
+    outline-offset: 3px;
+}
+
+.message-main-copy a,
+.message-citations a {
+    color: var(--brand-ink);
+    text-underline-offset: 3px;
 }
 
 html[data-theme="dark"] body,
@@ -730,6 +747,20 @@ html[data-theme="dark"] select {
     color: var(--ink);
     background: var(--surface);
     border-color: var(--line-strong);
+}
+
+html[data-theme="dark"] .seed-chip {
+    border-color: var(--line);
+}
+
+html[data-theme="dark"] .seed-chip:hover {
+    color: var(--brand-ink);
+    background: var(--brand-soft);
+    border-color: var(--brand-ink);
+}
+
+html[data-theme="dark"] .composer-row:focus-within {
+    border-color: var(--brand-ink);
 }
 
 html[data-theme="dark"] .composer-tools-row,
