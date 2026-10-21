@@ -28,4 +28,5 @@ def test_visual_refresh_preserves_native_states_and_accessible_focus():
     assert "outline: 2px solid var(--brand-ink)" in css
     assert ".message-retry-button" in css
     html = (THEME.parent / "index.html").read_text()
-    assert "twin-ws-layout-history-20261020" in html
+    revisions = re.findall(r'(?:minimal\.1009\.css|app\.4222\.js)\?rev=([^"\s]+)', html)
+    assert revisions == ["sage-auto-web-20261021"] * 2

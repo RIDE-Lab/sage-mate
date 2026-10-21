@@ -34,7 +34,8 @@ def test_frontend_script_uses_optional_overlay_modal_registry() -> None:
     assert 'const luckyQuestionButton = document.getElementById("lucky-question-button");' in script
     assert 'const knowledgeFeedbackWebList = document.getElementById("knowledge-feedback-web-list");' in script
     assert 'luckyQuestionButton?.addEventListener("click", handleLuckyQuestionClick);' in script
-    assert "function applyLuckyQuestionPreferences(selection)" in script
+    assert "applyLuckyQuestionPreferences" not in script
+    assert 'web_mode: webSearchMode?.value || "auto"' in script
     assert "function isFeedbackWebKnowledgeRecord(record)" in script
     assert "function handleFeedbackWebKnowledgeAction(event)" in script
     assert 'apiRequest("/knowledge/reviews/summary")' in script

@@ -124,9 +124,14 @@ class IntentAwareLLMClient:
 
 
 class RecordingLLMClient(IntentAwareLLMClient):
-    def __init__(self, booking_intent: bool, answer: str) -> None:
+    def __init__(self, booking_intent: bool, answer: str, web_intent: dict | None = None) -> None:
         super().__init__(booking_intent=booking_intent, answer=answer)
         self.prompts: list[str] = []
+        self.web_intent = web_intent
+
+    def classify_interaction_intent_sync(self, question, course_context=None, recent_session_context=None):
+        intent = super().classify_interaction_intent_sync(question, course_context, recent_session_context)
+        return intent.model_copy(update={"web_intent": self.web_intent})
 
     def answer_question_sync(
         self,
@@ -2224,7 +2229,7 @@ def test_service_normalizes_repeated_gap_title_prefixes_on_startup(
     assert documents[0].title == "常见问题：和老师约时间前，我应该先准备什么"
 
 
-def test_chat_auto_web_searches_when_local_knowledge_is_empty(
+def test_chat_auto_web_uses_public_source_intent_not_empty_local_store(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2234,12 +2239,12 @@ def test_chat_auto_web_searches_when_local_knowledge_is_empty(
         knowledge_backend="local",
         conversation_memory_index_type="segment",
         web_search_enabled=True,
-        web_search_auto_trigger=True,
     )
     service = DigitalTwinService(settings)
     service._llm_client = RecordingLLMClient(
         booking_intent=False,
         answer="可以先从 vLLM、SGLang、PagedAttention 和 prefix caching 这些关键词入手。",
+        web_intent=dict(need="sources",disclosure="public",query="大模型推理系统"),
     )
 
     monkeypatch.setattr(
@@ -2282,7 +2287,8 @@ def test_explicit_web_search_returns_bounded_sources_without_second_llm_turn(
         web_search_enabled=True,
     )
     service = DigitalTwinService(settings)
-    llm = RecordingLLMClient(booking_intent=False, answer="不应调用模型")
+    llm = RecordingLLMClient(booking_intent=False, answer="不应调用模型",
+        web_intent=dict(need="sources",disclosure="public",query="推理系统资料"))
     service._llm_client = llm
     monkeypatch.setattr(
         "sage_faculty_twin.web_search.WebSearchClient.search",
@@ -2325,12 +2331,12 @@ def test_positive_feedback_writes_web_sources_back_to_knowledge_base(
         knowledge_backend="local",
         conversation_memory_index_type="segment",
         web_search_enabled=True,
-        web_search_auto_trigger=True,
     )
     service = DigitalTwinService(settings)
     service._llm_client = RecordingLLMClient(
         booking_intent=False,
         answer="我建议先看 [vLLM 文档](https://docs.vllm.ai/)，再对照 SGLang 的调度与缓存机制。",
+        web_intent=dict(need="sources",disclosure="public",query="大模型推理系统"),
     )
 
     monkeypatch.setattr(
@@ -2379,6 +2385,7 @@ def test_positive_feedback_writes_web_sources_back_to_knowledge_base(
     assert "如果我想系统了解大模型推理系统" not in documents[0].content
     assert "回答：" not in documents[0].content
 
+    service._llm_client.web_intent = dict(need="sources", disclosure="public", query="vLLM 的推理执行路径")
     second_response = asyncio.run(
         service.answer(
             ChatRequest(

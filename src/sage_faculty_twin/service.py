@@ -26,6 +26,7 @@ from sage.runtime.adaptive_workflow import (
     AdaptiveWorkflowPlan, WorkflowCapabilities, WorkflowRequirements, plan_workflow,
 )
 from sage.runtime.answer_task import AnswerTask
+from sage.runtime.web_research import WebDecision, WebIntent, decide_web_research, execute_web_research
 from sage.runtime.work_journal import PreparedLeaseGuard
 from sage.runtime.source_audit import (
     AnswerValidationRejected, SourceAuditRejected,
@@ -897,6 +898,7 @@ _CANONICAL_TRACE_ORDER: tuple[str, ...] = (
     "booking_prepare",
     "booking_execute",
     "memory_retrieve",
+    "web_search",
     "knowledge_retrieve",
     "prompt_build",
     "llm_answer",
@@ -1003,20 +1005,6 @@ _REMEMBERED_VALUE_CAPTURE_PATTERN = re.compile(
 )
 _REMEMBERED_VALUE_LABELS = ("代号", "编号", "关键词", "字符串")
 _SECRET_VALUE_LABELS = ("密码", "密钥", "token", "api key", "secret", "credential")
-_WEB_SEARCH_QUERY_MARKERS = (
-    "最新",
-    "今天",
-    "实时",
-    "刚刚",
-    "新闻",
-    "政策更新",
-    "会议截稿",
-    "deadline",
-    "breaking",
-    "recent",
-    "update",
-    "today",
-)
 
 
 @dataclass
@@ -1067,6 +1055,8 @@ class ChatWorkflowContext:
     artifact_draft_intent: ArtifactDraftIntent | None = None
     planner_decision: PlannerDecision | None = None
     adaptive_plan: AdaptiveWorkflowPlan | None = None
+    web_decision: WebDecision | None = None
+    web_source_restricted: bool | None = None
     shadow_planner_decision: PlannerDecision | None = None
     shadow_planner_status: str = "shadow_disabled"
     shadow_planner_message: str | None = None
@@ -1091,6 +1081,7 @@ class KnowledgeRetrievalInput:
     needs_retrieval: bool
     admin_role: str | None
     used_model: str
+    web_decision: WebDecision | None = None
 
 
 @dataclass
@@ -1105,6 +1096,7 @@ class _KnowledgeBranchState:
     needs_retrieval: bool
     admin_role: str | None
     used_model: str
+    web_decision: WebDecision | None = None
     runtime_identity: RuntimeIdentity | None = None
     knowledge_hits: list[KnowledgeSearchHit] = field(default_factory=list)
     web_search_hits: list[WebSearchHit] = field(default_factory=list)
@@ -1393,6 +1385,7 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
+        context.web_source_restricted = context.request.knowledge_sources is not None
         intent, source = self._resolve_interaction_intent(context)
         context.interaction_decision = InteractionDecision(intent=intent, source=source)
         intent = context.interaction_decision.intent
@@ -1499,6 +1492,8 @@ class FacultyTwinWorkflowSupport:
             identity = "admin"
         private_allowed = KnowledgeSources._private_allowed(
             context.request.visitor_profile, self._resolve_admin_role())
+        context.web_decision = self._decide_web_research(context)
+        context.request = context.request.model_copy(update={"web_search": context.web_decision.allowed})
         plan = plan_workflow(WorkflowRequirements(
             action=intent.action,
             resolved=context.route != "answer" or context.answer is not None,
@@ -1506,7 +1501,7 @@ class FacultyTwinWorkflowSupport:
             research_review=intent.requests_research(context.request.question),
             knowledge=knowledge.needs_retrieval,
             memory=not bool(memory.skip_summary),
-            web=context.request.web_search,
+            web=context.web_decision.allowed,
             requested_sources=(tuple(context.request.knowledge_sources)
                                if context.request.knowledge_sources is not None else None),
         ), WorkflowCapabilities(
@@ -1748,6 +1743,7 @@ class FacultyTwinWorkflowSupport:
                 and self._planner_requests_any_step(context, "retrieve_knowledge", "retrieve_hybrid_knowledge")
             ),
             admin_role=self._resolve_admin_role(), used_model=context.used_model,
+            web_decision=context.web_decision,
         )
 
     def retrieve_knowledge(self, inputs: KnowledgeRetrievalInput) -> KnowledgeRetrievalResult:
@@ -1759,6 +1755,7 @@ class FacultyTwinWorkflowSupport:
             recent_session_context=inputs.recent_session_context,
             needs_retrieval=inputs.needs_retrieval, admin_role=inputs.admin_role,
             used_model=inputs.used_model,
+            web_decision=inputs.web_decision,
         )
         self._read_knowledge_branch(state)
         return KnowledgeRetrievalResult(
@@ -1781,15 +1778,15 @@ class FacultyTwinWorkflowSupport:
         context.used_model = result.used_model
         for step in result.trace:
             context.workflow_trace.append(step.model_copy(deep=True))
-            if self._trace_callback is not None:
+            if self._trace_callback is not None and (step.key != "web_search" or step.status == "skipped"):
                 self._trace_callback(step.model_copy(deep=True))
         return context
 
-    @staticmethod
-    def _append_knowledge_trace(context: _KnowledgeBranchState, **fields: Any) -> None:
-        context.workflow_trace.append(WorkflowTraceStep(
-            **fields,
-        ))
+    def _append_knowledge_trace(self, context: _KnowledgeBranchState, **fields: Any) -> None:
+        step = WorkflowTraceStep(**fields)
+        context.workflow_trace.append(step)
+        if step.key == "web_search" and step.status != "skipped" and self._trace_callback is not None:
+            self._trace_callback(step.model_copy(deep=True))
 
     def _read_knowledge_branch(self, context: _KnowledgeBranchState) -> _KnowledgeBranchState:
         started_at = perf_counter()
@@ -1825,9 +1822,12 @@ class FacultyTwinWorkflowSupport:
 
         # --- Determine whether knowledge retrieval should run ---
         needs_retrieval = context.needs_retrieval
-        explicit_web = bool(getattr(context.request, "web_search", False))
+        context.web_decision = context.web_decision or self._decide_web_research(context)
+        explicit_web = context.web_decision.allowed
+        context.request = context.request.model_copy(update={"web_search": explicit_web})
 
         if not needs_retrieval and not explicit_web:
+            self._retrieve_web_search_hits(context)
             self._append_knowledge_trace(
                 context, key="knowledge_retrieve", title="知识检索",
                 summary=(
@@ -1931,10 +1931,7 @@ class FacultyTwinWorkflowSupport:
             top_score = context.knowledge_hits[0].score if context.knowledge_hits else 0.0
 
         # --- Run web search (always available when explicitly requested) ---
-        context.web_search_hits = self._retrieve_web_search_hits(
-            context, interaction_intent=interaction_intent,
-            local_hit_count=hit_count, local_top_score=top_score,
-        )
+        context.web_search_hits = self._retrieve_web_search_hits(context)
         web_count = len(context.web_search_hits)
 
         # --- Post-retrieval: clarification override or demotion ---
@@ -2010,77 +2007,55 @@ class FacultyTwinWorkflowSupport:
         )
         return context
 
-    def _should_run_web_search(
-        self,
-        context: ChatWorkflowContext,
-        *,
-        local_hit_count: int,
-        local_top_score: float,
-    ) -> bool:
-        if not self._settings.web_search_enabled or not self._web_search_client.enabled:
-            return False
-
-        if bool(getattr(context.request, "web_search", False)):
-            return True
-
-        if not self._settings.web_search_auto_trigger:
-            return False
-
-        # Local grounding completely missing should always allow a web fallback
-        # when auto-trigger is enabled, even for non-realtime questions.
-        if local_hit_count == 0:
-            return True
-
-        question = str(context.request.question or "")
-        lowered = question.lower()
-        asks_realtime = any(marker in question or marker in lowered for marker in _WEB_SEARCH_QUERY_MARKERS)
-        if not asks_realtime:
-            return False
-
-        # Keep local knowledge as first-class. The local retriever has already
-        # applied its provenance sanity check, so a non-empty local result is
-        # considered grounded; avoid comparing backend-specific scores to a
-        # global threshold.
-        return asks_realtime and local_hit_count == 0
+    def _decide_web_research(self, context) -> WebDecision:
+        identity = (context.request.owner_id or "guest:").split(":", 1)[0]
+        identity = identity if identity in {"account", "api_token", "slack"} else "guest"
+        if getattr(context, "is_admin_request", False):
+            identity = "admin"
+        proposal = context.interaction_intent
+        try:
+            intent = WebIntent.parse(proposal.web_intent if proposal else None)
+        except ValueError:
+            intent = WebIntent()  # Unknown proposals cannot authorize disclosure.
+        return decide_web_research(
+            question=context.request.question, mode=context.request.web_mode,
+            identity=identity, intent=intent,
+            available=self._settings.web_search_enabled and self._web_search_client.enabled,
+            source_restricted=(context.web_source_restricted if getattr(context, "web_source_restricted", None) is not None
+                else context.request.knowledge_sources is not None),
+            active=(context.route == "answer" and context.answer is None
+                and proposal is not None and proposal.action in {"answer", "ask_followup"}),
+            contains_private_context=bool(context.request.attachments or context.request.slack_channel_context),
+        )
 
     def _retrieve_web_search_hits(
         self,
         context: ChatWorkflowContext,
-        *,
-        interaction_intent: InteractionIntent,
-        local_hit_count: int,
-        local_top_score: float,
     ) -> list[WebSearchHit]:
-        if not self._should_run_web_search(
-            context,
-            local_hit_count=local_hit_count,
-            local_top_score=local_top_score,
-        ):
-            return []
+        decision = getattr(context, "web_decision", None) or self._decide_web_research(context)
+        started_at = perf_counter()
+        checked_at = None
+        candidates = []
 
-        query = self._build_knowledge_query(
-            context.request,
-            interaction_intent,
-            context.recent_session_context,
-        )
-        try:
-            raw_hits = self._web_search_client.search(
-                query,
-                max_results=self._settings.web_search_max_results,
-            )
-        except Exception as exc:
-            _logger.warning("Web search failed: %s", exc)
-            return []
+        def observe(status, summary, timestamp):
+            nonlocal checked_at
+            checked_at = timestamp
+            self._append_knowledge_trace(context, key="web_search", title="公开网页检索",
+                summary=summary, status=status,
+                detail=decision.reason + (f" 检索时间：{timestamp}" if timestamp else ""),
+                sources=[dict(title=hit.title, url=hit.url, retrieved_at=timestamp)
+                    for hit in candidates] if status == "completed" else [],
+                duration_ms=self._elapsed_ms(started_at))
 
-        return [
-            WebSearchHit(
-                title=hit.title,
-                url=hit.url,
-                snippet=hit.snippet,
-                score=hit.score,
-            )
-            for hit in raw_hits
-        ]
+        def search(query):
+            nonlocal candidates
+            candidates = [WebSearchHit(title=hit.title, url=hit.url, snippet=hit.snippet, score=hit.score)
+                for hit in self._web_search_client.search(query, max_results=self._settings.web_search_max_results)]
+            return candidates
+
+        hits = execute_web_research(decision, search,
+            observe, timeout_seconds=getattr(self._settings, "web_search_timeout_seconds", 8))
+        return [hit.model_copy(update={"retrieved_at": checked_at}) for hit in hits]
 
     def prepare_memory_retrieval(self, context: ChatWorkflowContext) -> MemoryRetrievalInput:
         request_json = context.request.model_dump_json()
@@ -4514,7 +4489,8 @@ class FacultyTwinWorkflowSupport:
                 f"knowledge:{index}", hit.title, str(hit.metadata.get("wiki_url") or ""),
                 hit.source_content if hit.source_content is not None else hit.excerpt,
             ) for index, hit in enumerate(context.knowledge_hits)
-        )
+        ) + tuple(PlanSource(f"web:{index}", hit.title, hit.url, hit.snippet or hit.title)
+                  for index, hit in enumerate(context.web_search_hits))
 
     def _prepare_source_answer(self, context: ChatWorkflowContext) -> None:
         started_at = perf_counter()
@@ -7628,7 +7604,7 @@ class FacultyTwinWorkflowSupport:
         Design rules:
         - Knowledge hits: deduplicated by source group, generic index pages
           filtered; retain all selected chunks and sources.
-        - Web search hits: max 2 items.
+        - Web search hits: selected sources only for a source-constrained plan.
         - Memory hits: only artifact (uploaded) and long-term profile memory;
           short-term conversation memory is NEVER cited (it is implicit).
         - Session context: NEVER cited — conversation history is already
@@ -7641,7 +7617,10 @@ class FacultyTwinWorkflowSupport:
             # Keep the full input snapshot untouched for final receipt validation.
             return [self._build_knowledge_basis_item(hit)
                     for index, hit in enumerate(context.knowledge_hits)
-                    if f"knowledge:{index}" in context.source_answer_plan.source_ids]
+                    if f"knowledge:{index}" in context.source_answer_plan.source_ids] + [
+                        self._build_web_basis_item(hit)
+                        for index, hit in enumerate(context.web_search_hits)
+                        if f"web:{index}" in context.source_answer_plan.source_ids]
         if context.answer and context.answer.startswith((
             "当前可见资料不足", "当前可见的公开资料不足", "当前可见的课程资料不足"
         )):
@@ -7669,16 +7648,9 @@ class FacultyTwinWorkflowSupport:
             ))})
             basis_items.append(self._build_knowledge_basis_item(hit))
 
-        # 3. Web search hits — max 2
-        for hit in context.web_search_hits[:2]:
-            basis_items.append(
-                AnswerBasisItem(
-                    basis_label="联网检索",
-                    title=self._clip_basis_text(hit.title, 256),
-                    source_label=self._clip_basis_text(hit.url, 256),
-                    detail=self._clip_basis_text(hit.snippet or "来自联网检索的实时网页结果。", 1000),
-                )
-            )
+        # Web candidates retain full evidence URLs and retrieval time.
+        for hit in context.web_search_hits:
+            basis_items.append(self._build_web_basis_item(hit))
 
         # 4. Memory hits — only artifact (uploaded) and long-term profile.
         #    Short-term conversation memory is an implicit reference and
@@ -7720,6 +7692,13 @@ class FacultyTwinWorkflowSupport:
             item for item in deduped_items
             if item.basis_label != "近期交流记录"
         ]
+
+    def _build_web_basis_item(self, hit: WebSearchHit) -> AnswerBasisItem:
+        return AnswerBasisItem(basis_label="联网检索", source_url=hit.url,
+            title=self._clip_basis_text(hit.title, 256),
+            source_label=self._clip_basis_text(hit.url, 256),
+            detail=(hit.snippet or "来自联网检索的网页候选结果。")
+                + (f"\n检索时间：{hit.retrieved_at}" if hit.retrieved_at else ""))
 
     @staticmethod
     def _build_direct_web_answer(context: ChatWorkflowContext) -> str:

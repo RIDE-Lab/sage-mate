@@ -190,7 +190,7 @@ let currentAppProfile = "faculty_twin";
 const chatForm = document.getElementById("chat-form");
 const deepThinkingCheckbox = document.getElementById("deep-thinking-checkbox");
 const composerModeStatus = document.getElementById("composer-mode-status");
-const webSearchCheckbox = document.getElementById("web-search-checkbox");
+const webSearchMode = document.getElementById("web-search-mode");
 const adminLoginForm = document.getElementById("admin-login-form");
 const userRegisterForm = document.getElementById("user-register-form");
 const userLoginForm = document.getElementById("user-login-form");
@@ -390,16 +390,17 @@ function setDeepThinkingProcessing(processing) {
 deepThinkingCheckbox?.addEventListener("change", syncDeepThinkingPresentation);
 syncDeepThinkingPresentation();
 
-const WEB_SEARCH_TOGGLE_KEY = "myTwinWebSearchEnabled";
-if (webSearchCheckbox) {
+const WEB_SEARCH_MODE_KEY = "myTwinWebSearchMode";
+if (webSearchMode) {
     try {
-        webSearchCheckbox.checked = localStorage.getItem(WEB_SEARCH_TOGGLE_KEY) === "1";
+        const saved = localStorage.getItem(WEB_SEARCH_MODE_KEY);
+        webSearchMode.value = ["auto", "never", "always"].includes(saved) ? saved : "auto";
     } catch {
-        webSearchCheckbox.checked = false;
+        webSearchMode.value = "auto";
     }
-    webSearchCheckbox.addEventListener("change", () => {
+    webSearchMode.addEventListener("change", () => {
         try {
-            localStorage.setItem(WEB_SEARCH_TOGGLE_KEY, webSearchCheckbox.checked ? "1" : "0");
+            localStorage.setItem(WEB_SEARCH_MODE_KEY, webSearchMode.value);
         } catch {
             // Ignore storage access issues.
         }
@@ -2174,22 +2175,6 @@ addTapListener(document.getElementById("onboarding-random-btn"), async () => {
     }, 1200);
 });
 
-function applyLuckyQuestionPreferences(selection) {
-    if (!selection || typeof selection !== "object") {
-        return;
-    }
-
-    if (typeof selection.webSearch === "boolean" && webSearchCheckbox) {
-        const nextState = Boolean(selection.webSearch);
-        webSearchCheckbox.checked = nextState;
-        try {
-            localStorage.setItem(WEB_SEARCH_TOGGLE_KEY, nextState ? "1" : "0");
-        } catch {
-            // Ignore storage access issues.
-        }
-    }
-}
-
 function getLuckyQuestionCandidates(profile = visitorProfileInput?.value) {
     const config = getVisitorProfileConfig(profile);
     const luckyEntries = buildLuckyQuestionCandidates(profile);
@@ -2295,7 +2280,6 @@ async function handleLuckyQuestionClick() {
         });
         luckyQuestionRecentParts = luckyQuestionRecentParts.slice(-LUCKY_QUESTION_RECENT_LIMIT);
         saveLuckyQuestionParts();
-        applyLuckyQuestionPreferences(selected);
         seedChatQuestion(selected.question, selected.context || "");
         updateComposerContextChips();
     } finally {
@@ -2947,7 +2931,7 @@ chatForm.addEventListener("submit", async (event) => {
         conversation_id: activeConversationId,
         deep_thinking: deepThinkingCheckbox?.checked ?? false,
         deep_thinking_explicit: deepThinkingExplicitlyEnabled,
-        web_search: webSearchCheckbox?.checked ?? false,
+        web_mode: webSearchMode?.value || "auto",
         code_approval_mode: isCodeAssistantProfile()
             ? normalizeCodeApprovalMode(currentCodeApprovalMode)
             : "ask",
@@ -7994,6 +7978,7 @@ function renderPendingAssistantMessage(
                     <div class="message-role">${escapeHtml(assistantLabel)}</div>
                     <div class="message-frame message-pending-frame">
                         <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta" aria-live="polite">已处理 0.0 秒</div>
+                        <div class="pending-web-research" aria-live="polite"></div>
                         <div class="typing-dots" id="pending-typing-dots">
                             <span class="dot"></span>
                             <span class="dot"></span>
@@ -8333,6 +8318,19 @@ function buildResponseWorkSummaryHtml(events = [], status = null) {
         <small>后台完成不代表邮件送达或会议确认。详情见高级工作流。</small></div>`;
 }
 
+function buildWebResearchStatusHtml(steps = []) {
+    const step = [...steps].reverse().find(item => item?.key === "web_search");
+    if (!step) return "";
+    const labels = {running:"正在搜索网页",completed:"网页候选来源已取得",empty:"未找到可用网页",failed:"网页搜索失败",skipped:"本轮未联网"};
+    const label = labels[step.status] || "联网状态未确认";
+    const detail = step.detail && step.detail !== step.summary ? `<small>${escapeHtml(step.detail)}</small>` : "";
+    const sources = step.status === "completed" && Array.isArray(step.sources) ? step.sources.filter(source => {
+        try { return ["https:", "http:"].includes(new URL(source.url).protocol); } catch { return false; }
+    }) : [];
+    const links = sources.length ? `<details><summary>候选来源（不代表已采用或核实） · ${sources.length}</summary><ul>${sources.map(source => `<li><a href="${escapeHtml(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.title)}</a><small>${escapeHtml(source.retrieved_at || "")}</small></li>`).join("")}</ul></details>` : "";
+    return `<div class="web-research-status" role="status" data-web-status="${escapeHtml(step.status || "unknown")}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(step.summary || "")}</span>${detail}${links}</div>`;
+}
+
 function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null) {
     if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length && !workStatus) {
         return "";
@@ -8341,7 +8339,7 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], wor
     const nativeCount = new Set(executionEvents.map(event => event.execution_id)).size;
     const preview = nativeCount ? `${nativeCount} 个原生节点` : `${workflowTrace.length} 条业务记录 · 原生执行状态未记录`;
 
-    return `
+    return `${buildWebResearchStatusHtml(workflowTrace)}
         <section class="message-workflow-summary message-section" data-execution-format="native-v1" data-expanded="false" aria-label="高级执行详情">
             <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
                 <div class="message-section-toggle-copy">
@@ -9106,6 +9104,8 @@ function buildCollapsibleSupportSectionHtml({
 function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
     const scrollSnapshot = captureConversationScroll();
     try {
+        const pending = chatStream?.querySelector(".message-pending .pending-web-research");
+        if (pending) pending.innerHTML = buildWebResearchStatusHtml(workflowSteps);
         if (!INLINE_WORKFLOW_TRACE_ENABLED) {
             return;
         }
@@ -9177,6 +9177,7 @@ function formatWorkflowStepChipTitle(step, fallbackTitle) {
 function normalizeWorkflowStepStatus(status) {
     if (["completed", "skipped", "failed"].includes(status)) return status;
     if (status === "error") return "failed";
+    if (status === "empty") return "skipped";
     if (["active", "running", "retrying"].includes(status)) return "active";
     if (["queued", "pending"].includes(status)) return "queued";
     return "unknown";

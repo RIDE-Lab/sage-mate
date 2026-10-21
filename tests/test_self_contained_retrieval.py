@@ -156,8 +156,9 @@ def test_knowledge_branch_owns_input_and_defers_context_and_callbacks(tmp_path):
     assert context.knowledge_hits == []
     support._trace_callback.assert_not_called()
     support.apply_knowledge_result(context, result)
-    assert len(context.workflow_trace) == 1
-    support._trace_callback.assert_called_once()
+    assert [step.key for step in context.workflow_trace] == ["web_search", "knowledge_retrieve"]
+    assert support._trace_callback.call_count == 2
+    assert all(step.status == "skipped" for step in context.workflow_trace)
 
 
 @pytest.mark.parametrize("intent,fields", [

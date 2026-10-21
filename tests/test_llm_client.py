@@ -504,7 +504,7 @@ def test_parse_interaction_intent_payload_repairs_invalid_shape() -> None:
             }
         )
 
-    client.answer_question_sync = answer_question_sync
+    client._request_intent_classification = answer_question_sync
 
     payload = client._parse_interaction_intent_payload(
         '{"task_mode":"facts","action":"book_meeting","domain":"booking","retrieval_scopes":"meeting_policy"}'
@@ -721,6 +721,10 @@ def test_request_intent_classification_disables_thinking_even_when_answer_llm_ca
     assert payload["model"] == "Qwen3-8B"
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
     assert payload["temperature"] == 0.0
+    schema = payload["response_format"]["json_schema"]["schema"]
+    assert set(schema["required"]) == set(schema["properties"])
+    assert "local_only_span" in schema["properties"]["web_intent"]["required"]
+    assert schema["properties"]["task_mode"]["enum"] == ["facts", "research"]
 
 
 def test_responses_mode_converts_messages_limits_and_tools() -> None:

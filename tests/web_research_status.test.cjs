@@ -1,0 +1,28 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('src/sage_faculty_twin/web/app.js','utf8');
+const html = fs.readFileSync('src/sage_faculty_twin/web/index.html','utf8');
+const start=source.indexOf('function buildWebResearchStatusHtml(');
+const context={URL,escapeHtml:text=>String(text).replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;')};
+vm.createContext(context);
+vm.runInContext(source.slice(start,source.indexOf('\nfunction buildWorkflowStatusSummaryHtml(',start)),context);
+const render=context.buildWebResearchStatusHtml;
+assert.equal(render([]),'');
+assert.match(render([{key:'web_search',status:'running',summary:'search'}]),/正在搜索网页/);
+assert.match(render([{key:'web_search',status:'running'},{key:'web_search',status:'failed'}]),/网页搜索失败/);
+assert.match(render([{key:'web_search',status:'empty'}]),/未找到可用网页/);
+assert.doesNotMatch(render([{key:'web_search',status:'failed'}]),/候选来源已取得/);
+assert(!render([{key:'web_search',status:'failed',summary:'<script>'}]).includes('<script>'));
+const candidates=[{title:'official',url:'https://example.org/full?'+ 'x'.repeat(2000),retrieved_at:'2026-10-21T00:00:00Z'},
+    {title:'unsafe',url:'javascript:alert(1)'}];
+const withSources=render([{key:'web_search',status:'completed',sources:candidates}]);
+assert(withSources.includes(candidates[0].url));
+assert.match(withSources,/不代表已采用或核实/);
+assert(!withSources.includes('javascript:'));
+assert(!render([{key:'web_search',status:'failed',sources:candidates}]).includes('<a '));
+assert.match(html,/<option value="auto" selected>/);
+assert.match(source,/web_mode: webSearchMode\?\.value \|\| "auto"/);
+assert(!source.includes('webSearchCheckbox'));
+assert(source.indexOf('pending.innerHTML = buildWebResearchStatusHtml(workflowSteps)') < source.indexOf('if (!INLINE_WORKFLOW_TRACE_ENABLED)',source.indexOf('function syncPendingWorkflowTrace')));
+console.log('Real web statuses, historical unknowns, XSS and advanced auto/never/always controls passed');

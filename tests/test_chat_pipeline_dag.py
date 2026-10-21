@@ -138,6 +138,7 @@ CANONICAL_CHAT_TRACE = [
     "booking_prepare",
     "booking_execute",
     "memory_retrieve",
+    "web_search",
     "knowledge_retrieve",
     "prompt_build",
     "llm_answer",
@@ -298,7 +299,7 @@ def test_booking_with_full_details_keeps_canonical_trace_order(
         )
     )
 
-    assert _trace_keys(response) == CANONICAL_CHAT_TRACE
+    assert _trace_keys(response) == [key for key in CANONICAL_CHAT_TRACE if key != "web_search"]
     assert response.workflow_action == "book_meeting"
     statuses = _trace_statuses(response)
     # booking branch is the active path here

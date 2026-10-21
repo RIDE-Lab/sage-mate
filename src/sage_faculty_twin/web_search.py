@@ -8,6 +8,7 @@ from time import monotonic
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
+from sage.runtime.web_research import web_research_budget, web_research_deadline
 
 
 _DEFAULT_USER_AGENT = (
@@ -128,22 +129,27 @@ class WebSearchClient:
         self._timeout_seconds = max(1.0, float(timeout_seconds))
         self._max_results = max(1, min(int(max_results), 8))
         self._tavily_api_key = (tavily_api_key or "").strip()
-        self._search_deadline: float | None = None
 
     @property
     def enabled(self) -> bool:
         return True
 
     def search(self, query: str, *, max_results: int | None = None) -> list[WebSearchResult]:
+        with web_research_budget(self._timeout_seconds):
+            return self._search_with_deadline(query, max_results=max_results)
+
+    def _search_with_deadline(self, query: str, *, max_results: int | None = None) -> list[WebSearchResult]:
         normalized_query = str(query or "").strip()
         if not normalized_query:
             return []
 
         limit = self._max_results if max_results is None else max(1, min(int(max_results), 8))
+        provider_completed = False
         official_repo = self._known_official_release_repo(normalized_query)
         if official_repo is not None:
             try:
                 official_result = self._search_github_latest_release(*official_repo)
+                provider_completed = True
                 if official_result is not None:
                     return [official_result]
             except Exception:
@@ -153,42 +159,38 @@ class WebSearchClient:
         if official_award_page is not None:
             try:
                 official_result = self._search_official_award_page(*official_award_page)
+                provider_completed = True
                 if official_result is not None:
                     return [official_result]
             except Exception:
                 pass
-        # Treat the configured timeout as a budget for the *whole* provider
-        # chain, not once per fallback. Otherwise an RSS timeout followed by
-        # an HTML timeout can silently double the latency of /chat.
-        deadline = monotonic() + self._timeout_seconds
-        previous_deadline = self._search_deadline
-        self._search_deadline = deadline
-        try:
-            # --- Tavily (primary) ---
-            if self._tavily_api_key and monotonic() < deadline:
-                try:
-                    tavily_results = self._search_tavily(normalized_query, limit)
-                    if tavily_results:
-                        return self._rerank_results(normalized_query, tavily_results, limit)
-                except Exception:
-                    pass  # fall through to Bing
+        deadline = web_research_deadline()
+        assert deadline is not None
+        if self._tavily_api_key and monotonic() < deadline:
+            try:
+                tavily_results = self._search_tavily(normalized_query, limit)
+                provider_completed = True
+                if tavily_results:
+                    return self._rerank_results(normalized_query, tavily_results, limit)
+            except Exception:
+                pass
 
-            # --- Bing fallback ---
-            search_query = self._rewrite_query_for_bing(normalized_query)
-            for searcher in (self._search_bing_rss, self._search_bing_html):
-                if monotonic() >= deadline:
-                    break
-                try:
-                    results = searcher(search_query, limit)
-                except Exception:
-                    continue
-                if results:
-                    reranked = self._rerank_results(normalized_query, results, limit)
-                    if reranked:
-                        return reranked
-            return []
-        finally:
-            self._search_deadline = previous_deadline
+        search_query = self._rewrite_query_for_bing(normalized_query)
+        for searcher in (self._search_bing_rss, self._search_bing_html):
+            if monotonic() >= deadline:
+                break
+            try:
+                results = searcher(search_query, limit)
+                provider_completed = True
+            except Exception:
+                continue
+            if results:
+                reranked = self._rerank_results(normalized_query, results, limit)
+                if reranked:
+                    return reranked
+        if not provider_completed:
+            raise RuntimeError("web_search_providers_unavailable")
+        return []
 
     @staticmethod
     def _known_official_release_repo(query: str) -> tuple[str, str] | None:
@@ -220,13 +222,13 @@ class WebSearchClient:
             return None
         release_name = str(payload.get("name") or "").strip()
         published_at = str(payload.get("published_at") or "").strip()
-        title = release_name or f"{repository} {tag_name}"
-        snippet = f"Official GitHub release tag: {tag_name}."
+        title = f"{owner}/{repository} — {release_name or tag_name}"
+        snippet = f"GitHub latest non-prerelease release for {owner}/{repository}: {tag_name}."
         if published_at:
             snippet += f" Published at {published_at}."
         return WebSearchResult(
             title=title[:300],
-            url=html_url[:1000],
+            url=html_url,
             snippet=snippet[:500],
             score=100.0,
         )
@@ -275,6 +277,7 @@ class WebSearchClient:
             query,
             max_results=max_results,
             include_raw_content=False,
+            timeout=max(0.05, min(self._timeout_seconds, (web_research_deadline() or (monotonic() + self._timeout_seconds)) - monotonic())),
         )
         hits: list[WebSearchResult] = []
         for index, item in enumerate(response.get("results", [])):
@@ -285,7 +288,7 @@ class WebSearchClient:
             hits.append(
                 WebSearchResult(
                     title=title[:300],
-                    url=url[:1000],
+                    url=url,
                     snippet=(item.get("content") or "")[:500],
                     score=float(item.get("score", max_results - index)),
                 )
@@ -294,8 +297,10 @@ class WebSearchClient:
 
     def _client(self) -> httpx.Client:
         timeout_seconds = self._timeout_seconds
-        if self._search_deadline is not None:
-            timeout_seconds = max(0.05, self._search_deadline - monotonic())
+        if web_research_deadline() is not None:
+            timeout_seconds = web_research_deadline() - monotonic()
+            if timeout_seconds <= 0:
+                raise TimeoutError("web research deadline exceeded")
         return httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -329,7 +334,7 @@ class WebSearchClient:
             results.append(
                 WebSearchResult(
                     title=unescape(title)[:300],
-                    url=self._decode_bing_result_url(unescape(link))[:1000],
+                    url=self._decode_bing_result_url(unescape(link)),
                     snippet=unescape(description)[:500],
                     score=float(max_results - len(results)),
                 )
@@ -392,7 +397,7 @@ class WebSearchClient:
             results.append(
                 WebSearchResult(
                     title=title[:300],
-                    url=self._decode_bing_result_url(href)[:1000],
+                    url=self._decode_bing_result_url(href),
                     snippet=snippet[:500],
                     score=float(max_results - len(results)),
                 )

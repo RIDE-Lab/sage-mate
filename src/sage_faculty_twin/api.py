@@ -538,9 +538,11 @@ async def _parse_chat_request(raw_request: Request) -> ChatRequest:
             )
             not in ("false", "0", None),
             "web_search": _coerce_optional_form_value(form.get("web_search"))
-            in ("true", "1", "on", "yes"),
+            in ("true", "1", "on", "yes") if form.get("web_search") is not None else None,
             "attachments": await _parse_chat_attachments(files),
         }
+        if form.get("web_mode") is not None:
+            payload["web_mode"] = _coerce_optional_form_value(form.get("web_mode"))
         payload["visitor_profile"] = _normalize_visitor_profile(payload.get("visitor_profile"))
         try:
             return ChatRequest.model_validate(payload)

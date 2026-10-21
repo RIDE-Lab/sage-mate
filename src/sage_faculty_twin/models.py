@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sage.runtime.source_answer_plan import SourceAnswerBlock
@@ -41,7 +42,15 @@ class ChatRequest(BaseModel):
     deep_thinking_explicit: bool = Field(default=False)
     skill_routing: bool = Field(default=True)
     answer_max_tokens: int | None = Field(default=None, ge=128, le=32768)
-    web_search: bool = Field(default=False)
+    web_mode: Literal['auto', 'never', 'always'] = 'auto'
+    web_search: bool | None = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def migrate_web_control(cls, value):
+        if isinstance(value, dict) and 'web_mode' not in value and value.get('web_search') is not None:
+            value = dict(value, web_mode='always' if value['web_search'] else 'never')
+        return value
     code_approval_mode: str = Field(default="ask", pattern="^(ask|auto|full)$")
 
 
@@ -60,6 +69,7 @@ class OnlinePresenceHeartbeatResponse(BaseModel):
 
 
 class InteractionIntent(BaseModel):
+    web_intent: dict[str, Any] | None = None
     task_mode: Literal['facts', 'research'] | None = None
     task_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
@@ -88,13 +98,20 @@ class InteractionIntent(BaseModel):
         return AnswerTask(self.task_mode, self.task_directive).validate(question).research_requested
 
 
+class WebSourceReceipt(BaseModel):
+    title: str = Field(min_length=1, max_length=300)
+    url: str = Field(min_length=1, max_length=16384)
+    retrieved_at: str
+
+
 class WorkflowTraceStep(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     title: str = Field(min_length=1, max_length=128)
     summary: str = Field(min_length=1, max_length=256)
     detail: str = Field(min_length=1, max_length=512)
-    status: str = Field(default="completed", pattern="^(completed|skipped)$")
+    status: str = Field(default="completed", pattern="^(running|completed|skipped|empty|failed)$")
     duration_ms: int | None = Field(default=None, ge=0)
+    sources: list[WebSourceReceipt] = Field(default_factory=list)
 
 
 class AnswerBasisItem(BaseModel):
@@ -202,10 +219,21 @@ class MemoryAuditItem(BaseModel):
 
 
 class WebSearchHit(BaseModel):
+    retrieved_at: str | None = None
     title: str = Field(min_length=1, max_length=300)
-    url: str = Field(min_length=1, max_length=1000)
+    url: str = Field(min_length=1, max_length=16384)
     snippet: str = Field(default="", max_length=500)
     score: float = Field(default=0.0)
+
+    @field_validator("url")
+    @classmethod
+    def safe_public_link(cls, value: str) -> str:
+        parsed = urlsplit(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or any(
+            c in value for c in "\r\n<>"
+        ):
+            raise ValueError("invalid web source URL")
+        return value
 
 
 class KnowledgeWriteBackResult(BaseModel):

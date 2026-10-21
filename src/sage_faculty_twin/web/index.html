@@ -24,7 +24,7 @@
         rel="stylesheet" media="print" onload="this.media='all'" />
     <link rel="stylesheet" href="./styles.4222.css?rev=evidence-layers-20261019" />
     <link rel="stylesheet" href="./companion.css" />
-    <link rel="stylesheet" href="./static/minimal.1009.css?rev=twin-ws-layout-history-20261020" />
+    <link rel="stylesheet" href="./static/minimal.1009.css?rev=sage-auto-web-20261021" />
     <!-- First paint must not depend on fonts, JavaScript or timer delivery. -->
 </head>
 
@@ -596,9 +596,13 @@
                                     <input type="checkbox" id="deep-thinking-checkbox" />
                                     <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-brain"></use></svg>深度思考</span>
                                 </label>
-                                <label class="composer-pill-toggle web-search-pill" title="开启后会先做联网检索，再结合本地知识回答">
-                                    <input type="checkbox" id="web-search-checkbox" />
-                                    <span class="pill-toggle-label"><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-globe-search"></use></svg>联网检索</span>
+                                <label class="composer-pill-toggle web-search-pill" title="由 SAGE 按问题与身份决定；任何模式都不能越过私密资料边界">
+                                    <span><svg class="ui-icon ui-icon-sm" aria-hidden="true"><use href="#icon-globe-search"></use></svg>联网策略</span>
+                                    <select id="web-search-mode" aria-label="联网策略">
+                                        <option value="auto" selected>自动</option>
+                                        <option value="never">禁止联网</option>
+                                        <option value="always">必须联网（公开主题）</option>
+                                    </select>
                                 </label>
                                 </div>
                                 <div class="composer-tools-right">
@@ -1479,7 +1483,7 @@
     </section>
 
     <script src="./companion.js" defer></script>
-    <script src="./app.4222.js?rev=twin-ws-layout-history-20261020" defer></script>
+    <script src="./app.4222.js?rev=sage-auto-web-20261021" defer></script>
 </body>
 
 </html>

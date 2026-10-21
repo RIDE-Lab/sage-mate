@@ -9,6 +9,8 @@ from sage_faculty_twin.service import ChatWorkflowContext, FacultyTwinWorkflowSu
 def support_for(*, admin=False):
     support = object.__new__(FacultyTwinWorkflowSupport)
     support._trace_callback = None
+    support._settings = SimpleNamespace(web_search_enabled=False)
+    support._web_search_client = SimpleNamespace(enabled=False)
     support._resolve_admin_role = lambda: "manager" if admin else None
     support.prepare_memory_retrieval = lambda _: SimpleNamespace(skip_summary="")
     support.prepare_knowledge_retrieval = lambda _: SimpleNamespace(needs_retrieval=True)

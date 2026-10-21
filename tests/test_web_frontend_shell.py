@@ -49,7 +49,8 @@ def test_overlay_modal_registry_and_frontend_shell() -> None:
     assert 'const processingLabel = deepThinking ? "正在深度分析" : "正在处理";' in app_js
     assert 'class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}"' in app_js
     assert "优先使用模型原生 thinking" in index_html
-    assert "function applyLuckyQuestionPreferences(selection)" in app_js
+    assert "applyLuckyQuestionPreferences" not in app_js
+    assert 'web_mode: webSearchMode?.value || "auto"' in app_js
     assert "function handleLuckyQuestionClick()" in app_js
     assert "function isFeedbackWebKnowledgeRecord(record)" in app_js
     assert "function handleFeedbackWebKnowledgeAction(event)" in app_js

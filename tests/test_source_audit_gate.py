@@ -5,7 +5,7 @@ from sage.runtime.source_audit import SourceAuditRejected
 from sage.runtime.flownet import FlowRequestOutcomeError
 
 from sage_faculty_twin.config import AppSettings
-from sage_faculty_twin.models import ChatRequest, KnowledgeSearchHit
+from sage_faculty_twin.models import ChatRequest, KnowledgeSearchHit, WebSearchHit
 from sage_faculty_twin.service import ChatWorkflowContext, FacultyTwinWorkflowSupport
 
 
@@ -74,6 +74,31 @@ def test_changed_source_invalidates_receipt(tmp_path):
     support._call_compact_retry_sync = lambda **kw: plan_response(kw["user_prompt"])
     support._prepare_source_answer(context)
     context.knowledge_hits[0].source_content += "changed"
+    with pytest.raises(SourceAuditRejected):
+        support._validate_source_answer(context)
+
+
+def test_web_candidates_reach_same_sage_coverage_plan_and_selected_basis(tmp_path):
+    support, context = setup_gate(tmp_path)
+    context.request.question = "ExampleRelease 当前版本是什么？请提供发布链接。"
+    context.knowledge_hits = []
+    context.web_search_hits = [WebSearchHit(title="ExampleRelease release", url="https://example.org/releases/v2",
+        snippet="ExampleRelease latest non-prerelease release: v2. Published at 2026-10-20.",
+        retrieved_at="2026-10-21T00:00:00+00:00")]
+    def call(**kwargs):
+        data = json.loads(kwargs["user_prompt"])
+        assert data["sources"][0]["source_id"] == "web:0"
+        if "requirements" in data:
+            return plan_response(kwargs["user_prompt"])
+        return json.dumps({"digest":data["digest"],"source_ids":["web:0"],"inferences":[]})
+    support._call_compact_retry_sync = call
+    support._prepare_source_answer(context)
+    result = support.render_chat_response(context)
+    assert context.web_search_hits[0].snippet in result.answer
+    assert context.web_search_hits[0].url in result.answer
+    assert result.answer_basis[0].source_url == context.web_search_hits[0].url
+    assert "2026-10-21" in result.answer_basis[0].detail
+    context.web_search_hits[0].snippet += "changed"
     with pytest.raises(SourceAuditRejected):
         support._validate_source_answer(context)
 

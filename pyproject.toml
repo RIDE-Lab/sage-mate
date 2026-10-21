@@ -32,7 +32,7 @@ dependencies = [
   "uvicorn>=0.30.0,<1.0.0",
   "cloudpickle>=2.2",
   "tavily-python>=0.5.0",
-    "isage[delivery-markdown] @ git+https://github.com/RIDE-Lab/SAGE.git@dff9d32e030dd5a3c05195f0b81c7250a8ed6ee5",
+    "isage[delivery-markdown] @ git+https://github.com/RIDE-Lab/SAGE.git@ce7eab7700d4ac1235c830cb1ba242f2ae89251e",
   "isage-neuromem @ git+https://github.com/RIDE-Lab/neuromem.git@9374c3465022e8d02235a5cf470898d26209570b",
   "isage-anns>=0.2.0",
   "isage-vdb @ git+https://github.com/intellistream/sageVDB.git@311d65e972fb3cb4e5a2904a4c499a51dafae38d",
