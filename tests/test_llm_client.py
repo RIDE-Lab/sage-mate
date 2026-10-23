@@ -22,6 +22,42 @@ from sage_faculty_twin.llm_client import (
 from sage_faculty_twin.models import InteractionIntent
 
 
+def test_source_restriction_requires_current_question_witness_and_bounded_retry():
+    client = object.__new__(VllmChatClient)
+    responses = iter([
+        dict(task_mode='facts', knowledge_sources=['private']),
+        dict(task_mode='facts', knowledge_sources=None, source_directive=None),
+    ])
+    calls = []
+    def classify(system, user):
+        calls.append(user)
+        return json.dumps(next(responses))
+    client._request_intent_classification = classify
+    question = '课题组主要研究哪些问题？'
+    intent = client.classify_interaction_intent_sync(question)
+    assert intent.knowledge_sources is None
+    assert len(calls) == 2 and all(question in prompt for prompt in calls)
+    assert 'Prior source decision rejected' in calls[-1]
+
+
+def test_explicit_private_request_is_not_widened_when_source_validation_fails():
+    client = object.__new__(VllmChatClient)
+    client._request_intent_classification = lambda *_: json.dumps(dict(
+        task_mode='facts', knowledge_sources=['private'], source_directive=None))
+    with pytest.raises(ValueError, match='source restriction requires'):
+        client.classify_interaction_intent_sync('只使用私有知识库，课题组主要研究哪些问题？')
+
+
+@pytest.mark.parametrize('origins,directive', [(['private'], '只使用私有知识库'), ([], '不要检索任何来源')])
+def test_valid_explicit_source_witness_preserves_empty_and_private(origins, directive):
+    client = object.__new__(VllmChatClient)
+    client._request_intent_classification = lambda *_: json.dumps(dict(
+        task_mode='facts', knowledge_sources=origins, source_directive=directive))
+    intent = client.classify_interaction_intent_sync(directive + '，解释这个问题。')
+    assert intent.knowledge_sources == origins
+    assert intent.source_directive == directive
+
+
 @pytest.mark.parametrize("question", [
     "根据公开 Wiki，评审这个研究方向，并设计对照实验。",
     "Review this research hypothesis and propose controlled experiments.",

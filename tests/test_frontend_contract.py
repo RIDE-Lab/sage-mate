@@ -21,7 +21,7 @@ const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const source=fs.readFileSync(process.argv[1],'utf8');
 const calls=[],streams=[];
 let releaseSnapshot;
-const context={chatStream:null, document:{getElementById:()=>null}, escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
+const context={chatStream:null, conversationFollowingLatest:false, document:{getElementById:()=>null}, escapeHtml:s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;'),
     buildNativeExecutionHtml:()=>'<p>foreground</p>', persistActiveConversationSnapshot:()=>calls.push('persist'),
     resolveApiOrigin:async()=>'https://testserver',
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
@@ -113,8 +113,10 @@ const old={dataset:{},querySelector:selector=>selector==='.message-inline-proces
     querySelectorAll:selector=>selector==='.workflow-step-chip-group'?[group]:[{remove:()=>removed.push('rail')}]};
 const current={dataset:{executionFormat:'native-v1'},querySelector:()=>null,querySelectorAll:()=>{throw Error('native evidence must not be rewritten');}};
 let evidenceHtml='';
-const message={querySelector:selector=>selector==='.response-evidence'?(evidenceHtml?{}:null):
-    selector==='.message-main-copy'?{insertAdjacentHTML:(_,html)=>{evidenceHtml=html;}}:null,querySelectorAll:()=>[]};
+let placedAfterAnswer=0;
+const evidence={querySelector:selector=>selector==='details'?{}:null};
+const message={querySelector:selector=>selector==='.response-evidence'?(evidenceHtml?evidence:null):
+    selector==='.message-main-copy'?{insertAdjacentHTML:(position,html)=>{assert.equal(position,'afterend');evidenceHtml=html;},after:node=>{assert.equal(node,evidence);placedAfterAnswer++;}}:null,querySelectorAll:()=>[]};
 const root={answer:'original answer',citation:'full original citation',querySelectorAll:selector=>selector==='.message-ready'?[message]:[old,current]};
 const context={isUserAuthenticated:false,currentUserAccountProfile:''};vm.createContext(context);
 for(const name of ['escapeHtml','buildResponseEvidenceModel','buildResponseEvidenceHtml']) {
@@ -129,6 +131,7 @@ assert(preview.textContent.includes('无原生执行证据'));
 assert.deepEqual(removed,['rail','group']);
 assert.equal(root.answer,'original answer');assert.equal(root.citation,'full original citation');
 context.repairLegacyWorkflowSummaries(root);assert.equal(removed.length,2);
+assert.equal(placedAfterAnswer,2,'old evidence follows the preserved answer on every hydration');
 '''
     subprocess.run(["node", "-e", script, str(WEB_DIR / "app.js")], check=True, timeout=20)
 

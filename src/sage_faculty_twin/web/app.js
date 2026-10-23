@@ -501,6 +501,7 @@ const WORKFLOW_STEP_SHORT_LABELS = {
 };
 let assistantLabel = "我的学术分身";
 let activeConversationId = createConversationId();
+let conversationFollowingLatest = false;
 let sessionTokenTotal = 0;
 let activeWorkflowStream = null;
 let activeWorkflowRequestId = null;
@@ -1472,8 +1473,18 @@ function wikiStarterQuestions(profile, pages) {
         return {label: question, question, context: design.context,
             ...(page ? {source_name: page.source_name, url: page.url} : {})};
     });
-    const supported = pool.filter(item => item.source_name);
-    return supported.length >= 3 ? supported : pool;
+    // Do not fill an unavailable public catalog with promises of answers we
+    // cannot ground. Fewer than three real topics is preferable to fake ones.
+    return pool.filter(item => item.source_name?.startsWith("wiki:") && item.url);
+}
+
+function starterProfileForIdentity(profile) {
+    if (isUserAuthenticated && WIKI_QUESTION_PROFILES[currentUserAccountProfile]) {
+        return currentUserAccountProfile;
+    }
+    // The audience selector is not proof of membership. Match the HTTP
+    // adapter's guest downgrade rather than advertising member-only work.
+    return profile === "lab_member" ? "general_visitor" : profile;
 }
 
 const SEED_CHIP_COUNT = 3;
@@ -1505,9 +1516,11 @@ async function renderSeedChips(profile) {
     const container = document.getElementById("seed-chips-list");
     if (!container) return;
     const requestedProfile = profile;
+    const identityProfile = starterProfileForIdentity(profile);
     await loadPublicWikiQuestions();
     if ((visitorProfileInput?.value || 'general_visitor') !== requestedProfile) return;
-    const pool = wikiStarterQuestions(profile, publicWikiQuestions);
+    if (starterProfileForIdentity(profile) !== identityProfile) return;
+    const pool = wikiStarterQuestions(identityProfile, publicWikiQuestions);
     // Shuffle and pick SEED_CHIP_COUNT items
     const shuffled = [...pool].sort(() => Math.random() - 0.5);
     const picked = shuffled.slice(0, SEED_CHIP_COUNT);
@@ -2378,7 +2391,7 @@ historyNewChatButton?.addEventListener("click", () => {
 });
 document.getElementById("export-conversation")?.addEventListener("click", exportCurrentConversationMarkdown);
 document.getElementById("chat-scroll-latest")?.addEventListener("click", scrollConversationToLatest);
-chatStream?.addEventListener("scroll", () => syncLatestConversationButton(), { passive: true });
+chatStream?.addEventListener("scroll", handleConversationScroll, { passive: true });
 window.addEventListener("resize", () => syncLatestConversationButton());
 
 // Sidebar toggle - uses existing history-rail-collapsed system
@@ -2947,7 +2960,7 @@ chatForm.addEventListener("submit", async (event) => {
     activeChatUserCancelled = false;
     activeChatCancellationPromise = null;
 
-    appendMessage("user", payload.student_name || "学生", question, {
+    const questionMessage = appendMessage("user", payload.student_name || "学生", question, {
         emphasis: "user",
         attachments: submittedAttachments,
     });
@@ -2961,6 +2974,10 @@ chatForm.addEventListener("submit", async (event) => {
     renderPendingAssistantMessage(pendingMessage, "理解问题", [], {
         deepThinking: explicitDeepMode,
     });
+    // Reserve only the pending answer's reading space so the submitted
+    // question and answer beginning can sit at the top, not at the old tail.
+    pendingMessage.style.minHeight = `${Math.max(0, chatStream.clientHeight - questionMessage.getBoundingClientRect().height)}px`;
+    chatStream.scrollTop += questionMessage.getBoundingClientRect().top - chatStream.getBoundingClientRect().top;
     persistActiveConversationSnapshot();
     const requestBody = buildChatRequestBody(payload, submittedFiles);
     document.getElementById("chat-question").value = "";
@@ -7022,13 +7039,20 @@ function renderBookingResponseStatus(element, bookingResponse, options = {}) {
     element.className = `inline-status inline-status-${state}`;
 }
 
-// Capture before each asynchronous render, not after content has grown. User
-// scrolling is authoritative: returning to the bottom naturally resumes follow.
+// Following is opt-in, never inferred from a short answer fitting the viewport.
+// Start at the answer's beginning and keep that reading position as it grows.
+function handleConversationScroll() {
+    if (chatStream && chatStream.scrollHeight - chatStream.clientHeight - chatStream.scrollTop > 4) {
+        conversationFollowingLatest = false;
+    }
+    syncLatestConversationButton();
+}
+
 function captureConversationScroll() {
     if (!chatStream) return null;
     const root = chatStream;
     const top = root.scrollTop;
-    const following = root.scrollHeight - root.clientHeight - top <= 4;
+    const following = conversationFollowingLatest && root.scrollHeight - root.clientHeight - top <= 4;
     const viewportTop = root.getBoundingClientRect().top;
     const anchor = following ? null : [...root.children].find(node =>
         node.getBoundingClientRect().bottom > viewportTop);
@@ -7073,6 +7097,7 @@ function syncLatestConversationButton({ newContent = false, completed = false, r
 
 function scrollConversationToLatest() {
     if (!chatStream) return;
+    conversationFollowingLatest = true;
     // Transfer focus before navigation; a still-finishing keyboard scroll must
     // not get another chance to move the region after the explicit jump.
     chatStream.focus({ preventScroll: true });
@@ -7147,6 +7172,7 @@ function updateWelcomeGreeting() {
 }
 
 function appendMessage(role, label, text, options = {}) {
+    const scrollSnapshot = captureConversationScroll();
     const article = document.createElement("article");
     const stateClass = options.state ? ` message-${options.state}` : "";
     const emphasisClass = options.emphasis ? ` message-emphasis-${options.emphasis}` : "";
@@ -7186,7 +7212,14 @@ function appendMessage(role, label, text, options = {}) {
   `;
     chatStream.appendChild(article);
     syncConversationMode();
-    chatStream.scrollTop = chatStream.scrollHeight;
+    if (role === "user" && options.emphasis === "user") {
+        // Sending a new turn may reveal that question once. It must not grant
+        // permission to chase the growing answer or jump again on completion.
+        conversationFollowingLatest = false;
+        chatStream.scrollTop = chatStream.scrollHeight;
+    } else {
+        restoreConversationScroll(scrollSnapshot);
+    }
     updateChatEmptyState();
     return article;
 }
@@ -7581,6 +7614,7 @@ function handleConversationRemove(conversationId) {
 }
 
 async function restoreConversationFromHistory(conversationId) {
+    conversationFollowingLatest = false;
     const entry = conversationHistoryEntries.find((item) => item.id === conversationId);
     if (!chatStream) {
         return;
@@ -7648,6 +7682,7 @@ async function fetchConversationTranscript(conversationId) {
 }
 
 function renderConversationTranscript(transcript) {
+    conversationFollowingLatest = false;
     if (!chatStream || !transcript) {
         return;
     }
@@ -7828,6 +7863,7 @@ function attachFeedbackHandlersToStream() {
 }
 
 function startFreshConversation() {
+    conversationFollowingLatest = false;
     if (hasRenderableConversation()) {
         persistActiveConversationSnapshot();
     }
@@ -8092,6 +8128,7 @@ function renderAssistantMessage(
     try {
         if (exchangeId && !isError) container.dataset.exchangeId = exchangeId;
         stopAnswerProcessingTicker(container);
+        container.style.minHeight = "";
         const startedAt = Number(container?.dataset?.startedAt);
         const elapsedMs = Number.isFinite(startedAt) ? Math.max(0, performance.now() - startedAt) : 0;
         const bodyClass = isError ? "message-body" : "message-body";
@@ -8191,9 +8228,6 @@ function renderAssistantMessage(
                 <div class="message-bubble">
                     <div class="message-role">${escapeHtml(assistantLabel)}</div>
                     <div class="message-frame">
-                        ${processingMetaHtml}
-                        ${buildResponseEvidenceHtml(evidenceView)}
-                        ${buildResponseWorkSummaryHtml(workEvents)}
                         <div class="message-main-copy">
                             <div class="message-reply-block">
                                 <div class="${bodyClass}">${formatSourceAnswer(text, answerBlocks, cleanedText)}</div>
@@ -8202,11 +8236,14 @@ function renderAssistantMessage(
                                 </button>
                             </div>
                             ${thinkSectionHtml}
-                            ${workflowTraceHtml}
                         </div>
+                        ${processingMetaHtml}
+                        ${buildResponseEvidenceHtml(evidenceView)}
+                        ${buildResponseWorkSummaryHtml(workEvents)}
                         ${notificationHtml}
                         ${basisHtml}
                         ${followUpHtml}
+                        ${workflowTraceHtml}
                         ${buildFeedbackSectionHtml(exchangeId, isError)}
                         ${buildRetryButtonHtml(isError)}
                     </div>
@@ -8273,12 +8310,13 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
 
 function buildResponseEvidenceHtml(model) {
     return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="来源与依据边界" data-evidence-view="v1">
-        <strong>${escapeHtml(model.source)}</strong>
+        <details><summary>${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : model.warning ? " · 依据待核对" : ""}</summary>
         ${model.hasSourceDetails ? '<button type="button" class="response-source-button" data-show-response-sources>查看来源与记录</button>' : ""}
         <p>${escapeHtml(model.gap)}</p>
         ${model.missingParts.length ? `<ul class="response-evidence-gaps">${model.missingParts.map(part => `<li>${escapeHtml(part)}</li>`).join("")}</ul><p>可补充对应资料，或明确哪些部分需要进一步检索。</p>` : ""}
         ${model.inference ? `<p>${escapeHtml(model.inference)}</p>` : ""}
         ${model.research ? `<p class="response-research-boundary">${escapeHtml(model.research)}</p>` : ""}
+        </details>
         ${model.operation ? `<p class="response-operation">操作状态 · ${escapeHtml(model.operation)}</p>` : ""}
     </aside>`;
 }
@@ -8313,9 +8351,9 @@ function buildResponseWorkSummaryHtml(events = [], status = null) {
         entries = [...tasks.values()].map(event => ({name:event.task_id,
             label:labels[event.state] || "状态未知或冲突"}));
     }
-    return `<div class="response-work-summary" aria-label="后台处理状态"><strong>后台处理</strong>
+    return `<details class="response-work-summary" aria-label="后台处理状态"><summary>后台处理${entries.length ? ` · ${escapeHtml([...new Set(entries.map(entry => entry.label))].join("、"))}` : " · 状态待核对"}</summary>
         ${entries.length ? `<ul>${entries.map(entry => `<li>${escapeHtml(entry.name === "post_answer" ? "答后处理" : entry.name)} · ${escapeHtml(entry.label)}</li>`).join("")}</ul>` : "<p>状态记录不完整，无法确认</p>"}
-        <small>后台完成不代表邮件送达或会议确认。详情见高级工作流。</small></div>`;
+        <small>后台完成不代表邮件送达或会议确认。详情见高级工作流。</small></details>`;
 }
 
 function buildWebResearchStatusHtml(steps = []) {
@@ -8942,11 +8980,12 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents, wo
         }
         const workSummary = message.querySelector(".response-work-summary");
         const workHtml = buildResponseWorkSummaryHtml(workEvents, workStatus);
-        if (workSummary) workSummary.outerHTML = workHtml;
+        if (workSummary) workSummary.outerHTML = workSummary.open
+            ? workHtml.replace('<details ', '<details open ') : workHtml;
         else if (workHtml) {
             const evidence = message.querySelector(".response-evidence");
             if (evidence) evidence.insertAdjacentHTML("afterend", workHtml);
-            else message.querySelector(".message-main-copy")?.insertAdjacentHTML("beforebegin", workHtml);
+            else message.querySelector(".message-main-copy")?.insertAdjacentHTML("afterend", workHtml);
         }
         const content = summary?.querySelector(".message-section-content");
         if (!content) return;
@@ -8976,8 +9015,36 @@ function repairLegacyWorkflowSummaries(root) {
     // not proof of source coverage or external delivery.
     for (const message of root.querySelectorAll(".message-ready")) {
         if (!message.querySelector(".response-evidence")) {
-            message.querySelector(".message-main-copy")?.insertAdjacentHTML("afterbegin",
+            message.querySelector(".message-main-copy")?.insertAdjacentHTML("afterend",
                 buildResponseEvidenceHtml(buildResponseEvidenceModel({externalEvidenceRequired:false})));
+        }
+        // Migrate saved HTML as presentation only. Keep the original answer,
+        // source text and links; do not require a new question or generation.
+        const main = message.querySelector(".message-main-copy");
+        const evidence = message.querySelector(".response-evidence");
+        if (main && evidence) main.after(evidence);
+        if (evidence && !evidence.querySelector("details")) {
+            const folded = document.createElement("details");
+            const heading = document.createElement("summary");
+            heading.textContent = evidence.querySelector("strong")?.textContent || "来源与依据边界 · 历史记录";
+            const operation = evidence.querySelector(".response-operation");
+            operation?.remove();
+            folded.append(heading);
+            folded.append(...evidence.childNodes);
+            evidence.append(folded);
+            if (operation) evidence.append(operation);
+        }
+        const background = message.querySelector(".response-work-summary");
+        if (main && background) (evidence || main).after(background);
+        if (background && background.tagName !== "DETAILS") {
+            const folded = document.createElement("details");
+            folded.className = background.className;
+            folded.setAttribute("aria-label", "后台处理状态");
+            const heading = document.createElement("summary");
+            heading.textContent = "后台处理 · 历史状态";
+            folded.append(heading);
+            folded.append(...background.childNodes);
+            background.replaceWith(folded);
         }
         for (const hint of message.querySelectorAll(".response-research-boundary")) {
             hint.hidden = !(isUserAuthenticated && ["paper_writing_student", "lab_member"].includes(currentUserAccountProfile));

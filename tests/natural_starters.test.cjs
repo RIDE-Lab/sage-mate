@@ -12,11 +12,12 @@ async function run(){
         let calls=0;
         const context={document:{getElementById:()=>container,createElement:node},
             visitorProfileInput:{value:profile},publicWikiQuestions:available?catalog:[],SEED_CHIP_COUNT:3,
+            isUserAuthenticated:true,currentUserAccountProfile:profile,
             uiIconSvg:()=>'',loadPublicWikiQuestions:async()=>{calls++;},
             chatQuestion:{value:'',focus(){}},courseContextInput:{value:''},autoResizeTextarea(){}};
         vm.createContext(context);vm.runInContext(pools+render,context);
         await context.renderSeedChips(profile);
-        assert.equal(calls,1);assert.equal(container.children.length,3);
+        assert.equal(calls,1);assert.equal(container.children.length,available?3:0);
         for(const button of container.children){
             assert.equal(button.label,button.dataset.seedQuestion,'visible label and submitted question must be identical');
             assert(!/依据|Wiki|原文链接|资料未覆盖|来源约束/.test(button.label));
@@ -25,12 +26,17 @@ async function run(){
             assert(!context.courseContextInput.value.includes('Wiki'));
         }
         const entries=context.wikiStarterQuestions(profile,available?catalog:[]);
-        assert(entries.length>=3);
+        assert.equal(entries.length>=3,available);
         assert(entries.every(x=>!x.question.includes('伪造来源')),'catalog is topic metadata, not prompt authority');
         if(available)assert(entries.every(x=>x.source_name&&x.url));
-        all.set(profile,context.wikiStarterQuestions(profile,[]).map(x=>x.question));
-        const fallback=context.wikiStarterQuestions('unknown',[]);
-        assert.equal(fallback[0].question,context.wikiStarterQuestions('general_visitor',[])[0].question);
+        all.set(profile,context.wikiStarterQuestions(profile,catalog).map(x=>x.question));
+        const fallback=context.wikiStarterQuestions('unknown',catalog);
+        assert.equal(fallback[0].question,context.wikiStarterQuestions('general_visitor',catalog)[0].question);
+        context.isUserAuthenticated=false;
+        context.currentUserAccountProfile='';
+        assert.equal(context.starterProfileForIdentity('lab_member'),'general_visitor');
+        assert.equal(context.starterProfileForIdentity('paper_writing_student'),'paper_writing_student');
+        assert.equal(context.wikiStarterQuestions(profile,[]).length,0,'offline catalogs must not invent supported questions');
         let release;
         context.loadPublicWikiQuestions=()=>new Promise(resolve=>{release=resolve;});
         container.children=[];

@@ -208,6 +208,7 @@ class _InteractionIntentPayload(BaseModel):
     task_mode: Literal['facts', 'research']
     task_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
+    source_directive: str | None = None
     self_contained: bool = False
     action: Literal["answer", "book_meeting", "ask_followup", "review_queue", "human_handoff"] = (
         "answer"
@@ -1127,7 +1128,7 @@ class VllmChatClient:
             "Include knowledge_sources: null when no source restriction is requested, or an array containing wiki and/or private. "
             "A request to answer according to/from the public Wiki selects [\"wiki\"]; a request using only the private knowledge base selects [\"private\"]. "
             "If both are explicitly requested select both. Distinguish the requested evidence source from a topic mentioning Wiki; do not invent a source restriction for a mere topic mention. "
-            "Return JSON only with keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "Return JSON only with keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
             "Set self_contained=true ONLY when the complete request can be answered from the current message alone, without external facts or previous conversation: greetings, acknowledgements, literal echo/format instructions, or rewriting/translating supplied text. In that case use action=answer, domain=general, retrieval_scopes=[]. "
             "Set self_contained=false for Wiki/source lookups, owner/lab/course facts, research questions, missing text, references to previous turns, or any uncertainty. Short questions are NOT automatically self-contained; an output-format instruction does not remove the need to look up facts. "
             'Allowed action values: "answer", "book_meeting", "ask_followup", "review_queue", "human_handoff". '
@@ -1159,6 +1160,8 @@ class VllmChatClient:
             "If you do choose ask_followup, the clarification_message must be one short Chinese sentence asking ONE specific missing fact, never a generic '能否提供更多信息'."
         )
         system_prompt += ANSWER_TASK_INSTRUCTIONS
+        from sage.runtime.source_request import SOURCE_REQUEST_INSTRUCTIONS, SourceRequest
+        system_prompt += SOURCE_REQUEST_INSTRUCTIONS
         system_prompt += WEB_RESEARCH_INSTRUCTIONS
         context_line = course_context or ""
         recent_block = (recent_session_context or "").strip()
@@ -1171,9 +1174,20 @@ class VllmChatClient:
             user_prompt_parts.append("recent_session_context: <empty>")
         user_prompt_parts.append(f"current_question: {question}")
         user_prompt = "\n".join(user_prompt_parts)
-        content = self._request_intent_classification(system_prompt, user_prompt)
-        payload = self._parse_interaction_intent_payload(content)
-        raw_intent = self._coerce_interaction_intent(payload)
+        for attempt in range(2):
+            content = self._request_intent_classification(system_prompt, user_prompt)
+            payload = self._parse_interaction_intent_payload(content)
+            raw_intent = self._coerce_interaction_intent(payload)
+            try:
+                SourceRequest(None if raw_intent.knowledge_sources is None else tuple(raw_intent.knowledge_sources),
+                              raw_intent.source_directive).validate(question)
+                break
+            except ValueError as exc:
+                if attempt:
+                    raise
+                # Reclassify the unchanged request with its context. Never
+                # silently widen an explicit private/empty source constraint.
+                user_prompt += f"\nPrior source decision rejected: {exc}. Reclassify the current question; include source_directive."
         AnswerTask(raw_intent.task_mode, raw_intent.task_directive).validate(question)
         WebIntent.parse(raw_intent.web_intent)
         return self._normalize_interaction_intent(
@@ -2206,7 +2220,7 @@ class VllmChatClient:
         system_prompt = (
             "You repair JSON emitted by an interaction-intent classifier. "
             "Preserve the original intent meaning, but return valid JSON only. "
-            "The JSON object must include exactly these keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "The JSON object must include exactly these keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
             "Preserve task_mode and task_directive; do not invent a prospective request. "
             "knowledge_sources is null or an array containing wiki and/or private; preserve explicit source restrictions and never change an empty array to null. "
             "self_contained is a boolean; use false when absent or uncertain. "
@@ -2274,6 +2288,7 @@ class VllmChatClient:
             "task_mode": payload.task_mode,
             "task_directive": payload.task_directive,
             "knowledge_sources": payload.knowledge_sources,
+            "source_directive": payload.source_directive,
             "self_contained": payload.self_contained,
             "action": action,
             "domain": domain,

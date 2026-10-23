@@ -3514,6 +3514,8 @@ body.conversation-active .intro-card .message-body {
 .response-evidence .response-operation { color: var(--ink); border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }
 .response-work-summary ul { margin: 3px 0; padding-inline-start: 18px; }
 .response-work-summary small { color: var(--text-secondary); }
+.response-evidence summary, .response-work-summary > summary { cursor: pointer; color: var(--text-secondary); }
+.response-evidence summary:focus-visible, .response-work-summary > summary:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 3px; }
 .response-advanced > summary { cursor: pointer; color: var(--text-secondary); padding: 6px 0; font-size: 12px; }
 .response-advanced:not([open]) { margin: 0; }
 .response-advanced:focus-within { outline: 2px solid var(--focus-ring); outline-offset: 2px; }

@@ -20,7 +20,7 @@ def test_semantic_task_contract_survives_classification(mode, directive):
     client = object.__new__(VllmChatClient)
     client._request_intent_classification = lambda system, user: json.dumps({
         "action": "answer", "domain": "research", "task_mode": mode,
-        "task_directive": directive, "knowledge_sources": ["wiki"],
+        "task_directive": directive, "knowledge_sources": None, "source_directive": None,
     })
     question = FACT_QUERY if mode == "facts" else FACT_QUERY + "另外，请设计对照实验。"
     intent = client.classify_interaction_intent_sync(question)

@@ -13,7 +13,7 @@ const stream = {scrollTop: 600, clientHeight: 700, get scrollHeight() {return he
     children: [], contains: () => true, getBoundingClientRect: () => ({top:0})};
 const message = {dataset:{}, style:{}, classList:{remove(){},add(){}},
     set innerHTML(value) {height += 900;}, querySelector: () => null};
-const context = {chatStream:stream, document:{getElementById:()=>null}, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
+const context = {chatStream:stream, conversationFollowingLatest:false, document:{getElementById:()=>null}, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
     isUserAuthenticated:false, currentUserAccountProfile:'',
     stopAnswerProcessingTicker(){}, hasMatchingSourceBlocks:()=>false,
     stripNotificationText:x=>x, parseStreamingThinkContent:x=>({main:x,think:''}),
@@ -32,8 +32,14 @@ for (const error of [false, true]) {
     context.renderAssistantMessage(message, '完整答案', [], [], [], null, error, null, [], false);
     assert.equal(stream.scrollTop, 600, 'completion/error must not pull history reader to bottom');
     stream.scrollTop = height - stream.clientHeight;
+    const readingTop = stream.scrollTop;
     context.renderAssistantMessage(message, '继续跟随', [], [], [], null, error, null, [], false);
-    assert.equal(stream.scrollTop, height - stream.clientHeight, 'bottom reader must continue following');
+    assert.equal(stream.scrollTop, readingTop, 'a short answer at bottom must not imply follow permission');
+    context.conversationFollowingLatest=true;
+    stream.scrollTop = height - stream.clientHeight;
+    context.renderAssistantMessage(message, '主动跟随', [], [], [], null, error, null, [], false);
+    assert.equal(stream.scrollTop, height - stream.clientHeight, 'explicit latest resumes following');
+    context.conversationFollowingLatest=false;
 }
 console.log('Completion and error preserve history reading and resume following at bottom');
 
@@ -56,8 +62,14 @@ for (const [name, args] of [['appendStreamingAnswerDelta',['流式回答']],
     context[name](...args);
     assert.equal(stream.scrollTop,600,name+' preserves reader');
     stream.scrollTop = height-stream.clientHeight;
+    const priorTop=stream.scrollTop;
     context[name](...args);
-    assert.equal(stream.scrollTop,height-stream.clientHeight,name+' follows latest');
+    assert.equal(stream.scrollTop,priorTop,name+' preserves beginning by default');
+    context.conversationFollowingLatest=true;
+    stream.scrollTop=height-stream.clientHeight;
+    context[name](...args);
+    assert.equal(stream.scrollTop,height-stream.clientHeight,name+' follows only after opt-in');
+    context.conversationFollowingLatest=false;
 }
 // An earlier expanded evidence card grows above the visible message.
 let anchorY=900;
@@ -121,6 +133,13 @@ assert(focused);
 context.appendStreamingAnswerDelta('点击后继续生成');
 assert.equal(stream.scrollTop,height-stream.clientHeight);
 assert.equal(button.hidden,true);
+stream.scrollTop=600;
+vm.runInContext(productionFunction('handleConversationScroll'),context);
+context.handleConversationScroll();
+assert.equal(context.conversationFollowingLatest,false,'manual upward scroll revokes follow permission');
+stream.scrollTop=height-stream.clientHeight;
+context.handleConversationScroll();
+assert.equal(context.conversationFollowingLatest,false,'naturally reaching bottom does not re-enable following');
 stream.scrollTop=600;
 context.syncLatestConversationButton({completed:true});
 context.syncLatestConversationButton({reset:true});

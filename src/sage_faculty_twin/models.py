@@ -73,6 +73,7 @@ class InteractionIntent(BaseModel):
     task_mode: Literal['facts', 'research'] | None = None
     task_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
+    source_directive: str | None = None
     self_contained: bool = False
     action: str = Field(
         default="answer",
