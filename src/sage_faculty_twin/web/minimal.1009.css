@@ -983,8 +983,8 @@ html[data-theme="dark"] .primary-button:hover {
     font-size: 12px; color: var(--text-secondary);
 }
 .message-ready .web-research-status:not([data-web-status="failed"]) strong { font-weight: 400; }
-.message-ready .message-workflow-summary { border: 0; background: transparent; }
-.message-ready .message-workflow-summary-toggle { font-size: 12px; padding: 3px 0; min-height: 28px; width: fit-content; gap: 8px; justify-content: flex-start; background: transparent; }
+:root .message-ready .message-workflow-summary { border: 0; background: transparent; }
+:root .message-ready .message-workflow-summary-toggle { font-size: 12px; padding: 3px 0; min-height: 28px; width: fit-content; gap: 8px; justify-content: flex-start; background: transparent; }
 .message-ready .message-workflow-summary-toggle .message-process-icon { display: none; }
 .message-ready .message-workflow-summary-toggle .message-section-title { font-weight: 400; font-size: 12px; }
 .message-inline-process-preview[hidden] { display: none; }
