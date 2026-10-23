@@ -70,6 +70,8 @@ class Node {
   insertAdjacentHTML(position,html){
     let node;
     if(html.includes('class="response-work-attention"'))node=new Node('response-work-attention');
+    else if(html.includes('class="response-execution-attention"'))node=new Node('response-execution-attention');
+    else if(html.includes('class="response-status-attention"'))node=new Node('response-status-attention');
     else if(html.includes('class="response-work-summary"'))node=new Node('response-work-summary',{workAttention:/data-work-attention="([^"]+)"/.exec(html)[1]});
     else throw Error('unexpected HTML fixture: '+html);
     node.html=html;
@@ -105,4 +107,61 @@ assert.equal(advanced.dataset.expanded,'true','late events must not close or ope
 context.updateMessageExecutionEvidence(message,[],[event('failed')],{version:1,tasks:[{task_id:'post_answer',status:'done'}]});
 assert.equal(frame.querySelector('.response-work-attention'),null,'authoritative recovery removes stale warning');
 assert.equal(body.original,'complete answer');assert.equal(evidence.original,'complete source and original link');
+
+// An old snapshot can already have actionable notices nested under the closed
+// advanced section. Promote by typed state, never by guessing words in a reply.
+const skippedMail=new Node('notification-card-skipped'),confirmation=new Node('message-section-follow-up');
+const knownQueued=new Node('message-section-follow-up',{actionAttention:'false'});
+const uncertainOperation=new Node('response-operation'),knownOperation=new Node('response-operation',{operationAttention:'false'});
+content.append(mailFailure,skippedMail,confirmation,knownQueued,uncertainOperation,knownOperation);
+advanced.dataset.expanded='false';content.hidden=true;
+context.consolidateMessageDiagnostics(message);
+for(const node of [mailFailure,skippedMail,confirmation,uncertainOperation])assert.equal(node.parent,frame);
+for(const node of [knownQueued,knownOperation])assert.equal(node.parent,content);
+assert.equal(advanced.dataset.expanded,'false');assert(content.hidden);
+
+// A legacy answer without an evidence panel must still expose late failures.
+evidence.remove();
+for(const state of ['failed','blocked','unknown']) {
+  context.updateMessageExecutionEvidence(message,[execution],[],{version:1,tasks:[{task_id:'post_answer',status:state}]});
+  for(const cls of ['response-work-attention','response-execution-attention'])assert.equal(frame.querySelector('.'+cls).parent,frame);
+  assert.equal(advanced.dataset.expanded,'false');assert(content.hidden);
+}
+// Exercise the production capture/restore functions around this real updater,
+// with growing content and both closed and user-opened advanced details.
+let height=5000;
+context.chatStream={scrollTop:600,clientHeight:700,get scrollHeight(){return height;},children:[],getBoundingClientRect:()=>({top:0})};
+context.conversationFollowingLatest=false;context.document={getElementById:()=>null};
+for(const name of ['captureConversationScroll','restoreConversationScroll','syncLatestConversationButton'])vm.runInContext(fn(name),context);
+Object.defineProperty(native,'innerHTML',{set(){height+=300;}});
+for(const expanded of ['false','true']) {
+  advanced.dataset.expanded=expanded;content.hidden=expanded==='false';
+  for(const state of ['failed','done']) {
+    context.updateMessageExecutionEvidence(message,[],[],{version:1,tasks:[{task_id:'post_answer',status:state}]});
+    assert.equal(context.chatStream.scrollTop,600,'late work must not scroll history');
+    assert.equal(advanced.dataset.expanded,expanded);assert.equal(content.hidden,expanded==='false');
+  }
+}
+assert.match(suggested,/data-action-attention="true"/);
+assert.match(queued,/data-action-attention="false"/);
 console.log('Advanced details: full diagnostics folded, old nodes moved intact, web/mail/work exceptions exposed, live recovery and user open state preserved');
+
+const hydrateStart=source.indexOf('async function hydrateExecutionEvidence(');
+vm.runInContext(source.slice(hydrateStart,source.indexOf('\n}\n',hydrateStart)+3),context);
+Object.assign(context,{executionHistoryGeneration:0,activeWorkflowMessage:null,resolveApiOrigin:async()=>'',
+  apiRequest:async()=>{throw Error('synthetic unavailable');}});
+const root={querySelectorAll:()=>[message],contains:node=>node===message};
+message.dataset.exchangeId='synthetic';
+(async()=>{
+  advanced.dataset.expanded='false';content.hidden=true;
+  await context.hydrateExecutionEvidence(root);
+  assert.equal(frame.querySelector('.response-status-attention').parent,frame,'unverifiable status is not hidden');
+  await context.hydrateExecutionEvidence(root);
+  assert.equal(frame.querySelectorAll('.response-status-attention').length,1,'no duplicate warning');
+  assert.equal(context.chatStream.scrollTop,600);assert(content.hidden);assert.equal(advanced.dataset.expanded,'false');
+  context.apiRequest=async()=>({work_status:{version:1,tasks:[{task_id:'post_answer',status:'done'}]},stream_closed:true});
+  await context.hydrateExecutionEvidence(root);
+  assert.equal(frame.querySelector('.response-status-attention'),null,'verified snapshot clears unavailable warning');
+  assert.equal(context.chatStream.scrollTop,600);assert(content.hidden);assert.equal(advanced.dataset.expanded,'false');
+  console.log('History status unavailable and recovery are visible, deduplicated and nonintrusive');
+})().catch(error=>{console.error(error);process.exitCode=1;});

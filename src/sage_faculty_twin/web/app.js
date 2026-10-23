@@ -8166,6 +8166,8 @@ function renderAssistantMessage(
                         </div>
                     `
                 : "";
+        const followUpAttention = Array.isArray(followUpActions) && followUpActions.some(action =>
+            !["queued", "pending", "sent", "skipped"].includes(action.status));
         const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
             ? buildCollapsibleSupportSectionHtml({
                 kicker: "Next",
@@ -8174,6 +8176,7 @@ function renderAssistantMessage(
                 count: followUpActions.length,
                 countLabel: "需确认",
                 sectionClassName: "message-section-follow-up",
+                requiresAttention: followUpAttention,
                 closedLabel: "确认查看",
                 openLabel: "收起",
                 contentHtml: `
@@ -8200,13 +8203,11 @@ function renderAssistantMessage(
         });
         const notificationAttention = Boolean(bookingResult?.notification)
             && !["sent", "queued"].includes(bookingResult.notification.status);
-        const followUpAttention = Array.isArray(followUpActions) && followUpActions.some(action =>
-            !["queued", "pending", "sent", "skipped"].includes(action.status));
         const diagnosticsHtml = processingMetaHtml + buildResponseWorkSummaryHtml(workEvents)
             + thinkSectionHtml + (notificationAttention ? "" : notificationHtml)
             + (followUpAttention ? "" : followUpHtml)
             + (!evidenceView.operationAttention && evidenceView.operation
-                ? `<p class="response-operation">操作状态 · ${escapeHtml(evidenceView.operation)}</p>` : "");
+                ? `<p class="response-operation" data-operation-attention="false">操作状态 · ${escapeHtml(evidenceView.operation)}</p>` : "");
         const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
             ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents, null, diagnosticsHtml)
             : `<details class="response-advanced"><summary>高级详情</summary>${diagnosticsHtml}</details>`;
@@ -9006,13 +9007,17 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents, wo
         if (attention) {
             if (attentionHtml) attention.outerHTML = attentionHtml;
             else attention.remove();
-        } else if (attentionHtml) message.querySelector(".response-evidence")?.insertAdjacentHTML("afterend", attentionHtml);
+        } else if (attentionHtml) {
+            (summary || message.querySelector(".message-frame"))?.insertAdjacentHTML(summary ? "beforebegin" : "beforeend", attentionHtml);
+        }
         const executionAttention = message.querySelector(".response-execution-attention");
         const executionAttentionHtml = buildExecutionAttentionHtml(executionEvents);
         if (executionAttention) {
             if (executionAttentionHtml) executionAttention.outerHTML = executionAttentionHtml;
             else executionAttention.remove();
-        } else if (executionAttentionHtml) message.querySelector(".response-evidence")?.insertAdjacentHTML("afterend", executionAttentionHtml);
+        } else if (executionAttentionHtml) {
+            (summary || message.querySelector(".message-frame"))?.insertAdjacentHTML(summary ? "beforebegin" : "beforeend", executionAttentionHtml);
+        }
         const content = summary?.querySelector(".message-section-content");
         if (!content) return;
         let native = content.querySelector(".message-native-execution");
@@ -9140,6 +9145,10 @@ function consolidateMessageDiagnostics(message) {
     }
     // Historical follow-up/operation state cannot be reclassified from text.
     // Keep those notices outside rather than hiding a possibly pending action.
+    for (const node of content.querySelectorAll(".notification-card-failed, .notification-card-skipped, .message-section-follow-up, .response-operation, .response-work-attention, .response-execution-attention, .response-status-attention")) {
+        if (node.dataset.actionAttention === "false" || node.dataset.operationAttention === "false") continue;
+        advanced.before(node);
+    }
 }
 
 async function hydrateExecutionEvidence(root) {
@@ -9155,6 +9164,9 @@ async function hydrateExecutionEvidence(root) {
         try {
             const snapshot = await apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000});
             if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+            const scrollSnapshot = captureConversationScroll();
+            message.querySelector(".response-status-attention")?.remove();
+            restoreConversationScroll(scrollSnapshot);
             const foreground = snapshot.execution_events || [];
             let work = snapshot.work_events || [];
             updateMessageExecutionEvidence(message,foreground,work,snapshot.work_status);
@@ -9186,8 +9198,13 @@ async function hydrateExecutionEvidence(root) {
             };
         } catch {
             if (generation !== executionHistoryGeneration || !root.contains(message)) return;
-            const summary = message.querySelector(".message-inline-process-preview");
-            if (summary) summary.textContent = "执行状态暂时无法核验；原回答未改动";
+            const scrollSnapshot = captureConversationScroll();
+            if (!message.querySelector(".response-status-attention")) {
+                const summary = message.querySelector(".message-workflow-summary");
+                (summary || message.querySelector(".message-frame"))?.insertAdjacentHTML(summary ? "beforebegin" : "beforeend",
+                    '<p class="response-status-attention" role="status">执行状态暂时无法核验；原回答未改动，不代表后台处理成功。</p>');
+            }
+            restoreConversationScroll(scrollSnapshot);
         }
     }
 }
@@ -9221,10 +9238,11 @@ function buildCollapsibleSupportSectionHtml({
     closedLabel = "查看",
     openLabel = "收起",
     compact = false,
+    requiresAttention = null,
 }) {
     const resolvedCountLabel = countLabel || (Number.isFinite(count) ? `${count} 条` : closedLabel);
     return `
-        <section class="message-section ${compact ? "message-section-compact " : ""}${escapeHtml(sectionClassName)}" data-expanded="${defaultExpanded}">
+        <section class="message-section ${compact ? "message-section-compact " : ""}${escapeHtml(sectionClassName)}" data-expanded="${defaultExpanded}"${requiresAttention === null ? "" : ` data-action-attention="${Boolean(requiresAttention)}"`}>
             <button type="button" class="message-section-toggle" aria-expanded="${defaultExpanded}" data-closed-label="${escapeHtml(closedLabel)}" data-open-label="${escapeHtml(openLabel)}">
                 <div class="message-section-toggle-copy">
                     ${compact ? uiIconSvg("inbox", "ui-icon-sm") : `<span class="message-section-kicker">${escapeHtml(kicker)}</span>`}
