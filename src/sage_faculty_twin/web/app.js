@@ -9146,7 +9146,8 @@ function consolidateMessageDiagnostics(message) {
     // Historical follow-up/operation state cannot be reclassified from text.
     // Keep those notices outside rather than hiding a possibly pending action.
     for (const node of content.querySelectorAll(".notification-card-failed, .notification-card-skipped, .message-section-follow-up, .response-operation, .response-work-attention, .response-execution-attention, .response-status-attention")) {
-        if (node.dataset.actionAttention === "false" || node.dataset.operationAttention === "false") continue;
+        if (node.dataset.actionAttention === "false" || node.dataset.operationAttention === "false"
+                || node.dataset.notificationAttention === "false") continue;
         advanced.before(node);
     }
 }
@@ -9396,7 +9397,7 @@ function buildNotificationStatusHtml(notification, options = {}) {
             : "notification-card-skipped";
 
     return `
-        <section class="notification-card ${statusClass}">
+        <section class="notification-card ${statusClass}" data-notification-attention="${!["sent", "queued"].includes(notification.status)}">
             <div class="notification-card-head">
                 <strong class="notification-card-title">${escapeHtml(title)}</strong>
                 <span class="notification-card-badge">${escapeHtml(statusLabel)}</span>

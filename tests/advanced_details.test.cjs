@@ -40,6 +40,7 @@ function renderNotification(status,actions=[]){
 for(const state of ['sent','queued']){
   const html=renderNotification(state);
   assert(html.indexOf('notification-card')>html.indexOf('<div class="message-section-content" hidden>'));
+  assert.match(html,/data-notification-attention="false"/);
 }
 for(const state of ['failed','skipped','unknown']){
   const html=renderNotification(state);
@@ -112,12 +113,13 @@ assert.equal(body.original,'complete answer');assert.equal(evidence.original,'co
 // advanced section. Promote by typed state, never by guessing words in a reply.
 const skippedMail=new Node('notification-card-skipped'),confirmation=new Node('message-section-follow-up');
 const knownQueued=new Node('message-section-follow-up',{actionAttention:'false'});
+const queuedMail=new Node('notification-card-skipped',{notificationAttention:'false'});
 const uncertainOperation=new Node('response-operation'),knownOperation=new Node('response-operation',{operationAttention:'false'});
-content.append(mailFailure,skippedMail,confirmation,knownQueued,uncertainOperation,knownOperation);
+content.append(mailFailure,skippedMail,confirmation,knownQueued,queuedMail,uncertainOperation,knownOperation);
 advanced.dataset.expanded='false';content.hidden=true;
 context.consolidateMessageDiagnostics(message);
 for(const node of [mailFailure,skippedMail,confirmation,uncertainOperation])assert.equal(node.parent,frame);
-for(const node of [knownQueued,knownOperation])assert.equal(node.parent,content);
+for(const node of [knownQueued,queuedMail,knownOperation])assert.equal(node.parent,content);
 assert.equal(advanced.dataset.expanded,'false');assert(content.hidden);
 
 // A legacy answer without an evidence panel must still expose late failures.
