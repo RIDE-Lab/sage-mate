@@ -9161,18 +9161,28 @@ async function hydrateExecutionEvidence(root) {
         if (message === activeWorkflowMessage) continue; // Its current request owns the live stream.
         const exchange = message.dataset.exchangeId || message.querySelector("[data-feedback-exchange]")?.dataset.feedbackExchange;
         if (!exchange) continue;
+        const markUnavailable = (unavailable = true) => {
+            if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+            const scrollSnapshot = captureConversationScroll();
+            if (!unavailable) message.querySelector(".response-status-attention")?.remove();
+            else if (!message.querySelector(".response-status-attention")) {
+                const summary = message.querySelector(".message-workflow-summary");
+                (summary || message.querySelector(".message-frame"))?.insertAdjacentHTML(summary ? "beforebegin" : "beforeend",
+                    '<p class="response-status-attention" role="status">执行状态暂时无法核验；原回答未改动，不代表后台处理成功。</p>');
+            }
+            restoreConversationScroll(scrollSnapshot);
+        };
         try {
             const snapshot = await apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000});
             if (generation !== executionHistoryGeneration || !root.contains(message)) return;
-            const scrollSnapshot = captureConversationScroll();
-            message.querySelector(".response-status-attention")?.remove();
-            restoreConversationScroll(scrollSnapshot);
+            markUnavailable(false);
             const foreground = snapshot.execution_events || [];
             let work = snapshot.work_events || [];
             updateMessageExecutionEvidence(message,foreground,work,snapshot.work_status);
             if (snapshot.stream_closed !== false || !snapshot.request_id || typeof EventSource !== "function") continue;
             const stream = new EventSource(`${origin}/chat/workflow-events?request_id=${encodeURIComponent(snapshot.request_id)}`,{withCredentials:true});
             restoredExecutionStreams.add(stream);
+            stream.onerror = () => markUnavailable();
             stream.onmessage = event => {
                 if (generation !== executionHistoryGeneration || !root.contains(message)) {
                     stream.close(); restoredExecutionStreams.delete(stream); return;
@@ -9188,23 +9198,18 @@ async function hydrateExecutionEvidence(root) {
                     void apiRequest(`/chat/execution?exchange_id=${encodeURIComponent(exchange)}`,{timeoutMs:10000})
                         .then(fresh=>{
                             if (generation !== executionHistoryGeneration || !root.contains(message)) return;
+                            markUnavailable(false);
                             work = mergeWorkEventLists(work,fresh.work_events || []);
                             updateMessageExecutionEvidence(message,foreground,work,fresh.work_status);
-                        }).catch(()=>{}); // Actual events remain visible; no fabricated state.
+                        }).catch(()=>markUnavailable()); // Keep actual events; current state is unverified.
                 }
                 if (payload.type === "complete" || payload.type === "error") {
+                    if (payload.type === "error") markUnavailable();
                     stream.close(); restoredExecutionStreams.delete(stream);
                 }
             };
         } catch {
-            if (generation !== executionHistoryGeneration || !root.contains(message)) return;
-            const scrollSnapshot = captureConversationScroll();
-            if (!message.querySelector(".response-status-attention")) {
-                const summary = message.querySelector(".message-workflow-summary");
-                (summary || message.querySelector(".message-frame"))?.insertAdjacentHTML(summary ? "beforebegin" : "beforeend",
-                    '<p class="response-status-attention" role="status">执行状态暂时无法核验；原回答未改动，不代表后台处理成功。</p>');
-            }
-            restoreConversationScroll(scrollSnapshot);
+            markUnavailable();
         }
     }
 }
