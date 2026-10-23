@@ -978,3 +978,8 @@ html[data-theme="dark"] .primary-button:hover {
 .web-research-status details { min-width: 0; }
 .web-research-status li { overflow-wrap: anywhere; }
 .web-research-status li small { display: block; }
+.message-ready .web-research-status:not([data-web-status="failed"]) {
+    border: 0; background: transparent; padding: 0; margin: 2px 0;
+    font-size: 12px; color: var(--text-secondary);
+}
+.message-ready .web-research-status:not([data-web-status="failed"]) strong { font-weight: 400; }
