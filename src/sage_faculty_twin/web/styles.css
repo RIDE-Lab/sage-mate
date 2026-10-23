@@ -3509,6 +3509,8 @@ body.conversation-active .intro-card .message-body {
 }
 .response-evidence p, .response-work-summary p { margin: 3px 0 0; color: var(--text-secondary); }
 .response-evidence.has-gap > details > summary { color: var(--warning-text, var(--ink)); }
+.response-work-attention, .response-execution-attention { color: var(--warning-text, var(--ink)); font-size: 12px; margin: 4px 0; }
+.message-workflow-summary .message-processing-meta { margin: 6px 0; }
 .response-evidence details[open], .response-work-summary[open] { padding-bottom: 6px; }
 .response-evidence details[open] > :not(summary), .response-work-summary[open] > :not(summary) { margin-inline-start: 14px; }
 .response-evidence .response-operation { color: var(--ink); border-top: 1px solid var(--line); padding-top: 6px; margin-top: 6px; }

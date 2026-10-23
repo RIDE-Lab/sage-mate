@@ -8013,8 +8013,8 @@ function renderPendingAssistantMessage(
                 <div class="message-bubble">
                     <div class="message-role">${escapeHtml(assistantLabel)}</div>
                     <div class="message-frame message-pending-frame">
-                        <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta" aria-live="polite">已处理 0.0 秒</div>
-                        <div class="pending-web-research" aria-live="polite"></div>
+                        <div class="pending-web-attention" hidden></div>
+                        <div class="pending-work-attention" hidden></div>
                         <div class="typing-dots" id="pending-typing-dots">
                             <span class="dot"></span>
                             <span class="dot"></span>
@@ -8030,10 +8030,12 @@ function renderPendingAssistantMessage(
                                 ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
                             </div>
                             <div class="thinking-progress" aria-hidden="true"><span></span></div>
-                            <div class="pending-work-state" aria-live="polite"></div>
                             ${INLINE_WORKFLOW_TRACE_ENABLED
                 ? `<details class="thinking-trace response-advanced" aria-label="高级执行详情">
-                                <summary>高级详情 · 实时工作流</summary>
+                                <summary>高级详情</summary>
+                                <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta">已处理 0.0 秒</div>
+                                <div class="pending-web-research" aria-live="polite"></div>
+                                <div class="pending-work-state" aria-live="polite"></div>
                                 <div class="thinking-trace-list"></div>
                             </details>`
                 : ""}
@@ -8181,11 +8183,6 @@ function renderAssistantMessage(
                 `,
             })
             : "";
-        const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
-            && Array.isArray(workflowTrace)
-            && (workflowTrace.length || executionEvents.length || workEvents.length)
-            ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents)
-            : "";
         const thinkSectionHtml = thinkContent
             ? `<div class="thinking-text-section" data-collapsed="true">
                    <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">模型思考文本 · 不作为事实依据</button>
@@ -8201,6 +8198,18 @@ function renderAssistantMessage(
             externalEvidenceRequired, bookingResult, followUpActions, isError, evidenceCoverage,
             verifiedProfile: isUserAuthenticated ? currentUserAccountProfile : "general_visitor",
         });
+        const notificationAttention = Boolean(bookingResult?.notification)
+            && !["sent", "queued"].includes(bookingResult.notification.status);
+        const followUpAttention = Array.isArray(followUpActions) && followUpActions.some(action =>
+            !["queued", "pending", "sent", "skipped"].includes(action.status));
+        const diagnosticsHtml = processingMetaHtml + buildResponseWorkSummaryHtml(workEvents)
+            + thinkSectionHtml + (notificationAttention ? "" : notificationHtml)
+            + (followUpAttention ? "" : followUpHtml)
+            + (!evidenceView.operationAttention && evidenceView.operation
+                ? `<p class="response-operation">操作状态 · ${escapeHtml(evidenceView.operation)}</p>` : "");
+        const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
+            ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents, null, diagnosticsHtml)
+            : `<details class="response-advanced"><summary>高级详情</summary>${diagnosticsHtml}</details>`;
         container.innerHTML = `
             <div class="message-bubble-row">
                 <div class="message-avatar" aria-hidden="true">S</div>
@@ -8214,13 +8223,12 @@ function renderAssistantMessage(
                                     ${uiIconSvg("copy", "ui-icon-sm")}
                                 </button>
                             </div>
-                            ${thinkSectionHtml}
                         </div>
-                        ${processingMetaHtml}
                         ${buildResponseEvidenceHtml(evidenceView, basisHtml)}
-                        ${buildResponseWorkSummaryHtml(workEvents)}
-                        ${notificationHtml}
-                        ${followUpHtml}
+                        ${buildWorkAttentionHtml(workEvents)}
+                        ${buildExecutionAttentionHtml(executionEvents)}
+                        ${notificationAttention ? notificationHtml : ""}
+                        ${followUpAttention ? followUpHtml : ""}
                         ${workflowTraceHtml}
                         ${buildFeedbackSectionHtml(exchangeId, isError)}
                         ${buildRetryButtonHtml(isError)}
@@ -8280,10 +8288,10 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
     const actionStates = [suggestions && `${suggestions} 项建议尚未执行`, queued && `${queued} 项后续动作等待处理`,
         sent && `${sent} 项动作记录为已发送（不代表收件方已收到）`, unknown && `${unknown} 项动作状态未知`].filter(Boolean);
     return {source, gap, operation: [operation, ...actionStates].filter(Boolean).join("；"),
+        operationAttention: Boolean(bookingResult || suggestions || unknown),
         research: research ? "研究使用：区分来源陈述与实验建议；来源未展示数据不等于实验未做。" : "",
         inference: hasInferences ? "含单列推论或建议，不是来源已证实的事实。" : "",
-        warning: isError || missingParts.length > 0 || (!sourceCount && externalEvidenceRequired), sourceCount, missingParts,
-        hasSourceDetails: basisItems.length > 0 || hits.length > 0};
+        warning: isError || missingParts.length > 0 || (!sourceCount && externalEvidenceRequired), sourceCount, missingParts};
 }
 
 function buildResponseEvidenceHtml(model, sourceDetailsHtml = "") {
@@ -8295,17 +8303,17 @@ function buildResponseEvidenceHtml(model, sourceDetailsHtml = "") {
         ${model.research ? `<p class="response-research-boundary">${escapeHtml(model.research)}</p>` : ""}
         ${sourceDetailsHtml}
         </details>
-        ${model.operation ? `<p class="response-operation">操作状态 · ${escapeHtml(model.operation)}</p>` : ""}
+        ${model.operation && model.operationAttention ? `<p class="response-operation">操作状态 · ${escapeHtml(model.operation)}</p>` : ""}
     </aside>`;
 }
 
-function buildResponseWorkSummaryHtml(events = [], status = null) {
-    if (!events.length && !status) return "";
+function responseWorkEntries(events = [], status = null) {
     const labels = {pending:"等待处理",running:"处理中",done:"持久化完成",failed:"失败",blocked:"已阻止",
         started:"处理中",completed:"持久化确认",retrying:"等待重试"};
     let entries;
     if (status?.version === 1 && Array.isArray(status.tasks)) {
-        entries = status.tasks.map(task => ({name: task.task_id, label:
+        entries = status.tasks.map(task => ({name: task.task_id,
+            attention: !["pending", "running", "done"].includes(task.status) || Boolean(task.lease_expired), label:
             task.status === "running" && task.lease_expired ? "租约过期，等待回收"
             : task.status === "failed" && task.last_failure_code === "request_cancelled" ? "已取消"
             : labels[task.status] || "未知"}));
@@ -8327,9 +8335,34 @@ function buildResponseWorkSummaryHtml(events = [], status = null) {
             tasks.set(key, event);
         }
         entries = [...tasks.values()].map(event => ({name:event.task_id,
+            attention: !["started", "completed", "retrying"].includes(event.state),
             label:labels[event.state] || "状态未知或冲突"}));
     }
-    return `<details class="response-work-summary" aria-label="后台处理状态"><summary>后台处理${entries.length ? ` · ${escapeHtml([...new Set(entries.map(entry => entry.label))].join("、"))}` : " · 状态待核对"}</summary>
+    return entries;
+}
+
+function buildWorkAttentionHtml(events = [], status = null) {
+    const entries = responseWorkEntries(events, status).filter(entry => entry.attention);
+    return entries.length ? `<p class="response-work-attention" role="status">后台处理异常 · ${entries.map(entry =>
+        `${escapeHtml(entry.name === "post_answer" ? "答后处理" : entry.name)}：${escapeHtml(entry.label)}`).join("；")}。请展开高级详情核对。</p>` : "";
+}
+
+function buildExecutionAttentionHtml(events = []) {
+    const latest = new Map();
+    for (const event of events) {
+        if (event?.version !== 1 || !Number.isInteger(event.sequence)) continue;
+        const key = JSON.stringify([event.trace_id, event.request_id, event.program_uri, event.program_rev, event.node_id]);
+        if (!latest.has(key) || event.sequence > latest.get(key).sequence) latest.set(key, event);
+    }
+    const failures = [...latest.values()].filter(event => ["failed", "cancelled"].includes(event.state));
+    return failures.length ? `<p class="response-execution-attention" role="status">执行异常 · ${failures.map(event =>
+        `${escapeHtml(event.operator_key || event.node_id || "节点")}：${event.state === "failed" ? "执行失败" : "已取消"}`).join("；")}。请展开高级详情核对。</p>` : "";
+}
+
+function buildResponseWorkSummaryHtml(events = [], status = null) {
+    if (!events.length && !status) return "";
+    const entries = responseWorkEntries(events, status);
+    return `<details class="response-work-summary" data-work-attention="${entries.some(entry => entry.attention)}" aria-label="后台处理状态"><summary>后台处理${entries.length ? ` · ${escapeHtml([...new Set(entries.map(entry => entry.label))].join("、"))}` : " · 状态待核对"}</summary>
         ${entries.length ? `<ul>${entries.map(entry => `<li>${escapeHtml(entry.name === "post_answer" ? "答后处理" : entry.name)} · ${escapeHtml(entry.label)}</li>`).join("")}</ul>` : "<p>状态记录不完整，无法确认</p>"}
         <small>后台完成不代表邮件送达或会议确认。详情见高级工作流。</small></details>`;
 }
@@ -8347,27 +8380,26 @@ function buildWebResearchStatusHtml(steps = []) {
     return `<div class="web-research-status" role="status" data-web-status="${escapeHtml(step.status || "unknown")}"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(step.summary || "")}</span>${detail}${links}</div>`;
 }
 
-function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null) {
-    if ((!Array.isArray(workflowTrace) || !workflowTrace.length) && !executionEvents.length && !workEvents.length && !workStatus) {
-        return "";
-    }
-
+function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], workEvents = [], workStatus = null, diagnosticsHtml = "") {
     const nativeCount = new Set(executionEvents.map(event => event.execution_id)).size;
     const preview = nativeCount ? `${nativeCount} 个原生节点` : `${workflowTrace.length} 条业务记录 · 原生执行状态未记录`;
 
-    return `${buildWebResearchStatusHtml(workflowTrace)}
+    const webFailure = workflowTrace.filter(step => step?.key === "web_search").at(-1)?.status === "failed";
+    return `${webFailure ? buildWebResearchStatusHtml(workflowTrace) : ""}
         <section class="message-workflow-summary message-section" data-execution-format="native-v1" data-expanded="false" aria-label="高级执行详情">
             <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
                 <div class="message-section-toggle-copy">
                     <span class="message-process-icon" aria-hidden="true"></span>
-                    <strong class="message-section-title">高级详情 · 工作流</strong>
-                    <span class="message-inline-process-preview">${escapeHtml(preview)}</span>
+                    <strong class="message-section-title">高级详情</strong>
+                    <span class="message-inline-process-preview" hidden>${escapeHtml(preview)}</span>
                 </div>
                 <div class="message-section-toggle-meta">
                     <span class="message-section-chevron">展开</span>
                 </div>
             </button>
             <div class="message-section-content" hidden>
+                ${diagnosticsHtml}
+                ${webFailure ? "" : buildWebResearchStatusHtml(workflowTrace)}
                 <div class="message-native-execution">${buildNativeExecutionHtml(executionEvents)}
                     <div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>
                 </div>
@@ -8865,6 +8897,12 @@ function syncNativeExecutionDisplay() {
         if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
         const pendingState = chatStream?.querySelector(".message-pending .pending-work-state");
         if (pendingState) pendingState.innerHTML = buildResponseWorkSummaryHtml(activeWorkEvents);
+        const pendingAttention = chatStream?.querySelector(".message-pending .pending-work-attention");
+        if (pendingAttention) {
+            const attentionHtml = buildWorkAttentionHtml(activeWorkEvents) + buildExecutionAttentionHtml(activeExecutionEvents);
+            pendingAttention.innerHTML = attentionHtml;
+            pendingAttention.hidden = !attentionHtml;
+        }
         if (workflowTrace) workflowTrace.innerHTML = html;
         if (activeWorkflowMessage?.classList.contains("message-ready")) {
             updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
@@ -8961,10 +8999,20 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents, wo
         if (workSummary) workSummary.outerHTML = workSummary.open
             ? workHtml.replace('<details ', '<details open ') : workHtml;
         else if (workHtml) {
-            const evidence = message.querySelector(".response-evidence");
-            if (evidence) evidence.insertAdjacentHTML("afterend", workHtml);
-            else message.querySelector(".message-main-copy")?.insertAdjacentHTML("afterend", workHtml);
+            summary?.querySelector(".message-section-content")?.insertAdjacentHTML("afterbegin", workHtml);
         }
+        const attention = message.querySelector(".response-work-attention");
+        const attentionHtml = buildWorkAttentionHtml(workEvents, workStatus);
+        if (attention) {
+            if (attentionHtml) attention.outerHTML = attentionHtml;
+            else attention.remove();
+        } else if (attentionHtml) message.querySelector(".response-evidence")?.insertAdjacentHTML("afterend", attentionHtml);
+        const executionAttention = message.querySelector(".response-execution-attention");
+        const executionAttentionHtml = buildExecutionAttentionHtml(executionEvents);
+        if (executionAttention) {
+            if (executionAttentionHtml) executionAttention.outerHTML = executionAttentionHtml;
+            else executionAttention.remove();
+        } else if (executionAttentionHtml) message.querySelector(".response-evidence")?.insertAdjacentHTML("afterend", executionAttentionHtml);
         const content = summary?.querySelector(".message-section-content");
         if (!content) return;
         let native = content.querySelector(".message-native-execution");
@@ -8976,6 +9024,7 @@ function updateMessageExecutionEvidence(message, executionEvents, workEvents, wo
         native.innerHTML = buildNativeExecutionHtml(executionEvents)
             + `<div class="native-work-events">${buildWorkAttemptHtml(workEvents,workStatus)}</div>`;
         summary.dataset.executionFormat = "native-v1";
+        consolidateMessageDiagnostics(message);
     } finally {
         restoreConversationScroll(scrollSnapshot);
     }
@@ -9050,7 +9099,7 @@ function repairLegacyWorkflowSummaries(root) {
     }
     for (const summary of root.querySelectorAll(".message-workflow-summary")) {
         const title = summary.querySelector(".message-section-title");
-        if (title) title.textContent = "高级详情 · 工作流";
+        if (title) title.textContent = "高级详情";
         if (summary.dataset.executionFormat || summary.querySelector(".native-execution")) continue;
         summary.querySelectorAll(".workflow-phase-rail,.workflow-step-chip-group-head").forEach(node=>node.remove());
         for (const group of summary.querySelectorAll(".workflow-step-chip-group")) {
@@ -9061,6 +9110,36 @@ function repairLegacyWorkflowSummaries(root) {
         if (preview) preview.textContent = "历史业务记录 · 无原生执行证据";
         summary.dataset.executionFormat = "legacy-unrecorded";
     }
+    for (const message of root.querySelectorAll(".message-ready")) consolidateMessageDiagnostics(message);
+}
+
+function consolidateMessageDiagnostics(message) {
+    const frame = message.querySelector(".message-frame");
+    if (!frame) return;
+    let advanced = frame.querySelector(".message-workflow-summary");
+    if (!advanced) {
+        frame.insertAdjacentHTML("beforeend", buildWorkflowStatusSummaryHtml([]));
+        advanced = frame.querySelector(".message-workflow-summary");
+    }
+    const content = advanced?.querySelector(".message-section-content");
+    if (!content) return;
+    const title = advanced.querySelector(".message-section-title");
+    if (title) title.textContent = "高级详情";
+    const preview = advanced.querySelector(".message-inline-process-preview");
+    if (preview) preview.hidden = true;
+    // Move original nodes so old answers retain full metadata and links. Never
+    // open/reset a user's advanced section when late work events arrive.
+    for (const node of frame.querySelectorAll(".message-processing-meta, .message-reply-divider, .response-work-summary, .thinking-text-section, .web-research-status, .notification-card-sent")) {
+        if (node.matches(".response-work-summary") && node.dataset.workAttention !== "false"
+            && !frame.querySelector(".response-work-attention")) {
+            advanced.insertAdjacentHTML("beforebegin", '<p class="response-work-attention" role="status">后台状态需要核对，请展开高级详情；不能根据旧记录推断处理成功。</p>');
+        }
+        if (node.matches('.web-research-status[data-web-status="failed"]')) {
+            if (content.contains(node)) advanced.before(node);
+        } else if (!content.contains(node)) content.append(node);
+    }
+    // Historical follow-up/operation state cannot be reclassified from text.
+    // Keep those notices outside rather than hiding a possibly pending action.
 }
 
 async function hydrateExecutionEvidence(root) {
@@ -9171,6 +9250,12 @@ function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
     try {
         const pending = chatStream?.querySelector(".message-pending .pending-web-research");
         if (pending) pending.innerHTML = buildWebResearchStatusHtml(workflowSteps);
+        const attention = chatStream?.querySelector(".message-pending .pending-web-attention");
+        if (attention) {
+            const failed = workflowSteps.filter(step => step?.key === "web_search").at(-1)?.status === "failed";
+            attention.innerHTML = failed ? buildWebResearchStatusHtml(workflowSteps) : "";
+            attention.hidden = !failed;
+        }
         if (!INLINE_WORKFLOW_TRACE_ENABLED) {
             return;
         }

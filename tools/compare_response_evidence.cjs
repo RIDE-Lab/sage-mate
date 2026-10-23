@@ -11,7 +11,7 @@ const root = path.join(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'src/sage_faculty_twin/web/app.js'), 'utf8');
 const context = {};
 vm.createContext(context);
-for (const name of ['escapeHtml','buildResponseEvidenceModel','buildResponseEvidenceHtml','buildResponseWorkSummaryHtml','buildWorkStatusHtml','buildWorkAttemptHtml','buildCollapsibleSupportSectionHtml']) {
+for (const name of ['escapeHtml','buildResponseEvidenceModel','buildResponseEvidenceHtml','responseWorkEntries','buildResponseWorkSummaryHtml','buildWorkStatusHtml','buildWorkAttemptHtml','buildCollapsibleSupportSectionHtml']) {
     const start = source.indexOf(`function ${name}(`);
     vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), context);
 }

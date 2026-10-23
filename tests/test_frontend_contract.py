@@ -27,8 +27,10 @@ const context={chatStream:null, conversationFollowingLatest:false, document:{get
     apiRequest:async url=>{calls.push(url); return await new Promise(resolve=>{releaseSnapshot=resolve;});},
     EventSource:class {constructor(url){this.url=url;streams.push(this);}close(){this.closed=true;}}};
 vm.createContext(context);
-const summaryStart=source.indexOf('function buildResponseWorkSummaryHtml(');
-vm.runInContext(source.slice(summaryStart,source.indexOf('\nfunction ',summaryStart+1)),context);
+for(const name of ['responseWorkEntries','buildWorkAttentionHtml','buildExecutionAttentionHtml','buildResponseWorkSummaryHtml']) {
+    const summaryStart=source.indexOf('function '+name+'(');
+    vm.runInContext(source.slice(summaryStart,source.indexOf('\nfunction ',summaryStart+1)),context);
+}
 for(const name of ['captureConversationScroll','restoreConversationScroll','syncLatestConversationButton']) {
     const start=source.indexOf('function '+name+'(');
     vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
@@ -52,7 +54,7 @@ assert(context.buildWorkStatusHtml(status({status:'running',lease_expired:true})
 assert(!context.buildWorkStatusHtml(status({status:'running',lease_expired:true})).includes('已持久化完成'));
 assert(context.buildWorkStatusHtml(status({status:'failed',last_failure_code:'request_cancelled'})).includes('已取消'));
 assert(context.buildWorkStatusHtml(status({status:'done',last_failure_code:'temporarily_unavailable'})).includes('已持久化完成'));
-const native={innerHTML:''},content={querySelector:()=>native};
+const native={innerHTML:''},content={querySelector:()=>native,insertAdjacentHTML:()=>calls.push('work-html')};
 const summary={dataset:{},querySelector:selector=>selector==='.message-section-content'?content:null};
 const message={dataset:{exchangeId:'exchange'},answer:'original answer',citations:'original complete citations',
     querySelector:selector=>selector==='.message-workflow-summary'?summary:null};
@@ -72,7 +74,7 @@ const turn=()=>new Promise(resolve=>setImmediate(resolve));
     assert(native.innerHTML.includes('data-work-state="completed"'));
     assert.equal(message.answer,'original answer');assert.equal(message.citations,'original complete citations');
     assert.equal(root.scrollTop,600,'background hydration must preserve history reading position');
-    assert(calls.filter(c=>c!=='persist').every(c=>c.startsWith('/chat/execution?')));
+    assert(calls.filter(c=>!['persist','work-html'].includes(c)).every(c=>c.startsWith('/chat/execution?')));
     context.stopRestoredExecutionStreams();
     assert(streams[0].closed);
     const saved=native.innerHTML;
@@ -716,7 +718,7 @@ def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     ]
     assert 'class="message-workflow-summary message-section"' in summary_fn
     assert 'aria-expanded="false"' in summary_fn
-    assert '<strong class="message-section-title">高级详情 · 工作流</strong>' in summary_fn
+    assert '<strong class="message-section-title">高级详情</strong>' in summary_fn
     assert '<div class="message-section-content" hidden>' in summary_fn
     assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
         "buildNativeExecutionHtml(executionEvents)"

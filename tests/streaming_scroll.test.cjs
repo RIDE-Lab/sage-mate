@@ -20,7 +20,7 @@ const context = {chatStream:stream, conversationFollowingLatest:false, document:
     buildNotificationStatusHtml:()=>'', escapeHtml:x=>x, formatSourceAnswer:x=>x,
     uiIconSvg:()=>'', buildFeedbackSectionHtml:()=>'', buildRetryButtonHtml:()=>''};
 vm.createContext(context);
-for (const name of ['buildResponseEvidenceModel', 'buildResponseEvidenceHtml', 'buildResponseWorkSummaryHtml', 'buildWebResearchStatusHtml']) {
+for (const name of ['buildResponseEvidenceModel', 'buildResponseEvidenceHtml', 'responseWorkEntries', 'buildWorkAttentionHtml', 'buildExecutionAttentionHtml', 'buildResponseWorkSummaryHtml', 'buildWebResearchStatusHtml']) {
     vm.runInContext(productionFunction(name), context);
 }
 if (source.includes('function captureConversationScroll(')) {

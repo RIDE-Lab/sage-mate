@@ -5,7 +5,7 @@ const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/app.js'), 'utf8');
 const context = {};
 vm.createContext(context);
-for (const name of ['escapeHtml', 'buildResponseEvidenceModel', 'buildResponseEvidenceHtml', 'buildResponseWorkSummaryHtml']) {
+for (const name of ['escapeHtml', 'buildResponseEvidenceModel', 'buildResponseEvidenceHtml', 'responseWorkEntries', 'buildWorkAttentionHtml', 'buildResponseWorkSummaryHtml']) {
     const start = source.indexOf(`function ${name}(`);
     vm.runInContext(source.slice(start, source.indexOf('\n}\n', start) + 3), context);
 }
@@ -37,8 +37,9 @@ assert.match(render({bookingResult:{accepted:true,booking:{status:'pending'}}}),
 assert.match(render({bookingResult:{accepted:true}}), /不能确认预约成功/);
 assert.match(render({bookingResult:{accepted:false}}), /未被接受/);
 assert.match(render({followUpActions:[{status:'suggested'}]}), /尚未执行/);
-assert.match(render({followUpActions:[{status:'queued'}]}), /等待处理/);
-assert.match(render({followUpActions:[{status:'sent'}]}), /不代表收件方已收到/);
+assert.match(model({followUpActions:[{status:'queued'}]}).operation, /等待处理/);
+assert.match(model({followUpActions:[{status:'sent'}]}).operation, /不代表收件方已收到/);
+assert.doesNotMatch(render({followUpActions:[{status:'sent'}]}), /操作状态/);
 assert.match(render({followUpActions:[{}]}), /动作状态未知/);
 assert.equal(summary([]), '');
 assert.match(summary([work('started')]), /^<details /);
@@ -53,7 +54,11 @@ assert(unified.includes(fullDetails),'complete source body and links retained in
 assert.equal((unified.match(/<summary>/g)||[]).length,1);
 assert.match(unified,/<summary>回答依据/);
 assert.doesNotMatch(unified,/<details[^>]*\sopen/);
-assert(answerRenderer.indexOf('<div class="message-main-copy">') < answerRenderer.indexOf('${buildResponseWorkSummaryHtml(workEvents)}'), 'answer body precedes background status');
+assert(answerRenderer.includes('diagnosticsHtml = processingMetaHtml + buildResponseWorkSummaryHtml(workEvents)'), 'background belongs to advanced diagnostics');
+assert(!answerRenderer.includes('${processingMetaHtml}'), 'timing is not a standalone rendered surface');
+assert.equal(context.buildWorkAttentionHtml([work('completed')]),'');
+assert.match(context.buildWorkAttentionHtml([work('failed')]),/后台处理异常/);
+assert.equal(context.buildWorkAttentionHtml([work('failed')],{version:1,tasks:[{task_id:'post_answer',status:'done'}]}),'','authoritative recovery removes alert');
 assert.match(summary([work('started')]), /处理中/);
 assert.match(summary([work('completed'),work('started')]), /持久化确认/);
 assert.match(summary([work('completed'),work('failed')]), /状态未知或冲突/);

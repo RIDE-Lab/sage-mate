@@ -13,6 +13,16 @@ disclosure once, preserving their original nodes and complete links. Normal
 background status is a quiet text disclosure rather than a bordered card;
 explicitly expanding it still exposes all observed task states.
 
+Timing, normal web status, background processing, model thinking text and the
+complete native graph now live in the same initially closed `高级详情` entry.
+Saved original nodes migrate into its content without re-fetching answers or
+resetting a user's expansion state during late updates. Normal notification
+and queued-action records also stay there; failed/unexecuted/unknown
+notifications, confirmation suggestions, booking uncertainty and typed work or
+execution failures remain separate notices. Authoritative recovery removes
+stale failure notices. No normal completion status is inferred from graph
+appearance, and old ambiguous action records are not silently reclassified.
+
 Following a growing answer is explicit: the latest button enables it. A new
 question starts at the question/answer beginning. Manual upward navigation
 disables following; completion, errors and work-event refreshes preserve the
