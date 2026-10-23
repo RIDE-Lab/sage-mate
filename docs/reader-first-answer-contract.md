@@ -6,6 +6,13 @@ details start closed; operation state remains visible and must not be described
 as external delivery merely because a task persisted. Saved HTML is migrated in
 place without regenerating answers or removing complete citations.
 
+Coverage notes, gaps and the complete source list share one native, initially
+closed `回答依据` disclosure. No separate source shortcut or second basis
+accordion is rendered. Saved standalone source sections are moved into this
+disclosure once, preserving their original nodes and complete links. Normal
+background status is a quiet text disclosure rather than a bordered card;
+explicitly expanding it still exposes all observed task states.
+
 Following a growing answer is explicit: the latest button enables it. A new
 question starts at the question/answer beginning. Manual upward navigation
 disables following; completion, errors and work-event refreshes preserve the

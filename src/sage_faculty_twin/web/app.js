@@ -8143,26 +8143,13 @@ function renderAssistantMessage(
         container.classList.add("message-ready");
         const notificationHtml = buildNotificationStatusHtml(bookingResult?.notification || null, { title: "邮件通知状态" });
         const basisHtml = Array.isArray(basisItems) && basisItems.length
-            ? buildCollapsibleSupportSectionHtml({
-                kicker: "Support",
-                title: "本次回答依据",
-                compact: true,
-                copy: "下面这些信息说明这条回复主要依据了哪些材料或记录。",
-                count: basisItems.length,
-                contentHtml: `
+            ? `
                     <div class="message-basis-list">
                         ${basisItems.map((item) => buildAnswerBasisItemHtml(item)).join("")}
                     </div>
-                `,
-            })
+                `
             : hits.length
-                ? buildCollapsibleSupportSectionHtml({
-                    kicker: "Knowledge",
-                    title: "相关知识",
-                    compact: true,
-                    copy: "这些知识条目是本次回答优先参考的资料。",
-                    count: hits.length,
-                    contentHtml: `
+                ? `
                         <div class="message-knowledge-list">
                             ${hits
                             .map(
@@ -8175,16 +8162,8 @@ function renderAssistantMessage(
                             )
                             .join("")}
                         </div>
-                    `,
-                })
-                : isError || !externalEvidenceRequired ? "" : buildCollapsibleSupportSectionHtml({
-                    kicker: "Support",
-                    title: "本次未引用可核验材料",
-                    copy: "没有匹配到可用于引用的材料；以下说明不是文献引用。",
-                    count: 0,
-                    defaultExpanded: false,
-                    contentHtml: '<p class="message-basis-detail">本回答未附可核验来源，不应当作已核实的事实或文献结论。可开启联网检索，或指定需要查询的资料。</p>',
-                });
+                    `
+                : "";
         const followUpHtml = Array.isArray(followUpActions) && followUpActions.length
             ? buildCollapsibleSupportSectionHtml({
                 kicker: "Next",
@@ -8238,10 +8217,9 @@ function renderAssistantMessage(
                             ${thinkSectionHtml}
                         </div>
                         ${processingMetaHtml}
-                        ${buildResponseEvidenceHtml(evidenceView)}
+                        ${buildResponseEvidenceHtml(evidenceView, basisHtml)}
                         ${buildResponseWorkSummaryHtml(workEvents)}
                         ${notificationHtml}
-                        ${basisHtml}
                         ${followUpHtml}
                         ${workflowTraceHtml}
                         ${buildFeedbackSectionHtml(exchangeId, isError)}
@@ -8308,14 +8286,14 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
         hasSourceDetails: basisItems.length > 0 || hits.length > 0};
 }
 
-function buildResponseEvidenceHtml(model) {
-    return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="来源与依据边界" data-evidence-view="v1">
-        <details><summary>${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : model.warning ? " · 依据待核对" : ""}</summary>
-        ${model.hasSourceDetails ? '<button type="button" class="response-source-button" data-show-response-sources>查看来源与记录</button>' : ""}
+function buildResponseEvidenceHtml(model, sourceDetailsHtml = "") {
+    return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="回答依据" data-evidence-view="v2">
+        <details><summary>回答依据 · ${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : model.warning ? " · 依据待核对" : ""}</summary>
         <p>${escapeHtml(model.gap)}</p>
         ${model.missingParts.length ? `<ul class="response-evidence-gaps">${model.missingParts.map(part => `<li>${escapeHtml(part)}</li>`).join("")}</ul><p>可补充对应资料，或明确哪些部分需要进一步检索。</p>` : ""}
         ${model.inference ? `<p>${escapeHtml(model.inference)}</p>` : ""}
         ${model.research ? `<p class="response-research-boundary">${escapeHtml(model.research)}</p>` : ""}
+        ${sourceDetailsHtml}
         </details>
         ${model.operation ? `<p class="response-operation">操作状态 · ${escapeHtml(model.operation)}</p>` : ""}
     </aside>`;
@@ -9033,6 +9011,26 @@ function repairLegacyWorkflowSummaries(root) {
             folded.append(...evidence.childNodes);
             evidence.append(folded);
             if (operation) evidence.append(operation);
+        }
+        const legacySources = [...message.querySelectorAll(".message-section-support")];
+        if (evidence && (evidence.dataset.evidenceView !== "v2" || legacySources.length)) {
+            const details = evidence.querySelector("details");
+            const heading = details?.querySelector("summary");
+            if (details && heading) {
+                // Move full nodes rather than re-summarizing/re-fetching the
+                // sources. No nested second disclosure or duplicate copy.
+                for (const section of legacySources) {
+                    const content = section.querySelector(".message-section-content");
+                    if (!content) continue;
+                    details.append(...content.childNodes);
+                    section.remove();
+                }
+                evidence.querySelectorAll("[data-show-response-sources]").forEach(node => node.remove());
+                if (!heading.textContent.startsWith("回答依据")) heading.textContent = `回答依据 · ${heading.textContent}`;
+                details.open = false;
+                evidence.dataset.evidenceView = "v2";
+                evidence.setAttribute("aria-label", "回答依据");
+            }
         }
         const background = message.querySelector(".response-work-summary");
         if (main && background) (evidence || main).after(background);
@@ -10564,17 +10562,6 @@ function handleWorkflowTraceToggle(event) {
 }
 
 function handleMessageSectionToggle(event) {
-    const sourceButton = event.target.closest("[data-show-response-sources]");
-    if (sourceButton && chatStream?.contains(sourceButton)) {
-        const section = sourceButton.closest(".message-ready")?.querySelector(".message-section-support");
-        const toggle = section?.querySelector(".message-section-toggle");
-        if (toggle) {
-            if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
-            section.scrollIntoView({block:"start", behavior:"auto"});
-            toggle.focus({preventScroll:true});
-        }
-        return;
-    }
     const toggle = event.target.closest(".message-section-toggle");
     if (!toggle || !chatStream || !chatStream.contains(toggle)) {
         return;

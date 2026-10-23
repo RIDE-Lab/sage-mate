@@ -114,7 +114,7 @@ const old={dataset:{},querySelector:selector=>selector==='.message-inline-proces
 const current={dataset:{executionFormat:'native-v1'},querySelector:()=>null,querySelectorAll:()=>{throw Error('native evidence must not be rewritten');}};
 let evidenceHtml='';
 let placedAfterAnswer=0;
-const evidence={querySelector:selector=>selector==='details'?{}:null};
+const evidence={dataset:{evidenceView:'v2'},querySelector:selector=>selector==='details'?{}:null};
 const message={querySelector:selector=>selector==='.response-evidence'?(evidenceHtml?evidence:null):
     selector==='.message-main-copy'?{insertAdjacentHTML:(position,html)=>{assert.equal(position,'afterend');evidenceHtml=html;},after:node=>{assert.equal(node,evidence);placedAfterAnswer++;}}:null,querySelectorAll:()=>[]};
 const root={answer:'original answer',citation:'full original citation',querySelectorAll:selector=>selector==='.message-ready'?[message]:[old,current]};
@@ -245,23 +245,23 @@ def test_authenticated_account_has_slack_binding_entry():
 
 def test_no_evidence_answer_explains_absence_instead_of_hiding_support() -> None:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
-    renderer = app_js[app_js.index("function renderAssistantMessage("):]
-    assert 'title: "本次未引用可核验材料"' in renderer
-    assert 'count: 0' in renderer
-    assert '不应当作已核实的事实或文献结论' in renderer
+    assert 'externalEvidenceRequired ? "未附可核验来源"' in app_js
+    assert '当前无法核对事实依据。可补充资料或指定要查询的来源。' in app_js
+    assert '${escapeHtml(model.gap)}' in app_js
 
 
 def test_answer_basis_is_collapsed_by_default() -> None:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
-    answer_basis = app_js.split('title: "本次回答依据",', 1)[1].split("contentHtml:", 1)[0]
-    assert "defaultExpanded: true" not in answer_basis
-    assert "defaultExpanded = false" in app_js
+    answer_basis = app_js.split('function buildResponseEvidenceHtml(', 1)[1].split('\nfunction ', 1)[0]
+    assert '<details><summary>回答依据' in answer_basis
+    assert '<details open' not in answer_basis
+    assert '${sourceDetailsHtml}' in answer_basis
 
 
 def test_self_contained_answer_does_not_show_missing_evidence_warning() -> None:
     app_js = (WEB_DIR / "app.js").read_text(encoding="utf-8")
     assert 'externalEvidenceRequired = true' in app_js
-    assert ': isError || !externalEvidenceRequired ? ""' in app_js
+    assert '(!sourceCount && externalEvidenceRequired)' in app_js
     assert 'data.external_evidence_required !== false' in app_js
     assert 'response.external_evidence_required !== false' in app_js
 
