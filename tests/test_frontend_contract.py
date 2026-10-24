@@ -328,7 +328,7 @@ API_PAYLOAD_CONTRACTS = [
         "knowledge-content",
         "knowledge-tags",
     ]),
-    ("/bookings", [
+    ("/bookings/proposals", [
         "booking-student-name",
         "booking-email",
         "booking-topic",

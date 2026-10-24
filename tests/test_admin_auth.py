@@ -930,7 +930,9 @@ def test_visitor_booking_requires_own_explicit_confirmation(isolated_availabilit
     client.cookies.clear()
     payload = dict(student_name="Synthetic", student_email="fixture@example.test", topic="Synthetic only",
                    preferred_start="2030-01-07T10:00:00", preferred_end="2030-01-07T11:00:00")
-    prepared = client.post("/bookings", json=payload)
+    assert client.post("/bookings", json=payload).status_code == 405
+    assert not service._meeting_service.list_bookings()
+    prepared = client.post("/bookings/proposals", json=payload)
     assert prepared.status_code == 200
     proposal = prepared.json()["proposal"]
     assert proposal["status"] == "pending"
@@ -956,7 +958,7 @@ def test_admin_can_confirm_pending_booking(
     client.cookies.clear()
 
     created_response = client.post(
-        "/bookings",
+        "/bookings/proposals",
         json={
             "student_name": "Alice",
             "student_email": "alice@example.com",
@@ -998,7 +1000,7 @@ def test_admin_can_reject_pending_booking(
     client.cookies.clear()
 
     created_response = client.post(
-        "/bookings",
+        "/bookings/proposals",
         json={
             "student_name": "Bob",
             "student_email": "bob@example.com",

@@ -3303,7 +3303,7 @@ bookingForm.addEventListener("submit", async (event) => {
     };
 
     try {
-        const data = await apiRequest("/bookings", {
+        const data = await apiRequest("/bookings/proposals", {
             method: "POST",
             body: JSON.stringify(payload),
         });

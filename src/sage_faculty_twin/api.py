@@ -2584,8 +2584,8 @@ async def dispatch_follow_ups(
     return service.dispatch_due_follow_ups()
 
 
-@llm_app.post("/bookings", response_model=BookingResponse)
-async def create_booking(request: BookingRequest, raw_request: Request, response: Response) -> BookingResponse:
+@llm_app.post("/bookings/proposals", response_model=BookingResponse)
+async def prepare_booking_proposal(request: BookingRequest, raw_request: Request, response: Response) -> BookingResponse:
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
     if identity.account_email and request.student_email.strip().lower() != identity.account_email.lower():
         raise HTTPException(status_code=403, detail="请使用当前登录账号的邮箱准备预约。")
