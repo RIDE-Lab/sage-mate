@@ -29,6 +29,8 @@ def outbox(meeting):
 def test_prepare_cancel_never_creates_or_notifies(meeting):
     draft = meeting.prepare_proposal("guest:a", request())
     assert draft.proposal["status"] == "pending"
+    assert "以下方操作状态为准" in draft.message
+    assert "待你确认" not in draft.message  # historical body must not contradict later cancellation
     assert not meeting.list_bookings() and not outbox(meeting)
     action = draft.proposal["action_id"]
     with pytest.raises(ConfirmationError, match="not_found"):
