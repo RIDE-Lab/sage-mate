@@ -14,6 +14,17 @@ from pathlib import Path
 WEB_DIR = Path(__file__).resolve().parents[1] / "src" / "sage_faculty_twin" / "web"
 
 
+def test_consent_modal_is_above_floating_companion():
+    css = (WEB_DIR / "styles.css").read_text()
+    companion = (WEB_DIR / "companion.css").read_text()
+    overlay = re.search(r"\.modal-overlay\s*\{([^}]+)\}", css).group(1)
+    panel = re.search(r"\.modal-panel\s*\{\s*position: fixed;([^}]+)\}", css).group(1)
+    overlay_z = int(re.search(r"z-index:\s*(\d+)", overlay).group(1))
+    panel_z = int(re.search(r"z-index:\s*(\d+)", panel).group(1))
+    floating_max = max(map(int, re.findall(r"z-index:\s*(\d+)", companion)))
+    assert panel_z > overlay_z > floating_max
+
+
 def test_native_work_history_refresh_preserves_answer_and_closes_stale_scope():
     import subprocess
     script = r'''

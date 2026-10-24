@@ -6015,6 +6015,8 @@ select {
 .modal-overlay {
     position: fixed;
     inset: 0;
+    /* Explicit consent must remain above floating companion and chat controls. */
+    z-index: 90;
     background: rgba(15, 23, 42, 0.38);
     backdrop-filter: blur(6px);
 }
@@ -6027,7 +6029,7 @@ select {
     width: min(460px, calc(100vw - 28px));
     padding: 20px;
     overflow: auto;
-    z-index: 10;
+    z-index: 100;
 }
 
 .modal-panel-wide {
