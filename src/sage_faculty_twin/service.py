@@ -10605,6 +10605,7 @@ class DigitalTwinService:
                     evidence_coverage=record.evidence_coverage,
                     execution_events=record.execution_events,
                     work_events=self._work_events_for_exchange(record),
+                    booking_result=self._booking_for_exchange(record),
                     workflow_action=record.workflow_action,
                     knowledge_hit_count=record.knowledge_hit_count,
                     created_at=record.created_at,
@@ -10612,6 +10613,20 @@ class DigitalTwinService:
                 for record in records
             ],
         )
+
+    def _booking_for_exchange(self, record):
+        from .post_answer_runtime import booking_action_for_exchange
+        from sage.runtime.action_confirmation import ConfirmationError
+        action_id = booking_action_for_exchange(self._conversation_store.state_store,
+                                               record.memory_id, owner_id=record.owner_id)
+        if action_id is None:
+            return None
+        try:
+            return self._meeting_service.read_proposal(record.owner_id, action_id)
+        except ConfirmationError:
+            # Missing legacy evidence is not a pending draft or a new operation.
+            return BookingResponse(accepted=False, proposal={"action_id": action_id, "status": "unavailable"},
+                                   message="原预约草稿不可核验；未执行新的预约操作。")
 
     def _work_events_for_exchange(self, record):
         from .post_answer_runtime import work_events_for_exchange

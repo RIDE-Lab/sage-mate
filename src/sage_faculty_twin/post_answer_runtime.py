@@ -17,6 +17,18 @@ def work_events_for_exchange(state, exchange_id, *, owner_id):
     return work_evidence_for_exchange(state, exchange_id, owner_id=owner_id)["work_events"]
 
 
+def booking_action_for_exchange(state, exchange_id, *, owner_id):
+    """Recover the committed proposal identity, not a guessed name/email match."""
+    record = WorkJournal(state, namespace="twin-post-answer-v1").read(exchange_id)
+    if record is None:
+        return None
+    task = PostAnswerTask.model_validate(record["tasks"]["post_answer"]["payload"])
+    if task.request.owner_id != owner_id or task.request_id != exchange_id:
+        raise PermissionError("post_answer_observation_owner_conflict")
+    result = task.response.booking_result
+    return result.proposal["action_id"] if result and result.proposal else None
+
+
 def work_evidence_for_exchange(state, exchange_id, *, owner_id):
     """Read the committed task's owner-bound delivery, never guess it by email."""
     journal = WorkJournal(state, namespace="twin-post-answer-v1")

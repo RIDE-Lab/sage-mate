@@ -677,6 +677,11 @@ def test_chat_explicit_draft_with_email_is_not_contact_lookup(tmp_path: Path, wi
     assert not service._meeting_service._notifications.journal.records()[0]
     service._meeting_service.decide_proposal("guest:synthetic", response.booking_result.proposal["action_id"], decision="cancel")
     assert not service.list_bookings()
+    history = service.get_chat_conversation(conversation_id=response.conversation_id,
+        student_email="synthetic@example.test", owner_id="guest:synthetic")
+    assert history.exchanges[0].booking_result.proposal["status"] == "cancelled"
+    assert history.exchanges[0].booking_result.proposal["action_id"] == response.booking_result.proposal["action_id"]
+    assert not service._meeting_service._notifications.journal.records()[0]
 
 
 def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) -> None:

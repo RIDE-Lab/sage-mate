@@ -939,13 +939,20 @@ def test_visitor_booking_requires_own_explicit_confirmation(isolated_availabilit
     assert not service._meeting_service.list_bookings()
     assert not service._meeting_service._notifications.journal.records()[0]
     cookies = dict(client.cookies)
+    lookup = client.get("/bookings/proposals/" + proposal["action_id"])
+    assert lookup.status_code == 200 and lookup.json()["proposal"]["status"] == "pending"
+    assert lookup.headers["cache-control"] == "no-store"
     client.cookies.clear()
+    lookup = client.get("/bookings/proposals/" + proposal["action_id"])
+    assert lookup.status_code == 404 and lookup.headers["cache-control"] == "no-store"
     denied = client.post("/bookings/confirm-proposal", json={"action_id": proposal["action_id"]})
     assert denied.status_code == 409
     client.cookies.clear()
     client.cookies.update(cookies)
     cancelled = client.post("/bookings/cancel-proposal", json={"action_id": proposal["action_id"]})
     assert cancelled.status_code == 200 and cancelled.json()["proposal"]["status"] == "cancelled"
+    for _ in range(3):
+        assert client.get("/bookings/proposals/" + proposal["action_id"]).json()["proposal"]["status"] == "cancelled"
     denied = client.post("/bookings/confirm-proposal", json={"action_id": proposal["action_id"]})
     assert denied.status_code == 409
     assert not service._meeting_service.list_bookings()

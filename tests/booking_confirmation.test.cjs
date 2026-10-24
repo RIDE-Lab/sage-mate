@@ -6,7 +6,7 @@ const context={captureConversationScroll:()=>600,restoreConversationScroll:x=>as
   conversationHistoryScope:'fixture',
   persistActiveConversationSnapshot(){},buildNotificationStatusHtml:()=>'',document:{createTextNode:text=>text,querySelectorAll:()=>[]}};
 vm.createContext(context);
-for(const name of ['escapeHtml','buildBookingProposalHtml','handleBookingProposalClick']){
+for(const name of ['escapeHtml','buildBookingProposalHtml','buildBookingReceiptContent','rememberBookingObservation','handleBookingProposalClick']){
   const start=source.indexOf((name==='handleBookingProposalClick'?'async ':'')+'function '+name+'(');
   vm.runInContext(source.slice(start,source.indexOf('\n}\n',start)+3),context);
 }
@@ -24,7 +24,7 @@ function fixture(cancel){
   const buttons=[button,{disabled:false}];
   let rendered=null;
   Object.defineProperty(card,'innerHTML',{get:()=>rendered ?? `<strong>${heading.textContent}</strong><p>${status.textContent}</p><button ${button.disabled?'disabled':''}>确认</button>`,set:value=>{rendered=value;}});
-  return {card,status,heading,buttons,event:{target:{closest:()=>button}}};
+  return {card,status,heading,buttons,event:{target:{closest:selector=>selector==='[data-booking-proposal-refresh]'?null:button}}};
 }
 (async()=>{
   let item=fixture(true);

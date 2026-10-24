@@ -7045,8 +7045,8 @@ function renderBookingResponseStatus(element, bookingResponse, options = {}) {
     element.className = `inline-status inline-status-${state}`;
 }
 
-function buildBookingProposalHtml(proposal) {
-    if (bookingProposalResults.has(proposal.action_id)) {
+function buildBookingProposalHtml(proposal, {ignoreCache = false} = {}) {
+    if (!ignoreCache && bookingProposalResults.has(proposal.action_id)) {
         return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿处理结果">${bookingProposalResults.get(proposal.action_id)}</section>`;
     }
     const payload = proposal.payload || {};
@@ -7055,7 +7055,7 @@ function buildBookingProposalHtml(proposal) {
         return value && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, {timeZoneName:"short"}) : value;
     };
     const pending = proposal.status === "pending";
-    const label = {pending:"待你确认 · 尚未提交",cancelled:"草稿已放弃 · 未提交预约",confirmed:"草稿已经确认 · 请查询申请结果"}[proposal.status] || "草稿状态不明 · 请核对";
+    const label = {pending:"待你确认 · 尚未提交",cancelled:"草稿已放弃 · 未提交预约",expired:"草稿已过期 · 未提交",confirmed:"已确认过提交 · 执行结果待核验"}[proposal.status] || "草稿状态不明 · 请核对";
     return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿核对">
         <strong>${escapeHtml(label)}</strong>
         <dl>${[["姓名",payload.student_name],["邮箱",payload.student_email],["主题",payload.topic],
@@ -7064,10 +7064,84 @@ function buildBookingProposalHtml(proposal) {
         <p>确认前不会占用时段或发送邮件；提交时会复核时段是否可用。确认提交后仍需老师审核，不代表会议已确认。</p>
         <p class="booking-proposal-status" role="status"></p>
         ${pending ? '<button type="button" data-booking-proposal-confirm>确认并提交预约申请</button> <button type="button" data-booking-proposal-cancel>放弃草稿（不提交）</button>' : ""}
+        ${proposal.status === "confirmed" && proposal.execution_status === "awaiting_result" ? '<p>确认已记录，但尚无执行回执。查询不会自动提交；仅可由你主动重试同一申请。</p><button type="button" data-booking-proposal-confirm>重试同一申请（已确认）</button>' : ""}
     </section>`;
 }
 
+function rememberBookingObservation(card) {
+    bookingProposalResults.set(card.dataset.bookingProposal, card.innerHTML);
+    for (const live of document.querySelectorAll(".booking-proposal")) {
+        if (live !== card && live.dataset.bookingProposal === card.dataset.bookingProposal) {
+            live.innerHTML = card.innerHTML;
+            live.dataset.busy = "false";
+        }
+    }
+}
+
+function buildBookingReceiptContent(result) {
+    const status = result.proposal?.status;
+    const label = status === "cancelled" ? "已放弃草稿" : status === "expired" ? "草稿已过期 · 未提交"
+        : result.accepted && result.booking ? (result.booking.status === "待确认" ? "申请已登记 · 等待老师审核" : `申请已登记 · 当前状态：${result.booking.status}`) : "申请未被接受";
+    return `<strong>${escapeHtml(label)}</strong><p>${escapeHtml(result.message || "请核对处理状态。")}</p>
+        ${result.booking ? `<p>预约编号：${escapeHtml(result.booking.booking_id)} · 当前状态：${escapeHtml(result.booking.status)}</p>` : ""}
+        ${buildNotificationStatusHtml(result.notification)}
+        ${(result.alternative_slots || []).length ? `<p>可选时间：${escapeHtml(result.alternative_slots.join("，"))}</p>` : ""}`;
+}
+
+async function refreshBookingProposals(root) {
+    if (!root) return;
+    const cards = [...(root.matches?.(".booking-proposal") ? [root] : root.querySelectorAll(".booking-proposal"))];
+    const scope = conversationHistoryScope;
+    await Promise.all(cards.map(async card => {
+        if (card.dataset.busy === "true") return;
+        const actionId = card.dataset.bookingProposal;
+        if (!actionId) return;
+        const observation = bookingProposalResults.get(actionId);
+        const snapshot = captureConversationScroll();
+        card.innerHTML = '<strong>正在核对预约状态</strong><p role="status">正在只读查询，不会提交预约或发送邮件。</p>';
+        restoreConversationScroll(snapshot);
+        try {
+            const result = await apiRequest(`/bookings/proposals/${encodeURIComponent(actionId)}`, {timeoutMs:10000});
+            if (scope !== conversationHistoryScope || !card.isConnected || card.dataset.busy === "true"
+                || bookingProposalResults.get(actionId) !== observation) return;
+            const scroll = captureConversationScroll();
+            const proposal = result.proposal;
+            if (!proposal || proposal.action_id !== actionId) throw Error("预约状态回执不匹配，请重试查询。");
+            if (proposal.status === "pending" || (proposal.status === "confirmed" && proposal.execution_status === "awaiting_result")) {
+                const shell = document.createElement("div");
+                shell.innerHTML = buildBookingProposalHtml(proposal, {ignoreCache:true});
+                card.innerHTML = shell.firstElementChild.innerHTML;
+            } else if (["cancelled", "expired"].includes(proposal.status) || proposal.execution_status === "committed") {
+                card.innerHTML = buildBookingReceiptContent(result);
+            } else {
+                throw Error("原预约草稿不可核验；请重新查询，不要重复提交。");
+            }
+            const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
+            if (operation) operation.textContent = proposal.status === "cancelled" ? "操作状态 · 草稿已放弃，未提交预约或发送邮件"
+                : proposal.status === "pending" ? "操作状态 · 草稿尚未提交，等待你核对"
+                : proposal.status === "expired" ? "操作状态 · 草稿已过期，未提交"
+                : result.booking ? `操作状态 · 申请已登记，当前状态：${result.booking.status}`
+                : proposal.execution_status === "committed" ? "操作状态 · 申请未被接受，未登记预约" : "操作状态 · 已确认过提交，执行结果待核验";
+            rememberBookingObservation(card);
+            restoreConversationScroll(scroll);
+            persistActiveConversationSnapshot();
+        } catch (error) {
+            if (scope !== conversationHistoryScope || !card.isConnected || card.dataset.busy === "true"
+                || bookingProposalResults.get(actionId) !== observation) return;
+            const scroll = captureConversationScroll();
+            card.innerHTML = `<strong>预约状态待核验 · 未执行新的操作</strong><p role="status">无法核对当前状态；不代表草稿仍待确认，也不代表未提交。${escapeHtml(error.message)}</p><button type="button" data-booking-proposal-refresh>重试查询状态（不提交）</button>`;
+            const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
+            if (operation) operation.textContent = "操作状态 · 预约状态待核验；未执行新的操作";
+            rememberBookingObservation(card);
+            restoreConversationScroll(scroll);
+            persistActiveConversationSnapshot();
+        }
+    }));
+}
+
 async function handleBookingProposalClick(event) {
+    const refresh = event.target.closest("[data-booking-proposal-refresh]");
+    if (refresh) { await refreshBookingProposals(refresh.closest(".booking-proposal")); return; }
     const button = event.target.closest("[data-booking-proposal-confirm], [data-booking-proposal-cancel]");
     if (!button) return;
     const card = button.closest(".booking-proposal");
@@ -7095,11 +7169,7 @@ async function handleBookingProposalClick(event) {
         if (operation) operation.textContent = cancel ? "操作状态 · 草稿已放弃，未提交预约或发送邮件"
             : result.accepted ? "操作状态 · 申请已登记，等待老师审核；通知送达以邮件状态为准"
             : "操作状态 · 申请未被接受；未登记预约";
-        card.innerHTML = `<strong>${cancel ? "已放弃草稿" : result.accepted ? "申请已登记 · 等待老师审核" : "申请未被接受"}</strong>
-            <p>${escapeHtml(result.message || "请核对处理状态。")}</p>
-            ${result.booking ? `<p>预约编号：${escapeHtml(result.booking.booking_id)} · 状态：${escapeHtml(result.booking.status)}</p>` : ""}
-            ${buildNotificationStatusHtml(result.notification)}
-            ${(result.alternative_slots || []).length ? `<p>可选时间：${escapeHtml(result.alternative_slots.join("，"))}</p>` : ""}`;
+        card.innerHTML = buildBookingReceiptContent(result);
         restoreConversationScroll(snapshot);
         persistActiveConversationSnapshot();
     } catch (error) {
@@ -7124,13 +7194,7 @@ async function handleBookingProposalClick(event) {
         if (scope === conversationHistoryScope) {
             // A late canonical chat render may have replaced the clicked card.
             // Apply the observed outcome to that live copy, not just a detached node.
-            bookingProposalResults.set(card.dataset.bookingProposal, card.innerHTML);
-            for (const live of document.querySelectorAll(".booking-proposal")) {
-                if (live !== card && live.dataset.bookingProposal === card.dataset.bookingProposal) {
-                    live.innerHTML = card.innerHTML;
-                    live.dataset.busy = "false";
-                }
-            }
+            rememberBookingObservation(card);
             persistActiveConversationSnapshot();
         }
     }
@@ -7802,7 +7866,7 @@ function renderConversationTranscript(transcript) {
     exchanges.forEach((exchange) => {
         appendMessage("user", speakerName, exchange.question, {});
         const message = appendMessage("assistant", assistantLabel, exchange.answer, {answerBlocks: exchange.answer_blocks || []});
-        renderAssistantMessage(message, exchange.answer, [], [], [], null, false,
+        renderAssistantMessage(message, exchange.answer, [], [], [], exchange.booking_result || null, false,
             exchange.exchange_id, [], false, exchange.answer_blocks || [], exchange.execution_events || [], exchange.work_events || [], exchange.evidence_coverage || null);
     });
     hydrateConversationInteractiveState();
@@ -7934,6 +7998,7 @@ function hydrateConversationInteractiveState() {
     attachFeedbackHandlersToStream();
     repairLegacyWorkflowSummaries(chatStream);
     void hydrateExecutionEvidence(chatStream);
+    void refreshBookingProposals(chatStream);
 }
 
 function compactHistoricalSupportSections(root) {

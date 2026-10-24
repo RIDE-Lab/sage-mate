@@ -372,6 +372,7 @@ class ConversationHistoryListResponse(BaseModel):
 
 
 class ConversationExchangeResponse(BaseModel):
+    booking_result: BookingResponse | None = None
     evidence_coverage: EvidenceCoverageView | None = None
     exchange_id: str
     question: str = Field(min_length=1, max_length=4000)

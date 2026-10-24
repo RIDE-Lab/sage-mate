@@ -41,6 +41,32 @@ def test_prepare_cancel_never_creates_or_notifies(meeting):
     assert not meeting.list_bookings() and not outbox(meeting)
 
 
+def test_read_cancelled_and_confirmed_restart_never_replays(meeting, monkeypatch):
+    cancelled = meeting.prepare_proposal("guest:a", request()).proposal["action_id"]
+    meeting.decide_proposal("guest:a", cancelled, decision="cancel")
+    accepted = meeting.prepare_proposal("guest:a", request()).proposal["action_id"]
+    meeting.decide_proposal("guest:a", accepted, decision="confirm")
+    waiting = meeting.prepare_proposal("guest:a", request()).proposal["action_id"]
+    # Reproduce approval committed but the effect was not started: GET must not resume it.
+    from sage.runtime.action_confirmation import ActionConfirmations
+    ActionConfirmations(meeting._storage(), namespace="twin-booking").resolve("guest:a", waiting, decision="confirm")
+    settings = meeting._settings
+    meeting.close()
+    restarted = MeetingService(settings)
+    try:
+        monkeypatch.setattr(restarted, "book", lambda *args, **kwargs: pytest.fail("GET must not execute"))
+        for _ in range(3):
+            assert restarted.read_proposal("guest:a", cancelled).proposal["status"] == "cancelled"
+            result = restarted.read_proposal("guest:a", accepted)
+            assert result.accepted and result.proposal["execution_status"] == "committed"
+            assert restarted.read_proposal("guest:a", waiting).proposal["execution_status"] == "awaiting_result"
+        with pytest.raises(ConfirmationError, match="not_found"):
+            restarted.read_proposal("guest:b", accepted)
+        assert len(restarted.list_bookings()) == len(outbox(restarted)) == 1
+    finally:
+        restarted.close()
+
+
 def test_explicit_confirmation_is_replay_safe_after_lost_ack(meeting, monkeypatch):
     draft = meeting.prepare_proposal("guest:a", request())
     action = draft.proposal["action_id"]
@@ -57,6 +83,18 @@ def test_explicit_confirmation_is_replay_safe_after_lost_ack(meeting, monkeypatc
     assert results[0] == results[1]
     assert results[0].booking.status == "待确认"
     assert len(meeting.list_bookings()) == len(outbox(meeting)) == 1
+    sent = []
+    class CounterOnly:
+        def send_booking_request_notification(self, booking):
+            sent.append(booking.booking_id)
+            return meeting._settings.booking_notification_email.strip()
+    meeting.start_notifications(CounterOnly())
+    meeting._notifications.service.wait("confirmed-booking:" + action, timeout=5)
+    for _ in range(3):
+        assert meeting.read_proposal("guest:a", action).booking.booking_id == results[0].booking.booking_id
+        meeting.decide_proposal("guest:a", action, decision="confirm")
+    assert sent == [results[0].booking.booking_id]
+    assert len(outbox(meeting)) == 1
     with pytest.raises(ConfirmationError, match="already_confirmed"):
         meeting.decide_proposal("guest:a", action, decision="cancel")
 

@@ -26,6 +26,30 @@ def _retire_booking_resources(state, notifications):
 
 
 class MeetingService:
+    def read_proposal(self, owner_id, action_id):
+        """Inspect only; neither approval nor effect replay belongs in GET."""
+        state = self._storage()
+        proposal = ActionConfirmations(state, namespace="twin-booking").read(owner_id, action_id)
+        view = {**proposal, "payload": proposal["payload"]["request"]}
+        if proposal["status"] == "confirmed":
+            saved = OperationReceipts(state, namespace="twin-booking-effects-v1").read("confirmed-booking:" + action_id)
+            if saved is not None:
+                view["execution_status"] = "committed"
+                result = BookingResponse.model_validate(saved)
+                result.proposal = view
+                if result.booking:
+                    current = next((row for row in self.list_bookings() if row.booking_id == result.booking.booking_id), None)
+                    if current is not None:
+                        result.booking = current
+                return result
+            view["execution_status"] = "awaiting_result"
+            return BookingResponse(accepted=False, proposal=view,
+                message="已收到确认，但执行结果尚未核验；请重试同一申请，不要新建预约。")
+        messages = {"pending": "草稿尚未提交；请核对后再明确确认。",
+                    "cancelled": "已放弃预约草稿；未提交预约、未发送邮件。",
+                    "expired": "草稿已过期，未提交；请重新准备。"}
+        return BookingResponse(accepted=False, proposal=view, message=messages[proposal["status"]])
+
     def prepare_proposal(self, owner_id, request, *, operation_id=None, cancellation_scope=None):
         proposal = ActionConfirmations(self._storage(), namespace="twin-booking").prepare(
             owner_id, {"request": request.model_dump(mode="json"), "workflow_operation_id": operation_id}, operation_id=operation_id,

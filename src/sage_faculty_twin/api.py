@@ -2584,6 +2584,20 @@ async def dispatch_follow_ups(
     return service.dispatch_due_follow_ups()
 
 
+@llm_app.get("/bookings/proposals/{action_id}", response_model=BookingResponse)
+async def read_booking_proposal(action_id: str, raw_request: Request, response: Response):
+    from sage.runtime.action_confirmation import ConfirmationError
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    try:
+        result = await asyncio.to_thread(service._meeting_service.read_proposal, identity.owner_id, action_id)
+    except ConfirmationError as error:
+        raise HTTPException(status_code=404, detail="草稿不可用或不属于当前身份；未执行预约操作。",
+                            headers={"X-Sage-Error-Code": str(error), "Cache-Control": "no-store"}) from error
+    response.headers["Cache-Control"] = "no-store"
+    _deliver_guest_cookie(raw_request, response)
+    return result
+
+
 @llm_app.post("/bookings/proposals", response_model=BookingResponse)
 async def prepare_booking_proposal(request: BookingRequest, raw_request: Request, response: Response) -> BookingResponse:
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
