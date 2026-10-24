@@ -241,9 +241,13 @@ def forbids_booking_action(question: str) -> bool:
     normalized = " ".join(question.strip().lower().split())
     booking_positions = [
         normalized.find(marker)
-        for marker in ("预约", "book", "schedule", "meeting")
+        for marker in ("预约",)
         if marker in normalized
     ]
+    # English action words, not substrings in user-supplied names or email
+    # addresses (e.g. booking-history@example.test following "不要发邮件").
+    booking_positions.extend(match.start() for match in re.finditer(
+        r"(?<![\w@.\-])(?:book|schedule|meeting)(?![\w@.\-])", normalized))
     return any(
         any(negation in normalized[max(0, position - 32) : position] for negation in (
             "不执行", "不要", "不得", "无需", "不用", "禁止", "不创建", "do not", "don't",

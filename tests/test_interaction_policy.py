@@ -23,7 +23,8 @@ def _proposed(**updates) -> InteractionIntent:
     return InteractionIntent.model_validate(payload)
 
 
-@pytest.mark.parametrize("question", ["请准备一份预约草稿，不提交", "帮我生成预约草稿，不发邮件"])
+@pytest.mark.parametrize("question", ["请准备一份预约草稿，不提交", "帮我生成预约草稿，不发邮件",
+    "请准备预约草稿：多页放弃E。不要提交或发邮件。姓名 Synthetic Booking QA，邮箱 booking-history-qa@example.test，2030年1月22日10:00到10:30。"])
 def test_explicit_draft_survives_answer_misclassification(question):
     result = InteractionPolicyEngine().apply(ChatRequest(student_name="QA", question=question), _proposed())
     assert result.intent.action == "book_meeting"
