@@ -7180,6 +7180,9 @@ async function handleBookingProposalClick(event) {
             : "提交结果暂时无法核验，可能已经登记。请重试本条确认以查询同一申请，不要重复创建草稿。";
         status.append(document.createTextNode(` ${error.message}`));
         status.dataset.state = "error";
+        const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
+        if (operation) operation.textContent = cancel ? "操作状态 · 放弃结果待核验；未执行新的提交"
+            : "操作状态 · 提交结果待核验；可能已登记，请核对同一申请";
         buttons.forEach(item => item.disabled = false);
         if (["confirmation_expired", "confirmation_already_cancelled", "confirmation_not_found"].includes(error.code)) {
             card.querySelector("strong").textContent = error.code === "confirmation_expired" ? "草稿已过期 · 未提交" : "草稿已不可用 · 请重新准备";

@@ -19,12 +19,13 @@ assert(!context.buildBookingProposalHtml({...draft,status:'confirmed'}).includes
 function fixture(cancel){
   const status={textContent:'',dataset:{},append(value){this.textContent+=value;}};
   const heading={textContent:'待你确认 · 尚未提交'};
-  const card={dataset:{bookingProposal:draft.action_id},querySelector:selector=>selector==='strong'?heading:status,querySelectorAll:()=>buttons,closest:()=>null};
+  const operation={textContent:'操作状态 · 尚未提交'};
+  const card={dataset:{bookingProposal:draft.action_id},querySelector:selector=>selector==='strong'?heading:status,querySelectorAll:()=>buttons,closest:selector=>selector==='.message-assistant'?{querySelector:()=>operation}:null};
   const button={disabled:false,closest:()=>card,hasAttribute:()=>cancel};
   const buttons=[button,{disabled:false}];
   let rendered=null;
   Object.defineProperty(card,'innerHTML',{get:()=>rendered ?? `<strong>${heading.textContent}</strong><p>${status.textContent}</p><button ${button.disabled?'disabled':''}>确认</button>`,set:value=>{rendered=value;}});
-  return {card,status,heading,buttons,event:{target:{closest:selector=>selector==='[data-booking-proposal-refresh]'?null:button}}};
+  return {card,status,heading,operation,buttons,event:{target:{closest:selector=>selector==='[data-booking-proposal-refresh]'?null:button}}};
 }
 (async()=>{
   let item=fixture(true);
@@ -39,6 +40,7 @@ function fixture(cancel){
   assert(item.status.textContent.includes('可能已经登记'));assert(item.status.textContent.includes('重试本条确认'));
   assert.equal(item.status.dataset.state,'error');assert(item.buttons.every(button=>!button.disabled));
   assert(item.heading.textContent.includes('待核验'));assert(!item.heading.textContent.includes('尚未提交'));
+  assert(item.operation.textContent.includes('待核验'));assert(!item.operation.textContent.includes('尚未提交'));
   assert(!context.buildBookingProposalHtml(draft).includes('尚未提交'));
   assert.deepEqual(calls.at(-1),['/bookings/confirm-proposal',{action_id:'sealed-id'}]);
   item=fixture(false);

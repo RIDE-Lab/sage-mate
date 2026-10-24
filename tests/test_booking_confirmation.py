@@ -91,7 +91,9 @@ def test_explicit_confirmation_is_replay_safe_after_lost_ack(meeting, monkeypatc
     meeting.start_notifications(CounterOnly())
     meeting._notifications.service.wait("confirmed-booking:" + action, timeout=5)
     for _ in range(3):
-        assert meeting.read_proposal("guest:a", action).booking.booking_id == results[0].booking.booking_id
+        inspected = meeting.read_proposal("guest:a", action)
+        assert inspected.booking.booking_id == results[0].booking.booking_id
+        assert inspected.notification.status == "sent"
         meeting.decide_proposal("guest:a", action, decision="confirm")
     assert sent == [results[0].booking.booking_id]
     assert len(outbox(meeting)) == 1

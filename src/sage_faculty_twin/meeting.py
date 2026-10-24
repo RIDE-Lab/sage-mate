@@ -41,6 +41,16 @@ class MeetingService:
                     current = next((row for row in self.list_bookings() if row.booking_id == result.booking.booking_id), None)
                     if current is not None:
                         result.booking = current
+                        result.message = "已核对原预约申请；当前状态：" + current.status + "。不会因此新建预约或重新发送通知。"
+                if result.notification is not None:
+                    work = self._notifications.journal.read("confirmed-booking:" + action_id)
+                    task = work["tasks"]["notify"] if work else None
+                    if task and task["status"] == "done" and (task.get("result") or {}).get("status") == "sent":
+                        result.notification = result.notification.model_copy(update={"status": "sent",
+                            "summary": "通知工作已完成，邮件服务已接受；不代表收件人已阅读。"})
+                    elif task and task["status"] in {"failed", "blocked"}:
+                        result.notification = result.notification.model_copy(update={"status": "failed",
+                            "summary": "通知工作失败；查询不会重新发送邮件。", "detail": task.get("failure_code")})
                 return result
             view["execution_status"] = "awaiting_result"
             return BookingResponse(accepted=False, proposal=view,
