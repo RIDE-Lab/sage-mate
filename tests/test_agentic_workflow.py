@@ -418,7 +418,8 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     _drain_booking_notifications(service)
     assert len(notifier.request_bookings) == 1
     assert "未发送邮件" in response.answer  # Original chat only prepared the draft.
-    assert "待你确认" in response.answer
+    assert "明确确认后才会提交" in response.answer
+    assert "以下方操作状态为准" in response.answer
 
 
 def test_benchmark_requests_skip_memory_retrieval_and_persistence(
@@ -754,7 +755,8 @@ def test_chat_booking_reports_notification_failure_without_rolling_back_booking(
     _drain_booking_notifications(service, failed=True)
     booking_execute_step = _trace_step(response, "booking_execute")
     assert booking_execute_step.status == "skipped"  # Chat only prepared; HTTP consent executed later.
-    assert "待你确认" in response.answer
+    assert "明确确认后才会提交" in response.answer
+    assert "以下方操作状态为准" in response.answer
     assert len(service._meeting_service.list_bookings()) == 1
 
 
