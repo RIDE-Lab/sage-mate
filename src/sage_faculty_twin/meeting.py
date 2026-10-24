@@ -31,7 +31,7 @@ class MeetingService:
             owner_id, {"request": request.model_dump(mode="json"), "workflow_operation_id": operation_id}, operation_id=operation_id,
             guard=self.effect_fences.prepare_guard(cancellation_scope) if cancellation_scope else None)
         view = {**proposal, "payload": proposal["payload"]["request"]}
-        messages = {"pending": "预约草稿已生成。提交、放弃及失败结果请以下方操作状态为准；未经你的明确确认，不会提交预约或发送邮件。提交后仍需老师审核。",
+        messages = {"pending": "预约草稿已生成（生成时未提交预约、未发送邮件）。后续提交、放弃及失败结果请以下方操作状态为准；明确确认后才会提交，提交后仍需老师审核。",
                     "cancelled": "草稿已经放弃，未提交；请重新准备预约。",
                     "confirmed": "此草稿已经确认提交，请核对申请状态；不能据此认定会议或邮件已确认。"}
         return BookingResponse(accepted=False, proposal=view, message=messages[proposal["status"]])
