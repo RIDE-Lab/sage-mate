@@ -1558,6 +1558,10 @@ class FacultyTwinWorkflowSupport:
         fields = {"student_name": request.student_name}
         topic_default = None
         if captured is None:
+            # A display name in a draft never changes the verified owner.
+            explicit_name = re.search(r"(?:^|[：:，,；;\n])\s*姓名\s*[:：]?\s*([^，,；;。\n]+)", request.question)
+            if explicit_name:
+                fields["student_name"] = explicit_name.group(1).strip()
             if request.student_email:
                 fields["student_email"] = request.student_email.strip()
             extracted_email = self._extract_email(request.question)
@@ -8473,6 +8477,7 @@ class FacultyTwinWorkflowSupport:
         self,
         text: str,
     ) -> tuple[datetime | None, datetime | None]:
+        text = re.sub(r"(\d{4})年(\d{1,2})月(\d{1,2})日\s*", r"\1-\2-\3 ", text).replace("：", ":")
         pattern = re.compile(
             r"(\d{4}-\d{1,2}-\d{1,2})[ T](\d{1,2}:\d{2})(?:\s*(?:到|-|至)\s*(\d{1,2}:\d{2}))?"
         )
@@ -8481,11 +8486,14 @@ class FacultyTwinWorkflowSupport:
             return None, None
 
         day_text, start_text, end_text = match.groups()
-        start_at = datetime.strptime(f"{day_text} {start_text}", "%Y-%m-%d %H:%M")
-        if end_text:
-            end_at = datetime.strptime(f"{day_text} {end_text}", "%Y-%m-%d %H:%M")
-        else:
-            end_at = start_at + timedelta(minutes=self._settings.meeting_duration_minutes)
+        try:
+            start_at = datetime.strptime(f"{day_text} {start_text}", "%Y-%m-%d %H:%M")
+            if end_text:
+                end_at = datetime.strptime(f"{day_text} {end_text}", "%Y-%m-%d %H:%M")
+            else:
+                end_at = start_at + timedelta(minutes=self._settings.meeting_duration_minutes)
+        except ValueError:
+            return None, None
         return start_at, end_at
 
     def _extract_relative_date(self, text: str) -> date | None:

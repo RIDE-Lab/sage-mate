@@ -661,6 +661,23 @@ def test_direct_booking_keeps_record_when_notification_fails(tmp_path: Path) -> 
     _drain_booking_notifications(service, failed=True)
 
 
+@pytest.mark.parametrize("window", ["2030-01-07 10:00到10:30", "2030年1月7日10:00到10:30"])
+def test_chat_explicit_draft_with_email_is_not_contact_lookup(tmp_path: Path, window: str) -> None:
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path))
+    service._llm_client = IntentAwareLLMClient(booking_intent=False, answer="wrong contact lookup")
+    response = asyncio.run(service.answer(ChatRequest(
+        student_name="guest", owner_id="guest:synthetic", student_email="synthetic@example.test",
+        question=f"请准备一份预约草稿，不提交：姓名 Synthetic QA，邮箱 synthetic@example.test，主题为研究方案讨论，{window}。")))
+    assert response.workflow_action == "confirm_booking_draft"
+    assert response.booking_result.proposal["status"] == "pending"
+    assert response.booking_result.proposal["payload"]["student_name"] == "Synthetic QA"
+    assert response.booking_result.proposal["payload"]["preferred_start"].startswith("2030-01-07T10:00")
+    assert not service.list_bookings()
+    assert not service._meeting_service._notifications.journal.records()[0]
+    service._meeting_service.decide_proposal("guest:synthetic", response.booking_result.proposal["action_id"], decision="cancel")
+    assert not service.list_bookings()
+
+
 def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path)
     service = DigitalTwinService(settings)

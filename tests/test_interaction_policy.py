@@ -7,6 +7,7 @@ from sage_faculty_twin.interaction_policy import (
     asks_for_booking_information,
     forbids_booking_action,
     requires_human_handoff,
+    requests_booking_draft,
 )
 from sage_faculty_twin.models import ChatRequest, InteractionIntent
 
@@ -20,6 +21,18 @@ def _proposed(**updates) -> InteractionIntent:
     }
     payload.update(updates)
     return InteractionIntent.model_validate(payload)
+
+
+@pytest.mark.parametrize("question", ["请准备一份预约草稿，不提交", "帮我生成预约草稿，不发邮件"])
+def test_explicit_draft_survives_answer_misclassification(question):
+    result = InteractionPolicyEngine().apply(ChatRequest(student_name="QA", question=question), _proposed())
+    assert result.intent.action == "book_meeting"
+    assert result.intent.decision_mode == "review_queue"
+
+
+@pytest.mark.parametrize("question", ["预约草稿是什么？", "如何生成预约草稿？", "不要生成预约草稿", "文档示例：请准备一份预约草稿"])
+def test_draft_description_or_negation_is_not_instruction(question):
+    assert not requests_booking_draft(question)
 
 
 @pytest.mark.parametrize(

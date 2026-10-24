@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from .models import ChatRequest, InteractionIntent
 
@@ -126,9 +127,21 @@ _EXPLICIT_BOOKING_MARKERS = (
 )
 
 
+def requests_booking_draft(question: str) -> bool:
+    """An explicit drafting request is not consent to submit or send mail.
+
+    Match a direct imperative, not a quoted example, a how-to question, or a
+    negated instruction. Execution still requires the separate sealed gate.
+    """
+    return bool(re.match(
+        r"^(?:请帮我|请|帮我|我想|我要)?(?:仅|只)?(?:准备|生成|起草)(?:一份|一个)?预约草稿",
+        question.strip(),
+    ))
+
+
 def requests_booking_action(question: str) -> bool:
     normalized = question.strip().lower()
-    return any(marker in normalized for marker in _EXPLICIT_BOOKING_MARKERS)
+    return requests_booking_draft(question) or any(marker in normalized for marker in _EXPLICIT_BOOKING_MARKERS)
 
 _BOOKING_INFORMATION_MARKERS = (
     "office hour",
@@ -331,6 +344,18 @@ class InteractionPolicyEngine:
                 ),
                 changed=True,
                 reasons=("faculty_review_required",),
+            )
+
+        if requests_booking_draft(request.question) and not forbids_booking_action(request.question):
+            return InteractionPolicyResult(
+                intent=InteractionIntent(
+                    action="book_meeting", domain="booking",
+                    retrieval_scopes=["meeting_policy"],
+                    exclude_scopes=["courseware", "publications"],
+                    decision_mode="review_queue", confidence=max(proposed.confidence, 0.95),
+                ),
+                changed=proposed.action != "book_meeting",
+                reasons=("explicit_booking_draft_requires_separate_confirmation",),
             )
 
         if proposed.action == "book_meeting" and asks_for_booking_information(
