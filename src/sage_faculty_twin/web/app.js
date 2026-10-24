@@ -7111,6 +7111,14 @@ async function handleBookingProposalClick(event) {
         status.append(document.createTextNode(` ${error.message}`));
         status.dataset.state = "error";
         buttons.forEach(item => item.disabled = false);
+        if (["confirmation_expired", "confirmation_already_cancelled", "confirmation_not_found"].includes(error.code)) {
+            card.querySelector("strong").textContent = error.code === "confirmation_expired" ? "草稿已过期 · 未提交" : "草稿已不可用 · 请重新准备";
+            status.textContent = error.message;
+            buttons.forEach(item => item.disabled = true);
+        } else if (error.code === "confirmation_already_confirmed") {
+            card.querySelector("strong").textContent = "已确认过提交 · 不能通过放弃草稿撤回";
+            status.textContent = error.message;
+        }
     } finally {
         card.dataset.busy = "false";
         if (scope === conversationHistoryScope) {

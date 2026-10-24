@@ -2606,7 +2606,8 @@ async def _decide_booking_proposal(payload, raw_request, response, decision):
             "confirmation_already_cancelled": "草稿已经放弃，不能再提交；请重新准备。",
             "confirmation_already_confirmed": "已确认提交，不能通过放弃草稿撤回；请查询预约状态。",
         }
-        raise HTTPException(status_code=409, detail=messages.get(str(error), "草稿不可用或不属于当前身份；未执行新的预约操作。")) from error
+        raise HTTPException(status_code=409, detail=messages.get(str(error), "草稿不可用或不属于当前身份；未执行新的预约操作。"),
+                            headers={"X-Sage-Error-Code": str(error)}) from error
     _deliver_guest_cookie(raw_request, response)
     return result
 

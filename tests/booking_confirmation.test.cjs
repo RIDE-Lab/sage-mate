@@ -41,6 +41,11 @@ function fixture(cancel){
   assert(item.heading.textContent.includes('待核验'));assert(!item.heading.textContent.includes('尚未提交'));
   assert(!context.buildBookingProposalHtml(draft).includes('尚未提交'));
   assert.deepEqual(calls.at(-1),['/bookings/confirm-proposal',{action_id:'sealed-id'}]);
+  item=fixture(false);
+  context.apiRequest=async()=>{throw Object.assign(Error('草稿已过期，未提交'),{status:409,code:'confirmation_expired'});};
+  await context.handleBookingProposalClick(item.event);
+  assert(item.heading.textContent.includes('草稿已过期'));assert(!item.status.textContent.includes('可能已经登记'));
+  assert(item.buttons.every(button=>button.disabled));
   item=fixture(false);let resolve;
   const live={dataset:{bookingProposal:draft.action_id},innerHTML:'late pending copy'};
   context.document.querySelectorAll=()=>[live];
