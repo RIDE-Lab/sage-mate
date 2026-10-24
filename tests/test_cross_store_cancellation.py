@@ -188,7 +188,7 @@ def test_actual_booking_pipeline_propagates_scope_into_stale_business_commit(tmp
             monkeypatch.setattr(target, "seal", temporary)
         else:
             available.set()
-        original = instance._meeting_service.book
+        original = instance._meeting_service.prepare_proposal
         seen = []
 
         def paused(*args, **kwargs):
@@ -200,7 +200,7 @@ def test_actual_booking_pipeline_propagates_scope_into_stale_business_commit(tmp
             finally:
                 finished.set()
 
-        monkeypatch.setattr(instance._meeting_service, "book", paused)
+        monkeypatch.setattr(instance._meeting_service, "prepare_proposal", paused)
         async def authorize(_):
             return True
         async def recover(_):

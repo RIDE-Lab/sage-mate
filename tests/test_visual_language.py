@@ -28,5 +28,6 @@ def test_visual_refresh_preserves_native_states_and_accessible_focus():
     assert "outline: 2px solid var(--brand-ink)" in css
     assert ".message-retry-button" in css
     html = (THEME.parent / "index.html").read_text()
-    revisions = re.findall(r'(?:minimal\.1009\.css|app\.4222\.js)\?rev=([^"\s]+)', html)
-    assert revisions == ["sage-auto-web-20261021"] * 2
+    revisions = re.findall(r'(?:styles\.4222\.css|minimal\.1009\.css|app\.4222\.js)\?rev=([^"\s]+)', html)
+    assert len(revisions) == 3 and len(set(revisions)) == 1
+    assert re.fullmatch(r"[a-z][a-z0-9-]+", revisions[0])

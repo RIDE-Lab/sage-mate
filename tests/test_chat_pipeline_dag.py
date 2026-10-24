@@ -300,11 +300,14 @@ def test_booking_with_full_details_keeps_canonical_trace_order(
     )
 
     assert _trace_keys(response) == [key for key in CANONICAL_CHAT_TRACE if key != "web_search"]
-    assert response.workflow_action == "book_meeting"
+    assert response.workflow_action == "confirm_booking_draft"
+    assert response.booking_result.proposal["status"] == "pending"
+    assert response.booking_result.booking is None
+    assert not service._meeting_service.list_bookings()
     statuses = _trace_statuses(response)
     # booking branch is the active path here
     assert statuses["booking_prepare"] == "completed"
-    assert statuses["booking_execute"] == "completed"
+    assert statuses["booking_execute"] == "skipped"
 
 
 def test_admin_knowledge_add_runs_through_legacy_linear_pipeline(

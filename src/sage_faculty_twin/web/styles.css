@@ -3,6 +3,15 @@
 .session-export-button:disabled { opacity: .4; cursor: default; }
 .session-export-status:empty { display: none; }
 .session-export-status { position: fixed; top: 64px; right: 20px; max-width: min(320px, calc(100vw - 40px)); padding: 10px 14px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--surface-solid); color: var(--ink); font-size: 12px; z-index: 150; }
+.booking-proposal { margin: 12px 0; padding: 12px; border: 1px solid var(--line-strong); border-radius: 8px; color: var(--ink); background: var(--surface); font-size: 13px; overflow-wrap: anywhere; }
+.booking-proposal dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 10px 0; }
+.booking-proposal dt { color: var(--muted); }
+.booking-proposal dd { margin: 0; }
+.booking-proposal button { padding: 7px 10px; margin: 4px 4px 0 0; border: 1px solid var(--line-strong); border-radius: 6px; color: var(--ink); background: var(--surface); cursor: pointer; }
+.booking-proposal button:disabled { opacity: .5; cursor: wait; }
+.booking-proposal [data-booking-proposal-confirm] { color: var(--bg); background: var(--ink); }
+.booking-proposal-status:empty { display: none; }
+.booking-proposal-status[data-state="error"] { color: var(--warning-text, var(--ink)); }
 .native-execution, .native-work, .native-work-current {
     color: var(--ink);
     background: var(--surface-inset);

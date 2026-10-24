@@ -311,6 +311,15 @@ def _drain_booking_notifications(service, *, failed=False):
         outbox.close()
 
 
+def _explicitly_confirm_chat_draft(service, response):
+    assert response.workflow_action == "confirm_booking_draft"
+    assert response.booking_result.proposal["status"] == "pending"
+    assert response.booking_result.booking is None
+    assert response.booking_result.notification is None
+    response.booking_result = service._meeting_service.decide_proposal(
+        "guest:alice", response.booking_result.proposal["action_id"], decision="confirm")
+
+
 def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     settings = AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="bm25")
     service = DigitalTwinService(settings)
@@ -331,7 +340,7 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
         )
     )
 
-    assert response.workflow_action == "book_meeting"
+    _explicitly_confirm_chat_draft(service, response)
     assert response.booking_result is not None
     assert response.booking_result.accepted is True
     assert response.booking_result.booking is not None
@@ -402,14 +411,14 @@ def test_chat_books_meeting_when_details_are_complete(tmp_path: Path) -> None:
     ]
     assert _trace_step(response, "interaction_understand").summary == "已识别当前交互意图：book_meeting/booking。"
     assert _trace_step(response, "booking_prepare").summary == "预约字段已经齐备。"
-    assert _trace_step(response, "booking_execute").summary == "预约申请已提交，等待管理员确认。"
-    assert "尚未确认送达" in _trace_step(response, "booking_execute").detail
-    assert any(item.basis_label == "预约规则与时段" for item in response.answer_basis)
-    assert any(item.source_label == "当前预约安排配置" for item in response.answer_basis)
+    assert _trace_step(response, "booking_execute").status == "skipped"
+    assert "未触发预约提交" in _trace_step(response, "booking_execute").detail
+    # Preparation is not a claim that availability was checked or reserved.
+    assert not any(item.basis_label == "预约规则与时段" for item in response.answer_basis)
     _drain_booking_notifications(service)
     assert len(notifier.request_bookings) == 1
-    assert "尚未确认送达" in response.answer
-    assert "待确认" in response.answer
+    assert "未发送邮件" in response.answer  # Original chat only prepared the draft.
+    assert "待你确认" in response.answer
 
 
 def test_benchmark_requests_skip_memory_retrieval_and_persistence(
@@ -525,7 +534,7 @@ def test_chat_books_meeting_with_chinese_relative_time(tmp_path: Path) -> None:
         )
     )
 
-    assert response.workflow_action == "book_meeting"
+    _explicitly_confirm_chat_draft(service, response)
     assert response.pending_fields == []
     assert response.booking_result is not None
     assert response.booking_result.booking is not None
@@ -691,12 +700,12 @@ def test_chat_collects_missing_booking_details_and_then_books(tmp_path: Path) ->
         )
     )
 
-    assert second.workflow_action == "book_meeting"
+    _explicitly_confirm_chat_draft(service, second)
     assert second.booking_result is not None
     assert second.booking_result.accepted is True
     assert second.booking_result.booking is not None
     assert second.booking_result.booking.status == "待确认"
-    assert _trace_step(second, "booking_execute").status == "completed"
+    assert _trace_step(second, "booking_execute").status == "skipped"
 
 
 def test_chat_booking_reports_notification_failure_without_rolling_back_booking(
@@ -720,16 +729,16 @@ def test_chat_booking_reports_notification_failure_without_rolling_back_booking(
         )
     )
 
-    assert response.workflow_action == "book_meeting"
+    _explicitly_confirm_chat_draft(service, response)
     assert response.booking_result is not None
     assert response.booking_result.accepted is True
     assert response.booking_result.notification is not None
     assert response.booking_result.notification.status == "queued"
     _drain_booking_notifications(service, failed=True)
     booking_execute_step = _trace_step(response, "booking_execute")
-    assert booking_execute_step.summary == "预约申请已提交，等待管理员确认。"
-    assert "尚未确认送达" in booking_execute_step.detail
-    assert "尚未确认送达" in response.answer
+    assert booking_execute_step.status == "skipped"  # Chat only prepared; HTTP consent executed later.
+    assert "待你确认" in response.answer
+    assert len(service._meeting_service.list_bookings()) == 1
 
 
 def test_chat_uses_llm_intent_to_avoid_false_booking_positive(tmp_path: Path) -> None:
@@ -1881,7 +1890,8 @@ def test_chat_reuses_booking_preference_profile_memory_in_follow_up_prompt(
         )
     )
 
-    assert booking_response.workflow_action == "book_meeting"
+    assert booking_response.workflow_action == "confirm_booking_draft"
+    assert booking_response.booking_result.booking is None
 
     follow_up = asyncio.run(
         service.answer(

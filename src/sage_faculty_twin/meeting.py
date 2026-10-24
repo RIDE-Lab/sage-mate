@@ -4,10 +4,12 @@ from datetime import date, datetime, timedelta
 import threading
 import weakref
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from sage.runtime.flownet.runtime.operator_runtime.stateful import StatefulProcessRuntime
 from sage.runtime.operation_receipts import OperationReceipts
 from sage.runtime.effect_cancellation import EffectFences
+from sage.runtime.action_confirmation import ActionConfirmations
 
 from .availability import WeeklyAvailabilityStore
 from .booking_notifications import BookingNotifications
@@ -24,6 +26,30 @@ def _retire_booking_resources(state, notifications):
 
 
 class MeetingService:
+    def prepare_proposal(self, owner_id, request, *, operation_id=None, cancellation_scope=None):
+        proposal = ActionConfirmations(self._storage(), namespace="twin-booking").prepare(
+            owner_id, {"request": request.model_dump(mode="json"), "workflow_operation_id": operation_id}, operation_id=operation_id,
+            guard=self.effect_fences.prepare_guard(cancellation_scope) if cancellation_scope else None)
+        view = {**proposal, "payload": proposal["payload"]["request"]}
+        messages = {"pending": "待你确认：预约草稿尚未提交，未占用时段、未发送邮件。确认提交后仍需老师审核。",
+                    "cancelled": "草稿已经放弃，未提交；请重新准备预约。",
+                    "confirmed": "此草稿已经确认提交，请核对申请状态；不能据此认定会议或邮件已确认。"}
+        return BookingResponse(accepted=False, proposal=view, message=messages[proposal["status"]])
+
+    def decide_proposal(self, owner_id, action_id, *, decision):
+        proposal = ActionConfirmations(self._storage(), namespace="twin-booking").resolve(
+            owner_id, action_id, decision=decision)
+        if decision == "cancel":
+            if proposal["payload"]["workflow_operation_id"]:
+                self.workflows.discard(owner_id, proposal["payload"]["workflow_operation_id"])
+            return BookingResponse(accepted=False, proposal={**proposal, "payload": proposal["payload"]["request"]},
+                message="已放弃预约草稿；未提交预约、未发送邮件。这不是取消一条已提交的预约。")
+        result = self.book(BookingRequest.model_validate(proposal["payload"]["request"]),
+                           operation_id="confirmed-booking:" + proposal["action_id"])
+        if proposal["payload"]["workflow_operation_id"]:
+            self.workflows.settle(owner_id, proposal["payload"]["workflow_operation_id"], result)
+        return result
+
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
         self._state = None
@@ -112,6 +138,14 @@ class MeetingService:
              cancellation_scope: str | None = None) -> BookingResponse:
         if cancellation_scope is not None and not operation_id:
             raise ValueError("cancellable_booking_requires_operation_identity")
+        # Calendar policy and historical records use wall time in the configured
+        # booking timezone. Browser datetime-local inputs arrive as UTC instants;
+        # never compare those UTC hours with local opening hours or naive records.
+        zone = ZoneInfo(self._settings.booking_timezone)
+        request = request.model_copy(update={name: (
+            getattr(request, name).astimezone(zone).replace(tzinfo=None)
+            if getattr(request, name).tzinfo is not None else getattr(request, name))
+            for name in ("preferred_start", "preferred_end")})
         # Availability is a captured file-policy snapshot. It is not claimed to
         # be transactionally coupled to concurrent calendar-policy edits.
         slot_start = request.preferred_start.replace(second=0, microsecond=0)

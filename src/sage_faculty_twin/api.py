@@ -64,6 +64,7 @@ from .models import (
     BookingDecisionRequest,
     BookingRecord,
     BookingRequest,
+    BookingProposalDecision,
     BookingResponse,
     ChatAttachment,
     ChatFeedbackRequest,
@@ -2584,8 +2585,40 @@ async def dispatch_follow_ups(
 
 
 @llm_app.post("/bookings", response_model=BookingResponse)
-async def create_booking(request: BookingRequest) -> BookingResponse:
-    return service.book_meeting(request)
+async def create_booking(request: BookingRequest, raw_request: Request, response: Response) -> BookingResponse:
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    if identity.account_email and request.student_email.strip().lower() != identity.account_email.lower():
+        raise HTTPException(status_code=403, detail="请使用当前登录账号的邮箱准备预约。")
+    result = await asyncio.to_thread(service._meeting_service.prepare_proposal, identity.owner_id, request)
+    _deliver_guest_cookie(raw_request, response)
+    return result
+
+
+async def _decide_booking_proposal(payload, raw_request, response, decision):
+    from sage.runtime.action_confirmation import ConfirmationError
+    identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
+    try:
+        result = await asyncio.to_thread(service._meeting_service.decide_proposal,
+                                        identity.owner_id, payload.action_id, decision=decision)
+    except ConfirmationError as error:
+        messages = {
+            "confirmation_expired": "预约草稿已过期，未提交；请重新核对并生成草稿。",
+            "confirmation_already_cancelled": "草稿已经放弃，不能再提交；请重新准备。",
+            "confirmation_already_confirmed": "已确认提交，不能通过放弃草稿撤回；请查询预约状态。",
+        }
+        raise HTTPException(status_code=409, detail=messages.get(str(error), "草稿不可用或不属于当前身份；未执行新的预约操作。")) from error
+    _deliver_guest_cookie(raw_request, response)
+    return result
+
+
+@llm_app.post("/bookings/confirm-proposal", response_model=BookingResponse)
+async def confirm_booking_proposal(payload: BookingProposalDecision, raw_request: Request, response: Response):
+    return await _decide_booking_proposal(payload, raw_request, response, "confirm")
+
+
+@llm_app.post("/bookings/cancel-proposal", response_model=BookingResponse)
+async def cancel_booking_proposal(payload: BookingProposalDecision, raw_request: Request, response: Response):
+    return await _decide_booking_proposal(payload, raw_request, response, "cancel")
 
 
 @llm_app.get("/bookings", response_model=list[BookingRecord])

@@ -1606,13 +1606,23 @@ class FacultyTwinWorkflowSupport:
             )
             return context
 
-        context.route = "book_meeting"
+        # Complete fields are not consent. SAGE seals a proposal; only the
+        # explicit HTTP confirmation control may execute the immutable payload.
+        context.booking_result = self._meeting_service.prepare_proposal(
+            request.owner_id, decision.request, operation_id=self._booking_operation_id,
+            cancellation_scope=self._delivery.stream_id if self._delivery is not None else None)
+        # The immutable proposal now owns these complete fields. Do not keep
+        # routing unrelated later questions through a partial-details draft.
+        self._booking_workflows.discard(request.owner_id, self._booking_operation_id)
+        context.workflow_action = "confirm_booking_draft"
+        context.answer = context.booking_result.message
+        context.route = "done"
         self._append_trace(
             context,
             key="booking_prepare",
             title="预约信息收集",
             summary="预约字段已经齐备。",
-            detail="预约所需信息已齐备，准备提交预约。",
+            detail="预约信息已齐备，等待来访者确认草稿；尚未提交或发送邮件。",
             duration_ms=self._elapsed_ms(started_at),
         )
         return context
@@ -1635,42 +1645,12 @@ class FacultyTwinWorkflowSupport:
         decision = context.booking_decision
         if decision is None or decision.request is None:
             raise ValueError("booking_execution_requires_captured_plan")
-        booking_response = self._meeting_service.book(
-            decision.request,
-            operation_id=f"booking-create:{self._booking_operation_id}",
-            cancellation_scope=self._delivery.stream_id if self._delivery is not None else None,
-        )
-        self._booking_workflows.settle(request.owner_id, self._booking_operation_id, booking_response,
-            guard=(self._meeting_service.effect_fences.prepare_guard(self._delivery.stream_id)
-                   if self._delivery is not None else None))
-        context.booking_result = booking_response
-
-        if booking_response.accepted:
-            context.pending_fields = []
-            context.workflow_action = "book_meeting"
-            context.booking_notification = context.booking_result.notification
-            context.answer = self._build_booking_success_message(context.booking_result)
-            self._append_trace(
-                context,
-                key="booking_execute",
-                title="预约执行",
-                summary=self._build_booking_execute_summary(context.booking_result),
-                detail=self._build_booking_execute_detail(context.booking_result),
-                duration_ms=self._elapsed_ms(started_at),
-            )
-        else:
-            context.pending_fields = ["preferred_start"]
-            context.workflow_action = "collect_booking_details"
-            context.answer = self._build_booking_retry_message(booking_response)
-            self._append_trace(
-                context,
-                key="booking_execute",
-                title="预约执行",
-                summary="时间冲突，等待用户重选。",
-                detail="预约时间冲突，已返回可选时间并等待用户补充新时间。",
-                duration_ms=self._elapsed_ms(started_at),
-            )
-
+        context.booking_result = self._meeting_service.prepare_proposal(
+            request.owner_id, decision.request, operation_id=self._booking_operation_id,
+            cancellation_scope=self._delivery.stream_id if self._delivery is not None else None)
+        self._booking_workflows.discard(request.owner_id, self._booking_operation_id)
+        context.workflow_action = "confirm_booking_draft"
+        context.answer = context.booking_result.message
         context.route = "done"
         return context
 
@@ -4608,7 +4588,8 @@ class FacultyTwinWorkflowSupport:
             ),
             web_search_hits=context.web_search_hits,
             answer_basis=self._build_answer_basis(context),
-            external_evidence_required=not self._is_self_contained_request(context),
+            external_evidence_required=(context.workflow_action != "confirm_booking_draft"
+                                        and not self._is_self_contained_request(context)),
             follow_up_actions=context.follow_up_actions,
             conversation_id=context.conversation_id,
             workflow_action=context.workflow_action,

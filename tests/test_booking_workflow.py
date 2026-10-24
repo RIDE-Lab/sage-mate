@@ -267,8 +267,12 @@ def test_real_chat_restart_retries_captured_plan_without_reparsing(tmp_path, mon
 
     monkeypatch.setattr(first_attempt._meeting_service, "book", lose_ack)
     try:
-        with pytest.raises(FlowRequestOutcomeError, match="injected after booking"):
-            asyncio.run(first_attempt.answer(request, delivery=delivery))
+        response = asyncio.run(first_attempt.answer(request, delivery=delivery))
+        assert response.booking_result.proposal["status"] == "pending"
+        assert first_attempt._meeting_service.list_bookings() == []
+        action_id = response.booking_result.proposal["action_id"]
+        with pytest.raises(ConnectionError, match="injected after booking"):
+            first_attempt._meeting_service.decide_proposal(OWNER, action_id, decision="confirm")
         assert len(first_attempt._meeting_service.list_bookings()) == 1
     finally:
         asyncio.run(first_attempt.aclose())
@@ -279,10 +283,13 @@ def test_real_chat_restart_retries_captured_plan_without_reparsing(tmp_path, mon
     monkeypatch.setattr(FacultyTwinWorkflowSupport, "_extract_time_window", forbidden_parser)
     recovered = fresh_service()
     try:
-        response = asyncio.run(recovered.answer(request, delivery=delivery))
-        assert response.booking_result.accepted
-        assert response.booking_result.booking.start_at == datetime(2030, 1, 7, 10)
-        assert response.booking_result.booking.topic == "论文进展"
+        # The answer already completed before explicit confirmation lost its
+        # acknowledgement. Recovery retries only the sealed action, not chat,
+        # a parser or another execution-observer stream for the completed turn.
+        result = recovered._meeting_service.decide_proposal(OWNER, action_id, decision="confirm")
+        assert result.accepted
+        assert result.booking.start_at == datetime(2030, 1, 7, 10)
+        assert result.booking.topic == "论文进展"
         assert len(recovered._meeting_service.list_bookings()) == 1
         rows, _ = recovered._meeting_service._notifications.journal.records()
         assert len(rows) == 1

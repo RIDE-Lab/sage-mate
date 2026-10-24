@@ -419,6 +419,11 @@ class BookingResponse(BaseModel):
     booking: BookingRecord | None = None
     alternative_slots: list[str] = Field(default_factory=list)
     notification: NotificationDeliveryStatus | None = None
+    proposal: dict[str, Any] | None = None
+
+
+class BookingProposalDecision(BaseModel):
+    action_id: str = Field(min_length=1, max_length=128)
 
 
 class BookingStatusFilter(BaseModel):

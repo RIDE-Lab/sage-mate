@@ -118,3 +118,14 @@ class BookingWorkflows:
         return OperationReceipts(self._state_provider(), namespace="twin-booking-draft-settle-v1").commit(
             identity, inputs=response.model_dump(mode="json"), slots=(draft_slot,), transition=finish, guard=guard,
         )
+
+    def discard(self, owner_id, operation_id):
+        identity = self._identity(owner_id, operation_id)
+        plan = self.decision(owner_id, operation_id)
+        if plan is None:
+            return
+        slot = self._draft_slot(owner_id, plan.conversation_id)
+        def discard(values):
+            current = values[slot]
+            return {slot: None if current and current["operation_id"] == identity else current}
+        self._state_provider().update_many((slot,), discard)

@@ -197,6 +197,7 @@ const userLoginForm = document.getElementById("user-login-form");
 const luckyQuestionButton = document.getElementById("lucky-question-button");
 const knowledgeForm = document.getElementById("knowledge-form");
 const bookingForm = document.getElementById("booking-form");
+const bookingProposalResults = new Map(); // Actual action observations, including unknown transport outcomes; never model guesses.
 const suggestionForm = document.getElementById("suggestion-form");
 const chatSubmitButton = chatForm?.querySelector('button[type="submit"]') || null;
 
@@ -2650,6 +2651,9 @@ document.getElementById("open-booking").addEventListener("click", () => {
     bookingEmailInput.value = studentEmailInput.value;
     openModal(bookingModal);
 });
+document.getElementById("open-booking-tools")?.addEventListener("click", () => {
+    document.getElementById("open-booking").click();
+});
 openSuggestionsButton?.addEventListener("click", async () => {
     closeDrawers();
     openSuggestionView();
@@ -3289,7 +3293,7 @@ knowledgeForm.addEventListener("submit", async (event) => {
 
 bookingForm.addEventListener("submit", async (event) => {
     event.preventDefault();
-    setInlineStatus(bookingResponse, "正在提交预约，请确认主题和时间无误...", "empty");
+    setInlineStatus(bookingResponse, "正在准备核对草稿；不会提交预约或发送邮件。", "empty");
     const payload = {
         student_name: document.getElementById("booking-student-name").value,
         student_email: document.getElementById("booking-email").value,
@@ -3304,14 +3308,15 @@ bookingForm.addEventListener("submit", async (event) => {
             body: JSON.stringify(payload),
         });
         renderBookingResponseStatus(bookingResponse, data, {
-            state: data.accepted ? "success" : "error",
-            lines: data.accepted
+            state: data.proposal ? "empty" : data.accepted ? "success" : "error",
+            lines: data.proposal ? [] : data.accepted
                 ? [
                     `预约编号：${data.booking.booking_id}`,
                     `当前状态：${data.booking.status}`,
                 ]
                 : [`可选时间：${(data.alternative_slots || []).join(", ") || "无"}`],
         });
+        bookingResponse.querySelector(".booking-proposal")?.focus(); // Explicit Next action, never a background update.
     } catch (error) {
         setInlineStatus(bookingResponse, error.message, "error");
     }
@@ -7035,9 +7040,94 @@ function renderBookingResponseStatus(element, bookingResponse, options = {}) {
             ${summaryLines.map((line) => `<p class="inline-status-line">${escapeHtml(line)}</p>`).join("")}
         </div>
         ${buildNotificationStatusHtml(notification, { title: "邮件通知状态" })}
+        ${bookingResponse?.proposal ? buildBookingProposalHtml(bookingResponse.proposal) : ""}
     `;
     element.className = `inline-status inline-status-${state}`;
 }
+
+function buildBookingProposalHtml(proposal) {
+    if (bookingProposalResults.has(proposal.action_id)) {
+        return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿处理结果">${bookingProposalResults.get(proposal.action_id)}</section>`;
+    }
+    const payload = proposal.payload || {};
+    const localTime = value => {
+        const date = new Date(value);
+        return value && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, {timeZoneName:"short"}) : value;
+    };
+    const pending = proposal.status === "pending";
+    const label = {pending:"待你确认 · 尚未提交",cancelled:"草稿已放弃 · 未提交预约",confirmed:"草稿已经确认 · 请查询申请结果"}[proposal.status] || "草稿状态不明 · 请核对";
+    return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿核对">
+        <strong>${escapeHtml(label)}</strong>
+        <dl>${[["姓名",payload.student_name],["邮箱",payload.student_email],["主题",payload.topic],
+            ["开始时间（本地时区）",localTime(payload.preferred_start)],["结束时间（本地时区）",localTime(payload.preferred_end)]].map(([label,value])=>
+                `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(String(value || "未填写"))}</dd>`).join("")}</dl>
+        <p>确认前不会占用时段或发送邮件；提交时会复核时段是否可用。确认提交后仍需老师审核，不代表会议已确认。</p>
+        <p class="booking-proposal-status" role="status"></p>
+        ${pending ? '<button type="button" data-booking-proposal-confirm>确认并提交预约申请</button> <button type="button" data-booking-proposal-cancel>放弃草稿（不提交）</button>' : ""}
+    </section>`;
+}
+
+async function handleBookingProposalClick(event) {
+    const button = event.target.closest("[data-booking-proposal-confirm], [data-booking-proposal-cancel]");
+    if (!button) return;
+    const card = button.closest(".booking-proposal");
+    if (!card || card.dataset.busy === "true") return;
+    const scope = conversationHistoryScope;
+    const cancel = button.hasAttribute("data-booking-proposal-cancel");
+    const status = card.querySelector(".booking-proposal-status");
+    const buttons = [...card.querySelectorAll("button")];
+    card.dataset.busy = "true";
+    buttons.forEach(item => item.disabled = true);
+    card.closest(".inline-status")?.querySelector(".inline-status-copy")?.remove();
+    card.querySelector("strong").textContent = cancel ? "正在放弃草稿（不提交）" : "已点击确认 · 等待提交回执";
+    status.textContent = cancel ? "正在放弃草稿；不会提交预约。" : "正在提交已确认的申请；请勿重复创建草稿。";
+    bookingProposalResults.set(card.dataset.bookingProposal, card.innerHTML);
+    try {
+        const result = await apiRequest(`/bookings/${cancel ? "cancel" : "confirm"}-proposal`, {
+            method:"POST", body:JSON.stringify({action_id:card.dataset.bookingProposal}),
+        });
+        if (scope !== conversationHistoryScope) return;
+        const snapshot = captureConversationScroll();
+        // The form's preparation receipt is historical, not the current
+        // outcome. Remove it rather than leaving "待确认" above a rejection.
+        card.closest(".inline-status")?.querySelector(".inline-status-copy")?.remove();
+        const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
+        if (operation) operation.textContent = cancel ? "操作状态 · 草稿已放弃，未提交预约或发送邮件"
+            : result.accepted ? "操作状态 · 申请已登记，等待老师审核；通知送达以邮件状态为准"
+            : "操作状态 · 申请未被接受；未登记预约";
+        card.innerHTML = `<strong>${cancel ? "已放弃草稿" : result.accepted ? "申请已登记 · 等待老师审核" : "申请未被接受"}</strong>
+            <p>${escapeHtml(result.message || "请核对处理状态。")}</p>
+            ${result.booking ? `<p>预约编号：${escapeHtml(result.booking.booking_id)} · 状态：${escapeHtml(result.booking.status)}</p>` : ""}
+            ${buildNotificationStatusHtml(result.notification)}
+            ${(result.alternative_slots || []).length ? `<p>可选时间：${escapeHtml(result.alternative_slots.join("，"))}</p>` : ""}`;
+        restoreConversationScroll(snapshot);
+        persistActiveConversationSnapshot();
+    } catch (error) {
+        if (scope !== conversationHistoryScope) return;
+        card.querySelector("strong").textContent = cancel ? "放弃结果待核验" : "提交结果待核验 · 请勿重复创建申请";
+        status.textContent = cancel
+            ? "未能放弃草稿；不会因此自动提交，也不会撤回已有申请。请核对状态或重试放弃。"
+            : "提交结果暂时无法核验，可能已经登记。请重试本条确认以查询同一申请，不要重复创建草稿。";
+        status.append(document.createTextNode(` ${error.message}`));
+        status.dataset.state = "error";
+        buttons.forEach(item => item.disabled = false);
+    } finally {
+        card.dataset.busy = "false";
+        if (scope === conversationHistoryScope) {
+            // A late canonical chat render may have replaced the clicked card.
+            // Apply the observed outcome to that live copy, not just a detached node.
+            bookingProposalResults.set(card.dataset.bookingProposal, card.innerHTML);
+            for (const live of document.querySelectorAll(".booking-proposal")) {
+                if (live !== card && live.dataset.bookingProposal === card.dataset.bookingProposal) {
+                    live.innerHTML = card.innerHTML;
+                    live.dataset.busy = "false";
+                }
+            }
+            persistActiveConversationSnapshot();
+        }
+    }
+}
+document.addEventListener("click", handleBookingProposalClick);
 
 // Following is opt-in, never inferred from a short answer fitting the viewport.
 // Start at the answer's beginning and keep that reading position as it grows.
@@ -7380,6 +7470,7 @@ function switchConversationHistoryScope(nextScope, { preserveCurrentSnapshot = t
     if (normalizedScope === conversationHistoryScope) {
         return;
     }
+    bookingProposalResults.clear();
 
     if (preserveCurrentSnapshot && hasRenderableConversation()) {
         persistActiveConversationSnapshot();
@@ -8226,6 +8317,7 @@ function renderAssistantMessage(
                             </div>
                         </div>
                         ${buildResponseEvidenceHtml(evidenceView, basisHtml)}
+                        ${bookingResult?.proposal ? buildBookingProposalHtml(bookingResult.proposal) : ""}
                         ${buildWorkAttentionHtml(workEvents)}
                         ${buildExecutionAttentionHtml(executionEvents)}
                         ${notificationAttention ? notificationHtml : ""}
@@ -8277,7 +8369,10 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
         : "本次未记录来源覆盖情况；不据此判断事实已核实。";
     let operation = "";
     if (bookingResult) {
-        operation = bookingResult.accepted === true && bookingResult.booking
+        operation = bookingResult.proposal ? (bookingProposalResults.has(bookingResult.proposal.action_id)
+            ? "预约草稿已有操作状态，请查看下方结果"
+            : {pending:"预约草稿待核对；尚未提交预约、未发送邮件",cancelled:"预约草稿已放弃；未提交预约",confirmed:"草稿已确认；请核对申请结果，不代表会议已确认"}[bookingResult.proposal.status] || "草稿状态不明，请核对")
+            : bookingResult.accepted === true && bookingResult.booking
             ? `预约请求已登记 · 记录状态：${bookingResult.booking.status || "未知"}；不等于会议已确认或通知已送达`
             : bookingResult.accepted === false ? "预约请求未被接受；未确认预约成功"
             : "预约结果不完整；需核对，不能确认预约成功";
@@ -9145,7 +9240,7 @@ function consolidateMessageDiagnostics(message) {
     }
     // Historical follow-up/operation state cannot be reclassified from text.
     // Keep those notices outside rather than hiding a possibly pending action.
-    for (const node of content.querySelectorAll(".notification-card-failed, .notification-card-skipped, .message-section-follow-up, .response-operation, .response-work-attention, .response-execution-attention, .response-status-attention")) {
+    for (const node of content.querySelectorAll(".notification-card-failed, .notification-card-skipped, .message-section-follow-up, .booking-proposal, .response-operation, .response-work-attention, .response-execution-attention, .response-status-attention")) {
         if (node.dataset.actionAttention === "false" || node.dataset.operationAttention === "false"
                 || node.dataset.notificationAttention === "false") continue;
         advanced.before(node);

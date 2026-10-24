@@ -926,6 +926,30 @@ def _complete_booking_notifications():
         meeting._notifications.service.wait(row["key"], timeout=5)
 
 
+def test_visitor_booking_requires_own_explicit_confirmation(isolated_availability_store):
+    client.cookies.clear()
+    payload = dict(student_name="Synthetic", student_email="fixture@example.test", topic="Synthetic only",
+                   preferred_start="2030-01-07T10:00:00", preferred_end="2030-01-07T11:00:00")
+    prepared = client.post("/bookings", json=payload)
+    assert prepared.status_code == 200
+    proposal = prepared.json()["proposal"]
+    assert proposal["status"] == "pending"
+    assert not service._meeting_service.list_bookings()
+    assert not service._meeting_service._notifications.journal.records()[0]
+    cookies = dict(client.cookies)
+    client.cookies.clear()
+    denied = client.post("/bookings/confirm-proposal", json={"action_id": proposal["action_id"]})
+    assert denied.status_code == 409
+    client.cookies.clear()
+    client.cookies.update(cookies)
+    cancelled = client.post("/bookings/cancel-proposal", json={"action_id": proposal["action_id"]})
+    assert cancelled.status_code == 200 and cancelled.json()["proposal"]["status"] == "cancelled"
+    denied = client.post("/bookings/confirm-proposal", json={"action_id": proposal["action_id"]})
+    assert denied.status_code == 409
+    assert not service._meeting_service.list_bookings()
+    assert not service._meeting_service._notifications.journal.records()[0]
+
+
 def test_admin_can_confirm_pending_booking(
     isolated_availability_store: RecordingNotifier,
 ) -> None:
@@ -943,6 +967,9 @@ def test_admin_can_confirm_pending_booking(
     )
     assert created_response.status_code == 200
     created = created_response.json()
+    assert created["proposal"]["status"] == "pending"
+    assert service._meeting_service.list_bookings() == []
+    created = client.post("/bookings/confirm-proposal", json={"action_id": created["proposal"]["action_id"]}).json()
     assert created["booking"]["status"] == "待确认"
 
     login_response = client.post(
@@ -982,6 +1009,8 @@ def test_admin_can_reject_pending_booking(
     )
     assert created_response.status_code == 200
     created = created_response.json()
+    assert created["proposal"]["status"] == "pending"
+    created = client.post("/bookings/confirm-proposal", json={"action_id": created["proposal"]["action_id"]}).json()
 
     login_response = client.post(
         "/auth/admin/login",
