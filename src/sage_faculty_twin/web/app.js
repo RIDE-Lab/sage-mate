@@ -199,7 +199,10 @@ const knowledgeForm = document.getElementById("knowledge-form");
 const bookingForm = document.getElementById("booking-form");
 const bookingProposalResults = new Map(); // Actual action observations, including unknown transport outcomes; never model guesses.
 const bookingProposalVersions = new Map(); // Invalidate in-flight reads when a sibling tab changes an action.
-const bookingProposalChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("twin-booking-invalidations-v1") : null;
+const bookingProposalChannel = (() => {
+    try { return typeof BroadcastChannel === "function" ? new BroadcastChannel("twin-booking-invalidations-v1") : null; }
+    catch (_) { return null; } // Storage/focus + click-time GET remain available.
+})();
 const suggestionForm = document.getElementById("suggestion-form");
 const chatSubmitButton = chatForm?.querySelector('button[type="submit"]') || null;
 

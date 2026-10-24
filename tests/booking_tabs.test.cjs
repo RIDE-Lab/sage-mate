@@ -1,5 +1,8 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../src/sage_faculty_twin/web/app.js'),'utf8');
+const init=source.slice(source.indexOf('const bookingProposalChannel ='),source.indexOf('\n})();',source.indexOf('const bookingProposalChannel ='))+6);
+const blocked={BroadcastChannel:class {constructor(){throw Error('blocked');}}};
+vm.createContext(blocked);assert.equal(vm.runInContext(init+'\nbookingProposalChannel',blocked),null);
 const id='a'.repeat(64);let cards=[],reads=0,published=[];
 const context={bookingProposalResults:new Map(),bookingProposalVersions:new Map(),conversationHistoryScope:'owner',
  bookingProposalChannel:{postMessage:value=>published.push(value)},localStorage:{setItem:(key,value)=>published.push(JSON.parse(value))},
