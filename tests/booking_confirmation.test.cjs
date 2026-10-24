@@ -3,6 +3,8 @@ const source=fs.readFileSync(path.join(__dirname,'../src/sage_faculty_twin/web/a
 const calls=[];
 const context={captureConversationScroll:()=>600,restoreConversationScroll:x=>assert.equal(x,600),
   bookingProposalResults:new Map(),
+  publishBookingInvalidation(){},
+  async refreshBookingProposals(){},
   conversationHistoryScope:'fixture',
   persistActiveConversationSnapshot(){},buildNotificationStatusHtml:()=>'',document:{createTextNode:text=>text,querySelectorAll:()=>[]}};
 vm.createContext(context);
@@ -29,13 +31,14 @@ function fixture(cancel){
 }
 (async()=>{
   let item=fixture(true);
-  context.apiRequest=async(url,options)=>{calls.push([url,JSON.parse(options.body)]);return {message:'已放弃预约草稿',proposal:{status:'cancelled'}};};
+  const pending=()=>({proposal:{...draft}});
+  context.apiRequest=async(url,options)=>{if(!options.method)return pending();calls.push([url,JSON.parse(options.body)]);return {message:'已放弃预约草稿',proposal:{status:'cancelled'}};};
   await context.handleBookingProposalClick(item.event);
   assert.equal(calls.at(-1)[0],'/bookings/cancel-proposal');assert(item.card.innerHTML.includes('已放弃草稿'));
   assert(context.buildBookingProposalHtml(draft).includes('已放弃草稿'),'late canonical answer must not resurrect cancelled controls');
   assert(!context.buildBookingProposalHtml(draft).includes('data-booking-proposal-confirm'));
   item=fixture(false);
-  context.apiRequest=async(url,options)=>{calls.push([url,JSON.parse(options.body)]);throw Error('synthetic timeout');};
+  context.apiRequest=async(url,options)=>{if(!options.method)return pending();calls.push([url,JSON.parse(options.body)]);throw Error('synthetic timeout');};
   await context.handleBookingProposalClick(item.event);
   assert(item.status.textContent.includes('可能已经登记'));assert(item.status.textContent.includes('重试本条确认'));
   assert.equal(item.status.dataset.state,'error');assert(item.buttons.every(button=>!button.disabled));
@@ -44,22 +47,33 @@ function fixture(cancel){
   assert(!context.buildBookingProposalHtml(draft).includes('尚未提交'));
   assert.deepEqual(calls.at(-1),['/bookings/confirm-proposal',{action_id:'sealed-id'}]);
   item=fixture(false);
-  context.apiRequest=async()=>{throw Object.assign(Error('草稿已过期，未提交'),{status:409,code:'confirmation_expired'});};
+  context.apiRequest=async(url,options)=>{if(!options.method)return pending();throw Object.assign(Error('草稿已过期，未提交'),{status:409,code:'confirmation_expired'});};
   await context.handleBookingProposalClick(item.event);
   assert(item.heading.textContent.includes('草稿已过期'));assert(!item.status.textContent.includes('可能已经登记'));
   assert(item.buttons.every(button=>button.disabled));
+  for (const state of ['cancelled','expired','confirmed']) {
+    item=fixture(false);let posts=0;
+    context.apiRequest=async(url,options)=>{assert(!options.method);posts+=Number(!!options.method);
+      return {accepted:state==='confirmed',message:'canonical '+state,
+        proposal:{action_id:draft.action_id,status:state,execution_status:state==='confirmed'?'committed':undefined},
+        ...(state==='confirmed'?{booking:{booking_id:'only-one',status:'待确认'}}:{})};};
+    await context.handleBookingProposalClick(item.event);
+    assert.equal(posts,0,'stale sibling tab must never POST a terminal action');
+    assert(!item.card.innerHTML.includes('data-booking-proposal-confirm'));
+  }
   item=fixture(false);let resolve;
   const live={dataset:{bookingProposal:draft.action_id},innerHTML:'late pending copy'};
   context.document.querySelectorAll=()=>[live];
-  context.apiRequest=async()=>{calls.push(['deferred']);return await new Promise(done=>{resolve=done;});};
-  const pending=context.handleBookingProposalClick(item.event),count=calls.length;
+  context.apiRequest=async(url,options)=>{if(!options.method)return pending();calls.push(['deferred']);return await new Promise(done=>{resolve=done;});};
+  const inFlight=context.handleBookingProposalClick(item.event);await new Promise(setImmediate);const count=calls.length;
   assert(context.buildBookingProposalHtml(draft).includes('disabled'),'late render cannot enable an in-flight confirmation');
   await context.handleBookingProposalClick(item.event);assert.equal(calls.length,count,'double click cannot dispatch twice');
-  resolve({accepted:false,message:'所选时间不可用，未登记。'});await pending;
+  resolve({accepted:false,message:'所选时间不可用，未登记。'});await inFlight;
   assert(item.card.innerHTML.includes('申请未被接受'));assert(!item.card.innerHTML.includes('申请已登记'));
   assert(live.innerHTML.includes('申请未被接受'),'receipt updates a card replaced by canonical rendering');
   item=fixture(false);
   const oldScope=context.handleBookingProposalClick(item.event);
+  await new Promise(setImmediate);
   context.conversationHistoryScope='other-account';context.bookingProposalResults.clear();
   resolve({accepted:true,message:'old scope only'});await oldScope;
   assert.equal(context.bookingProposalResults.size,0,'in-flight result must not repopulate another identity cache');

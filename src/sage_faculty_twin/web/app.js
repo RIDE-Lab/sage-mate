@@ -198,6 +198,8 @@ const luckyQuestionButton = document.getElementById("lucky-question-button");
 const knowledgeForm = document.getElementById("knowledge-form");
 const bookingForm = document.getElementById("booking-form");
 const bookingProposalResults = new Map(); // Actual action observations, including unknown transport outcomes; never model guesses.
+const bookingProposalVersions = new Map(); // Invalidate in-flight reads when a sibling tab changes an action.
+const bookingProposalChannel = typeof BroadcastChannel === "function" ? new BroadcastChannel("twin-booking-invalidations-v1") : null;
 const suggestionForm = document.getElementById("suggestion-form");
 const chatSubmitButton = chatForm?.querySelector('button[type="submit"]') || null;
 
@@ -7047,16 +7049,18 @@ function renderBookingResponseStatus(element, bookingResponse, options = {}) {
 
 function buildBookingProposalHtml(proposal, {ignoreCache = false} = {}) {
     if (!ignoreCache && bookingProposalResults.has(proposal.action_id)) {
-        return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿处理结果">${bookingProposalResults.get(proposal.action_id)}</section>`;
+        return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" data-booking-state="${escapeHtml(proposal.status)}" data-booking-expires="${Number(proposal.expires_at) || 0}" role="region" aria-label="预约草稿处理结果">${bookingProposalResults.get(proposal.action_id)}</section>`;
     }
     const payload = proposal.payload || {};
     const localTime = value => {
         const date = new Date(value);
         return value && Number.isFinite(date.getTime()) ? date.toLocaleString(undefined, {timeZoneName:"short"}) : value;
     };
+    const expired = proposal.status === "pending" && Number.isFinite(proposal.expires_at) && proposal.expires_at * 1000 <= Date.now();
+    if (expired) proposal = {...proposal, status:"expired"};
     const pending = proposal.status === "pending";
     const label = {pending:"待你确认 · 尚未提交",cancelled:"草稿已放弃 · 未提交预约",expired:"草稿已过期 · 未提交",confirmed:"已确认过提交 · 执行结果待核验"}[proposal.status] || "草稿状态不明 · 请核对";
-    return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" role="region" aria-label="预约草稿核对">
+    return `<section class="booking-proposal" tabindex="-1" data-booking-proposal="${escapeHtml(proposal.action_id)}" data-booking-state="${escapeHtml(proposal.status)}" data-booking-expires="${Number(proposal.expires_at) || 0}" role="region" aria-label="预约草稿核对">
         <strong>${escapeHtml(label)}</strong>
         <dl>${[["姓名",payload.student_name],["邮箱",payload.student_email],["主题",payload.topic],
             ["开始时间（本地时区）",localTime(payload.preferred_start)],["结束时间（本地时区）",localTime(payload.preferred_end)]].map(([label,value])=>
@@ -7074,7 +7078,35 @@ function rememberBookingObservation(card) {
         if (live !== card && live.dataset.bookingProposal === card.dataset.bookingProposal) {
             live.innerHTML = card.innerHTML;
             live.dataset.busy = "false";
+            live.dataset.bookingState = card.dataset.bookingState;
+            live.dataset.bookingExpires = card.dataset.bookingExpires;
         }
+    }
+}
+
+function publishBookingInvalidation(actionId) {
+    // Signal only; no payload, identity, HTML, credentials or authority crosses tabs.
+    const signal = {action_id:actionId, nonce:Date.now() + Math.random()};
+    try { bookingProposalChannel?.postMessage(signal); } catch (_) { /* focus/query fallback */ }
+    try { localStorage.setItem("twin-booking-invalidation-v1", JSON.stringify(signal)); } catch (_) { /* storage may be disabled */ }
+}
+
+function receiveBookingInvalidation(signal) {
+    const actionId = signal?.action_id;
+    if (typeof actionId !== "string" || !/^[a-f0-9]{32,64}$/.test(actionId)) return;
+    bookingProposalVersions.set(actionId, (bookingProposalVersions.get(actionId) || 0) + 1);
+    bookingProposalResults.delete(actionId);
+    for (const card of document.querySelectorAll(".booking-proposal")) {
+        if (card.dataset.bookingProposal === actionId && card.dataset.busy !== "true") void refreshBookingProposals(card);
+    }
+}
+
+function refreshVisibleBookingProposals({expiredOnly = false} = {}) {
+    if (document.visibilityState === "hidden") return;
+    for (const card of document.querySelectorAll(".booking-proposal")) {
+        if (expiredOnly && !(card.dataset.bookingState === "pending" && Number(card.dataset.bookingExpires) > 0
+                && Number(card.dataset.bookingExpires) * 1000 <= Date.now())) continue;
+        void refreshBookingProposals(card);
     }
 }
 
@@ -7097,16 +7129,22 @@ async function refreshBookingProposals(root) {
         const actionId = card.dataset.bookingProposal;
         if (!actionId) return;
         const observation = bookingProposalResults.get(actionId);
+        const version = bookingProposalVersions.get(actionId);
+        const queryVersion = String(version || 0);
+        if (card.dataset.bookingQuery === queryVersion) return;
+        card.dataset.bookingQuery = queryVersion;
         const snapshot = captureConversationScroll();
         card.innerHTML = '<strong>正在核对预约状态</strong><p role="status">正在只读查询，不会提交预约或发送邮件。</p>';
         restoreConversationScroll(snapshot);
         try {
             const result = await apiRequest(`/bookings/proposals/${encodeURIComponent(actionId)}`, {timeoutMs:10000});
             if (scope !== conversationHistoryScope || !card.isConnected || card.dataset.busy === "true"
-                || bookingProposalResults.get(actionId) !== observation) return;
+                || bookingProposalResults.get(actionId) !== observation || bookingProposalVersions.get(actionId) !== version) return;
             const scroll = captureConversationScroll();
             const proposal = result.proposal;
             if (!proposal || proposal.action_id !== actionId) throw Error("预约状态回执不匹配，请重试查询。");
+            card.dataset.bookingState = proposal.status;
+            card.dataset.bookingExpires = String(proposal.expires_at || 0);
             if (proposal.status === "pending" || (proposal.status === "confirmed" && proposal.execution_status === "awaiting_result")) {
                 const shell = document.createElement("div");
                 shell.innerHTML = buildBookingProposalHtml(proposal, {ignoreCache:true});
@@ -7127,14 +7165,17 @@ async function refreshBookingProposals(root) {
             persistActiveConversationSnapshot();
         } catch (error) {
             if (scope !== conversationHistoryScope || !card.isConnected || card.dataset.busy === "true"
-                || bookingProposalResults.get(actionId) !== observation) return;
+                || bookingProposalResults.get(actionId) !== observation || bookingProposalVersions.get(actionId) !== version) return;
             const scroll = captureConversationScroll();
+            card.dataset.bookingState = "unknown";
             card.innerHTML = `<strong>预约状态待核验 · 未执行新的操作</strong><p role="status">无法核对当前状态；不代表草稿仍待确认，也不代表未提交。${escapeHtml(error.message)}</p><button type="button" data-booking-proposal-refresh>重试查询状态（不提交）</button>`;
             const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
             if (operation) operation.textContent = "操作状态 · 预约状态待核验；未执行新的操作";
             rememberBookingObservation(card);
             restoreConversationScroll(scroll);
             persistActiveConversationSnapshot();
+        } finally {
+            if (card.dataset.bookingQuery === queryVersion) delete card.dataset.bookingQuery;
         }
     }));
 }
@@ -7148,6 +7189,7 @@ async function handleBookingProposalClick(event) {
     if (!card || card.dataset.busy === "true") return;
     const scope = conversationHistoryScope;
     const cancel = button.hasAttribute("data-booking-proposal-cancel");
+    let reconcileAfterConflict = false;
     const status = card.querySelector(".booking-proposal-status");
     const buttons = [...card.querySelectorAll("button")];
     card.dataset.busy = "true";
@@ -7157,6 +7199,26 @@ async function handleBookingProposalClick(event) {
     status.textContent = cancel ? "正在放弃草稿；不会提交预约。" : "正在提交已确认的申请；请勿重复创建草稿。";
     bookingProposalResults.set(card.dataset.bookingProposal, card.innerHTML);
     try {
+        // A stale tab must inspect the owner-bound authority before POST. This
+        // read cannot approve or replay; the atomic server transition still
+        // fences a concurrent cancel/confirm/expiry after this snapshot.
+        const inspected = await apiRequest(`/bookings/proposals/${encodeURIComponent(card.dataset.bookingProposal)}`, {timeoutMs:10000});
+        if (scope !== conversationHistoryScope) return;
+        const proposal = inspected.proposal;
+        if (!proposal || proposal.action_id !== card.dataset.bookingProposal) throw Error("预约状态回执不匹配，请只读查询。");
+        card.dataset.bookingState = proposal.status;
+        card.dataset.bookingExpires = String(proposal.expires_at || 0);
+        const retryApproved = !cancel && proposal.status === "confirmed" && proposal.execution_status === "awaiting_result";
+        if (proposal.status !== "pending" && !retryApproved) {
+            if (proposal.execution_status === "awaiting_result") {
+                const shell = document.createElement("div");
+                shell.innerHTML = buildBookingProposalHtml(proposal, {ignoreCache:true});
+                card.innerHTML = shell.firstElementChild.innerHTML;
+            } else card.innerHTML = buildBookingReceiptContent(inspected);
+            const operation = card.closest(".message-assistant")?.querySelector(".response-operation");
+            if (operation) operation.textContent = `操作状态 · ${inspected.message || "已核对原申请，未执行新的操作"}`;
+            return;
+        }
         const result = await apiRequest(`/bookings/${cancel ? "cancel" : "confirm"}-proposal`, {
             method:"POST", body:JSON.stringify({action_id:card.dataset.bookingProposal}),
         });
@@ -7185,10 +7247,12 @@ async function handleBookingProposalClick(event) {
             : "操作状态 · 提交结果待核验；可能已登记，请核对同一申请";
         buttons.forEach(item => item.disabled = false);
         if (["confirmation_expired", "confirmation_already_cancelled", "confirmation_not_found"].includes(error.code)) {
+            reconcileAfterConflict = true;
             card.querySelector("strong").textContent = error.code === "confirmation_expired" ? "草稿已过期 · 未提交" : "草稿已不可用 · 请重新准备";
             status.textContent = error.message;
             buttons.forEach(item => item.disabled = true);
         } else if (error.code === "confirmation_already_confirmed") {
+            reconcileAfterConflict = true;
             card.querySelector("strong").textContent = "已确认过提交 · 不能通过放弃草稿撤回";
             status.textContent = error.message;
         }
@@ -7198,11 +7262,24 @@ async function handleBookingProposalClick(event) {
             // A late canonical chat render may have replaced the clicked card.
             // Apply the observed outcome to that live copy, not just a detached node.
             rememberBookingObservation(card);
+            publishBookingInvalidation(card.dataset.bookingProposal);
             persistActiveConversationSnapshot();
+            if (reconcileAfterConflict) await refreshBookingProposals(card);
         }
     }
 }
 document.addEventListener("click", handleBookingProposalClick);
+bookingProposalChannel?.addEventListener("message", event => receiveBookingInvalidation(event.data));
+globalThis.addEventListener("storage", event => {
+    if (event.key !== "twin-booking-invalidation-v1" || !event.newValue) return;
+    try { receiveBookingInvalidation(JSON.parse(event.newValue)); } catch (_) { /* unrelated/malformed signal */ }
+});
+globalThis.addEventListener("focus", () => refreshVisibleBookingProposals());
+globalThis.addEventListener("pageshow", () => refreshVisibleBookingProposals());
+document.addEventListener("visibilitychange", () => refreshVisibleBookingProposals());
+// Local expiry is a fail-closed UX fence, never permission to submit. Server
+// expiry/owner validation is authoritative even with a skewed or suspended tab.
+setInterval(() => refreshVisibleBookingProposals({expiredOnly:true}), 1000);
 
 // Following is opt-in, never inferred from a short answer fitting the viewport.
 // Start at the answer's beginning and keep that reading position as it grows.

@@ -116,6 +116,39 @@ def test_rejected_confirmed_request_does_not_notify(meeting):
     assert meeting._notifications.journal.read(key)["tasks"]["notify"]["result"]["status"] == "skipped"
 
 
+def test_two_connections_stale_cancel_confirm_and_expired_replay(meeting, monkeypatch):
+    from sage.runtime.action_confirmation import ActionConfirmations
+    import sage_faculty_twin.meeting as module
+    now = [100]
+    monkeypatch.setattr(module, "ActionConfirmations", lambda store, **kwargs:
+        ActionConfirmations(store, clock=lambda: now[0], **kwargs))
+    sibling = MeetingService(meeting._settings)
+    try:
+        action = meeting.prepare_proposal("guest:a", request()).proposal["action_id"]
+        assert sibling.read_proposal("guest:a", action).proposal["status"] == "pending"
+        meeting.decide_proposal("guest:a", action, decision="cancel")
+        with pytest.raises(ConfirmationError, match="already_cancelled"):
+            sibling.decide_proposal("guest:a", action, decision="confirm")
+        assert not sibling.list_bookings() and not outbox(meeting)
+        action = meeting.prepare_proposal("guest:a", request()).proposal["action_id"]
+        with ThreadPoolExecutor(2) as pool:
+            results = list(pool.map(lambda service:
+                service.decide_proposal("guest:a", action, decision="confirm"), [meeting, sibling]))
+        assert results[0].booking.booking_id == results[1].booking.booking_id
+        with pytest.raises(ConfirmationError, match="already_confirmed"):
+            sibling.decide_proposal("guest:a", action, decision="cancel")
+        expired = meeting.prepare_proposal("guest:a", request(), operation_id="expires").proposal
+        now[0] = expired["expires_at"] + 1
+        assert sibling.read_proposal("guest:a", expired["action_id"]).proposal["status"] == "expired"
+        assert sibling.prepare_proposal("guest:a", request(), operation_id="expires").proposal["status"] == "expired"
+        with pytest.raises(ConfirmationError, match="expired"):
+            sibling.decide_proposal("guest:a", expired["action_id"], decision="confirm")
+        assert sibling.read_proposal("guest:a", action).proposal["execution_status"] == "committed"
+        assert len(sibling.list_bookings()) == len(outbox(meeting)) == 1
+    finally:
+        sibling.close()
+
+
 def test_browser_utc_input_uses_calendar_timezone_and_conflicts_with_local_record(meeting):
     utc = request().model_copy(update={
         "preferred_start": datetime.fromisoformat("2030-01-07T02:00:00+00:00"),

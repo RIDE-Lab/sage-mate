@@ -2,6 +2,7 @@ const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('nod
 const source=fs.readFileSync(path.join(__dirname,'../src/sage_faculty_twin/web/app.js'),'utf8');
 let live=[],calls=[];
 const context={conversationHistoryScope:'owner-a',bookingProposalResults:new Map(),
+ bookingProposalVersions:new Map(),
  captureConversationScroll:()=>321,restoreConversationScroll:n=>assert.equal(n,321),
  persistActiveConversationSnapshot(){},buildNotificationStatusHtml:()=>'',
  document:{querySelectorAll:()=>live,createElement(){let html='';return {
@@ -33,6 +34,10 @@ function api(handler){context.apiRequest=async(url,options)=>{
  assert(!context.buildBookingProposalHtml({action_id:'same-action',status:'pending'}).includes('data-booking-proposal-confirm'));
  api(()=>response('cancelled'));await context.refreshBookingProposals(c);
  assert(c.innerHTML.includes('已放弃草稿'));
+ c=card();live=[c];context.bookingProposalResults.clear();api(()=>response('expired'));
+ await context.refreshBookingProposals(c);assert(c.innerHTML.includes('草稿已过期'));
+ assert(!c.innerHTML.includes('data-booking-proposal-confirm'));
+ assert(!context.buildBookingProposalHtml({action_id:'expired-local',status:'pending',expires_at:1,payload:{}}).includes('data-booking-proposal-confirm'));
  c=card();live=[c];context.bookingProposalResults.clear();
  api(()=>response('confirmed',{accepted:true,booking:{booking_id:'one',status:'已确认'},
   proposal:{action_id:'same-action',status:'confirmed',execution_status:'committed'}}));
