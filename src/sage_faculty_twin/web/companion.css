@@ -1045,3 +1045,17 @@ body.onboarding-active .sage-companion,
         height: 80px;
     }
 }
+
+@media (max-width: 760px) {
+    /* The welcome composer is in normal flow: do not reserve it twice. */
+    .chat-shell.chat-empty[data-companion-placement] .chat-stream {
+        padding-bottom: 14px;
+        scroll-padding-bottom: 14px;
+    }
+    /* In a conversation the composer is fixed. Include its real dock/tool
+       height so the final message can scroll fully above all controls. */
+    .chat-shell[data-companion-placement]:not(.chat-empty) .chat-stream {
+        padding-bottom: calc(var(--chat-composer-height, 220px) + 12px);
+        scroll-padding-bottom: calc(var(--chat-composer-height, 220px) + 12px);
+    }
+}
