@@ -1030,3 +1030,18 @@ body.onboarding-active .sage-companion,
     .sage-companion-toggle:hover,
     .sage-companion-toggle[aria-expanded="true"] { transform: none; }
 }
+
+/* A dedicated empty strip prevents the mascot from covering any content or
+   composer actions when the viewport has no spare reading gutter. */
+.sage-companion-lane { display: none; }
+.chat-shell[data-companion-placement="dock"]:has(#sage-companion:not([hidden])) .sage-companion-lane {
+    display: block;
+    flex: 0 0 auto;
+    height: 88px;
+    width: 100%;
+}
+@media (max-width: 720px) {
+    .chat-shell[data-companion-placement="dock"]:has(#sage-companion:not([hidden])) .sage-companion-lane {
+        height: 80px;
+    }
+}

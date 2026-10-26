@@ -556,45 +556,30 @@
         }
 
         movementBounds() {
-            const shellRect = this.chatShell?.getBoundingClientRect();
-            const toggleRect = this.toggle?.getBoundingClientRect();
-            const formRect = this.chatForm?.getBoundingClientRect();
-            const contentRect = this.chatShell?.querySelector(".composer-inner")?.getBoundingClientRect();
+            const shellRect = this.chatShell.getBoundingClientRect();
+            const toggleRect = this.toggle.getBoundingClientRect();
+            const contentRect = this.chatShell.querySelector(".composer-inner").getBoundingClientRect();
             const margin = 12;
-            const usesViewportPosition = globalThis.matchMedia?.("(max-width: 720px)").matches;
-            const chatIsEmpty = this.chatShell?.classList.contains("chat-empty");
-            let left = Math.max(margin, shellRect?.left || margin);
-            let right = Math.min(globalThis.innerWidth - margin, shellRect?.right || globalThis.innerWidth - margin);
-            const top = Math.max(margin, shellRect?.top || margin);
-            let bottom = Math.min(
-                globalThis.innerHeight - margin,
-                (formRect?.top || globalThis.innerHeight) - margin
-            );
-            // On the narrow empty landing screen, keep the wandering companion
-            // above the recommendation card so it never hides a seed question.
-            if (usesViewportPosition && this.chatShell?.classList.contains("chat-empty")) {
-                const seedRect = document.getElementById("seed-chips")?.getBoundingClientRect();
-                if (seedRect && seedRect.height > 0) {
-                    bottom = Math.min(bottom, seedRect.top - margin);
-                }
-            }
-            const width = toggleRect?.width || 64;
-            const height = toggleRect?.height || 64;
-            // Once a conversation starts, reserve the transcript column for
-            // reading.  On desktop the companion lives in the right gutter;
-            // on narrow screens it docks at the right edge above the composer.
-            // The empty landing page keeps the wider roaming area users expect.
-            if (!chatIsEmpty) {
-                const gutterLeft = (contentRect?.right || right) + 16;
-                if (!usesViewportPosition && gutterLeft + width <= right) {
-                    left = gutterLeft;
-                } else {
-                    left = Math.max(left, right - width);
-                }
-            }
-            const maxX = Math.max(left, right - width);
-            const maxY = Math.max(top, bottom - height);
-            return { minX: left, maxX, minY: top, maxY, width, height };
+            const width = toggleRect.width || 64;
+            const height = toggleRect.height || 64;
+            const right = Math.min(globalThis.innerWidth, shellRect.right) - margin;
+            const gutterLeft = contentRect.right + margin * 2;
+            const gutter = gutterLeft + width <= right;
+            // Reserve actual layout space when there is no outside reading gutter.
+            // Empty welcomes, restored chats, drag and wandering use the same bounds.
+            this.chatShell.dataset.companionPlacement = gutter ? "gutter" : "dock";
+            const region = gutter ? shellRect : this.chatShell.querySelector(".sage-companion-lane").getBoundingClientRect();
+            const formRect = this.chatForm.getBoundingClientRect();
+            const left = gutter ? gutterLeft : region.left + margin;
+            const top = region.top + margin;
+            const bottom = gutter ? Math.min(shellRect.bottom, formRect.top) - margin : region.bottom - margin;
+            return {
+                minX: left,
+                maxX: Math.max(left, (gutter ? right : region.right - margin) - width),
+                minY: top,
+                maxY: Math.max(top, bottom - height),
+                width, height,
+            };
         }
 
         clampPosition(left, top) {
@@ -959,7 +944,6 @@
             }
             const formRect = this.chatForm.getBoundingClientRect();
             const shellRect = this.chatShell.getBoundingClientRect();
-            const usesViewportPosition = globalThis.matchMedia?.("(max-width: 720px)").matches;
             const chatIsEmpty = this.chatShell.classList.contains("chat-empty");
             this.root.classList.toggle("is-conversation-docked", !chatIsEmpty);
             const toggleRect = this.toggle?.getBoundingClientRect();
@@ -993,19 +977,9 @@
                 void this.root.offsetWidth;
                 this.root.classList.remove("is-positioning");
             }
-            // A restored/wandering viewport position can be stale for one
-            // frame while the mobile composer reflows. Clamp it again after
-            // measuring the live form so the companion never covers input or
-            // recommendation chips.
-            if (usesViewportPosition && chatIsEmpty && !this.root.classList.contains("is-dragging")) {
-                const rect = this.root.getBoundingClientRect();
+            if (!this.hasFreePosition) {
                 const bounds = this.movementBounds();
-                if (rect.bottom > formRect.top - 12 || rect.top > bounds.maxY) {
-                    this.root.classList.add("is-positioning");
-                    this.setViewportPosition(rect.left, bounds.maxY);
-                    void this.root.offsetWidth;
-                    this.root.classList.remove("is-positioning");
-                }
+                this.setViewportPosition(bounds.maxX, bounds.maxY);
             }
             globalThis.requestAnimationFrame(() => {
                 this.syncPanelPlacement();
