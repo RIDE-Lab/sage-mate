@@ -24,6 +24,9 @@
     --radius-xl: 12px;
     --radius-lg: 10px;
     --radius-md: 8px;
+    --compact-control-height: 40px;
+    --compact-control-radius: 8px;
+    --compact-control-padding: 10px;
     --brand-ink: #0f766e;
     --brand-soft: #edf7f5;
 }
@@ -352,16 +355,63 @@ select {
     border-color: var(--line);
     border-radius: 10px;
     background: #fafaf8;
+    flex-wrap: wrap;
 }
 
 .composer-pill-toggle {
+    box-sizing: border-box;
+    height: var(--compact-control-height);
+    min-height: var(--compact-control-height);
+    padding: 0 var(--compact-control-padding);
     border-color: #85857e;
-    border-radius: 8px;
+    border-radius: var(--compact-control-radius);
     background: #ffffff;
     color: #666661;
     box-shadow: none;
     transform: none;
     transition: none;
+}
+
+/* Compact toolbar controls must not inherit full-size form-field geometry. */
+.composer-tools-left,
+.composer-tools-right {
+    min-width: 0;
+    max-width: 100%;
+    flex-wrap: wrap;
+}
+
+.composer-tools-row .composer-icon-button,
+.composer-tools-row .token-usage-toggle {
+    box-sizing: border-box;
+    width: var(--compact-control-height);
+    height: var(--compact-control-height);
+    min-height: var(--compact-control-height);
+    border-radius: var(--compact-control-radius);
+}
+
+.composer-tools-row .token-usage-toggle {
+    width: auto;
+    padding: 0 var(--compact-control-padding);
+}
+
+.composer-tools-row #web-search-mode {
+    width: 6em;
+    min-width: 0;
+    max-width: 6em;
+    height: 100%;
+    min-height: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font: inherit;
+    appearance: auto;
+    box-shadow: none;
+}
+
+@media (max-width: 760px) {
+    :root { --compact-control-height: 44px; }
 }
 
 .composer-pill-toggle:hover {
@@ -972,7 +1022,6 @@ html[data-theme="dark"] .primary-button:hover {
 .message-assistant .message-pending-frame { color: var(--ink); background: var(--surface); border: 1px solid var(--line); }
 .web-research-status span, .web-research-status small { opacity: .8; }
 .web-research-status[data-web-status="running"] strong { color: var(--accent); }
-#web-search-mode { max-width: 15rem; color: inherit; background: transparent; border: 0; font: inherit; }
 #web-search-mode option { color: CanvasText; background: Canvas; }
 .composer-pill-toggle.web-search-pill > span { display: inline-flex; align-items: center; gap: .35rem; white-space: nowrap; flex: none; }
 .web-research-status details { min-width: 0; }

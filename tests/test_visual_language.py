@@ -31,3 +31,21 @@ def test_visual_refresh_preserves_native_states_and_accessible_focus():
     revisions = re.findall(r'(?:styles\.4222\.css|minimal\.1009\.css|app\.4222\.js)\?rev=([^"\s]+)', html)
     assert len(revisions) == 3 and len(set(revisions)) == 1
     assert re.fullmatch(r"[a-z][a-z0-9-]+", revisions[0])
+
+
+def test_composer_modes_share_compact_geometry_without_shrinking_forms():
+    css = THEME.read_text()
+    mode = re.search(r"\.composer-pill-toggle\s*\{([^}]+)\}", css).group(1)
+    for declaration in (
+        "height: var(--compact-control-height)",
+        "padding: 0 var(--compact-control-padding)",
+        "border-radius: var(--compact-control-radius)",
+    ):
+        assert declaration in mode
+    select = re.search(r"\.composer-tools-row #web-search-mode\s*\{([^}]+)\}", css).group(1)
+    assert "width: 6em" in select and "padding: 0" in select
+    assert "appearance: auto" in select  # Keep a native dropdown affordance.
+    assert "--compact-control-height: 44px" in css
+    html = (THEME.parent / "index.html").read_text()
+    assert '<option value="always">必须联网</option>' in html
+    assert "任何模式都不能越过私密资料边界" in html
