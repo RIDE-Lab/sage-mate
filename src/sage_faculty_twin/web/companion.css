@@ -101,14 +101,6 @@ body.onboarding-active .sage-companion,
     box-shadow: 0 10px 26px color-mix(in srgb, var(--companion-accent-strong) 14%, transparent);
 }
 
-@media (max-width: 720px) {
-    /* A 390px transcript has no true side gutter. Keep the pet available on
-       the landing page and through the sidebar, but never float it over an
-       active answer or the composer. */
-    .sage-companion.is-conversation-docked {
-        display: none;
-    }
-}
 
 .sage-companion.is-dragging .sage-companion-toggle {
     cursor: grabbing;
