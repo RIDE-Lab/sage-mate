@@ -394,6 +394,17 @@ select {
     padding: 0 var(--compact-control-padding);
 }
 
+/* Modal headings can wrap; their close action must remain a single target. */
+.modal-head > div { min-width: 0; }
+.modal-head > .icon-button {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    min-height: var(--compact-control-height);
+    padding: 0 var(--compact-control-padding);
+    border-radius: var(--compact-control-radius);
+    white-space: nowrap;
+}
+
 .composer-tools-row #web-search-mode {
     width: 6em;
     min-width: 0;

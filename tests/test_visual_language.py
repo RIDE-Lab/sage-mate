@@ -46,6 +46,8 @@ def test_composer_modes_share_compact_geometry_without_shrinking_forms():
     assert "width: 6em" in select and "padding: 0" in select
     assert "appearance: auto" in select  # Keep a native dropdown affordance.
     assert "--compact-control-height: 44px" in css
+    close = re.search(r"\.modal-head > \.icon-button\s*\{([^}]+)\}", css).group(1)
+    assert "flex: 0 0 auto" in close and "white-space: nowrap" in close
     html = (THEME.parent / "index.html").read_text()
     assert '<option value="always">必须联网</option>' in html
     assert "任何模式都不能越过私密资料边界" in html
