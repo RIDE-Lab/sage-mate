@@ -612,10 +612,8 @@
             }
             const clamped = this.clampPosition(left, top);
             const shellRect = this.chatShell?.getBoundingClientRect();
-            // The mobile media rule uses `position: fixed`, but the chat shell
-            // establishes a containing block; use shell-local coordinates in
-            // both layouts so a transformed/positioned shell cannot double
-            // offset the companion after a resize or reflow.
+            // Both layouts use the positioned chat shell as containing block.
+            // Keep a single coordinate space across resize and reflow.
             const localLeft = clamped.left - (shellRect?.left || 0);
             const localTop = clamped.top - (shellRect?.top || 0);
             this.root.style.setProperty("--sage-companion-travel-ms", `${Math.max(0, Math.round(duration))}ms`);
@@ -965,8 +963,8 @@
             const chatIsEmpty = this.chatShell.classList.contains("chat-empty");
             this.root.classList.toggle("is-conversation-docked", !chatIsEmpty);
             const toggleRect = this.toggle?.getBoundingClientRect();
-            const layoutBottom = usesViewportPosition ? globalThis.innerHeight : shellRect.bottom;
-            const layoutTop = usesViewportPosition ? 0 : shellRect.top;
+            const layoutBottom = shellRect.bottom;
+            const layoutTop = shellRect.top;
             const bottomOffset = Math.max(12, Math.ceil(layoutBottom - formRect.top + 12));
             const panelMaxHeight = Math.max(
                 160,

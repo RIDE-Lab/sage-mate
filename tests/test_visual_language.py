@@ -51,3 +51,12 @@ def test_composer_modes_share_compact_geometry_without_shrinking_forms():
     html = (THEME.parent / "index.html").read_text()
     assert '<option value="always">必须联网</option>' in html
     assert "任何模式都不能越过私密资料边界" in html
+
+
+def test_companion_has_one_coordinate_space_across_responsive_breakpoint():
+    css = (THEME.parent / "companion.css").read_text()
+    js = (THEME.parent / "companion.js").read_text()
+    assert ".sage-companion { position: fixed" not in css
+    assert "translateY(-148px)" not in css
+    assert "const layoutBottom = shellRect.bottom;" in js
+    assert "const localTop = clamped.top - (shellRect?.top || 0);" in js

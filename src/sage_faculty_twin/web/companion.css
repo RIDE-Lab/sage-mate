@@ -1000,22 +1000,13 @@ body.onboarding-active .sage-companion,
 }
 
 @media (max-width: 720px) {
-    .sage-companion { position: fixed; right: 12px; }
+    .sage-companion { right: 12px; }
     .sage-companion-toggle { width: 56px; height: 56px; border-radius: 20px; }
     .sage-companion-character { transform: scale(0.9); }
 }
 
-/* The empty landing card is a primary action surface. Keep the little Sage
-   in the open greeting area while it wanders on narrow screens; once a chat
-   starts, the normal composer-relative bounds apply again. */
-@media (max-width: 720px) {
-    .chat-shell.chat-empty .sage-companion {
-        transform: translateY(-148px);
-    }
-    .chat-shell.chat-empty .sage-companion.is-dragging {
-        transform: none;
-    }
-}
+/* movementBounds owns narrow-screen placement. A second CSS translation
+   would move the already-clamped toggle across the topbar and its menu. */
 
 @media (prefers-reduced-motion: reduce) {
     .sage-companion,
