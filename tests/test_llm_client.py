@@ -1745,3 +1745,34 @@ def test_native_tool_calling_capability_is_explicit() -> None:
 
     client._settings = AppSettings(llm_tool_calling_mode="native", _env_file=None)
     assert client.supports_native_tool_calling is True
+
+
+def test_web_fragment_is_reclassified_once_without_changing_question_or_sources():
+    client = object.__new__(VllmChatClient)
+    question = '大模型生成一段回答，背后经历了哪些步骤？'
+    responses = iter([
+        dict(task_mode='facts',web_intent=dict(need='sources',disclosure='public',query='大')),
+        dict(task_mode='facts',web_intent=dict(need='none',disclosure='public',query='大模型')),
+    ])
+    calls=[]
+    def classify(system,user):
+        calls.append(user)
+        return json.dumps(next(responses))
+    client._request_intent_classification=classify
+    intent=client.classify_interaction_intent_sync(question)
+    assert intent.web_intent['query']=='大模型' and intent.web_intent['need']=='none'
+    assert intent.knowledge_sources is None
+    assert len(calls)==2 and all(question in prompt for prompt in calls)
+    assert 'one-character word fragment' in calls[1]
+
+
+def test_invalid_web_query_cannot_loop_or_be_replaced_by_whole_private_question():
+    client=object.__new__(VllmChatClient)
+    calls=[]
+    def classify(*args):
+        calls.append(args)
+        return json.dumps(dict(task_mode='facts',web_intent=dict(need='sources',disclosure='public',query='大')))
+    client._request_intent_classification=classify
+    with pytest.raises(ValueError,match='word fragment'):
+        client.classify_interaction_intent_sync('大模型生成一段回答，背后经历了哪些步骤？')
+    assert len(calls)==2

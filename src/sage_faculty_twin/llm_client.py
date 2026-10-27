@@ -1181,13 +1181,16 @@ class VllmChatClient:
             try:
                 SourceRequest(None if raw_intent.knowledge_sources is None else tuple(raw_intent.knowledge_sources),
                               raw_intent.source_directive).validate(question)
+                WebIntent.parse(raw_intent.web_intent).validate_query(question)
                 break
             except ValueError as exc:
                 if attempt:
                     raise
                 # Reclassify the unchanged request with its context. Never
                 # silently widen an explicit private/empty source constraint.
-                user_prompt += f"\nPrior source decision rejected: {exc}. Reclassify the current question; include source_directive."
+                user_prompt += (f"\nPrior source decision rejected: {exc}. Reclassify the unchanged current question; "
+                    "include source_directive and a verbatim complete public subject for any public web query. "
+                    "Stable explanations have need=none; do not invent a requirement for current information.")
         AnswerTask(raw_intent.task_mode, raw_intent.task_directive).validate(question)
         WebIntent.parse(raw_intent.web_intent)
         return self._normalize_interaction_intent(
