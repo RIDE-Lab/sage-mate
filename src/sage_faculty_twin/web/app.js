@@ -8991,6 +8991,7 @@ function nativeNodeAppearance(name, observed) {
         "reassess-coverage-correction":["复查映射纠正","checklist","纠正"],
         "reassess-coverage-valid":["复查映射有效","check","有效"],
         "coverage-ready":["依据齐备","branch"],"supplement-evidence":["定向补检","search","补检"],
+        "minimize-evidence":["完整覆盖与来源精简","checklist","精简"],
         "reassess-coverage":["覆盖复查","checklist","复查"],"compose-source-plan":["来源计划","book","编排"],
         "research-proposals":["研究复核","branch"],"no-proposal-review":["无需复核","branch"],
         "review-proposals":["建议复核","checklist","复核"],"verify-evidence-answer":["发布校验","check","校验"],
