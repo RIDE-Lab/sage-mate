@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 from sage.runtime.source_answer_plan import PLAN_SYSTEM_PROMPT
 from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT
-from sage.runtime.evidence_workflow import COVERED_PLAN_SYSTEM_PROMPT
 from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT
 from research_fixture import experiment_response
 
@@ -110,7 +109,7 @@ class IntentAwareLLMClient:
                     for source in data["sources"]]} for r in data["requirements"]]})
         if system_prompt == EXPERIMENT_SYSTEM_PROMPT:
             return experiment_response(json.loads(user_prompt)["digest"])
-        if system_prompt in {PLAN_SYSTEM_PROMPT, COVERED_PLAN_SYSTEM_PROMPT}:
+        if system_prompt == PLAN_SYSTEM_PROMPT:
             # Workflow fixture selects available sources. Relevance/real-model
             # quality is a separate live gate; no generated fact is approved here.
             data = json.loads(user_prompt)
