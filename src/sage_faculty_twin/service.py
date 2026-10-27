@@ -2026,7 +2026,8 @@ class FacultyTwinWorkflowSupport:
             checked_at = timestamp
             self._append_knowledge_trace(context, key="web_search", title="公开网页检索",
                 summary=summary, status=status,
-                detail=decision.reason + (f" 检索时间：{timestamp}" if timestamp else ""),
+                detail=decision.reason + (f" 搜索主题：{decision.query}" if decision.allowed and decision.query else "")
+                    + (f" 检索时间：{timestamp}" if timestamp else ""),
                 sources=[dict(title=hit.title, url=hit.url, retrieved_at=timestamp)
                     for hit in candidates] if status == "completed" else [],
                 duration_ms=self._elapsed_ms(started_at))
@@ -4490,6 +4491,14 @@ class FacultyTwinWorkflowSupport:
                             context.interaction_intent.task_mode or "facts",
                             context.interaction_intent.task_directive) if context.interaction_intent else AnswerTask("facts"),
                         timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds)
+            except Exception as exc:
+                if getattr(exc, "error_type", None) == "InvalidEvidenceCoverage":
+                    from sage.runtime.evidence_coverage import InvalidEvidenceCoverage
+                    # Log only a fixed validator category, never model text,
+                    # source bodies, credentials, or an exception traceback.
+                    code = InvalidEvidenceCoverage(getattr(exc, "message", "")).code
+                    _logger.warning("Evidence coverage rejected: %s", code)
+                raise
             finally:
                 if provider is None:
                     runtime.close()
