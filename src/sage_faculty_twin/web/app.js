@@ -1550,6 +1550,7 @@ async function renderSeedChips(profile) {
                 chatQuestion.value = question;
                 if (courseContextInput && btn.dataset.seedContext) {
                     courseContextInput.value = btn.dataset.seedContext;
+                    lastAutoCourseContext = btn.dataset.seedContext;
                 }
                 autoResizeTextarea();
                 chatQuestion.focus();
@@ -2947,7 +2948,7 @@ chatForm.addEventListener("submit", async (event) => {
     const payload = {
         student_name: document.getElementById("student-name").value,
         student_email: document.getElementById("student-email").value || null,
-        course_context: document.getElementById("course-context").value || null,
+        course_context: submittedCourseContext(),
         visitor_profile: currentChatVisitorProfile(),
         question: onboardingWrappedQuestion,
         conversation_id: activeConversationId,
@@ -3360,7 +3361,12 @@ chatQuestion.addEventListener("input", () => {
     }
     autoResizeTextarea();
 });
-courseContextInput?.addEventListener("input", updateComposerContextChips);
+courseContextInput?.addEventListener("input", () => {
+    // A user edit is actual request context, even if its text happens to
+    // equal a profile's presentation label.
+    lastAutoCourseContext = null;
+    updateComposerContextChips();
+});
 chatQuestion.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
         return;
@@ -3674,6 +3680,13 @@ function applyVisitorProfilePresentation({ syncCourseContext = false } = {}) {
 
 function markPresentationReady() {
     document.body?.classList.remove("presentation-booting");
+}
+
+function submittedCourseContext() {
+    const value = courseContextInput?.value?.trim() || "";
+    // Identity labels and seed-chip decorations are UI metadata. Sending
+    // them as a course topic changes classification and retrieval ranking.
+    return value && value !== lastAutoCourseContext ? value : null;
 }
 
 function seedChatQuestion(question, courseContext = "") {

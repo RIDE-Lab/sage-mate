@@ -1,0 +1,18 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('src/sage_faculty_twin/web/app.js','utf8');
+const start = source.indexOf('function submittedCourseContext(');
+const context = {courseContextInput:{value:'初次来访 · 研究与公开资料'},lastAutoCourseContext:'初次来访 · 研究与公开资料'};
+vm.createContext(context);
+vm.runInContext(source.slice(start,source.indexOf('\nfunction seedChatQuestion(',start)),context);
+assert.equal(context.submittedCourseContext(),null,'profile decoration must not enter query');
+context.courseContextInput.value='  计算机系统课程，第五章  ';
+assert.equal(context.submittedCourseContext(),'计算机系统课程，第五章','manual context remains available');
+context.courseContextInput.value='初次来访 · 研究与公开资料';
+context.lastAutoCourseContext=null;
+assert.equal(context.submittedCourseContext(),'初次来访 · 研究与公开资料','explicit user edits remain authoritative');
+context.courseContextInput.value='';
+assert.equal(context.submittedCourseContext(),null);
+assert(source.includes('course_context: submittedCourseContext()'));
+console.log('Automatic profile/seed labels stay out of request context; manual context is preserved');
