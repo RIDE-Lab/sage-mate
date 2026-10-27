@@ -232,3 +232,22 @@ def test_legacy_wiki_records_not_retrievable_through_private_lane(tmp_path):
     hits = sources.search('quartz', visitor_profile='lab_member')
     assert all(not h.source_name.startswith('wiki:') for h in hits if h.metadata['retrieval_source']=='private')
     assert sources.get_visible_document('private::'+record.document_id, visitor_profile='lab_member') is None
+
+
+def test_member_source_pool_preserves_guest_wiki_candidates():
+    from sage_faculty_twin.models import KnowledgeSearchHit
+    class Store:
+        def __init__(self, origin): self.origin = origin
+        def list_documents(self): return []
+        def search(self, query, **kwargs):
+            return [KnowledgeSearchHit(document_id=str(i), title=f'{self.origin}-{i}',
+                excerpt='synthetic', score=1, source_name=self.origin) for i in range(3)]
+    sources = KnowledgeSources(Store('private'), Store('public'), top_k=3)
+    try:
+        guest = sources.search('synthetic generation question', visitor_profile='general_visitor')
+        member = sources.search('synthetic generation question', visitor_profile='lab_member')
+        assert {h.document_id for h in guest} <= {h.document_id for h in member}
+        assert len(guest) == 3 and len(member) == 6
+        assert [h.document_id for h in member if h.metadata['retrieval_source']=='wiki'] == [h.document_id for h in guest]
+    finally:
+        sources.close()

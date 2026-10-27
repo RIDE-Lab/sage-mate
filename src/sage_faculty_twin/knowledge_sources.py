@@ -127,12 +127,9 @@ class KnowledgeSources:
                 if not (hit.source_name or '').startswith('wiki:') and hit.source_name not in SOURCE_OWNERSHIP]))
         # Rank-position interleaving avoids comparing incompatible score scales
         # across independently indexed sources. Preserve per-hit diagnostic score.
-        merged = []
-        for rank in range(limit):
-            for origin, hits in lanes:
-                if rank < len(hits):
-                    merged.append(self._label(hits[rank], origin))
-        return merged[:limit]
+        from sage.runtime.evidence_relevance import interleave_source_candidates
+        return list(interleave_source_candidates(
+            [[self._label(hit, origin) for hit in hits] for origin, hits in lanes], limit))
 
     def get_visible_document(self, document_id, *, visitor_profile=None, admin_role=None,
                              selection: SourceSelection = SourceSelection()):

@@ -3,9 +3,8 @@
 import json
 
 from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT, coverage_response_format
-from sage.runtime.evidence_workflow import COVERED_PLAN_SYSTEM_PROMPT
 from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT, experiment_response_format
-from sage.runtime.source_answer_plan import PlanSource, source_plan_response_format
+from sage.runtime.source_answer_plan import PlanSource
 
 from .request_context import raise_if_request_cancelled
 
@@ -60,14 +59,6 @@ class TwinEvidencePorts:
                 results.append(PlanSource(source_id, hit.title,
                     str(hit.metadata.get("wiki_url") or ""), hit.source_content))
         return tuple(results)
-
-    def compose(self, request, assessment):
-        payload = json.loads(request.payload)
-        payload["coverage"] = [{"requirement_id": item.requirement_id,
-            "witnesses": [vars(witness) for witness in item.witnesses]} for item in assessment.items]
-        return self._call(COVERED_PLAN_SYSTEM_PROMPT,
-            json.dumps(payload, ensure_ascii=False), namespace=f"source-plan:{request.digest}",
-            response_format=source_plan_response_format(request))
 
     def plan_experiments(self, request, plan):
         payload = json.loads(request.payload)

@@ -62,7 +62,7 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
     assert "https://example.org/full/path/" in answer
     assert "作者没有测量" not in answer
     support._validate_source_answer(context)
-    assert len(calls) == 2  # Native coverage and composition; no gratuitous repair/review.
+    assert len(calls) == 1  # Canonical selection from coverage; no second model document picker.
     assert context.source_audit_digest
     context.answer += "作者没有测量"
     with pytest.raises(SourceAuditRejected):
@@ -121,7 +121,7 @@ def test_selected_sources_keep_complete_candidate_binding_without_manual_overflo
             "inferences": []})
     support._call_compact_retry_sync = call
     response = support.render_chat_response(context)
-    assert len(calls) == 2
+    assert len(calls) == 1
     assert len(context.evidence_work.candidates) == 2
     assert context.source_answer_plan.source_ids == ("knowledge:1",)
     assert "unrelated tutorial" not in response.answer
