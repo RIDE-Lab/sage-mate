@@ -4509,8 +4509,8 @@ class FacultyTwinWorkflowSupport:
         context.decision_mode = "source_plan"
         self._validate_source_answer(context)
         self._append_trace(
-            context, key="source_audit", title="来源原文完整性校验",
-            summary="事实部分由 SAGE 从所选来源原文生成，未改写或截断。",
+            context, key="source_audit", title="回答来源与完整性校验",
+            summary="SAGE 围绕问题组织正文，逐句核对来源并检查漏答；完整来源保留在回答依据。",
             detail=(f"覆盖检查保留 {len(context.evidence_work.assessment.missing_ids)} 项待补依据；"
                     "问题、来源、回答均已绑定。原文可追溯不代表来源内容已被独立证实。"),
             duration_ms=self._elapsed_ms(started_at),

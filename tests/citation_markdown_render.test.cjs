@@ -63,3 +63,13 @@ assert.ok(sandbox.buildFollowUpActionHtml({label:'Task', title:'Read', detail:'N
 assert.equal(sandbox.formatMessageContent('- Parent\n    * Child\n    * Child two\n- Next'), '<ul><li>Parent<ul><li>Child</li><li>Child two</li></ul></li><li>Next</li></ul>');
 assert.equal(sandbox.formatMessageContent('1. Parent\n    - Child\n        1. Deep\n2. Next'), '<ol><li>Parent<ul><li>Child<ol><li>Deep</li></ol></li></ul></li><li>Next</li></ol>');
 assert.equal(sandbox.formatMessageContent('```text\n- Not a list\n    * Literal\n```'), '<pre>- Not a list\n    * Literal</pre>');
+// Natural answers render as prose without inheriting a document's link base.
+const naturalText = '先处理输入，再逐步生成回答。\n\n1. 处理已有输入。\n2. 利用缓存生成后续内容。';
+const naturalBlocks = [{kind:'answer', markdown:naturalText}];
+assert.equal(sandbox.hasMatchingSourceBlocks(naturalText, naturalBlocks), true);
+assert.ok(sandbox.formatSourceAnswer(naturalText, naturalBlocks).includes('<ol>'));
+assert.ok(!sandbox.formatSourceAnswer(naturalText, naturalBlocks).includes('来源原文'));
+assert.ok(!sandbox.formatSourceAnswer(naturalText, naturalBlocks).includes('<a '));
+
+assert.ok(sandbox.formatMessageContent('1. First step.\n\n2. Second step.').includes('<ol start="2">'));
+assert.equal(sandbox.formatMessageContent('3. Continue\n    2. Nested continuation'), '<ol start="3"><li>Continue<ol start="2"><li>Nested continuation</li></ol></li></ol>');

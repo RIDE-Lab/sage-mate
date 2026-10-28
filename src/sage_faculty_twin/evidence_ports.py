@@ -6,6 +6,11 @@ from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT, coverage_resp
 from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT, experiment_response_format
 from sage.runtime.source_answer_plan import PlanSource
 
+from sage.runtime.natural_answer import (
+    NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT,
+    natural_answer_response_format, audit_response_format,
+)
+
 from .request_context import raise_if_request_cancelled
 
 
@@ -42,6 +47,18 @@ class TwinEvidencePorts:
             json.dumps(payload, ensure_ascii=False),
             namespace=f"evidence-coverage-correction:{request.digest}",
             response_format=coverage_response_format(request))
+
+    def write_answer(self, request, rejected=None, failures=()):
+        payload = json.loads(request.payload)
+        if rejected is not None:
+            payload.update(rejected_answer=rejected, failed_units=list(failures))
+        return self._call(NATURAL_ANSWER_PROMPT, json.dumps(payload, ensure_ascii=False),
+            namespace=f"natural-answer:{request.digest}:{bool(rejected)}",
+            response_format=natural_answer_response_format(request))
+
+    def audit_answer(self, request):
+        return self._call(NATURAL_AUDIT_PROMPT, request.payload,
+            namespace=f"natural-answer-audit:{request.digest}", response_format=audit_response_format(request))
 
     def supplement(self, queries):
         results, seen = [], {hit.document_id for hit in self.context.knowledge_hits}

@@ -101,6 +101,13 @@ class IntentAwareLLMClient:
         **kwargs,
     ) -> str:
         del kwargs
+        from tests.natural_answer_stub import response as natural_response
+        try:
+            natural = natural_response(system_prompt, user_prompt)
+        except (ValueError, TypeError):
+            natural = None
+        if natural is not None:
+            return natural
         if system_prompt == COVERAGE_SYSTEM_PROMPT:
             data = json.loads(user_prompt)
             return json.dumps({"digest": data["digest"], "items": [

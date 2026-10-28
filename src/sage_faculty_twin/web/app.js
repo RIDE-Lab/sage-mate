@@ -8991,6 +8991,12 @@ function nativeNodeAppearance(name, observed) {
         "reassess-coverage-correction":["复查映射纠正","checklist","纠正"],
         "reassess-coverage-valid":["复查映射有效","check","有效"],
         "coverage-ready":["依据齐备","branch"],"supplement-evidence":["定向补检","search","补检"],
+        "write-natural-answer":["组织回答","message","写作"],
+        "review-natural-answer":["逐句来源与漏答检查","checklist","核对"],
+        "correct-natural-answer":["修正回答","message","修正"],
+        "review-corrected-answer":["修正后复查","checklist","复查"],
+        "answer-needs-correction":["需要修正","branch","待修"],
+        "answer-review-passed":["回答核验通过","checklist","通过"],
         "minimize-evidence":["完整覆盖与来源精简","checklist","精简"],
         "reassess-coverage":["覆盖复查","checklist","复查"],"compose-source-plan":["来源计划","book","编排"],
         "research-proposals":["研究复核","branch"],"no-proposal-review":["无需复核","branch"],
@@ -11923,7 +11929,7 @@ function escapeHtml(value) {
 function hasMatchingSourceBlocks(text, blocks) {
     return Array.isArray(blocks) && blocks.length > 0
         && blocks.every(block => block && typeof block.markdown === "string"
-            && ["notice", "source", "source_link", "inference"].includes(block.kind))
+            && ["answer", "notice", "source", "source_link", "inference"].includes(block.kind))
         && blocks.map(block => block.markdown).join("\n\n").trim() === text;
 }
 
@@ -11992,7 +11998,7 @@ function formatMessageContent(rawText, sourceUrl = null) {
         const entries = block.trimEnd().split('\n').map(line => {
             const match = line.match(/^([ \t]*)([-*+]|\d+\.)[ \t]+(.*)$/);
             return { indent: match[1].replace(/\t/g, '    ').length,
-                type: /^\d/.test(match[2]) ? 'ol' : 'ul', text: match[3] };
+                type: /^\d/.test(match[2]) ? 'ol' : 'ul', start: parseInt(match[2], 10), text: match[3] };
         });
         let position = 0;
         const renderLevel = indent => {
@@ -12002,7 +12008,8 @@ function formatMessageContent(rawText, sourceUrl = null) {
                 if (entry.type !== type) {
                     if (type) html += `</${type}>`;
                     type = entry.type;
-                    html += `<${type}>`;
+                    html += type === 'ol' && Number.isSafeInteger(entry.start) && entry.start !== 1
+                        ? `<ol start="${entry.start}">` : `<${type}>`;
                 }
                 html += `<li>${entry.text}`;
                 if (position < entries.length && entries[position].indent > indent) {

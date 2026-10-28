@@ -29,6 +29,14 @@ def setup_gate(tmp_path):
 
 def plan_response(payload):
     data = json.loads(payload)
+    if "units" in data:
+        from tests.natural_answer_stub import response
+        from sage.runtime.natural_answer import NATURAL_AUDIT_PROMPT
+        return response(NATURAL_AUDIT_PROMPT, payload)
+    if "requirements" not in data and "sources" in data:
+        from tests.natural_answer_stub import response
+        from sage.runtime.natural_answer import NATURAL_ANSWER_PROMPT
+        return response(NATURAL_ANSWER_PROMPT, payload)
     if "requirements" in data:
         return json.dumps({"digest": data["digest"], "items": [
             {"requirement_id": r["requirement_id"], "witnesses": [{
@@ -52,17 +60,19 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
     from sage_faculty_twin.models import ChatResponse
     restored = ChatResponse.model_validate_json(response.model_dump_json())
     assert restored.answer_blocks == response.answer_blocks
-    assert restored.answer_blocks[1].source_url == "https://example.org/full/path/"
+    assert restored.answer_blocks[0].kind == "answer" and restored.answer_blocks[0].source_url is None
     assert "\n\n".join(block.markdown for block in restored.answer_blocks).strip() == answer
     corrupted = response.model_dump(mode="json")
     corrupted["answer"] += "unsupported"
     with pytest.raises(ValueError, match="canonical answer"):
         ChatResponse.model_validate(corrupted)
     assert context.knowledge_hits[0].source_content in answer
-    assert "https://example.org/full/path/" in answer
+    assert "https://example.org/full/path/" not in answer
+    assert response.answer_basis[0].source_url == "https://example.org/full/path/"
+    assert context.knowledge_hits[0].source_content in response.answer_basis[0].detail
     assert "作者没有测量" not in answer
     support._validate_source_answer(context)
-    assert len(calls) == 1  # Canonical selection from coverage; no second model document picker.
+    assert len(calls) == 4  # Source coverage, natural writing, per-unit audit, answer completeness.
     assert context.source_audit_digest
     context.answer += "作者没有测量"
     with pytest.raises(SourceAuditRejected):
@@ -87,15 +97,12 @@ def test_web_candidates_reach_same_sage_coverage_plan_and_selected_basis(tmp_pat
         retrieved_at="2026-10-21T00:00:00+00:00")]
     def call(**kwargs):
         data = json.loads(kwargs["user_prompt"])
-        assert data["sources"][0]["source_id"] == "web:0"
-        if "requirements" in data:
-            return plan_response(kwargs["user_prompt"])
-        return json.dumps({"digest":data["digest"],"source_ids":["web:0"],"inferences":[]})
+        return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = call
     support._prepare_source_answer(context)
     result = support.render_chat_response(context)
     assert context.web_search_hits[0].snippet in result.answer
-    assert context.web_search_hits[0].url in result.answer
+    assert context.web_search_hits[0].url not in result.answer
     assert result.answer_basis[0].source_url == context.web_search_hits[0].url
     assert "2026-10-21" in result.answer_basis[0].detail
     context.web_search_hits[0].snippet += "changed"
@@ -115,13 +122,10 @@ def test_selected_sources_keep_complete_candidate_binding_without_manual_overflo
         calls.append(kwargs)
         assert "unrelated tutorial" not in kwargs["user_prompt"]
         data = json.loads(kwargs["user_prompt"])
-        if "requirements" in data:
-            return plan_response(kwargs["user_prompt"])
-        return json.dumps({"digest": data["digest"], "source_ids": [s["source_id"] for s in data["sources"]],
-            "inferences": []})
+        return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = call
     response = support.render_chat_response(context)
-    assert len(calls) == 1
+    assert len(calls) == 4
     assert len(context.evidence_work.candidates) == 2
     assert context.source_answer_plan.source_ids == ("knowledge:1",)
     assert "unrelated tutorial" not in response.answer
