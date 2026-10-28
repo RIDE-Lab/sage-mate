@@ -85,3 +85,42 @@ Chrome extension page commands remain unreliable. Native Chrome accessibility
 and actual public-page rendering worked and were used for the browser checks.
 No extension restart, login change, browser security bypass or user-session
 reset was performed. The precise internal extension fault is not established.
+
+## Cross-host egress comparison
+
+At 04:30 UTC on 2026-10-28, A100, A6000-1 and A6000-5 ran the same direct,
+TLS-verified HTTP/1.1 GET for `/app.js`, with identity encoding, a 12-second
+whole-response deadline, and three interleaved attempts per address per host.
+No proxy was used. All complete responses contained 574612 bytes and matched
+the deployed asset SHA256 above.
+
+| Host | 104.21.42.210 | 172.67.166.76 |
+| --- | --- | --- |
+| A100 | 3/3 complete, 1.948–2.638 s | 1/3 complete; two timeouts |
+| A6000-1 | 3/3 complete, 1.684–2.721 s | 0/3 complete; three timeouts |
+| A6000-5 | 3/3 complete, 1.559–2.815 s | 0/3 complete; three timeouts |
+
+Seven of the eight failures had received HTTP 200 before stalling; one timed
+out before response headers. This is intermittent destination-dependent
+failure, not evidence that the address is permanently unreachable. Observed
+CF-Ray suffixes differed consistently: HKG for the first address, LAX for the
+second. All three machines used the same next-hop gateway and MTU 1500; bounded
+tracepath on A100 and A6000-1 shared the first three responding hops. Later
+tracepath no-replies do not establish where the HTTPS flow loses data.
+
+The comparison rules out an explanation confined to the A100 machine. It
+supports investigating the shared network/egress/upstream/edge path, but does
+not prove a gateway restriction or identify a dropping device. Per-interface
+RX error/missed and TX error/drop counters had zero deltas; aggregate RX drop
+counters rose on all three busy hosts and cannot be attributed to these probes.
+No shared network configuration, GPU workload or service was changed.
+
+A second synchronized round reproduced 3/3 full responses at the first address
+and 0/3 within 12 seconds at the second; failures occurred at TLS, response
+headers, or partial body. An independent A6000-1 `/usr/bin/curl -q` run, with
+proxy disabled and a 30-second deadline, completed both: 2.248 seconds versus
+22.963 seconds. Earlier curl attempts also recorded TLS/TCP connection timeouts
+(including one 30-second timeout to each address). Those failures are retained;
+the first address is not promised to be permanently healthy. The problematic
+path is intermittently slow/unreliable, not demonstrably blocked. Raising a
+deadline can allow a request to finish but does not repair the network.
