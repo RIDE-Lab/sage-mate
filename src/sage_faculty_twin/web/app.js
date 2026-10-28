@@ -6995,7 +6995,10 @@ function friendlyHttpErrorMessage(status, body, code = null) {
     }
     const detail = structuredDetail || (looksLikeHtml || trimmed.length > 240 ? "" : trimmed);
     if (status === 413) {
-        return "附件超过服务允许的大小。单份附件请控制在 5MB 以内；如果是长 PDF，可以先发主要章节或转成文本后再上传。";
+        if (code === "prompt_capacity") {
+            return "本轮完整资料超出模型上下文容量，尚未生成回答；系统没有截断来源内容。";
+        }
+        return detail || "请求内容超过服务允许的大小，尚未完成处理。";
     }
     if (status === 504 || status === 502) {
         return "服务在 LLM 响应期间超时（错误码 " + status + "）。请稍后重试；如果问题较复杂，可以拆成更小的问题再问。";

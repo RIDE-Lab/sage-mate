@@ -1,0 +1,15 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const source = fs.readFileSync('src/sage_faculty_twin/web/app.js', 'utf8');
+const start = source.indexOf('function friendlyHttpErrorMessage(');
+const end = source.indexOf('\nfunction ', start + 1);
+const context = vm.createContext({});
+vm.runInContext(source.slice(start, end), context);
+const message = context.friendlyHttpErrorMessage;
+assert.match(message(413, '', 'prompt_capacity'), /上下文容量/);
+assert.doesNotMatch(message(413, '', 'prompt_capacity'), /附件|5MB/);
+assert.match(message(413, JSON.stringify({detail:'附件超过 5MB 限制'})), /附件超过 5MB/);
+assert.doesNotMatch(message(413, '<html>proxy rejection</html>'), /附件|5MB|html/);
+assert.match(message(503, '', 'answer_validation_rejected'), /未通过来源或完整性校验/);
+console.log('HTTP errors preserve typed capacity and upload distinctions');
