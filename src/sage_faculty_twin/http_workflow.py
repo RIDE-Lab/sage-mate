@@ -36,6 +36,8 @@ class HttpWorkRejected(RuntimeError):
 def public_http_failure(code):
     """One safe public contract shared by HTTP errors and durable SSE errors."""
     return {
+        "model_response_timeout": (504, "本轮等待模型响应超时，未获得完整回答；系统不会因此自动重新生成或重复提交操作。"),
+        "answer_execution_failed": (503, "本轮处理失败，未获得完整回答；系统已保留失败状态，不会因此重复提交操作。"),
         "answer_outcome_unknown": (503, "请求可能已执行，但结果尚未核验；不会自动重新生成。请保留原请求 ID 查询，勿重复提交。"),
         "prompt_capacity": (413, "完整材料超出模型上下文容量；未截断原文，请调整问题或材料后重试。"),
         "request_cancelled": (499, "任务已取消，未继续生成回答。"),
@@ -154,6 +156,12 @@ class HttpWorkflow:
             and error.error_type in {"AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage", "InvalidResearchPlan"}
         ):
             return WorkFailure("answer_validation_rejected")
+        if isinstance(error, FlowRequestOutcomeError):
+            # A native terminal outcome is known. Do not replace its original
+            # cause with an uncertain invocation fence on a redundant retry.
+            if error.error_type in {"ReadTimeout", "WriteTimeout", "TimeoutError", "RequestTimeoutError"}:
+                return WorkFailure("model_response_timeout")
+            return WorkFailure("answer_execution_failed")
         if isinstance(error, EffectOutcomeUnknown):
             return WorkFailure("answer_outcome_unknown")
         if isinstance(error, HttpWorkRejected):

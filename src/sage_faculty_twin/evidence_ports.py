@@ -58,6 +58,13 @@ class TwinEvidencePorts:
         return self._call(NATURAL_AUDIT_PROMPT, request.payload,
             namespace=f"natural-answer-audit:{request.digest}", response_format=audit_response_format(request))
 
+    def plan_retrieval_repair(self, request, assessment):
+        from sage.runtime.evidence_query_plan import (
+            QUERY_PLAN_PROMPT, query_plan_payload, query_plan_format,
+        )
+        return self._call(QUERY_PLAN_PROMPT, query_plan_payload(request, assessment),
+            namespace=f"evidence-search-plan:{request.digest}", response_format=query_plan_format(request))
+
     def supplement(self, queries):
         results, seen = [], {hit.document_id for hit in self.context.knowledge_hits}
         for query in queries:

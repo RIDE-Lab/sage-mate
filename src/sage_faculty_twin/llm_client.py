@@ -1453,6 +1453,7 @@ class VllmChatClient:
         continue_on_length: bool = True,
         neutral_sampling: bool = False,
         response_format: dict[str, Any] | None = None,
+        stream_internal: bool = False,
     ) -> str:
         if (
             enable_thinking
@@ -1548,17 +1549,24 @@ class VllmChatClient:
             target_e2e_ms=target_e2e_ms,
         )
 
-        if token_callback is not None:
+        if token_callback is not None or stream_internal:
+            # Internal structured work consumes incremental transport without
+            # publishing unvalidated JSON or reasoning to the user.
+            stream_consumer = token_callback or (lambda _chunk: None)
             stream_payload = dict(payload)
             stream_payload["stream"] = True
             stream_payload["stream_options"] = {"include_usage": True}
             try:
                 return self._request_chat_completion_stream(
-                    stream_payload, token_callback, continue_on_length=continue_on_length
+                    stream_payload, stream_consumer, continue_on_length=continue_on_length
                 )
             except StreamingServerError as exc:
                 raise RuntimeError(str(exc)) from exc
             except EmptyStreamingResponseError:
+                if stream_internal:
+                    # Acceptance is uncertain; never regenerate through a
+                    # buffered fallback for the same internal invocation.
+                    raise
                 logger.warning("Streaming chat response was empty; retrying once without streaming")
                 payload.pop("stream", None)
                 payload.pop("stream_options", None)

@@ -1776,3 +1776,79 @@ def test_invalid_web_query_cannot_loop_or_be_replaced_by_whole_private_question(
     with pytest.raises(ValueError,match='word fragment'):
         client.classify_interaction_intent_sync('大模型生成一段回答，背后经历了哪些步骤？')
     assert len(calls)==2
+
+
+@pytest.mark.parametrize('empty', [False, True])
+def test_internal_structured_stream_has_one_invocation_and_no_buffered_fallback(empty):
+    from sage_faculty_twin.llm_client import EmptyStreamingResponseError
+    requests = []
+    class Response:
+        def raise_for_status(self): pass
+        def iter_lines(self):
+            if not empty:
+                yield 'data: {"choices":[{"delta":{"content":"{\\"ok\\":"}}]}'
+                yield 'data: {"choices":[{"delta":{"content":"true}"}}]}'
+            yield 'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'
+            yield 'data: [DONE]'
+    class Transport:
+        def stream(self, *args, **kwargs):
+            requests.append(kwargs['json'])
+            return nullcontext(Response())
+        def post(self, *args, **kwargs):
+            pytest.fail('an accepted structured invocation must not restart buffered')
+    client = _build_retry_test_client(AppSettings(_env_file=None, llm_retry_attempts=0), Transport())
+    client._ensure_runtime_state()
+    client.model_name = 'test'
+    client._request_completion_client = lambda: nullcontext(client._client)
+    args = dict(enable_thinking=False, response_format={'type': 'json_object'},
+                stream_internal=True, continue_on_length=False)
+    if empty:
+        with pytest.raises(EmptyStreamingResponseError):
+            client.answer_question_sync('system', 'question', **args)
+    else:
+        assert client.answer_question_sync('system', 'question', **args) == '{"ok":true}'
+    assert len(requests) == 1
+    assert requests[0]['stream'] is True
+    assert requests[0]['response_format'] == {'type': 'json_object'}
+
+
+def test_structured_stream_progress_outlives_http_read_idle_timeout():
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    import time
+    calls = []
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, *args): pass
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            calls.append(payload)
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/event-stream')
+            self.send_header('Connection', 'close')
+            self.end_headers()
+            for fragment in ['{', '"', 'ok', '"', ':', 'tr', 'ue', '}']:
+                time.sleep(.2)
+                packet = {'choices': [{'delta': {'content': fragment}}]}
+                self.wfile.write(('data: '+json.dumps(packet)+'\n\n').encode())
+                self.wfile.flush()
+            self.wfile.write(b'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n')
+            self.wfile.flush()
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    transport = httpx.Client(base_url='http://127.0.0.1:'+str(server.server_port), timeout=.8, trust_env=False)
+    try:
+        client = _build_retry_test_client(AppSettings(_env_file=None, llm_retry_attempts=0), transport)
+        client._ensure_runtime_state()
+        client.model_name = 'test'
+        client._request_completion_client = lambda: nullcontext(transport)
+        start = time.monotonic()
+        result = client.answer_question_sync('system', 'question', enable_thinking=False,
+            response_format={'type':'json_object'}, stream_internal=True, continue_on_length=False)
+        assert result == '{"ok":true}'
+        assert time.monotonic()-start > .8
+        assert len(calls) == 1
+    finally:
+        transport.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

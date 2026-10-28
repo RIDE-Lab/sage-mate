@@ -328,6 +328,9 @@ let deepThinkingExplicitlyEnabled = Boolean(deepThinkingCheckbox?.checked);
 let lastFailedQuestion = null;
 let pendingChatRetry = null;
 const chatRetryContexts = new WeakMap();
+let inspectedWorkflowMessage = null;
+let workflowInspectorOpener = null;
+let workflowInspectorObserver = null;
 let codeAssistantWorkspaces = [];
 let selectedCodeWorkspaceId = "";
 let codeAssistantWorkspacesLoaded = false;
@@ -2362,7 +2365,14 @@ if (workflowTrace) {
     workflowTrace.addEventListener("click", handleWorkflowTraceToggle);
 }
 
+chatStream?.addEventListener("click", handleWorkflowInspectorClick, true);
 chatStream?.addEventListener("click", handleMessageSectionToggle);
+workflowShell?.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+        event.preventDefault(); closeWorkflowMobileSheet();
+        workflowInspectorOpener?.focus({preventScroll: true});
+    }
+});
 chatStream?.addEventListener("keydown", handleMessageSectionEscape);
 chatStream?.addEventListener("click", handleIntroQuickActionClick);
 chatStream?.addEventListener("change", handleCodeWorkspaceSelectionChange);
@@ -6988,6 +6998,8 @@ async function saveLocalCodeConfig(event) {
 }
 
 function friendlyHttpErrorMessage(status, body, code = null) {
+    if (code === "model_response_timeout") return "本轮等待模型响应超时，未获得完整回答；系统不会因此自动重新生成或重复提交操作。";
+    if (code === "answer_execution_failed") return "本轮处理失败，未获得完整回答；系统已保留失败状态，不会因此重复提交操作。";
     if (code === "answer_outcome_unknown") {
         return "请求可能已执行，但结果尚未核验；不会自动重新生成。请保留原请求查询，勿重复提交。";
     }
@@ -7608,6 +7620,9 @@ function resetConversationViewForHistoryScopeSwitch() {
     activeExecutionEvents = [];
     activeWorkEvents = [];
     activeWorkflowMessage = null;
+    inspectedWorkflowMessage = null;
+    workflowInspectorObserver?.disconnect();
+    if (workflowTrace) { workflowTrace.innerHTML = ""; delete workflowTrace.dataset.inspectorHtml; }
     activeConversationId = createConversationId();
     currentConversationTitle = DEFAULT_CONVERSATION_TITLE;
     currentConversationPreview = "";
@@ -7884,6 +7899,9 @@ async function restoreConversationFromHistory(conversationId) {
     activeExecutionEvents = [];
     activeWorkEvents = [];
     activeWorkflowMessage = null;
+    inspectedWorkflowMessage = null;
+    workflowInspectorObserver?.disconnect();
+    if (workflowTrace) { workflowTrace.innerHTML = ""; delete workflowTrace.dataset.inspectorHtml; }
     if (entry?.html) {
         currentConversationTitle = conversationHistoryMeta.titleOverrides[conversationId] || entry.title || DEFAULT_CONVERSATION_TITLE;
         currentConversationPreview = entry.preview || "";
@@ -8132,6 +8150,9 @@ function startFreshConversation() {
     activeExecutionEvents = [];
     activeWorkEvents = [];
     activeWorkflowMessage = null;
+    inspectedWorkflowMessage = null;
+    workflowInspectorObserver?.disconnect();
+    if (workflowTrace) { workflowTrace.innerHTML = ""; delete workflowTrace.dataset.inspectorHtml; }
     activeConversationId = createConversationId();
     sessionTokenTotal = 0;
     resetTokenUsageBadge();
@@ -8980,6 +9001,7 @@ function nativeNodeAppearance(name, observed) {
         "reassess-coverage-invalid":["复查映射待纠正","branch","待纠正"],
         "reassess-coverage-correction":["复查映射纠正","checklist","纠正"],
         "reassess-coverage-valid":["复查映射有效","check","有效"],
+        "plan-retrieval-repair":["规划补检查询","search","改写"],
         "coverage-ready":["依据齐备","branch"],"supplement-evidence":["定向补检","search","补检"],
         "write-natural-answer":["组织回答","message","写作"],
         "review-natural-answer":["逐句来源与漏答检查","checklist","核对"],
@@ -9171,7 +9193,7 @@ function syncNativeExecutionDisplay() {
             pendingAttention.innerHTML = attentionHtml;
             pendingAttention.hidden = !attentionHtml;
         }
-        if (workflowTrace) workflowTrace.innerHTML = html;
+        if (workflowTrace && !inspectedWorkflowMessage) workflowTrace.innerHTML = html;
         if (activeWorkflowMessage?.classList.contains("message-ready")) {
             updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
             persistActiveConversationSnapshot();
@@ -10053,6 +10075,7 @@ async function submitFeedbackExchange(exchangeId, payload, ui) {
 }
 
 function renderWorkflowTrace(steps, meta = {}) {
+    if (inspectedWorkflowMessage?.isConnected) { refreshWorkflowInspector(); return; }
     if (!workflowTrace) {
         return;
     }
@@ -10092,6 +10115,7 @@ function renderWorkflowTrace(steps, meta = {}) {
 }
 
 function renderWorkflowTraceError(message) {
+    if (inspectedWorkflowMessage?.isConnected) { refreshWorkflowInspector(); return; }
     if (!workflowTrace) {
         return;
     }
@@ -10132,6 +10156,7 @@ function renderWorkflowTraceError(message) {
 }
 
 function renderWorkflowTracePlaceholder(title, summary, detail) {
+    if (inspectedWorkflowMessage?.isConnected) { refreshWorkflowInspector(); return; }
     if (!workflowTrace) {
         return;
     }
@@ -10171,7 +10196,61 @@ function renderWorkflowTracePlaceholder(title, summary, detail) {
     scrollWorkflowToLatest();
 }
 
+function refreshWorkflowInspector() {
+    if (!workflowTrace || !inspectedWorkflowMessage?.isConnected) return;
+    const source = inspectedWorkflowMessage.querySelector(".message-workflow-summary .message-section-content, .thinking-trace, .response-advanced");
+    if (!source) return;
+    // Render the same recorded evidence in one visible panel. Source markup
+    // remains collapsed in the message for history serialization and updates.
+    const copy = source.cloneNode(true);
+    copy.querySelector(":scope > summary")?.remove();
+    copy.querySelectorAll("[id]").forEach(node => node.removeAttribute("id"));
+    const html = copy.innerHTML;
+    if (workflowTrace.dataset.inspectorHtml === html) return;
+    const open = [...workflowTrace.querySelectorAll("details")].map(node => node.open);
+    const focused = document.activeElement;
+    const focusKey = workflowTrace.contains(focused)
+        ? focused?.closest?.("[data-native-node-key]")?.getAttribute("data-native-node-key") : null;
+    const focusTag = focused?.tagName;
+    const top = workflowTraceWrap.scrollTop, left = workflowTraceWrap.scrollLeft;
+    workflowTrace.innerHTML = html;
+    workflowTrace.dataset.inspectorHtml = html;
+    workflowTrace.querySelectorAll("details").forEach((node, index) => { node.open = open[index] ?? false; });
+    if (focusKey) {
+        const entries = [...workflowTrace.querySelectorAll("[data-native-node-key]")];
+        const entry = entries.find(node => node.getAttribute("data-native-node-key") === focusKey
+            && (focusTag === "g" ? node.matches(".native-flow-node") : node.matches("li")));
+        (focusTag === "g" ? entry : entry?.querySelector("summary"))?.focus({preventScroll: true});
+    }
+    workflowTraceWrap.scrollTop = top; workflowTraceWrap.scrollLeft = left;
+}
+
+function inspectMessageWorkflow(message, opener) {
+    if (!message || !workflowTrace) return;
+    inspectedWorkflowMessage = message;
+    workflowInspectorOpener?.setAttribute?.("aria-expanded", "false");
+    workflowInspectorOpener = opener || workflowInspectorOpener;
+    workflowInspectorOpener?.setAttribute?.("aria-controls", "workflow-shell");
+    workflowInspectorObserver?.disconnect();
+    delete workflowTrace.dataset.inspectorHtml;
+    const question = message.previousElementSibling?.querySelector(".message-body")?.textContent?.trim();
+    const caption = workflowShell?.querySelector(".workflow-shell-copy");
+    if (caption) caption.textContent = question || "此回答的执行记录；状态更新不会移动对话。";
+    refreshWorkflowInspector();
+    workflowInspectorObserver = new MutationObserver(refreshWorkflowInspector);
+    workflowInspectorObserver.observe(message, {subtree: true, childList: true, characterData: true});
+}
+
+function handleWorkflowInspectorClick(event) {
+    const trigger = event.target.closest(".message-workflow-summary-toggle, .thinking-trace > summary, .response-advanced > summary");
+    if (!trigger || !chatStream?.contains(trigger)) return;
+    event.preventDefault(); event.stopImmediatePropagation();
+    inspectMessageWorkflow(trigger.closest(".message"), trigger);
+    openWorkflowMobileSheet();
+}
+
 function setWorkflowShellCollapsed(collapsed) {
+    workflowInspectorOpener?.setAttribute?.("aria-expanded", String(!collapsed));
     document.body.classList.toggle("workflow-shell-collapsed", collapsed);
     if (workflowShell) {
         workflowShell.setAttribute("data-collapsed", String(collapsed));
@@ -10194,6 +10273,7 @@ function isMobileWorkflowViewport() {
 
 function setWorkflowMobileOpen(open) {
     const nextOpen = Boolean(open);
+    workflowInspectorOpener?.setAttribute?.("aria-expanded", String(nextOpen));
     document.body.classList.toggle("workflow-shell-mobile-open", nextOpen);
     workflowMobileBackdrop?.classList.toggle("hidden", !nextOpen);
     if (workflowShell) {
@@ -10230,6 +10310,9 @@ function setWorkflowMobileSheetMode(mode) {
 }
 
 function openWorkflowMobileSheet(mode = getStoredWorkflowMobileSheetMode()) {
+    if (!inspectedWorkflowMessage?.isConnected) {
+        inspectMessageWorkflow(chatStream?.querySelector(".message-assistant:last-child"), mobileWorkflowTrigger);
+    }
     if (!isMobileWorkflowViewport()) {
         setWorkflowShellCollapsed(false);
         return;
@@ -10242,7 +10325,6 @@ function openWorkflowMobileSheet(mode = getStoredWorkflowMobileSheetMode()) {
     }
     setWorkflowMobileOpen(true);
     setWorkflowMobileSheetMode(mode);
-    scrollWorkflowToLatest();
 }
 
 function closeWorkflowMobileSheet() {
@@ -10516,6 +10598,9 @@ function updateMobileWorkflowTrigger(meta = latestWorkflowMeta, steps = activeWo
 
 function toggleWorkflowShell() {
     const collapsed = document.body.classList.contains("workflow-shell-collapsed");
+    if (collapsed && !inspectedWorkflowMessage?.isConnected) {
+        inspectMessageWorkflow(chatStream?.querySelector(".message-assistant:last-child"), mobileWorkflowTrigger);
+    }
     setWorkflowShellCollapsed(!collapsed);
 }
 

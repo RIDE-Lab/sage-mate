@@ -1,0 +1,22 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
+const source=fs.readFileSync(require('node:path').join(__dirname,'../src/sage_faculty_twin/web/app.js'),'utf8');
+function fn(name){const a=source.indexOf(`function ${name}(`);return source.slice(a,source.indexOf('\n}\n',a)+3);}
+let html='recorded graph',observed,opened=0,focus=0;
+const wrapper={scrollTop:31,scrollLeft:12};
+const details=[{open:true},{open:false}];
+const trace={contains:()=>false,dataset:{},querySelectorAll:()=>details,set innerHTML(value){this.html=value;details.forEach(x=>x.open=false);wrapper.scrollTop=0;},get innerHTML(){return this.html;}};
+const copy={get innerHTML(){return html;},querySelector:()=>({remove(){}}),querySelectorAll:()=>[]};
+const message={isConnected:true,querySelector:()=>({cloneNode:()=>copy}),previousElementSibling:{querySelector:()=>({textContent:'Original question'})}};
+const caption={};const trigger={closest:()=>message,focus(){focus++;}};
+const ctx={document:{activeElement:null},workflowTrace:trace,workflowTraceWrap:wrapper,inspectedWorkflowMessage:null,workflowInspectorObserver:null,workflowInspectorOpener:null,workflowShell:{querySelector:()=>caption},chatStream:{contains:()=>true},MutationObserver:class{constructor(cb){this.cb=cb;observed=this;} observe(node){assert.equal(node,message);} disconnect(){}},openWorkflowMobileSheet(){opened++;}};
+vm.createContext(ctx);for(const name of ['refreshWorkflowInspector','inspectMessageWorkflow','handleWorkflowInspectorClick','renderWorkflowTrace','renderWorkflowTraceError','renderWorkflowTracePlaceholder'])vm.runInContext(fn(name),ctx);
+let prevented=0;ctx.handleWorkflowInspectorClick({target:{closest:()=>trigger},preventDefault(){prevented++;},stopImmediatePropagation(){}});
+assert.equal(opened,1);assert.equal(prevented,1);assert.equal(caption.textContent,'Original question');
+assert.equal(trace.html,html);assert.deepEqual(details.map(x=>x.open),[true,false]);
+assert.equal(wrapper.scrollTop,31);assert.equal(wrapper.scrollLeft,12);
+html='updated recorded graph';observed.cb();
+assert.equal(trace.html,html);assert.equal(opened,1);assert.equal(focus,0);assert.equal(wrapper.scrollTop,31);
+ctx.renderWorkflowTrace([],{});ctx.renderWorkflowTraceError('other request');ctx.renderWorkflowTracePlaceholder('other','other','other');
+assert.equal(trace.html,html,'unrelated live request must not replace the inspected historical answer');
+message.isConnected=false;html='detached';observed.cb();assert.notEqual(trace.html,html);
+console.log('Workflow inspector: explicit open, selected history isolation, streaming updates preserve fold/scroll/focus; detached history ignored');

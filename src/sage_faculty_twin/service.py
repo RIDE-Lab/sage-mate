@@ -3823,6 +3823,7 @@ class FacultyTwinWorkflowSupport:
             "cache_namespace": cache_namespace,
             "neutral_sampling": neutral_sampling,
             "response_format": response_format,
+            "stream_internal": response_format is not None,
         }
         accepts_var_kwargs = any(
             parameter.kind is inspect.Parameter.VAR_KEYWORD

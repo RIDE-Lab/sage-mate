@@ -181,3 +181,39 @@ def test_accepted_generation_without_canonical_receipt_never_regenerates(tmp_pat
                 state.close()
         assert calls == ["r"]
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('native_type, expected', [
+    ('ReadTimeout', 'model_response_timeout'),
+    ('InvalidEvidenceCoverage', 'answer_validation_rejected'),
+    ('RuntimeError', 'answer_execution_failed'),
+])
+def test_known_native_failure_remains_terminal_after_restart(tmp_path, native_type, expected):
+    from sage.runtime.flownet.client.runtime_client import FlowRequestOutcomeError
+    from sage_faculty_twin.http_workflow import HttpWorkRejected
+
+    async def scenario():
+        calls = []
+        async def authorize(item): return True
+        async def recover(item): return None
+        async def answer(item, **kwargs):
+            calls.append(item.request_id)
+            raise FlowRequestOutcomeError(request_id='child', outcome_status='failed',
+                error_type=native_type, message='safe failure', error_stage='assess',
+                outcome_metadata={}, outputs=[])
+        item = ingress()
+        for _ in range(2):
+            state = StatefulProcessRuntime(backend='sqlite', sqlite_path=str(tmp_path / 'native.db'))
+            flow = HttpWorkflow(state, authorize=authorize, recover=recover,
+                                answer=answer, retry_delay=0)
+            try:
+                await flow.admit(item)
+                with pytest.raises(HttpWorkRejected) as exc:
+                    await flow.wait(item, timeout=5)
+                assert exc.value.code == expected
+                assert flow.journal.read(item.delivery.stream_id)['tasks']['answer']['attempt'] == 1
+            finally:
+                await flow.aclose()
+                state.close()
+        assert calls == ['r']
+    asyncio.run(scenario())

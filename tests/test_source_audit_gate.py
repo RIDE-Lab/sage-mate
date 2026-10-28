@@ -191,14 +191,18 @@ def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_f
     calls = []
     def model(**kwargs):
         calls.append(kwargs)
-        pytest.fail("no-source assessment must not spend a model request")
+        # Retrieval planning may propose search terms, never assess nonexistent
+        # evidence or generate an ungrounded answer.
+        assert kwargs["cache_namespace"].startswith("evidence-search-plan:")
+        payload = json.loads(kwargs["user_prompt"])
+        return json.dumps({"digest": payload["digest"], "queries": ["alternative source terms"]})
     support._call_compact_retry_sync = model
     support._call_answer_question_sync = lambda *a, **kw: pytest.fail("ungrounded free generation")
     support._knowledge_retriever = SimpleNamespace(search=lambda *a, **kw: [])
     support.answer_with_llm(context)
     result = support.render_chat_response(context)
     assert context.evidence_work.repair_attempted
-    assert not calls and len(context.workflow_trace) == 2  # Audit and render, not duplicate audit.
+    assert len(calls) == 1 and len(context.workflow_trace) == 2  # Query plan; no source audit/model answer.
     assert "仍待补充的依据" in result.answer and context.request.question in result.answer
     assert result.knowledge_hits == []
     assert "\n\n".join(block.markdown for block in result.answer_blocks).strip() == result.answer
