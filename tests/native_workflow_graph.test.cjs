@@ -127,8 +127,8 @@ assert.equal((flat.match(/data-flow-boundary="input"/g)||[]).length,1);
 assert.equal((flat.match(/data-flow-boundary="output"/g)||[]).length,1);
 assert(flat.includes('>输入</text>') && flat.includes('>输出</text>'));
 assert.equal((flat.match(/class="native-flow-diagram/g)||[]).length,1);
-assert(Number(flat.match(/viewBox="0 0 1160 ([\d.]+)"/)[1])<300);
-assert(Number(flat.match(/viewBox="0 0 1160 ([\d.]+)"/)[1])<=196);
+assert(Number(flat.match(/viewBox="0 0 [\d.]+ ([\d.]+)"/)[1])<300);
+assert(Number(flat.match(/viewBox="0 0 [\d.]+ ([\d.]+)"/)[1])<=260);
 assert.equal((flat.match(/width="114" height="48" rx="24"/g)||[]).length,2);
 const positions=[...flat.matchAll(/data-flow-boundary="(input|output|)"[^>]*data-flow-node="[^"]*"[^>]*><title>[^<]*<\/title>(?:<rect x="([\d.]+)"[^>]*|<circle cx="([\d.]+)"[^>]*)/g)]
     .map(match=>({boundary:match[1],x:match[2] ? Number(match[2])+57 : Number(match[3])}));
@@ -200,3 +200,13 @@ assert(/\.message-workflow-summary \.message-section-content\s*\{[^}]*grid-templ
 assert(/\.native-flow-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*min-width:\s*0/.test(css));
 assert(css.includes('@media (prefers-reduced-motion: reduce)'));
 console.log('Authoritative topology, nested forks, missing nodes, retries, cycles and escaping passed');
+
+// A growing graph expands its local canvas without squeezing native nodes.
+const denseTopology=Array.from({length:58},(_,i)=>({node_id:'dense-'+i,
+ operator_type:'map',operator_key:'review-natural-answer',is_entry:i===0,is_return:i===57,
+ downstream_node_ids:i===57 ? [] : ['dense-'+(i+1)]}));
+const dense=context.buildNativeExecutionHtml([event('dense-0',{program_topology:denseTopology})]);
+assert.equal((dense.match(/data-flow-node=/g)||[]).length,58);
+const circles=[...dense.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)"/g)].map(m=>({x:+m[1],y:+m[2]})).sort((a,b)=>a.x-b.x);
+for(let i=1;i<circles.length;i++) assert(circles[i].x-circles[i-1].x>=100,'labels need a real horizontal gap');
+assert(dense.includes('横向滚动查看完整路线'));

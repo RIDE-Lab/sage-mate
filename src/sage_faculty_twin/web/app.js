@@ -189,7 +189,6 @@ let currentAppProfile = "faculty_twin";
 
 const chatForm = document.getElementById("chat-form");
 const deepThinkingCheckbox = document.getElementById("deep-thinking-checkbox");
-const composerModeStatus = document.getElementById("composer-mode-status");
 const webSearchMode = document.getElementById("web-search-mode");
 const adminLoginForm = document.getElementById("admin-login-form");
 const userRegisterForm = document.getElementById("user-register-form");
@@ -370,27 +369,11 @@ function syncDeepThinkingPresentation() {
         "aria-label",
         active ? "深度思考已开启" : "深度思考未开启"
     );
-    if (composerModeStatus) {
-        composerModeStatus.hidden = !active;
-        composerModeStatus.dataset.state = active ? "ready" : "off";
-        composerModeStatus.textContent = active
-            ? "深度思考已开启 · 优先使用模型原生推理"
-            : "";
-    }
 }
 
 function setDeepThinkingProcessing(processing) {
     const toggle = deepThinkingCheckbox?.closest(".composer-pill-toggle");
     toggle?.classList.toggle("is-processing", Boolean(processing && deepThinkingCheckbox?.checked));
-    if (!composerModeStatus || !deepThinkingCheckbox?.checked) {
-        syncDeepThinkingPresentation();
-        return;
-    }
-    composerModeStatus.hidden = false;
-    composerModeStatus.dataset.state = processing ? "processing" : "ready";
-    composerModeStatus.textContent = processing
-        ? "深度思考进行中 · 正在整理完整上下文和权衡分析"
-        : "深度思考已开启 · 优先使用模型原生推理";
 }
 
 deepThinkingCheckbox?.addEventListener("change", syncDeepThinkingPresentation);
@@ -8275,11 +8258,6 @@ function renderPendingAssistantMessage(
                     <div class="message-frame message-pending-frame">
                         <div class="pending-web-attention" hidden></div>
                         <div class="pending-work-attention" hidden></div>
-                        <div class="typing-dots" id="pending-typing-dots">
-                            <span class="dot"></span>
-                            <span class="dot"></span>
-                            <span class="dot"></span>
-                        </div>
                         <div class="thinking-panel ${deepThinking ? "is-deep-mode" : ""}">
                             <div class="thinking-panel-head">
                                 <span class="thinking-orb" aria-hidden="true"></span>
@@ -8287,9 +8265,7 @@ function renderPendingAssistantMessage(
                                     <strong>${processingLabel}</strong>
                                     <p id="pending-stage-label" class="thinking-stage-label">${escapeHtml(currentStage)}</p>
                                 </div>
-                                ${deepThinking ? '<span class="thinking-mode-badge">深度模式</span>' : ""}
                             </div>
-                            <div class="thinking-progress" aria-hidden="true"><span></span></div>
                             ${INLINE_WORKFLOW_TRACE_ENABLED
                 ? `<details class="thinking-trace response-advanced" aria-label="高级执行详情">
                                 <summary>高级详情</summary>
@@ -8303,10 +8279,6 @@ function renderPendingAssistantMessage(
                         <div class="thinking-text-section" id="pending-thinking-text" data-collapsed="true" hidden>
                             <button type="button" class="thinking-text-toggle" onclick="this.parentElement.dataset.collapsed = this.parentElement.dataset.collapsed === 'true' ? 'false' : 'true'">思考过程</button>
                             <div class="thinking-text-body"></div>
-                        </div>
-                        <div class="message-pending-support" aria-live="polite">
-                            <span class="message-section-kicker">Support</span>
-                            <span>正在整理回答依据…</span>
                         </div>
                     </div>
                 </div>
@@ -8878,7 +8850,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         if (parent && first) links.push({from:parent,to:first,routed:true,kind:"call"});
     }
     if (!hasBoundaries && !links.some(link=>link.kind==="call")) return "";
-    const width=1160,margin=70;
+    const margin=70, columnPitch=104;
     // Program ownership is provenance, not a reason to split the visual map
     // into separate columns/clusters. All native nodes share one layout space.
     const orderedVertices=[...vertices].sort((a,b)=>a.id.localeCompare(b.id));
@@ -8908,8 +8880,11 @@ function buildNativeWorkflowAtlasHtml(groups) {
         columns.get(rank).push(vertex);
     }
     const maxRank=Math.max(...columns.keys()),rows=Math.max(...[...columns.values()].map(c=>c.length));
-    const rowPitch=52;
-    const height=Math.max(156,rows*rowPitch+40);
+    // Keep readable native scale as the topology grows; only the local
+    // scrollport scrolls, never the message or page.
+    const width=Math.max(600,2*margin+maxRank*columnPitch+32);
+    const rowPitch=72;
+    const height=Math.max(144,rows*rowPitch+32);
     // Parents must be positioned before their children. Map insertion order
     // follows opaque node IDs, not execution depth; using it here makes the
     // crossing reduction silently depend on UUID ordering.
@@ -8925,7 +8900,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
             const terminalGap=hasBoundaries ? 16 : 0;
             vertex.x=margin+rank*(width-2*margin-2*terminalGap)/Math.max(1,maxRank)
                 +(rank>0 ? terminalGap : 0)+(rank===maxRank ? terminalGap : 0);
-            vertex.y=height/2+(row-(column.length-1)/2)*rowPitch;
+            vertex.y=40+row*rowPitch;
         });
     }
     const edges=links.map((link,index)=>{
@@ -8965,7 +8940,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${iconX}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${labelX}" y="${labelY}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+(vertex.boundary ? 43 : 13)}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
-    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从左向右阅读：输入 → 分支处理 → 输出。高亮为本次路由，暗线为可选路径；紫色点线为明确记录的子流程调用，不表示返回依赖。点击图标查看原始记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">输入 → 分支处理 → 输出。横向滚动查看完整路线，点击节点查看记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
 }
 
 function nativeNodeAppearance(name, observed) {
@@ -9163,7 +9138,7 @@ function buildNativeWorkflowHtml(events) {
         return `<li>${escapeHtml(label)} · ${escapeHtml(programs)}</li>`;
     }).join("");
     const diagrams = atlas ? `${atlas}<details class="native-flow-identity"><summary>流程标识与调用关系</summary><ul>${identities}</ul></details>` : groups.map(render).join("");
-    return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${diagrams}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
+    return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${diagrams}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。紫色点线为明确记录的子流程调用，不表示返回依赖。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
 }
 
 function syncNativeExecutionDisplay() {
@@ -10692,9 +10667,6 @@ function appendStreamingAnswerDelta(delta) {
         streamingAnswerBuffer += delta;
         const pending = chatStream && chatStream.querySelector(".message-pending");
         if (!pending) return;
-        // Hide typing dots on first content
-        const dots = pending.querySelector("#pending-typing-dots");
-        if (dots) dots.hidden = true;
 
         // Parse <think>...</think> from the accumulated buffer
         const parsed = parseStreamingThinkContent(streamingAnswerBuffer);
@@ -10761,9 +10733,6 @@ function appendStreamingThinkDelta(delta) {
         streamingThinkBuffer += delta;
         const pending = chatStream && chatStream.querySelector(".message-pending");
         if (!pending) return;
-        // Hide typing dots on first content
-        const dots = pending.querySelector("#pending-typing-dots");
-        if (dots) dots.hidden = true;
         const section = pending.querySelector("#pending-thinking-text");
         if (!section) return;
         section.hidden = false;
@@ -10813,9 +10782,6 @@ function handleWorkflowStreamEvent(payload) {
 
     if (payload.type === "trace-step" && payload.step) {
         activeWorkflowSteps = [...activeWorkflowSteps, payload.step];
-        // Hide typing dots on first trace-step
-        const dots = chatStream?.querySelector(".message-pending #pending-typing-dots");
-        if (dots) dots.hidden = true;
         updatePendingAssistantMessage(payload.step.title || "处理中", activeWorkflowSteps);
         syncNativeExecutionDisplay();
         renderWorkflowTrace(activeWorkflowSteps, {
