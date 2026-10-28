@@ -1,10 +1,10 @@
 """Deterministic protocol fixture; not an entailment quality test."""
 import json
-from sage.runtime.natural_answer import NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT
+from sage.runtime.natural_answer import NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT, NATURAL_CORRECTION_PROMPT
 
 def response(system, payload):
     data = json.loads(payload)
-    if system == NATURAL_ANSWER_PROMPT:
+    if system in (NATURAL_ANSWER_PROMPT, NATURAL_CORRECTION_PROMPT):
         return json.dumps({"digest": data["digest"], "paragraphs": [s["content"] for s in data["sources"]]})
     if system == NATURAL_AUDIT_PROMPT:
         return json.dumps({"digest": data["digest"], "units": [{"id": u["id"], "verdict": "supported",

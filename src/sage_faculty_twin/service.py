@@ -1037,6 +1037,7 @@ class ChatWorkflowContext:
     # UI can show a "提示词已截断" badge when it kicked in.
     prompt_truncated: bool = False
     recent_session_context: str = ""
+    conversation_sources: tuple[PlanSource, ...] = ()
     interaction_intent: InteractionIntent | None = None
     pending_clarification_message: str | None = None
     pending_fields: list[str] = field(default_factory=list)
@@ -1274,9 +1275,9 @@ class FacultyTwinWorkflowSupport:
         )
         context.recent_session_context = (
             self._format_recent_session_context(request)
-            if DigitalTwinService._question_needs_recent_context(request.question)
-            else ""
+            if request.conversation_id else ""
         )
+        context.conversation_sources = self._recent_conversation_sources(request)
         self._append_trace(
             context,
             key="bootstrap",
@@ -4450,7 +4451,9 @@ class FacultyTwinWorkflowSupport:
         if getattr(context, "evidence_work", None) is not None:
             return True
         plan = getattr(context, "adaptive_plan", None)
-        return any(hit.source_content is not None for hit in context.knowledge_hits) or (
+        return (bool(context.conversation_sources) and context.route == "answer"
+                and context.workflow_action == "answer") or any(
+            hit.source_content is not None for hit in context.knowledge_hits) or (
             plan is not None and plan.evidence_required and context.route == "answer" and context.answer is None)
 
     def _validate_source_answer(self, context: ChatWorkflowContext) -> None:
@@ -4460,8 +4463,12 @@ class FacultyTwinWorkflowSupport:
                 raise SourceAuditRejected("来源集合在回答期间发生变化。")
             return
         work = context.evidence_work
+        current_sources = self._source_plan_sources(context)
+        # Supplemental documents append after the captured dialogue in SAGE.
+        # Identity/content must match exactly; adapter grouping order is not evidence.
         if (work is None or context.source_answer_plan != work.plan
-                or self._source_plan_sources(context) != work.candidates
+                or len(current_sources) != len(work.candidates)
+                or {s.source_id: s for s in current_sources} != {s.source_id: s for s in work.candidates}
                 or context.request.question != work.request.question
                 or context.answer != render_evidence_work(work)):
             raise SourceAuditRejected("回答与来源约束计划不一致，未发布。")
@@ -4475,7 +4482,7 @@ class FacultyTwinWorkflowSupport:
                 hit.source_content if hit.source_content is not None else hit.excerpt,
             ) for index, hit in enumerate(context.knowledge_hits)
         ) + tuple(PlanSource(f"web:{index}", hit.title, hit.url, hit.snippet or hit.title)
-                  for index, hit in enumerate(context.web_search_hits))
+                  for index, hit in enumerate(context.web_search_hits)) + context.conversation_sources
 
     def _prepare_source_answer(self, context: ChatWorkflowContext) -> None:
         started_at = perf_counter()
@@ -5721,6 +5728,20 @@ class FacultyTwinWorkflowSupport:
             "Unless the user explicitly asks for detail, keep the final response to "
             "80-160 Chinese characters or at most 3 short bullets; do not add a closing offer or extra background.\n"
         )
+
+    def _recent_conversation_sources(self, request: ChatRequest) -> tuple[PlanSource, ...]:
+        # Capture complete, owner-scoped turns once. A rolling digest is useful
+        # context but is not verbatim evidence of what the conversation said.
+        if not request.conversation_id or not request.owner_id:
+            return ()
+        records = self._conversation_store.list_recent_conversation_records(
+            request.conversation_id, owner_id=request.owner_id,
+            exclude_question=request.question, limit=4)
+        return tuple(PlanSource(
+            f"conversation:{record.memory_id}", "本会话先前问答", "",
+            f"User: {record.question}\nAssistant: {record.answer}", kind="conversation")
+            for record in reversed(records)
+            if record.owner_id == request.owner_id and record.conversation_id == request.conversation_id)
 
     def _format_recent_session_context(self, request: ChatRequest, limit: int = 4) -> str:
         conversation_id = str(getattr(request, "conversation_id", "") or "").strip()
@@ -7602,8 +7623,8 @@ class FacultyTwinWorkflowSupport:
         - Web search hits: selected sources only for a source-constrained plan.
         - Memory hits: only artifact (uploaded) and long-term profile memory;
           short-term conversation memory is NEVER cited (it is implicit).
-        - Session context: NEVER cited — conversation history is already
-          visible in the chat UI.
+        - Selected verbatim conversation evidence is labeled as dialogue,
+          never as an external fact source. Incidental session context is not cited.
         - Final safety net: any item with basis_label "近期交流记录" is
           stripped regardless of how it was produced.
         """
@@ -7615,7 +7636,11 @@ class FacultyTwinWorkflowSupport:
                     if f"knowledge:{index}" in context.source_answer_plan.source_ids] + [
                         self._build_web_basis_item(hit)
                         for index, hit in enumerate(context.web_search_hits)
-                        if f"web:{index}" in context.source_answer_plan.source_ids]
+                        if f"web:{index}" in context.source_answer_plan.source_ids] + [
+                            AnswerBasisItem(basis_label="对话上下文", title=source.title,
+                                source_label="本会话 · 不是外部事实来源", detail=source.content)
+                            for source in context.conversation_sources
+                            if source.source_id in context.source_answer_plan.source_ids]
         if context.answer and context.answer.startswith((
             "当前可见资料不足", "当前可见的公开资料不足", "当前可见的课程资料不足"
         )):
@@ -9197,8 +9222,7 @@ class DigitalTwinService:
 
         recent_session_context = (
             self._build_recent_session_context(request)
-            if self._question_needs_recent_context(request.question)
-            else ""
+            if request.conversation_id else ""
         )
 
         workflow_context = WorkflowRequestContext.from_chat_request(

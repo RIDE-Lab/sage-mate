@@ -7,8 +7,8 @@ from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT, experime
 from sage.runtime.source_answer_plan import PlanSource
 
 from sage.runtime.natural_answer import (
-    NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT,
-    natural_answer_response_format, audit_response_format,
+    NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT, NATURAL_CORRECTION_PROMPT,
+    natural_answer_response_format, audit_response_format, natural_answer_payload,
 )
 
 from .request_context import raise_if_request_cancelled
@@ -49,10 +49,8 @@ class TwinEvidencePorts:
             response_format=coverage_response_format(request))
 
     def write_answer(self, request, rejected=None, failures=()):
-        payload = json.loads(request.payload)
-        if rejected is not None:
-            payload.update(rejected_answer=rejected, failed_units=list(failures))
-        return self._call(NATURAL_ANSWER_PROMPT, json.dumps(payload, ensure_ascii=False),
+        return self._call(NATURAL_CORRECTION_PROMPT if rejected is not None else NATURAL_ANSWER_PROMPT,
+            natural_answer_payload(request, rejected, failures),
             namespace=f"natural-answer:{request.digest}:{bool(rejected)}",
             response_format=natural_answer_response_format(request))
 

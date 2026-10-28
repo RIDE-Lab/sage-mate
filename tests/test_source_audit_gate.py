@@ -257,3 +257,96 @@ def test_quality_rejection_is_terminal_for_all_transports(wrapped, transport):
     failure = classify(SimpleNamespace(attempt=1), error)
     assert failure.code == "answer_validation_rejected"
     assert failure.retry_delay is None
+
+
+def test_captured_dialogue_reaches_sage_and_visible_basis_without_becoming_wiki(tmp_path):
+    from sage.runtime.source_answer_plan import PlanSource
+    support, context = setup_gate(tmp_path)
+    context.request.question = "那段建议新增了什么解释？"
+    context.knowledge_hits = []
+    source = PlanSource("conversation:turn", "本会话先前问答", "", "Assistant: 30% 是实验目标，不是实测结果。", kind="conversation")
+    context.conversation_sources = (source,)
+    assert support._requires_source_audit(context)  # Dialogue-only evidence must not bypass verification.
+    kinds = []
+    def call(**kwargs):
+        data = json.loads(kwargs["user_prompt"])
+        for item in data.get("sources", []):
+            if item.get("source_id", item.get("id")) == source.source_id:
+                kinds.append(item["kind"])
+        return plan_response(kwargs["user_prompt"])
+    support._call_compact_retry_sync = call
+    support._prepare_source_answer(context)
+    response = support.render_chat_response(context)
+    assert kinds and set(kinds) == {"conversation"}
+    assert response.answer_basis[0].source_url is None
+    assert response.answer_basis[0].basis_label == "对话上下文"
+    assert "不是外部事实来源" in response.answer_basis[0].source_label
+    assert response.answer_basis[0].detail == source.content
+    context.conversation_sources = (PlanSource(source.source_id, source.title, "", "altered", kind="conversation"),)
+    with pytest.raises(SourceAuditRejected):
+        support._validate_source_answer(context)
+
+
+def test_conversation_evidence_requires_exact_owner_and_session(tmp_path):
+    from types import SimpleNamespace
+    support, context = setup_gate(tmp_path)
+    context.request.owner_id = "account:caller"
+    context.request.conversation_id = "session"
+    calls = []
+    def records(session, **kwargs):
+        calls.append((session, kwargs))
+        return [SimpleNamespace(memory_id="ok", owner_id="account:caller", conversation_id="session", question="Q", answer="A"*20000),
+                SimpleNamespace(memory_id="other-owner", owner_id="account:other", conversation_id="session", question="secret", answer="secret"),
+                SimpleNamespace(memory_id="other-session", owner_id="account:caller", conversation_id="other", question="secret", answer="secret")]
+    support._conversation_store = SimpleNamespace(list_recent_conversation_records=records)
+    sources = support._recent_conversation_sources(context.request)
+    assert calls[0][0] == "session" and calls[0][1]["owner_id"] == "account:caller"
+    assert len(sources) == 1 and sources[0].kind == "conversation"
+    assert sources[0].content.endswith("A"*20000)  # No display-preview truncation.
+    context.request.owner_id = None
+    assert support._recent_conversation_sources(context.request) == ()
+
+
+def test_bootstrap_keeps_history_for_followup_without_magic_keywords(tmp_path):
+    from sage_faculty_twin.service import DigitalTwinService
+    from sage_faculty_twin.context_routing import question_needs_recent_context
+    import asyncio
+    service = DigitalTwinService(AppSettings(knowledge_base_dir=tmp_path / 'kb', conversation_memory_dir=tmp_path / 'memory'))
+    try:
+        support = service._build_support()
+        request = ChatRequest(student_name='test', owner_id='account:caller', conversation_id='session', question='推论／建议（非来源事实）新增了什么解释')
+        assert not question_needs_recent_context(request.question)
+        captured = []
+        support._format_recent_session_context = lambda req: captured.append(req.conversation_id) or 'Previous full answer'
+        support._recent_conversation_sources = lambda req: ()
+        context = support.bootstrap_chat(request)
+        assert captured == ['session']
+        assert context.recent_session_context == 'Previous full answer'
+    finally:
+        asyncio.run(service.aclose())
+
+
+def test_dialogue_receipt_survives_adapter_grouping_order_but_not_content_changes(tmp_path):
+    from dataclasses import replace
+    from sage.runtime.source_answer_plan import PlanSource
+    support, context = setup_gate(tmp_path)
+    context.conversation_sources = (PlanSource("conversation:turn", "Prior turn", "", "User: Status?", kind="conversation"),)
+    support._call_compact_retry_sync = lambda **kw: plan_response(kw["user_prompt"])
+    support._prepare_source_answer(context)
+    # The supplement workflow appends new documents after existing conversation
+    # records, while Twin groups documents first. Order alone is not a mutation.
+    original_sources = support._source_plan_sources
+    support._source_plan_sources = lambda ctx: tuple(reversed(original_sources(ctx)))
+    support._validate_source_answer(context)
+    context.conversation_sources = (replace(context.conversation_sources[0], content="mutated"),)
+    with pytest.raises(SourceAuditRejected):
+        support._validate_source_answer(context)
+
+
+def test_advisory_branch_does_not_become_fact_answer_just_because_history_exists(tmp_path):
+    from sage.runtime.source_answer_plan import PlanSource
+    support, context = setup_gate(tmp_path)
+    context.conversation_sources = (PlanSource("c", "Prior", "", "User: Meeting preparation", kind="conversation"),)
+    context.knowledge_hits = []
+    context.workflow_action = "advise_only"
+    assert not support._requires_source_audit(context)
