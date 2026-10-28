@@ -328,6 +328,17 @@ SUPPORTED_CHAT_ATTACHMENT_MEDIA_TYPES = {
 }
 
 
+def _client_request_id(raw_request, request_id=None):
+    """Accept a standard retry key; never silently override a conflicting ID."""
+    header = raw_request.headers.get("Idempotency-Key")
+    if header is not None:
+        if not header or header != header.strip() or len(header) > 128:
+            raise HTTPException(status_code=400, detail="Idempotency-Key 必须为 1–128 字符，且无首尾空白。")
+        if request_id is not None and request_id != header:
+            raise HTTPException(status_code=409, detail="Idempotency-Key 与 request_id 不一致；未提交。")
+    return request_id or header
+
+
 def _owned_chat_request_key(owner_id: str, request_id: str) -> str:
     """Internal channel identity; public request IDs are not capabilities."""
     if not owner_id:
@@ -2044,6 +2055,7 @@ async def chat(
     http_response: Response,
     request_id: str | None = Query(default=None, min_length=1, max_length=128),
 ) -> ChatResponse:
+    request_id = _client_request_id(raw_request, request_id)
     timing = RequestTimingLedger(
         trace_id=request_id or uuid4().hex,
         budget_seconds=CHAT_REQUEST_TIMEOUT_SECONDS,
@@ -2159,6 +2171,7 @@ async def stream_chat(
     keepalives and the final result, never an unvalidated partial answer.
     """
 
+    request_id = _client_request_id(raw_request, request_id)
     # Starlette's streaming disconnect watcher reads the ASGI receive channel.
     # Cache the upload first so it cannot race with chat's JSON/form parsing.
     await raw_request.body()
@@ -2603,7 +2616,13 @@ async def prepare_booking_proposal(request: BookingRequest, raw_request: Request
     identity = await asyncio.to_thread(_resolve_chat_identity, raw_request, None)
     if identity.account_email and request.student_email.strip().lower() != identity.account_email.lower():
         raise HTTPException(status_code=403, detail="请使用当前登录账号的邮箱准备预约。")
-    result = await asyncio.to_thread(service._meeting_service.prepare_proposal, identity.owner_id, request)
+    from sage.runtime.action_confirmation import ConfirmationError
+    try:
+        result = await asyncio.to_thread(service._meeting_service.prepare_proposal, identity.owner_id, request,
+                                         idempotency_key=_client_request_id(raw_request))
+    except ConfirmationError as error:
+        raise HTTPException(status_code=409, detail="预约重试标识与原草稿不一致；未提交。",
+                            headers={"X-Sage-Error-Code": str(error)}) from error
     _deliver_guest_cookie(raw_request, response)
     return result
 
@@ -2658,7 +2677,11 @@ async def reject_booking(
     request: BookingDecisionRequest,
     _: dict = Depends(require_admin_session),
 ) -> BookingResponse:
-    return service.reject_booking(booking_id, request)
+    from sage.runtime.operation_receipts import OperationConflict
+    try:
+        return service.reject_booking(booking_id, request)
+    except OperationConflict as error:
+        raise HTTPException(status_code=409, detail="该预约已处理；重试内容与原决定不一致。") from error
 
 
 @llm_app.get("/changelog")

@@ -326,6 +326,8 @@ const sageCompanionController = globalThis.SageCompanion?.create({
 
 let deepThinkingExplicitlyEnabled = Boolean(deepThinkingCheckbox?.checked);
 let lastFailedQuestion = null;
+let pendingChatRetry = null;
+const chatRetryContexts = new WeakMap();
 let codeAssistantWorkspaces = [];
 let selectedCodeWorkspaceId = "";
 let codeAssistantWorkspacesLoaded = false;
@@ -2893,6 +2895,10 @@ chatForm.addEventListener("submit", async (event) => {
     if (!question) {
         return;
     }
+    const retry = pendingChatRetry;
+    pendingChatRetry = null;
+    if (retry && (retry.payload.conversation_id !== activeConversationId
+        || retry.account !== currentUserAccountEmail)) return;
     const effectiveQuestion = normalizeCodeAssistantQuestion(question);
 
     // If onboarding is active, wrap user's answer with the step template
@@ -2926,9 +2932,9 @@ chatForm.addEventListener("submit", async (event) => {
     }
 
     lastFailedQuestion = null;
-    noteOutgoingConversationQuestion(question);
+    if (!retry) noteOutgoingConversationQuestion(question);
 
-    const payload = {
+    const payload = retry?.payload || {
         student_name: document.getElementById("student-name").value,
         student_email: document.getElementById("student-email").value || null,
         course_context: submittedCourseContext(),
@@ -2942,26 +2948,29 @@ chatForm.addEventListener("submit", async (event) => {
             ? normalizeCodeApprovalMode(currentCodeApprovalMode)
             : "ask",
     };
-    const submittedFiles = [...pendingChatAttachments];
+    const submittedFiles = retry?.files || [...pendingChatAttachments];
     const submittedAttachments = submittedFiles.map((file) => ({
         fileName: file.name,
         sizeBytes: file.size,
     }));
-    const workflowRequestId = createConversationId();
+    const workflowRequestId = retry?.requestId || createConversationId();
     const requestController = new AbortController();
     activeChatAbortController = requestController;
     activeChatUserCancelled = false;
     activeChatCancellationPromise = null;
 
-    const questionMessage = appendMessage("user", payload.student_name || "学生", question, {
+    const questionMessage = retry?.questionMessage || appendMessage("user", payload.student_name || "学生", question, {
         emphasis: "user",
         attachments: submittedAttachments,
     });
     const answerStartedAt = performance.now();
-    const pendingMessage = appendMessage("assistant", assistantLabel, "正在整理问题、检索资料并准备回复", {
+    const pendingMessage = retry?.message || appendMessage("assistant", assistantLabel, "正在整理问题、检索资料并准备回复", {
         state: "pending",
         startedAt: answerStartedAt,
     });
+    chatRetryContexts.set(pendingMessage, { payload: structuredClone(payload), files: submittedFiles,
+        requestId: workflowRequestId, account: currentUserAccountEmail,
+        message: pendingMessage, questionMessage, originalQuestion: question });
     activeWorkflowMessage = pendingMessage;
     const explicitDeepMode = payload.deep_thinking && payload.deep_thinking_explicit;
     renderPendingAssistantMessage(pendingMessage, "理解问题", [], {
@@ -6979,6 +6988,9 @@ async function saveLocalCodeConfig(event) {
 }
 
 function friendlyHttpErrorMessage(status, body, code = null) {
+    if (code === "answer_outcome_unknown") {
+        return "请求可能已执行，但结果尚未核验；不会自动重新生成。请保留原请求查询，勿重复提交。";
+    }
     if (code === "answer_validation_rejected") {
         return "本轮回答未通过来源或完整性校验，未发布未经校验的答案。可展开处理过程查看失败节点。";
     }
@@ -9644,7 +9656,8 @@ function buildNotificationStatusHtml(notification, options = {}) {
         ? "已发送"
         : notification.status === "failed"
             ? "发送失败"
-            : notification.status === "queued" ? "等待发送" : "未发送";
+            : notification.status === "unknown" ? "回执待核验（不自动重发）"
+                : notification.status === "queued" ? "等待发送" : "未发送";
     const statusClass = notification.status === "sent"
         ? "notification-card-sent"
         : notification.status === "failed"
@@ -10979,10 +10992,15 @@ function handleRetryRequestClick(event) {
     if (!button || !chatStream || !chatStream.contains(button)) {
         return;
     }
-    if (!lastFailedQuestion) return;
+    if (activeChatAbortController) return;
+    const context = chatRetryContexts.get(button.closest(".message"));
+    if (!context || context.payload.conversation_id !== activeConversationId
+        || context.account !== currentUserAccountEmail) return;
+    pendingChatRetry = context;
+    button.disabled = true;
     const chatQuestion = document.getElementById("chat-question");
     if (chatQuestion) {
-        chatQuestion.value = lastFailedQuestion;
+        chatQuestion.value = context.originalQuestion;
         chatQuestion.dispatchEvent(new Event("input", { bubbles: true }));
     }
     lastFailedQuestion = null;

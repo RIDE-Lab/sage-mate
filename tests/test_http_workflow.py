@@ -155,3 +155,29 @@ def test_two_instances_share_lease_and_recover_lost_answer_ack(tmp_path):
             for state in states:
                 state.close()
     asyncio.run(scenario())
+
+
+def test_accepted_generation_without_canonical_receipt_never_regenerates(tmp_path):
+    from sage_faculty_twin.http_workflow import HttpWorkRejected
+    async def scenario():
+        path = str(tmp_path / "uncertain.db")
+        calls = []
+        async def authorize(item): return True
+        async def recover(item): return None
+        async def answer(item, **kwargs):
+            calls.append(item.request_id)
+            raise OSError("model accepted but result lost")
+        item = ingress()
+        for _ in range(2):
+            state = StatefulProcessRuntime(backend="sqlite", sqlite_path=path)
+            flow = HttpWorkflow(state, authorize=authorize, recover=recover, answer=answer, retry_delay=0)
+            try:
+                await flow.admit(item)
+                with pytest.raises(HttpWorkRejected) as error:
+                    await flow.wait(item, timeout=5)
+                assert error.value.code == "answer_outcome_unknown"
+            finally:
+                await flow.aclose()
+                state.close()
+        assert calls == ["r"]
+    asyncio.run(scenario())

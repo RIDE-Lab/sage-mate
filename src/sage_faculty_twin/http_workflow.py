@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sage.runtime.async_work_service import AsyncWorkService
 from sage.runtime.work_dispatcher import WorkFailure
 from sage.runtime.work_journal import WorkJournal
+from sage.runtime.external_effect import ExternalEffects, EffectOutcomeUnknown
 from sage.runtime.work_service import WorkFailedError, WorkWaitTimeoutError
 from sage.runtime.effect_cancellation import CancellationService, EffectCancelled
 from sage.runtime.event_journal import EventJournal
@@ -35,6 +36,7 @@ class HttpWorkRejected(RuntimeError):
 def public_http_failure(code):
     """One safe public contract shared by HTTP errors and durable SSE errors."""
     return {
+        "answer_outcome_unknown": (503, "请求可能已执行，但结果尚未核验；不会自动重新生成。请保留原请求 ID 查询，勿重复提交。"),
         "prompt_capacity": (413, "完整材料超出模型上下文容量；未截断原文，请调整问题或材料后重试。"),
         "request_cancelled": (499, "任务已取消，未继续生成回答。"),
         "authority_denied": (403, "当前身份或权限已失效，请重新验证。"),
@@ -81,6 +83,7 @@ class HttpWorkflow:
         if type(max_attempts) is not int or max_attempts < 1:
             raise ValueError("http_max_attempts_must_be_positive")
         self.journal = WorkJournal(state, namespace="twin-http-workflow-v1")
+        self._effects = ExternalEffects(state, namespace="twin-http-answer-v1")
         self.events = EventJournal(state, namespace="twin-workflow-events-v1")
         self._authorize, self._recover, self._answer = authorize, recover, answer
         self._max_attempts = max_attempts
@@ -151,6 +154,8 @@ class HttpWorkflow:
             and error.error_type in {"AnswerValidationRejected", "InvalidSourcePlan", "InvalidEvidenceCoverage", "InvalidResearchPlan"}
         ):
             return WorkFailure("answer_validation_rejected")
+        if isinstance(error, EffectOutcomeUnknown):
+            return WorkFailure("answer_outcome_unknown")
         if isinstance(error, HttpWorkRejected):
             return WorkFailure(error.code)
         if isinstance(error, PermissionError):
@@ -179,12 +184,23 @@ class HttpWorkflow:
         await self._check(ingress)
         response = await self._recover(ingress)
         if response is None:
+            # Claim before invoking a producer. A restarted worker must not
+            # regenerate if the previous process died before saving its result.
+            if lease.attempt > 1 and await asyncio.to_thread(self.journal._store.peek,
+                    ("sage-external-effects-v1", "twin-http-answer-v1", lease.request_id)) is None:
+                raise EffectOutcomeUnknown("legacy_answer_outcome_unknown")
+            claim = await asyncio.to_thread(self._effects.begin, lease.request_id,
+                self._input_identity(lease.payload), guard=self.journal.prepare_guard(lease))
+            if claim["replay"]:
+                return claim["result"]
             try:
                 response = await self._answer(ingress, admission_guard=self.journal.prepare_guard(lease))
             except Exception:
                 response = await self._recover(ingress)
                 if response is None:
                     raise
+            await asyncio.to_thread(self._effects.complete, claim,
+                ChatResponse.model_validate(response).model_dump(mode="json"))
         return ChatResponse.model_validate(response).model_dump(mode="json")
 
     async def start(self):

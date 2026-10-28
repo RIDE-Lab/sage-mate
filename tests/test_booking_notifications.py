@@ -47,14 +47,17 @@ def test_reopen_recovers_notice_without_repeating_booking_producer(tmp_path):
         store.close()
 
 
-def test_retry_recovers_transport_failure_not_the_booking(tmp_path):
+def test_uncertain_transport_stops_without_resending_or_rebooking(tmp_path):
     store = MeetingService(config(tmp_path))
     response = store.book(request(), operation_id="fixture")
     notifier = Notifier(failures=1)
     try:
         store._notifications.start(notifier, admin_recipient="admin@example.test", retry_delay=0)
-        store._notifications.service.wait("fixture", timeout=5)
-        assert notifier.calls == [response.booking.booking_id] * 2
+        from sage.runtime.work_service import WorkFailedError
+        with pytest.raises(WorkFailedError):
+            store._notifications.service.wait("fixture", timeout=5)
+        assert store._notifications.journal.read("fixture")["tasks"]["notify"]["failure_code"] == "notification_outcome_unknown"
+        assert notifier.calls == [response.booking.booking_id]
         assert len(store.list_bookings()) == 1
     finally:
         store.close()
@@ -126,3 +129,21 @@ def test_inconsistent_student_destination_never_calls_transport(tmp_path, action
         assert outbox.journal.read("inconsistent")["tasks"]["notify"]["failure_code"] == "invalid_notification_intent"
     finally:
         store.close()
+
+
+@pytest.mark.parametrize('decision', ['confirm', 'reject'])
+def test_admin_decision_retry_has_one_notification_intent(tmp_path, decision):
+    store = MeetingService(config(tmp_path))
+    try:
+        created = store.book(request(), operation_id='new-booking')
+        def decide():
+            return (store.confirm_booking(created.booking.booking_id) if decision == 'confirm'
+                    else store.reject_booking(created.booking.booking_id, 'Synthetic'))
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(4) as pool:
+            results = list(pool.map(lambda _: decide(), range(8)))
+        assert all(r == results[0] for r in results)
+        rows, _ = store._notifications.journal.records()
+        assert len(rows) == 2  # one new-booking mail and one admin-decision mail
+        assert len(store.list_bookings()) == 1
+    finally: store.close()

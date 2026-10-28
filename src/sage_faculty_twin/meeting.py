@@ -48,6 +48,10 @@ class MeetingService:
                     if task and task["status"] == "done" and (task.get("result") or {}).get("status") == "sent":
                         result.notification = result.notification.model_copy(update={"status": "sent",
                             "summary": "通知工作已完成，邮件服务已接受；不代表收件人已阅读。"})
+                    elif task and task.get("failure_code") == "notification_outcome_unknown":
+                        result.notification = result.notification.model_copy(update={"status": "unknown",
+                            "summary": "邮件可能已被接收，回执尚未核验；已停止自动重发，请核对邮件服务记录。",
+                            "detail": "notification_outcome_unknown"})
                     elif task and task["status"] in {"failed", "blocked"}:
                         result.notification = result.notification.model_copy(update={"status": "failed",
                             "summary": "通知工作失败；查询不会重新发送邮件。", "detail": task.get("failure_code")})
@@ -60,9 +64,9 @@ class MeetingService:
                     "expired": "草稿已过期，未提交；请重新准备。"}
         return BookingResponse(accepted=False, proposal=view, message=messages[proposal["status"]])
 
-    def prepare_proposal(self, owner_id, request, *, operation_id=None, cancellation_scope=None):
+    def prepare_proposal(self, owner_id, request, *, operation_id=None, cancellation_scope=None, idempotency_key=None):
         proposal = ActionConfirmations(self._storage(), namespace="twin-booking").prepare(
-            owner_id, {"request": request.model_dump(mode="json"), "workflow_operation_id": operation_id}, operation_id=operation_id,
+            owner_id, {"request": request.model_dump(mode="json"), "workflow_operation_id": operation_id}, operation_id=operation_id or idempotency_key,
             guard=self.effect_fences.prepare_guard(cancellation_scope) if cancellation_scope else None)
         view = {**proposal, "payload": proposal["payload"]["request"]}
         messages = {"pending": "预约草稿已生成（生成时未提交预约、未发送邮件）。后续提交、放弃及失败结果请以下方操作状态为准；明确确认后才会提交，提交后仍需老师审核。",
@@ -252,7 +256,7 @@ class MeetingService:
         return [booking for booking in bookings if booking.status == status]
 
     def confirm_booking(self, booking_id: str, *, operation_id=None) -> BookingResponse:
-        return self._commit(operation_id, {"action": "confirm", "booking_id": booking_id},
+        return self._commit(operation_id or "confirm:" + booking_id, {"action": "confirm", "booking_id": booking_id},
                             lambda bookings: self._confirm(booking_id, bookings))
 
     def _confirm(self, booking_id, bookings):
@@ -283,7 +287,7 @@ class MeetingService:
 
     def reject_booking(self, booking_id: str, rejection_reason: str | None = None,
                        *, operation_id=None) -> BookingResponse:
-        return self._commit(operation_id, {"action": "reject", "booking_id": booking_id,
+        return self._commit(operation_id or "reject:" + booking_id, {"action": "reject", "booking_id": booking_id,
                             "rejection_reason": rejection_reason},
                             lambda bookings: self._reject(booking_id, rejection_reason, bookings))
 

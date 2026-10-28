@@ -698,7 +698,7 @@ class _FlakyHttpxClient:
     def post(self, path: str, json: dict) -> _FakeChatCompletionResponse:
         self.calls += 1
         if self.calls <= self._failures_before_success:
-            raise httpx.ReadTimeout("timed out")
+            raise httpx.ConnectTimeout("connection not established")
         return _FakeChatCompletionResponse(self._content)
 
     def close(self) -> None:
@@ -897,7 +897,7 @@ def test_responses_mode_normalizes_function_calls() -> None:
     assert snapshot["llm_throughput_window_seconds"] == "60"
 
 
-def test_request_chat_completion_retries_timeout_then_succeeds(
+def test_request_chat_completion_retries_connect_timeout_then_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sleep_calls: list[float] = []
@@ -975,7 +975,7 @@ def test_request_chat_completion_raises_after_retry_budget(
     transport = _FlakyHttpxClient(failures_before_success=5)
     client = _build_retry_test_client(settings, transport)
 
-    with pytest.raises(httpx.ReadTimeout):
+    with pytest.raises(httpx.ConnectTimeout):
         client._request_chat_completion_sync({"model": "demo", "messages": []})
 
     assert transport.calls == 2
@@ -984,7 +984,7 @@ def test_request_chat_completion_raises_after_retry_budget(
     assert snapshot["llm_request_count"] == "1"
     assert snapshot["llm_success_count"] == "0"
     assert snapshot["llm_error_count"] == "1"
-    assert "timed out" in snapshot["llm_last_error"]
+    assert "connection not established" in snapshot["llm_last_error"]
 
 
 def test_request_chat_completion_continues_when_finish_reason_is_length() -> None:

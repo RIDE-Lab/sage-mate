@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .config import AppSettings
 from .models import FollowUpQueueRecord
@@ -100,9 +100,14 @@ class FollowUpQueueStore:
         due_at: datetime | None,
     ) -> FollowUpQueueRecord:
         existing = self._find_existing(booking_id=booking_id, action_type=action_type)
+        if existing is not None:
+            # Replaying a booking decision must not replace its immutable mail
+            # intent or turn sent/uncertain delivery back into queued work.
+            return existing.to_response()
         now = datetime.now(UTC)
         entry = FollowUpQueueEntry(
-            action_id=existing.action_id if existing else str(uuid4()),
+            action_id=(str(uuid5(NAMESPACE_URL, json.dumps(["twin-follow-up", booking_id, action_type])))
+                       if booking_id else str(uuid4())),
             booking_id=booking_id,
             student_name=student_name,
             student_email=student_email,
@@ -151,6 +156,12 @@ class FollowUpQueueStore:
         entry = self._entries[action_id]
         entry.status = "sent"
         entry.sent_at = sent_at or datetime.now(UTC)
+        self._persist_entry(entry)
+        return entry.to_response()
+
+    def mark_unknown(self, action_id: str) -> FollowUpQueueRecord:
+        entry = self._entries[action_id]
+        entry.status = "unknown"
         self._persist_entry(entry)
         return entry.to_response()
 

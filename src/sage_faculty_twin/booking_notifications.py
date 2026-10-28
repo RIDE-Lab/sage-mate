@@ -1,8 +1,9 @@
 """Booking notification port over SAGE work admission and recovery.
 
-SMTP is at-least-once: acknowledgement loss can duplicate a message. The worker
+SMTP has no idempotent receipt API: ambiguous delivery stops for reconciliation. The worker
 never regenerates a booking or asks a model to recover its immutable intent.
 """
+from sage.runtime.external_effect import ExternalEffects, EffectOutcomeUnknown
 from sage.runtime.work_dispatcher import WorkFailure
 from sage.runtime.work_journal import WorkJournal
 from sage.runtime.work_service import WorkService
@@ -14,6 +15,7 @@ class BookingNotifications:
     def __init__(self, state):
         self.journal = WorkJournal(state, namespace="twin-booking-notifications-v1")
         self.service = None
+        self.effects = ExternalEffects(state, namespace="twin-booking-email-v1")
 
     def prepare(self, operation_id, *, action, booking=None, recipient=None):
         return self.journal.prepare_commit(operation_id, result={"action": action}, tasks={
@@ -32,21 +34,29 @@ class BookingNotifications:
                 # a misdirected message from inconsistent persisted intent.
                 if action in {"confirm", "reject"} and payload["recipient"] != booking.student_email.strip():
                     raise ValueError("booking_notification_destination_mismatch")
-                if action == "book":
-                    if payload["recipient"] != admin_recipient:
-                        raise ValueError("booking_notification_destination_changed")
-                    recipient = notifier.send_booking_request_notification(booking)
-                elif action == "confirm":
-                    recipient = notifier.send_booking_approved_notification(booking)
-                elif action == "reject":
-                    recipient = notifier.send_booking_rejected_notification(booking)
-                else:
+                if action == "book" and payload["recipient"] != admin_recipient:
+                    raise ValueError("booking_notification_destination_changed")
+                methods = {"book": "send_booking_request_notification",
+                           "confirm": "send_booking_approved_notification",
+                           "reject": "send_booking_rejected_notification"}
+                if action not in methods:
                     raise ValueError("invalid_booking_notification_action")
-                if recipient != payload["recipient"]:
-                    raise ValueError("booking_notification_receipt_destination_mismatch")
-                return {"status": "sent", "recipient": recipient}
+                def deliver():
+                    recipient = getattr(notifier, methods[action])(booking)
+                    if recipient != payload["recipient"]:
+                        raise ValueError("booking_notification_receipt_destination_mismatch")
+                    return {"status": "sent", "recipient": recipient}
+                # A pre-upgrade attempt may already have sent without a durable
+                # effect claim. Never infer non-delivery from a missing receipt.
+                if lease.attempt > 1 and self.journal._store.peek(
+                        ("sage-external-effects-v1", "twin-booking-email-v1", lease.request_id)) is None:
+                    raise EffectOutcomeUnknown("legacy_notification_outcome_unknown")
+                return self.effects.execute(lease.request_id, payload, deliver,
+                                            guard=self.journal.prepare_guard(lease))
 
             def failure(lease, error):
+                if isinstance(error, EffectOutcomeUnknown):
+                    return WorkFailure("notification_outcome_unknown")
                 if isinstance(error, ValueError):
                     return WorkFailure("invalid_notification_intent")
                 if lease.attempt >= 5:

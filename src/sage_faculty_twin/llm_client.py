@@ -1775,7 +1775,7 @@ class VllmChatClient:
                     )
                 break
             except httpx.TimeoutException as exc:
-                if attempt >= max_retries:
+                if not isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) or attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
                 if diagnostics is not None:
@@ -1942,7 +1942,7 @@ class VllmChatClient:
                     raise IncompleteCompletionError("answer reached token limit")
                 break
             except httpx.TimeoutException as exc:
-                if attempt >= max_retries:
+                if not isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) or attempt >= max_retries:
                     self._record_request_error(exc)
                     raise
                 if diagnostics is not None:

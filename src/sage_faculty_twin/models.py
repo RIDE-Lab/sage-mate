@@ -145,13 +145,14 @@ class FollowUpQueueRecord(BaseModel):
     title: str = Field(min_length=1, max_length=256)
     detail: str = Field(min_length=1, max_length=512)
     subject: str = Field(min_length=1, max_length=256)
-    status: str = Field(pattern="^(queued|sent|skipped)$")
+    status: str = Field(pattern="^(queued|sent|unknown|skipped)$")
     due_at: datetime | None = None
     created_at: datetime
     sent_at: datetime | None = None
 
 
 class FollowUpDispatchResponse(BaseModel):
+    unknown_count: int = 0
     processed_count: int = 0
     sent_count: int = 0
     pending_count: int = 0
@@ -178,7 +179,7 @@ class EscalationDecisionRequest(BaseModel):
 
 class NotificationDeliveryStatus(BaseModel):
     channel: str = Field(default="email", pattern="^(email)$")
-    status: str = Field(default="skipped", pattern="^(queued|sent|failed|skipped)$")
+    status: str = Field(default="skipped", pattern="^(queued|sent|failed|unknown|skipped)$")
     recipient: str | None = Field(default=None, max_length=256)
     summary: str = Field(min_length=1, max_length=256)
     detail: str | None = Field(default=None, max_length=512)

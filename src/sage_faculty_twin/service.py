@@ -5330,17 +5330,28 @@ class FacultyTwinWorkflowSupport:
 
     def dispatch_due_follow_ups(self) -> FollowUpDispatchResponse:
         due_entries = self._follow_up_store.list_due_actions()
+        from sage.runtime.external_effect import ExternalEffects, EffectOutcomeUnknown, EffectInputConflict
+        effects = ExternalEffects(self._meeting_service._storage(), namespace="twin-follow-up-email-v1")
         sent_count = 0
+        unknown_count = 0
         for entry in due_entries:
-            self._email_notifier.send_follow_up_email(
-                entry.student_email, entry.subject, entry.lines
-            )
+            try:
+                effects.execute(json.dumps(["booking", entry.booking_id, entry.action_type])
+                    if entry.booking_id else entry.action_id,
+                    {"recipient": entry.student_email, "subject": entry.subject, "lines": entry.lines},
+                    lambda entry=entry: self._email_notifier.send_follow_up_email(
+                        entry.student_email, entry.subject, entry.lines))
+            except (EffectOutcomeUnknown, EffectInputConflict):
+                self._follow_up_store.mark_unknown(entry.action_id)
+                unknown_count += 1
+                continue
             self._follow_up_store.mark_sent(entry.action_id)
             sent_count += 1
 
         pending_count = len(self._follow_up_store.list_actions(status="queued"))
         return FollowUpDispatchResponse(
             processed_count=len(due_entries),
+            unknown_count=unknown_count,
             sent_count=sent_count,
             pending_count=pending_count,
         )
