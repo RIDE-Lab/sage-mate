@@ -72,6 +72,7 @@ class InteractionIntent(BaseModel):
     web_intent: dict[str, Any] | None = None
     task_mode: Literal['facts', 'research'] | None = None
     task_directive: str | None = None
+    experiment_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
     source_directive: str | None = None
     self_contained: bool = False
@@ -96,7 +97,7 @@ class InteractionIntent(BaseModel):
 
         if self.task_mode is None:
             return False
-        return AnswerTask(self.task_mode, self.task_directive).validate(question).research_requested
+        return AnswerTask(self.task_mode, self.task_directive, self.experiment_directive).validate(question).research_requested
 
 
 class WebSourceReceipt(BaseModel):

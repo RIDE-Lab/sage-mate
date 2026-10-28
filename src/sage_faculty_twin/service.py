@@ -4489,7 +4489,8 @@ class FacultyTwinWorkflowSupport:
                     context.evidence_work = runtime.run(context.request.question, self._source_plan_sources(context),
                         TwinEvidencePorts(self, context), task=AnswerTask(
                             context.interaction_intent.task_mode or "facts",
-                            context.interaction_intent.task_directive) if context.interaction_intent else AnswerTask("facts"),
+                            context.interaction_intent.task_directive,
+                            context.interaction_intent.experiment_directive) if context.interaction_intent else AnswerTask("facts"),
                         timeout=remaining if remaining is not None else self._settings.chat_request_timeout_seconds)
             except Exception as exc:
                 if getattr(exc, "error_type", None) == "InvalidEvidenceCoverage":

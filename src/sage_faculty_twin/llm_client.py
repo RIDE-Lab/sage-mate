@@ -207,6 +207,7 @@ class _InteractionIntentPayload(BaseModel):
     web_intent: dict[str, Any] | None = None
     task_mode: Literal['facts', 'research']
     task_directive: str | None = None
+    experiment_directive: str | None = None
     knowledge_sources: list[Literal['wiki', 'private']] | None = None
     source_directive: str | None = None
     self_contained: bool = False
@@ -1128,7 +1129,7 @@ class VllmChatClient:
             "Include knowledge_sources: null when no source restriction is requested, or an array containing wiki and/or private. "
             "A request to answer according to/from the public Wiki selects [\"wiki\"]; a request using only the private knowledge base selects [\"private\"]. "
             "If both are explicitly requested select both. Distinguish the requested evidence source from a topic mentioning Wiki; do not invent a source restriction for a mere topic mention. "
-            "Return JSON only with keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "Return JSON only with keys: web_intent, task_mode, task_directive, experiment_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
             "Set self_contained=true ONLY when the complete request can be answered from the current message alone, without external facts or previous conversation: greetings, acknowledgements, literal echo/format instructions, or rewriting/translating supplied text. In that case use action=answer, domain=general, retrieval_scopes=[]. "
             "Set self_contained=false for Wiki/source lookups, owner/lab/course facts, research questions, missing text, references to previous turns, or any uncertainty. Short questions are NOT automatically self-contained; an output-format instruction does not remove the need to look up facts. "
             'Allowed action values: "answer", "book_meeting", "ask_followup", "review_queue", "human_handoff". '
@@ -1191,7 +1192,7 @@ class VllmChatClient:
                 user_prompt += (f"\nPrior source decision rejected: {exc}. Reclassify the unchanged current question; "
                     "include source_directive and a verbatim complete public subject for any public web query. "
                     "Stable explanations have need=none; do not invent a requirement for current information.")
-        AnswerTask(raw_intent.task_mode, raw_intent.task_directive).validate(question)
+        AnswerTask(raw_intent.task_mode, raw_intent.task_directive, raw_intent.experiment_directive).validate(question)
         WebIntent.parse(raw_intent.web_intent)
         return self._normalize_interaction_intent(
             question, course_context, raw_intent, recent_session_context=recent_block
@@ -2223,8 +2224,8 @@ class VllmChatClient:
         system_prompt = (
             "You repair JSON emitted by an interaction-intent classifier. "
             "Preserve the original intent meaning, but return valid JSON only. "
-            "The JSON object must include exactly these keys: web_intent, task_mode, task_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
-            "Preserve task_mode and task_directive; do not invent a prospective request. "
+            "The JSON object must include exactly these keys: web_intent, task_mode, task_directive, experiment_directive, action, domain, self_contained, knowledge_sources, source_directive, retrieval_scopes, exclude_scopes, decision_mode, needs_clarification, clarification_message, escalation_reason. "
+            "Preserve task_mode, task_directive and experiment_directive; do not invent a prospective request. "
             "knowledge_sources is null or an array containing wiki and/or private; preserve explicit source restrictions and never change an empty array to null. "
             "self_contained is a boolean; use false when absent or uncertain. "
             "retrieval_scopes and exclude_scopes must be JSON arrays of strings."
@@ -2290,6 +2291,7 @@ class VllmChatClient:
             "web_intent": payload.web_intent,
             "task_mode": payload.task_mode,
             "task_directive": payload.task_directive,
+            "experiment_directive": payload.experiment_directive,
             "knowledge_sources": payload.knowledge_sources,
             "source_directive": payload.source_directive,
             "self_contained": payload.self_contained,

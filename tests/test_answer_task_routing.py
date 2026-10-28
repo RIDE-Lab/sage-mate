@@ -78,3 +78,12 @@ def test_classifier_failure_cannot_fall_back_to_topic_heuristic(tmp_path):
         knowledge_sources=["wiki"]), conversation_id="synthetic-failure", owner_name="owner", used_model="test")
     with pytest.raises(RuntimeError, match="answer_task_classification_unresolved"):
         support._resolve_interaction_intent(context)
+
+
+def test_experiment_scope_survives_adapter_without_enabling_from_topic():
+    client = object.__new__(VllmChatClient)
+    for directive in (None, "设计对照实验"):
+        client._request_intent_classification = lambda *_: json.dumps({
+            "task_mode":"research", "task_directive":"研究方向", "experiment_directive":directive})
+        intent = client.classify_interaction_intent_sync("研究方向是什么？请设计对照实验。")
+        assert intent.experiment_directive == directive
