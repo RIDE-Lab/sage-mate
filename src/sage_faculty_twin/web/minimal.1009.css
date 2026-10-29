@@ -1085,3 +1085,28 @@ html[data-theme="dark"] .primary-button:hover {
     #workflow-shell .workflow-shell-heading { flex: 1; min-width: 0; }
     #workflow-shell .workflow-shell-copy { display: none; }
 }
+
+/* Vertical graph fits the inspector; only vertical reading scroll is needed. */
+#workflow-shell .native-flow-atlas-diagram { width: 100%; min-width: 0 !important; height: auto; }
+#workflow-shell .native-flow-scroll { overflow: visible; }
+#workflow-shell .workflow-shell-head { display: flex; flex-direction: row; align-items: start; gap: 12px; }
+#workflow-shell .workflow-shell-heading { flex: 1; min-width: 0; }
+#workflow-shell .response-evidence { margin: 0 0 14px; font-size: 12px; }
+.response-evidence-attention { color: var(--warning-text); font-size: 12px; margin: 8px 0; }
+.message-pending .thinking-panel { background: transparent; padding: 0; border: 0; box-shadow: none; }
+.message-pending .thinking-stage-label { color: var(--text-secondary); line-height: 1.6; }
+@media (max-width: 920px) {
+    .chat-layout > .chat-shell { min-height: 0; min-width: 0; overflow: hidden; }
+    .chat-shell .composer-shell { position: relative !important; inset: auto; width: 100%; flex: 0 0 auto; }
+    .chat-shell .chat-stream { flex: 1 1 0; min-height: 0; height: auto; overflow-y: auto; padding-bottom: 20px !important; }
+}
+@media (min-width: 1201px) {
+    /* Keep the reading column near the page centre; diagnostics use the right
+       margin instead of shifting the whole conversation to the left edge. */
+    body:not(.workflow-shell-collapsed) .chat-layout {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 800px) clamp(280px, 22vw, 340px) !important;
+        column-gap: 20px;
+    }
+    body:not(.workflow-shell-collapsed) .chat-layout > .chat-shell { grid-column: 2; }
+    body:not(.workflow-shell-collapsed) #workflow-shell { grid-column: 3; border-left: 1px solid var(--line); }
+}

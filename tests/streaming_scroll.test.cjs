@@ -15,7 +15,7 @@ const message = {dataset:{}, style:{}, classList:{remove(){},add(){}},
     set innerHTML(value) {height += 900;}, querySelector: () => null};
 const context = {chatStream:stream, conversationFollowingLatest:false, document:{getElementById:()=>null}, assistantLabel:'Twin', INLINE_WORKFLOW_TRACE_ENABLED:false,
     isUserAuthenticated:false, currentUserAccountProfile:'',
-    stopAnswerProcessingTicker(){}, hasMatchingSourceBlocks:()=>false,
+    stopAnswerProcessingTicker(){}, consolidateMessageDiagnostics(){}, hasMatchingSourceBlocks:()=>false,
     stripNotificationText:x=>x, parseStreamingThinkContent:x=>({main:x,think:''}),
     buildNotificationStatusHtml:()=>'', escapeHtml:x=>x, formatSourceAnswer:x=>x,
     uiIconSvg:()=>'', buildFeedbackSectionHtml:()=>'', buildRetryButtonHtml:()=>''};
@@ -49,7 +49,7 @@ const section = {hidden:true, querySelector:()=>growing};
 const pending = {querySelector: selector => selector === '#pending-thinking-text' ? section :
     selector === '#pending-typing-dots' ? {} : growing};
 stream.querySelector = selector => selector.includes('thinking-trace-list') ? growing : pending;
-Object.assign(context, {streamingAnswerBuffer:'', streamingThinkBuffer:'',
+Object.assign(context, {streamingAnswerBuffer:'', streamingThinkBuffer:'', activeExecutionEvents:[],
     formatMessageContent:x=>x, buildVisibleWorkflowSteps:()=>[{}],
     buildPendingWorkflowTraceCompactHtml:()=>'<p>progress</p>'});
 for (const name of ['appendStreamingAnswerDelta','appendStreamingThinkDelta','syncPendingWorkflowTrace']) {

@@ -127,14 +127,14 @@ assert.equal((flat.match(/data-flow-boundary="input"/g)||[]).length,1);
 assert.equal((flat.match(/data-flow-boundary="output"/g)||[]).length,1);
 assert(flat.includes('>输入</text>') && flat.includes('>输出</text>'));
 assert.equal((flat.match(/class="native-flow-diagram/g)||[]).length,1);
-assert(Number(flat.match(/viewBox="0 0 [\d.]+ ([\d.]+)"/)[1])<300);
-assert(Number(flat.match(/viewBox="0 0 [\d.]+ ([\d.]+)"/)[1])<=260);
+assert(flat.includes('data-layout="vertical"'));
+assert(Number(flat.match(/viewBox="0 0 ([\d.]+) [\d.]+"/)[1]) <= 400);
 assert.equal((flat.match(/width="114" height="48" rx="24"/g)||[]).length,2);
-const positions=[...flat.matchAll(/data-flow-boundary="(input|output|)"[^>]*data-flow-node="[^"]*"[^>]*><title>[^<]*<\/title>(?:<rect x="([\d.]+)"[^>]*|<circle cx="([\d.]+)"[^>]*)/g)]
-    .map(match=>({boundary:match[1],x:match[2] ? Number(match[2])+57 : Number(match[3])}));
+const positions=[...flat.matchAll(/data-flow-boundary="(input|output|)"[^>]*data-flow-node="[^"]*"[^>]*><title>[^<]*<\/title>(?:<rect x="[\d.]+" y="([\d.]+)"[^>]*|<circle cx="[\d.]+" cy="([\d.]+)"[^>]*)/g)]
+    .map(match=>({boundary:match[1],y:match[2] ? Number(match[2])+24 : Number(match[3])}));
 assert.equal(positions.length,4);
-assert(positions.filter(p=>!p.boundary).every(p=>p.x>positions.find(p=>p.boundary==='input').x
-    && p.x<positions.find(p=>p.boundary==='output').x));
+assert(positions.filter(p=>!p.boundary).every(p=>p.y>positions.find(p=>p.boundary==='input').y
+    && p.y<positions.find(p=>p.boundary==='output').y));
 assert(!html.includes('data-flow-boundary="input"')); // No guessing for old records.
 // Child placement follows actual parents even when child IDs sort before
 // parent IDs. Opaque topology IDs must not scramble parallel reading lanes.
@@ -150,7 +150,7 @@ const laneHtml=context.buildNativeExecutionHtml([
     event('root',{program_topology:laneTopology}),
 ]);
 const laneY=id=>Number(laneHtml.match(new RegExp(
-    '<title>[^<]* · '+id+'</title><circle cx="[\\d.]+" cy="([\\d.]+)"'))[1]);
+    '<title>[^<]* · '+id+'</title><circle cx="([\\d.]+)" cy="[\\d.]+"'))[1]);
 assert.equal(laneY('parent-a'),laneY('child-z'));
 assert.equal(laneY('parent-z'),laneY('child-a'));
 const malformedBoundary=context.buildNativeWorkflowModel([
@@ -195,7 +195,7 @@ assert(!context.revealNativeNodeDetails({closest:()=>({...clicked,getAttribute:(
 const css = fs.readFileSync(path.join(__dirname, '../src/sage_faculty_twin/web/styles.css'), 'utf8');
 const atlas = laneHtml.match(/<svg class="native-flow-diagram native-flow-atlas-diagram"[^>]*>/)[0];
 const atlasWidth = atlas.match(/viewBox="0 0 ([\d.]+)/)[1];
-assert(atlas.includes(`style="min-width:${atlasWidth}px"`), 'keep native node scale inside local keyboard scrollport');
+assert(!atlas.includes("min-width:"), "vertical graph must fit sidebar width");
 assert(/\.message-workflow-summary \.message-section-content\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/.test(css));
 assert(/\.native-flow-scroll\s*\{[^}]*overflow-x:\s*auto;[^}]*min-width:\s*0/.test(css));
 assert(css.includes('@media (prefers-reduced-motion: reduce)'));
@@ -207,6 +207,15 @@ const denseTopology=Array.from({length:58},(_,i)=>({node_id:'dense-'+i,
  downstream_node_ids:i===57 ? [] : ['dense-'+(i+1)]}));
 const dense=context.buildNativeExecutionHtml([event('dense-0',{program_topology:denseTopology})]);
 assert.equal((dense.match(/data-flow-node=/g)||[]).length,58);
-const circles=[...dense.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)"/g)].map(m=>({x:+m[1],y:+m[2]})).sort((a,b)=>a.x-b.x);
-for(let i=1;i<circles.length;i++) assert(circles[i].x-circles[i-1].x>=100,'labels need a real horizontal gap');
-assert(dense.includes('横向滚动查看完整路线'));
+const circles=[...dense.matchAll(/<circle cx="([\d.]+)" cy="([\d.]+)"/g)].map(m=>({x:+m[1],y:+m[2]})).sort((a,b)=>a.y-b.y);
+for(let i=1;i<circles.length;i++) assert(circles[i].y-circles[i-1].y>=76,'vertical nodes need readable spacing');
+assert(dense.includes('从上到下'));
+// Live status names the running leaf rather than only its long-lived parent.
+const progressStart=source.indexOf('function describeNativeProgress(');
+vm.runInContext(source.slice(progressStart,source.indexOf('\n}\n',progressStart)+3),context);
+const live=[event('parent',{execution_id:'p',operator_key:'answer',state:'started'}),
+ event('child',{execution_id:'c',parent_execution_id:'p',operator_key:'assess-coverage',state:'started'})];
+assert.equal(context.describeNativeProgress(live),'正在覆盖检查');
+assert.equal(context.describeNativeProgress([...live,{...live[1],sequence:999,state:'completed'}]),'正在回答');
+assert.equal(context.describeNativeProgress([]),'');
+assert(!source.slice(source.indexOf('function startAnswerProcessingTicker('),source.indexOf('function stopAnswerProcessingTicker(')).includes('stageLabel.textContent = "暂未收到'));

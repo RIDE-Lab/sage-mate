@@ -19,7 +19,7 @@ const extra='<div class="message-processing-meta">duration</div><p>full diagnost
 const normal=context.buildWorkflowStatusSummaryHtml([{key:'web_search',status:'skipped',summary:'offline'}],[],[],null,extra);
 assert(normal.indexOf('offline')>normal.indexOf('<div class="message-section-content" hidden>'));
 assert(normal.indexOf(extra)>normal.indexOf('<div class="message-section-content" hidden>'));
-assert(normal.includes('<strong class="message-section-title">高级详情</strong>'));
+assert(normal.includes('<strong class="message-section-title">详情</strong>'));
 const failed=context.buildWorkflowStatusSummaryHtml([{key:'web_search',status:'failed',summary:'honest failure'}]);
 assert(failed.indexOf('honest failure')<failed.indexOf('<section class="message-workflow-summary'));
 const execution={version:1,trace_id:'t',request_id:'r',program_uri:'p',program_rev:'v',node_id:'n',sequence:1,state:'failed'};
@@ -32,7 +32,7 @@ Object.assign(context,{assistantLabel:'Twin',INLINE_WORKFLOW_TRACE_ENABLED:true,
   buildFollowUpActionHtml:()=>'<p>explicit action</p>',buildFeedbackSectionHtml:()=>'',
   buildRetryButtonHtml:()=>'',uiIconSvg:()=>''});
 function renderNotification(status,actions=[]){
-  const container={dataset:{},style:{},classList:{remove(){},add(){}}};
+  const container={querySelector:()=>null,dataset:{},style:{},classList:{remove(){},add(){}}};
   context.renderAssistantMessage(container,'original answer',[],actions,[],
     {notification:{status,summary:'notification record'}},false,null,[],false);
   return container.innerHTML;
@@ -55,6 +55,8 @@ assert(queued.indexOf('message-section-follow-up')>queued.indexOf('<div class="m
 // production migration and live updater; do not substitute their decisions.
 class Node {
   constructor(classes='',dataset={}){this.classes=classes.split(' ');this.dataset=dataset;this.children=[];this.attrs={};this.hidden=false;}
+  set className(value){this.classes=value.split(' ');}
+  setAttribute(name,value){this.attrs[name]=value;}
   matches(selector){
     if(selector.includes(':not(.notification-card-failed)')&&this.classes.includes('notification-card-failed'))return false;
     selector=selector.replace(':not(.notification-card-failed)','');
@@ -81,6 +83,7 @@ class Node {
     else if(position==='afterbegin'){this.append(node);this.children.unshift(this.children.pop());}
     else throw Error(position);
   }
+  prepend(node){this.append(node);this.children.unshift(this.children.pop());}
   set outerHTML(html){this.insertAdjacentHTML('beforebegin',html);this.remove();}
 }
 const message=new Node('message-ready'),frame=new Node('message-frame');message.append(frame);
@@ -95,9 +98,20 @@ const native=new Node('message-native-execution');content.append(native);advance
 frame.append(body,evidence,timing,divider,web,work,mail,mailFailure,thinking,advanced);content.append(webFailure);
 body.original='complete answer';evidence.original='complete source and original link';
 context.consolidateMessageDiagnostics(message);
-for(const node of [timing,divider,web,work,mail,thinking])assert(content.contains(node));
-for(const node of [body,evidence,mailFailure,webFailure])assert.equal(node.parent,frame);
-assert.equal(title.textContent,'高级详情');assert(preview.hidden);
+for(const node of [evidence,timing,divider,web,work,mail,thinking])assert(content.contains(node));
+for(const node of [body,mailFailure,webFailure])assert.equal(node.parent,frame);
+assert.equal(title.textContent,'详情');assert(preview.hidden);
+context.document={createElement:()=>new Node()};
+const gaps=new Node('response-evidence-gaps'),gap=new Node();gap.textContent='同负载下的测量记录';gaps.append(gap);evidence.append(gaps);
+const originalEvidenceQuery=evidence.querySelectorAll.bind(evidence);
+evidence.querySelectorAll=selector=>selector==='.response-evidence-gaps li' && gaps.parent ? [gap] : originalEvidenceQuery(selector);
+context.consolidateMessageDiagnostics(message);
+assert.equal(frame.querySelector('.response-evidence-attention').parent,frame);
+assert.equal(evidence.parent,content,'full sources remain folded under detail');
+assert.match(frame.querySelector('.response-evidence-attention').textContent,/同负载下的测量记录/);
+gaps.remove();
+context.consolidateMessageDiagnostics(message);
+assert.equal(frame.querySelector('.response-evidence-attention'),null,'resolved gap removes only its warning');
 advanced.dataset.expanded='true';
 context.consolidateMessageDiagnostics(message);assert.equal(advanced.dataset.expanded,'true');
 const event=state=>({version:1,namespace:'n',request_id:'r',task_id:'post_answer',attempt:1,state});

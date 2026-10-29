@@ -2370,7 +2370,8 @@ chatStream?.addEventListener("click", handleMessageSectionToggle);
 workflowShell?.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
         event.preventDefault(); closeWorkflowMobileSheet();
-        workflowInspectorOpener?.focus({preventScroll: true});
+        (workflowInspectorOpener?.isConnected ? workflowInspectorOpener
+            : inspectedWorkflowMessage?.querySelector(".message-workflow-summary-toggle, .thinking-trace > summary, .response-advanced > summary"))?.focus({preventScroll: true});
     }
 });
 chatStream?.addEventListener("keydown", handleMessageSectionEscape);
@@ -8304,7 +8305,7 @@ function renderPendingAssistantMessage(
                             </div>
                             ${INLINE_WORKFLOW_TRACE_ENABLED
                 ? `<details class="thinking-trace response-advanced" aria-label="高级执行详情">
-                                <summary>高级详情</summary>
+                                <summary>详情</summary>
                                 <div class="message-processing-meta pending-processing-meta" id="pending-processing-meta">已处理 0.0 秒</div>
                                 <div class="pending-web-research" aria-live="polite"></div>
                                 <div class="pending-work-state" aria-live="polite"></div>
@@ -8324,6 +8325,7 @@ function renderPendingAssistantMessage(
             syncPendingWorkflowTrace(workflowSteps, { animateNewItems: false, currentStage });
         }
         container.dataset.lastStageAt = String(performance.now());
+        container.dataset.lastStageLabel = currentStage;
         startAnswerProcessingTicker(container);
     } finally {
         restoreConversationScroll(scrollSnapshot);
@@ -8344,11 +8346,12 @@ function startAnswerProcessingTicker(container) {
         const lastStageAt = Number(container.dataset.lastStageAt || startedAt);
         const idleMs = Math.max(0, performance.now() - lastStageAt);
         if (stageLabel && idleMs >= 8000) {
-            stageLabel.textContent = "暂未收到新的处理进度；正在等待更新，无需重复提交";
+            const lastStage = container.dataset.lastStageLabel || "等待执行事件";
+            stageLabel.textContent = `${lastStage} · 等待新进度，无需重复提交`;
         }
     };
     update();
-    container._answerProcessingTimer = globalThis.setInterval(update, 100);
+    container._answerProcessingTimer = globalThis.setInterval(update, 1000);
 }
 
 function stopAnswerProcessingTicker(container) {
@@ -8368,6 +8371,7 @@ function updatePendingAssistantMessage(currentStage, workflowSteps = []) {
         const pendingMessage = chatStream?.querySelector(".message-pending");
         if (pendingMessage) {
             pendingMessage.dataset.lastStageAt = String(performance.now());
+            pendingMessage.dataset.lastStageLabel = currentStage;
         }
         if (INLINE_WORKFLOW_TRACE_ENABLED) {
             syncPendingWorkflowTrace(workflowSteps, { animateNewItems: true, currentStage });
@@ -8478,7 +8482,7 @@ function renderAssistantMessage(
                 ? `<p class="response-operation" data-operation-attention="false">操作状态 · ${escapeHtml(evidenceView.operation)}</p>` : "");
         const workflowTraceHtml = INLINE_WORKFLOW_TRACE_ENABLED
             ? buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents, workEvents, null, diagnosticsHtml)
-            : `<details class="response-advanced"><summary>高级详情</summary>${diagnosticsHtml}</details>`;
+            : `<details class="response-advanced"><summary>详情</summary>${diagnosticsHtml}</details>`;
         container.innerHTML = `
             <div class="message-bubble-row">
                 <div class="message-avatar" aria-hidden="true">S</div>
@@ -8509,6 +8513,7 @@ function renderAssistantMessage(
         if (isError) {
             container.style.background = "var(--error-surface)";
         }
+        consolidateMessageDiagnostics(container);
         answerRendered = true;
         if (exchangeId && !isError) {
             attachFeedbackHandlers(container, exchangeId);
@@ -8568,7 +8573,7 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
 }
 
 function buildResponseEvidenceHtml(model, sourceDetailsHtml = "") {
-    return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="回答依据" data-evidence-view="v2">
+    return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="回答依据" data-evidence-view="v2" data-missing-parts="${model.missingParts.length}">
         <details><summary>回答依据 · ${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : model.warning ? " · 依据待核对" : ""}</summary>
         <p>${escapeHtml(model.gap)}</p>
         ${model.missingParts.length ? `<ul class="response-evidence-gaps">${model.missingParts.map(part => `<li>${escapeHtml(part)}</li>`).join("")}</ul><p>可补充对应资料，或明确哪些部分需要进一步检索。</p>` : ""}
@@ -8663,7 +8668,7 @@ function buildWorkflowStatusSummaryHtml(workflowTrace, executionEvents = [], wor
             <button type="button" class="message-section-toggle message-workflow-summary-toggle" aria-expanded="false" data-closed-label="展开" data-open-label="收起">
                 <div class="message-section-toggle-copy">
                     <span class="message-process-icon" aria-hidden="true"></span>
-                    <strong class="message-section-title">高级详情</strong>
+                    <strong class="message-section-title">详情</strong>
                     <span class="message-inline-process-preview" hidden>${escapeHtml(preview)}</span>
                 </div>
                 <div class="message-section-toggle-meta">
@@ -8886,11 +8891,11 @@ function buildNativeWorkflowAtlasHtml(groups) {
         if (parent && first) links.push({from:parent,to:first,routed:true,kind:"call"});
     }
     if (!hasBoundaries && !links.some(link=>link.kind==="call")) return "";
-    const margin=70, columnPitch=104;
+    const margin=40, columnPitch=76;
     // Program ownership is provenance, not a reason to split the visual map
-    // into separate columns/clusters. All native nodes share one layout space.
+    // into separate diagrams. All native nodes share one layout space.
     const orderedVertices=[...vertices].sort((a,b)=>a.id.localeCompare(b.id));
-    // Rank explicit routes and calls left-to-right. Geometry is not a claim
+    // Rank explicit routes and calls from top to bottom. Geometry is not a claim
     // that the child returns data to any particular parent successor.
     const remaining=new Set(orderedVertices),ranks=new Map(orderedVertices.map(v=>[v,0]));
     while (remaining.size) {
@@ -8909,34 +8914,34 @@ function buildNativeWorkflowAtlasHtml(groups) {
     for (const vertex of orderedVertices) {
         vertex.boundary=!vertex.group.parent && vertex.node.declaration?.is_entry ? "input"
             : !vertex.group.parent && vertex.node.declaration?.is_return ? "output" : "";
-        // Dedicated terminal columns: an independent child/root branch must
+        // Dedicated terminal ranks: an independent child/root branch must
         // never share the input column and obscure where reading begins.
         const rank=vertex.boundary==="input" ? 0 : vertex.boundary==="output" ? lastRank+2 : ranks.get(vertex)+1;
         if (!columns.has(rank)) columns.set(rank,[]);
         columns.get(rank).push(vertex);
     }
-    const maxRank=Math.max(...columns.keys()),rows=Math.max(...[...columns.values()].map(c=>c.length));
+    const compactRanks=new Map([...columns.keys()].sort((a,b)=>a-b).map((rank,index)=>[rank,index]));
+    const maxRank=columns.size-1,rows=Math.max(...[...columns.values()].map(c=>c.length));
     // Keep readable native scale as the topology grows; only the local
     // scrollport scrolls, never the message or page.
-    const width=Math.max(600,2*margin+maxRank*columnPitch+32);
-    const rowPitch=72;
-    const height=Math.max(144,rows*rowPitch+32);
+    const rowPitch=92;
+    const width=Math.max(300, rows*rowPitch+36);
+    const height=2*margin+maxRank*columnPitch;
     // Parents must be positioned before their children. Map insertion order
     // follows opaque node IDs, not execution depth; using it here makes the
     // crossing reduction silently depend on UUID ordering.
     for (const [rank,column] of [...columns].sort((a,b)=>a[0]-b[0])) {
         column.sort((a,b)=>{
-            const center=v=>{const parents=links.filter(e=>e.to===v).map(e=>e.from.y).filter(Number.isFinite);
-                return parents.length ? parents.reduce((x,y)=>x+y,0)/parents.length : height/2;};
+            const center=v=>{const parents=links.filter(e=>e.to===v).map(e=>e.from.x).filter(Number.isFinite);
+                return parents.length ? parents.reduce((x,y)=>x+y,0)/parents.length : width/2;};
             return center(a)-center(b) || a.id.localeCompare(b.id);
         });
         column.forEach((vertex,row)=>{
             // Reserve room for the wider overall terminals without shrinking
             // every icon or reversing the short input/output arrow segments.
-            const terminalGap=hasBoundaries ? 16 : 0;
-            vertex.x=margin+rank*(width-2*margin-2*terminalGap)/Math.max(1,maxRank)
-                +(rank>0 ? terminalGap : 0)+(rank===maxRank ? terminalGap : 0);
-            vertex.y=40+row*rowPitch;
+            // Boundaries retain their own rank at the top and bottom.
+            vertex.x=width/2+(row-(column.length-1)/2)*rowPitch;
+            vertex.y=margin+compactRanks.get(rank)*columnPitch;
         });
     }
     const edges=links.map((link,index)=>{
@@ -8976,7 +8981,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${iconX}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${labelX}" y="${labelY}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+(vertex.boundary ? 43 : 13)}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
-    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">输入 → 分支处理 → 输出。横向滚动查看完整路线，点击节点查看记录。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，窄屏可横向滚动"><svg class="native-flow-diagram native-flow-atlas-diagram" style="min-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从上到下：输入 → 分支处理 → 输出。左右并列表示分支，不表示同时执行。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，从上到下阅读"><svg class="native-flow-diagram native-flow-atlas-diagram" data-layout="vertical" style="max-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
 }
 
 function nativeNodeAppearance(name, observed) {
@@ -9178,6 +9183,24 @@ function buildNativeWorkflowHtml(events) {
     return `<div class="native-workflow-view"><div class="native-flow-key"><span>执行路线图</span><span class="native-flow-key-routed">本次已走路线</span><span class="native-flow-key-declared">可选路线</span></div>${diagrams}<details class="native-flow-notes"><summary>如何理解这张图</summary><p class="native-flow-legend">低亮度是声明的可选路线，不代表本次执行；高亮实线来自已记录路由，流动光效仅表示当前执行。紫色点线为明确记录的子流程调用，不表示返回依赖。节点同层不代表同时执行；节点完成不等于答案提交或消息送达。条件节点完成只表示判断完成，是否进入分支以路由为准。折行只改变布局，不增加连线。缺少完整拓扑的旧记录只显示可核对的局部图，不补画未知路线。</p></details></div>`;
 }
 
+function describeNativeProgress(events = []) {
+    const latest = new Map();
+    for (const event of events) {
+        if (!event?.execution_id || event.version !== 1) continue;
+        const key = JSON.stringify([event.trace_id, event.request_id, event.execution_id]);
+        if (!latest.has(key) || event.sequence > latest.get(key).sequence) latest.set(key, event);
+    }
+    const active = [...latest.values()].filter(event => event.state === "started");
+    const leaves = active.filter(event => !active.some(child => child.parent_execution_id === event.execution_id));
+    const names = [...new Set(leaves.map(event => nativeNodeAppearance(event.operator_key || event.operator_type, true)[0]))];
+    if (names.length) return `正在${names.join("、")}`;
+    const last = [...latest.values()].sort((a,b) => b.sequence-a.sequence)[0];
+    if (!last) return "";
+    const label = nativeNodeAppearance(last.operator_key || last.operator_type, true)[0];
+    return last.state === "failed" ? `${label}遇到异常，正在核对状态`
+        : last.state === "completed" ? `${label}已完成，等待后续进度` : `${label} · 状态更新中`;
+}
+
 function syncNativeExecutionDisplay() {
     const scrollSnapshot = captureConversationScroll();
     try {
@@ -9185,6 +9208,14 @@ function syncNativeExecutionDisplay() {
         const html = buildNativeExecutionHtml(activeExecutionEvents)
             + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
         if (pending && (activeExecutionEvents.length || activeWorkEvents.length)) pending.innerHTML = html;
+        const pendingMessage = chatStream?.querySelector(".message-pending");
+        const liveStatus = describeNativeProgress(activeExecutionEvents);
+        const stageLabel = pendingMessage?.querySelector("#pending-stage-label");
+        if (stageLabel && liveStatus && pendingMessage.dataset.lastStageLabel !== liveStatus) {
+            stageLabel.textContent = liveStatus;
+            pendingMessage.dataset.lastStageLabel = liveStatus;
+            pendingMessage.dataset.lastStageAt = String(performance.now());
+        }
         const pendingState = chatStream?.querySelector(".message-pending .pending-work-state");
         if (pendingState) pendingState.innerHTML = buildResponseWorkSummaryHtml(activeWorkEvents);
         const pendingAttention = chatStream?.querySelector(".message-pending .pending-work-attention");
@@ -9393,7 +9424,7 @@ function repairLegacyWorkflowSummaries(root) {
     }
     for (const summary of root.querySelectorAll(".message-workflow-summary")) {
         const title = summary.querySelector(".message-section-title");
-        if (title) title.textContent = "高级详情";
+        if (title) title.textContent = "详情";
         if (summary.dataset.executionFormat || summary.querySelector(".native-execution")) continue;
         summary.querySelectorAll(".workflow-phase-rail,.workflow-step-chip-group-head").forEach(node=>node.remove());
         for (const group of summary.querySelectorAll(".workflow-step-chip-group")) {
@@ -9418,9 +9449,22 @@ function consolidateMessageDiagnostics(message) {
     const content = advanced?.querySelector(".message-section-content");
     if (!content) return;
     const title = advanced.querySelector(".message-section-title");
-    if (title) title.textContent = "高级详情";
+    if (title) title.textContent = "详情";
     const preview = advanced.querySelector(".message-inline-process-preview");
     if (preview) preview.hidden = true;
+    const evidence = frame.querySelector(".response-evidence");
+    if (evidence) {
+        let attention = frame.querySelector(".response-evidence-attention");
+        const missing = evidence.querySelectorAll(".response-evidence-gaps li");
+        if (missing.length && !attention) {
+            attention = document.createElement("p");
+            attention.className = "response-evidence-attention";
+            attention.setAttribute("role", "status");
+            attention.textContent = `尚缺资料：${[...missing].map(node => node.textContent.trim()).join("；")}`;
+            advanced.before(attention);
+        } else if (!missing.length) attention?.remove();
+        if (!content.contains(evidence)) content.prepend(evidence);
+    }
     // Move original nodes so old answers retain full metadata and links. Never
     // open/reset a user's advanced section when late work events arrive.
     for (const node of frame.querySelectorAll(".message-processing-meta, .message-reply-divider, .response-work-summary, .thinking-text-section, .web-research-status, .notification-card-sent")) {
@@ -9586,6 +9630,7 @@ function syncPendingWorkflowTrace(workflowSteps = [], options = {}) {
             return;
         }
 
+        if (activeExecutionEvents.length) { syncNativeExecutionDisplay(); return; }
         traceList.innerHTML = buildPendingWorkflowTraceCompactHtml(visibleSteps, {
             animate: options.animateNewItems !== false,
         });
@@ -10198,7 +10243,11 @@ function renderWorkflowTracePlaceholder(title, summary, detail) {
 
 function refreshWorkflowInspector() {
     if (!workflowTrace || !inspectedWorkflowMessage?.isConnected) return;
-    const source = inspectedWorkflowMessage.querySelector(".message-workflow-summary .message-section-content, .thinking-trace, .response-advanced");
+    if (workflowInspectorOpener?.isConnected === false) {
+        workflowInspectorOpener = inspectedWorkflowMessage.querySelector(".message-workflow-summary-toggle, .thinking-trace > summary, .response-advanced > summary");
+    }
+    const source = inspectedWorkflowMessage.querySelector(".message-workflow-summary .message-section-content")
+        || inspectedWorkflowMessage.querySelector(".thinking-trace, .response-advanced");
     if (!source) return;
     // Render the same recorded evidence in one visible panel. Source markup
     // remains collapsed in the message for history serialization and updates.

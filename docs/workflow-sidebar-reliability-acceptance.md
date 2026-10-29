@@ -69,12 +69,42 @@ Regression totals: 228 Twin Python checks, 80 SAGE checks, and 25 JavaScript sui
 
 The companion SAGE main change is `2687cb0d`; production remains on the earlier pair until the following gates pass.
 
+## Browser follow-up (2026-10-29)
+
+The unlocked Mac allowed real Chrome interaction. The initial horizontal graph
+was rejected as unreadable in a sidebar; it is now one vertical native topology,
+with input at the top and output at the bottom. Nodes and actual route/call edges
+are preserved. Empty layout ranks are removed, labels stay horizontal, and the
+inspector scrolls vertically independently of the conversation.
+
+Real checks found and fixed two additional issues: business progress could replace
+the pending native graph, and the old fixed mobile composer was covered by the
+new detail row. Native events now retain the running leaf label, including while
+waiting for a new event. The mobile composer participates in layout. Completed
+answers move full evidence records into Details, while evidence-gap, error and
+confirmation notices remain outside. At 1504 px the reading shell is 800 px and
+centred near the viewport centre; the inspector is approximately 331 px.
+
+The original question completed in guest browser runs (including a 26.4 s deep
+run), with relevant prose but no verifiable attached source. These are UI tests,
+NOT source-grounded acceptance. The scoped member runs above remain separate.
+Old synthetic conversations were restored using the history UI. The 390 px
+layout has no horizontal overflow, and composer and inspector rectangles no
+longer overlap. Desktop light/dark rendering was observed. Browser viewport
+emulation produced inconsistent screenshot scaling, so narrow visual acceptance
+must not be inferred solely from those measurements.
+
 ## Remaining release gates
 
-Chrome native control reports a locked Mac; the in-app browser control also
-failed to create a usable session. Desktop/narrow light/dark appearance, real
-keyboard interaction and public original-question browser acceptance are not yet
-verified. No production cutover should be inferred from unit tests or these
-isolated model runs. After browser acceptance, deploy the pinned Twin and SAGE
-main commits together, restart only Twin, and verify the public asset versions
-and original question again.
+Production has not switched. Public Chrome navigation fails with
+ERR_CONNECTION_CLOSED; a Mac curl GET succeeds directly, but the configured
+system HTTP proxy (127.0.0.1:7897) completes CONNECT then loses TLS. The user authorized an exact-domain DIRECT rule for twin.sage.org.ai. The active
+Clash profile rule override was backed up and updated, preserving all other rules;
+after reactivation the same proxy GET returned 200 in 1.78 s. Chrome extension
+control subsequently timed out, independently of the restored HTTP route. Public member acceptance,
+final narrow visual/keyboard acceptance and pinned production cutover remain.
+
+The generic answer-level “依据待核对” disclaimer was removed. Full evidence
+records stay in Details; an actual missing source span produces a concrete
+“尚缺资料” notice naming that span. Execution errors and consent controls are
+still independently visible. Current frontend regression: 25 suites passed.
