@@ -225,3 +225,28 @@ proof that the complete answer pipeline is correct. The deployed reranker's scor
 did not separate these domains reliably, so it was not wired into web acceptance.
 These are candidate-only changes. No production cutover, GPU/model restart or
 public-browser acceptance of this candidate has occurred.
+
+### 2026-10-29: preserve the answer focus and reduce coverage protocol overhead
+
+SAGE now carries the validated question-to-source range mapping into natural
+composition, while keeping complete source text for qualifications and the
+independent audit. Forged quotes, changed source snapshots, missing supporting
+sources and answer-completeness receipts cannot be used as factual focus plans.
+The wire carries references rather than duplicate passage bodies.
+
+Coverage IDs now refer to intact Markdown sections when headings are available;
+plain-text paragraph granularity is retained. Fenced-code headings do not split
+sections. Each selectable ID remains a pre-bound contiguous range in one source,
+so reversed or cross-source endpoints are not introduced into the model protocol.
+On the exact saved nine-source snapshot, selectable blocks decreased from 469 to
+88 with every source line unchanged. This is a protocol-size comparison, not a
+claim of measured end-to-end speedup. Audit line arrays also have a per-source
+maximum; a one-line source cannot emit the observed invalid `[0, 0]` reference.
+
+Final combined regression: **247 passed in 72.20 s** in
+`tests-search-sections-audit.log`. Original KV-question candidate runs remain
+unsuccessful: one reached a malformed audit at 39 s (the single-line schema issue
+above); the following run still reached the unchanged 80 s request deadline
+during full answer audit, after a Tavily timeout. The methodology question's
+large internal supplement remains unresolved. These limits prevent production
+cutover and public-browser acceptance; neither has been claimed complete.
