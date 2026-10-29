@@ -186,6 +186,8 @@ def test_accepted_generation_without_canonical_receipt_never_regenerates(tmp_pat
 @pytest.mark.parametrize('native_type, expected', [
     ('ReadTimeout', 'model_response_timeout'),
     ('InvalidEvidenceCoverage', 'answer_validation_rejected'),
+    ('IncompleteCompletionError', 'model_output_incomplete'),
+    ('EmptyStreamingResponseError', 'model_output_incomplete'),
     ('RuntimeError', 'answer_execution_failed'),
 ])
 def test_known_native_failure_remains_terminal_after_restart(tmp_path, native_type, expected):

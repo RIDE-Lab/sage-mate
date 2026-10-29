@@ -39,9 +39,7 @@ def plan_response(payload):
         return response(NATURAL_ANSWER_PROMPT, payload)
     if "requirements" in data:
         return json.dumps({"digest": data["digest"], "items": [
-            {"requirement_id": r["requirement_id"], "witnesses": [{
-                "source_id": data["sources"][0]["source_id"], "start_line": 1,
-                "end_line": len(data["sources"][0]["lines"])}]}
+            {"requirement_id": r["requirement_id"], "witnesses": [p["id"] for p in data["sources"][0]["paragraphs"]]}
             for r in data["requirements"]]})
     return json.dumps({"digest": data["digest"], "source_ids": ["knowledge:0"], "inferences": []})
 

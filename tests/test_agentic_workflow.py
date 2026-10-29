@@ -108,12 +108,14 @@ class IntentAwareLLMClient:
             natural = None
         if natural is not None:
             return natural
+        from sage.runtime.evidence_query_plan import QUERY_PLAN_PROMPT
+        if system_prompt == QUERY_PLAN_PROMPT:
+            return json.dumps({"digest": json.loads(user_prompt)["digest"], "queries": []})
         if system_prompt == COVERAGE_SYSTEM_PROMPT:
             data = json.loads(user_prompt)
             return json.dumps({"digest": data["digest"], "items": [
                 {"requirement_id": r["requirement_id"], "witnesses": [
-                    {"source_id": source["source_id"], "start_line": 1, "end_line": len(source["lines"])}
-                    for source in data["sources"]]} for r in data["requirements"]]})
+                    paragraph["id"] for source in data["sources"] for paragraph in source["paragraphs"]]} for r in data["requirements"]]})
         if system_prompt == EXPERIMENT_SYSTEM_PROMPT:
             return experiment_response(json.loads(user_prompt)["digest"])
         if system_prompt == PLAN_SYSTEM_PROMPT:
@@ -281,13 +283,19 @@ class RecordingNotifier:
 
 
 class FailingNotifier:
+    def __init__(self):
+        self.calls = 0
+
     def send_booking_request_notification(self, booking) -> str:
+        self.calls += 1
         raise BookingNotificationError("SMTP 未配置")
 
     def send_booking_approved_notification(self, booking) -> str:
+        self.calls += 1
         raise BookingNotificationError("SMTP 未配置")
 
     def send_booking_rejected_notification(self, booking) -> str:
+        self.calls += 1
         raise BookingNotificationError("SMTP 未配置")
 
 
@@ -308,11 +316,15 @@ def _drain_booking_notifications(service, *, failed=False):
                 with pytest.raises(WorkFailedError):
                     outbox.service.wait(row["key"], timeout=5)
                 saved = outbox.journal.read(row["key"])
-                assert saved["tasks"]["notify"]["failure_code"] == "notification_retry_exhausted"
+                # The sender raised after invocation; without a definitive
+                # pre-send receipt, retry must stop at the effect fence.
+                assert saved["tasks"]["notify"]["failure_code"] == "notification_outcome_unknown"
             else:
                 outbox.service.wait(row["key"], timeout=5)
                 saved = outbox.journal.read(row["key"])
                 assert saved["tasks"]["notify"]["result"]["status"] in {"sent", "skipped"}
+        if failed:
+            assert service._email_notifier.calls == len(rows)
     finally:
         outbox.close()
 

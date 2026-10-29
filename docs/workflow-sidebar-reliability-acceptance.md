@@ -1,7 +1,6 @@
 # Workflow sidebar and answer reliability acceptance
 
-Status: implementation and isolated backend acceptance complete; browser and
-production cutover pending. This document does not certify the public release.
+Status: frontend e5878bf and SAGE 2687cb0d are deployed. Public member original-question acceptance FAILED; do not treat isolated runs or UI acceptance as end-to-end approval. The later paragraph-selection repair is committed but not deployed pending relevance acceptance.
 
 ## Failure and changes
 
@@ -67,7 +66,7 @@ isolated test directory.
 
 Regression totals: 228 Twin Python checks, 80 SAGE checks, and 25 JavaScript suites passed.
 
-The companion SAGE main change is `2687cb0d`; production remains on the earlier pair until the following gates pass.
+The deployed pair for the public check below is Twin `e5878bf` and SAGE `2687cb0d`. Earlier isolated results above used a smaller private catalog, so they do not establish full-catalog relevance.
 
 ## Browser follow-up (2026-10-29)
 
@@ -94,17 +93,58 @@ longer overlap. Desktop light/dark rendering was observed. Browser viewport
 emulation produced inconsistent screenshot scaling, so narrow visual acceptance
 must not be inferred solely from those measurements.
 
-## Remaining release gates
+## Public follow-up and remaining gates (2026-10-29)
 
-Production has not switched. Public Chrome navigation fails with
-ERR_CONNECTION_CLOSED; a Mac curl GET succeeds directly, but the configured
-system HTTP proxy (127.0.0.1:7897) completes CONNECT then loses TLS. The user authorized an exact-domain DIRECT rule for twin.sage.org.ai. The active
-Clash profile rule override was backed up and updated, preserving all other rules;
-after reactivation the same proxy GET returned 200 in 1.78 s. Chrome extension
-control subsequently timed out, independently of the restored HTTP route. Public member acceptance,
-final narrow visual/keyboard acceptance and pinned production cutover remain.
+The exact Twin-domain DIRECT rule restored Chrome access after the user's
+approval. Native Chrome loaded the signed-in public page. Public HTML, JS and
+CSS bytes matched main. The app-only cutover preserved inference/router/
+workstation/advisory process IDs and all existing private state.
 
-The generic answer-level “依据待核对” disclaimer was removed. Full evidence
-records stay in Details; an actual missing source span produces a concrete
-“尚缺资料” notice naming that span. Execution errors and consent controls are
-still independently visible. Current frontend regression: 25 suites passed.
+The public original question failed in about 201.9 seconds at
+`assess-coverage-correction`. Durable answer attempt remained 1. Native Chrome
+showed the actual failure; this is a website/backend failure, distinct from
+occasional browser-control timeouts. Request ID:
+`362a8d44-a692-4028-9ec6-c0571e58d420`.
+
+An isolated production-catalog snapshot reproduced the root mechanism: model
+coverage selected start line 3 and end line 1. The correction then exhausted
+its output allowance after about 192.6 seconds (`IncompleteCompletionError`).
+The previous schema constrained each endpoint separately but allowed reversed
+pairs and an unlimited number of repeated witnesses.
+
+The candidate SAGE repair (`60854a64`, requiring the paired Twin adapter change) now asks the model to select compact paragraph IDs
+bound to the complete numbered source. The adapter decodes these to canonical
+exact line ranges; runtime provenance/digest checks remain mandatory. Every
+nonblank line remains selectable; sources are not truncated. Invalid IDs and
+malformed output remain failures, not empty-coverage fallbacks. Cardinality is
+bounded by the actual number of supplied paragraphs, not an answer token cap.
+A prototype with full object schemas was rejected for excessive schema size.
+The compact schema stays below 10 KB for 1,000 paragraphs.
+
+A complete-catalog execution with ordered paragraph ranges passed execution in
+21.7 seconds, but its answer narrowed a general experimental-method question
+to compression optimization. It FAILED independent relevance acceptance.
+An initial complementary-search experiment took 94.5 seconds and retained the
+same problem; that ineffective workflow change was removed. The compact decoder
+and precise incomplete-generation classification remain candidates, not a
+production quality claim. Do not deploy them as a completed original-question
+fix until relevance is independently accepted.
+
+The generic answer-level “依据待核对 · 请在详情中查看缺口与来源” text is
+removed in the deployed UI, including normalization of saved answer summaries.
+Native public Chrome confirms evidence records inside right-hand Details, while
+actual execution errors remain separately visible. Concrete missing-source
+notices name the missing part. No model-derived source status is fabricated.
+
+Real isolated 320 px light / 390 px dark checks found and fixed a header theme
+button collision and composer wrapping. History restored without regeneration;
+the inspector scrolled independently through the final output node. Explicit
+Close works. Full public success-state, streaming/history and keyboard acceptance
+remain incomplete because the original public answer failed.
+
+Candidate regression: 180 selected Twin/SAGE tests passed. Unit tests use isolated
+local knowledge and segment memory fixtures because the test host does not cache
+the optional BGE model; production retrieval acceptance above used the actual
+configured embedding/reranker and an isolated catalog snapshot. Test model stubs
+now emit paragraph IDs. Notification tests assert one sender invocation and the
+existing unknown-outcome fence; no real booking notification was sent.
