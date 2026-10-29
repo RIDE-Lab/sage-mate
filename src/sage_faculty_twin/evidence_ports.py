@@ -66,6 +66,17 @@ class TwinEvidencePorts:
             namespace=f"evidence-search-plan:{request.digest}", response_format=query_plan_format(request))
 
     def supplement(self, queries):
+        # The native SAGE coverage-gap branch may obtain public evidence once,
+        # using ONLY the original approved current-question span. Internal
+        # repair queries can include private material and must never go online.
+        attempted = any(t.key == "web_search" and t.status != "skipped"
+                        for t in self.context.workflow_trace)
+        if not self.context.web_search_hits and not attempted:
+            hits = self.support._retrieve_web_search_hits(self.context, evidence_gap=True)
+            if hits:
+                self.context.web_search_hits.extend(hits)
+                return tuple(PlanSource(f"web:{i}", h.title, h.url, h.source_content or h.snippet or h.title)
+                             for i, h in enumerate(hits))
         results, seen = [], {hit.document_id for hit in self.context.knowledge_hits}
         for query in queries:
             raise_if_request_cancelled()

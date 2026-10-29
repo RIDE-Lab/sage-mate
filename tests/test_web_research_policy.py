@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 import pytest
 from sage_faculty_twin.models import ChatRequest, InteractionIntent
@@ -21,8 +22,13 @@ def test_tavily_receives_remaining_sage_deadline_not_sdk_default(monkeypatch):
 
 def fixture(*, mode='auto', scope='public', need='current', owner='guest:test', **request_fields):
     support = object.__new__(FacultyTwinWorkflowSupport)
-    support._settings = SimpleNamespace(web_search_enabled=True, web_search_max_results=3)
+    support._settings = SimpleNamespace(web_search_enabled=True, web_search_max_results=3, llm_policy_output_max_tokens_cap=4096)
     support._trace_callback = None
+    def review(**kw):
+        data=json.loads(kw['user_prompt'])
+        assert 'PRIVATE_HISTORY_MUST_NOT_BE_QUERIED' not in kw['user_prompt']
+        return json.dumps({'digest':data['digest'],'selected':[c['id'] for c in data['candidates']], 'retry_query':None})
+    support._call_compact_retry_sync = review
     calls = []
     support._web_search_client = SimpleNamespace(enabled=True, search=lambda query, **_: calls.append(query) or [
         SimpleNamespace(title='Public source',url='https://example.org/full/path',snippet='Full evidence',score=1)])
@@ -42,7 +48,7 @@ def test_actual_adapter_search_uses_only_public_current_span_and_streams_real_st
     hits=support._retrieve_web_search_hits(context)
     assert calls==['vLLM 最新发布']
     assert hits[0].retrieved_at and hits[0].url=='https://example.org/full/path'
-    assert [e.status for e in events]==['running','completed']
+    assert [e.status for e in events]==['running','running','running','completed']
     assert events[-1].sources[0].url == hits[0].url
     assert events[-1].sources[0].retrieved_at == hits[0].retrieved_at
     assert all(e.key=='web_search' for e in events)
@@ -111,3 +117,71 @@ def test_intent_shape_repair_never_calls_answer_generation_or_its_thinking_defau
     client.answer_question_sync=lambda *args,**kwargs: pytest.fail('repair must stay on intent protocol')
     assert client._repair_interaction_intent_payload('{broken','fixture schema error')=='{"task_mode":"facts"}'
     assert len(calls)==1 and 'web_intent' in calls[0][0]
+
+
+def test_compound_subject_rejects_acronym_collision_and_tries_next_provider(monkeypatch):
+    from sage_faculty_twin.web_search import WebSearchResult
+    client=WebSearchClient(timeout_seconds=8,max_results=3)
+    queries=[]
+    def rss(query,limit):
+        queries.append(query)
+        return [WebSearchResult(title='广告主视觉 KV',url='https://example.org/ads',snippet='KV branding',score=1)]
+    def html(query,limit):
+        queries.append(query)
+        return [WebSearchResult(title='KV Cache transfer',url='https://example.org/docs',snippet='KV cache migration and recomputation',score=1)]
+    monkeypatch.setattr(client,'_search_bing_rss',rss)
+    monkeypatch.setattr(client,'_search_bing_html',html)
+    hits=client.search('KV Cache 迁移和重计算，什么时候各自更划算？')
+    assert len(hits)==1 and hits[0].url.endswith('/docs')
+    assert len(queries)==2 and all('"KV Cache"' in q for q in queries)
+
+
+def test_existing_tavily_credential_is_resolved_without_requiring_a_duplicate(monkeypatch):
+    from sage_faculty_twin.config import AppSettings
+    for key in ('TAVILY_TOKEN','TAVILY_API_KEY','DIGITAL_TWIN_TAVILY_API_KEY'):
+        monkeypatch.delenv(key,raising=False)
+    monkeypatch.setenv('TAVILY_TOKEN','synthetic-fixture-token')
+    assert AppSettings(_env_file=None).tavily_api_key=='synthetic-fixture-token'
+    assert AppSettings(_env_file=None,tavily_api_key='explicit-fixture').tavily_api_key=='explicit-fixture'
+    monkeypatch.setenv('TAVILY_API_KEY','standard-fixture')
+    assert AppSettings(_env_file=None).tavily_api_key=='standard-fixture'
+
+
+def test_web_excerpt_is_not_silently_cut_at_500_characters():
+    from sage_faculty_twin.models import WebSearchHit
+    text='条件与限制。'*300
+    value=WebSearchHit(title='Document',url='https://example.org/doc',snippet=text)
+    assert value.snippet==text
+
+
+def test_gap_research_uses_original_public_span_and_never_internal_repair_queries():
+    from sage_faculty_twin.evidence_ports import TwinEvidencePorts
+    support,context,calls=fixture(need='none')
+    assert support._retrieve_web_search_hits(context)==[]
+    ports=object.__new__(TwinEvidencePorts)
+    ports.support,ports.context=support,context
+    result=ports.supplement(['PRIVATE internal document search'])
+    assert calls==['vLLM 最新发布']
+    assert [s.source_id for s in result]==['web:0']
+    assert len(context.web_search_hits)==1
+
+
+def test_search_operation_budget_is_distinct_from_provider_http_budget():
+    from sage_faculty_twin.config import AppSettings
+    settings=AppSettings(_env_file=None)
+    assert settings.web_research_timeout_seconds > settings.web_search_timeout_seconds
+
+
+def test_full_web_document_survives_provider_ranking_and_source_plan(monkeypatch):
+    from sage_faculty_twin.models import WebSearchHit
+    from sage_faculty_twin.web_search import WebSearchResult
+    text='Measured workload conditions and comparison. '*100
+    client=WebSearchClient(timeout_seconds=8,max_results=3,tavily_api_key='fixture-only')
+    monkeypatch.setattr('tavily.TavilyClient',lambda **_: SimpleNamespace(search=lambda *a,**kw:{
+        'results':[{'title':'System evaluation','url':'https://example.org/doc','content':'preview','raw_content':text,'score':.8}]}))
+    result=client.search('system evaluation')[0]
+    assert result.source_content==text
+    support,context,_=fixture()
+    context.web_search_hits=[WebSearchHit(title=result.title,url=result.url,snippet=result.snippet,source_content=result.source_content)]
+    sources=support._source_plan_sources(context)
+    assert sources[-1].content==text and sources[-1].source_id=='web:0'

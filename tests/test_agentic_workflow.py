@@ -108,6 +108,10 @@ class IntentAwareLLMClient:
             natural = None
         if natural is not None:
             return natural
+        from sage.runtime.web_search_quality import PROMPT as SEARCH_PROMPT, QUERY_PROMPT as SEARCH_QUERY_PROMPT
+        if system_prompt in (SEARCH_PROMPT, SEARCH_QUERY_PROMPT):
+            data = json.loads(user_prompt)
+            return json.dumps({"digest": data["digest"], "selected": [c["id"] for c in data["candidates"]], "retry_query": None})
         from sage.runtime.evidence_query_plan import QUERY_PLAN_PROMPT
         if system_prompt == QUERY_PLAN_PROMPT:
             return json.dumps({"digest": json.loads(user_prompt)["digest"], "queries": []})
@@ -2327,7 +2331,7 @@ def test_chat_auto_web_uses_public_source_intent_not_empty_local_store(
     assert any(item.basis_label == "联网检索" for item in response.answer_basis)
 
 
-def test_explicit_web_search_returns_bounded_sources_without_second_llm_turn(
+def test_explicit_web_search_reviews_candidates_without_answer_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2370,7 +2374,8 @@ def test_explicit_web_search_returns_bounded_sources_without_second_llm_turn(
     assert "官方推理系统资料" in response.answer
     assert "https://example.com/inference" in response.answer
     assert any(item.basis_label == "联网检索" for item in response.answer_basis)
-    assert llm.prompts == []
+    assert len(llm.prompts) == 2
+    assert all("candidates" in json.loads(payload) for payload in llm.prompts)
 
 
 def test_positive_feedback_writes_web_sources_back_to_knowledge_base(

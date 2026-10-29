@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import field_validator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -259,9 +259,24 @@ class AppSettings(BaseSettings):
     knowledge_search_cache_ttl_seconds: int = Field(default=300, ge=0, le=3600)
     knowledge_search_cache_max_entries: int = Field(default=256, ge=0, le=4096)
     web_search_enabled: bool = Field(default=True)
-    web_search_timeout_seconds: float = Field(default=8.0, ge=1.0, le=30.0)
+    web_search_timeout_seconds: float = Field(default=12.0, ge=1.0, le=30.0)
+    web_research_timeout_seconds: float = Field(
+        default=35.0, ge=1.0, le=60.0,
+        description="Total search planning, provider attempts and relevance review deadline; each HTTP attempt retains its own limit.",
+    )
+    web_search_public_context: str = Field(default="", max_length=512,
+        description="Published site subject area used only for search disambiguation; never private profile/history.")
     web_search_max_results: int = Field(default=3, ge=1, le=8)
     tavily_api_key: str = Field(default="")
+
+    @field_validator("tavily_api_key", mode="before")
+    @classmethod
+    def resolve_tavily_credential(cls, value):
+        # Deployment already supplies TAVILY_TOKEN; resolve it in memory only.
+        # An explicit application key takes precedence. Never log credentials.
+        import os
+        return value or os.environ.get("TAVILY_API_KEY") or os.environ.get("TAVILY_TOKEN") or ""
+
     conversation_memory_dir: Path = Field(default=Path("data/conversation_memory"))
     online_presence_dir: Path = Field(default=Path(".runtime/online_presence"))
     online_presence_window_seconds: int = Field(default=300, ge=60, le=3600)

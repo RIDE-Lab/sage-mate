@@ -148,3 +148,49 @@ the optional BGE model; production retrieval acceptance above used the actual
 configured embedding/reranker and an isolated catalog snapshot. Test model stubs
 now emit paragraph IDs. Notification tests assert one sender invocation and the
 existing unknown-outcome fence; no real booking notification was sent.
+
+## Public search repair candidate (2026-10-29)
+
+The production KV migration/recomputation question selected Bing pages about
+advertising Key Visual. The deployed environment already had `TAVILY_TOKEN`, but
+configuration read only the application-specific Tavily key. Resolve existing
+credentials in memory, with explicit application configuration taking precedence.
+No credential is copied into the repository or deployment examples.
+
+SAGE now owns public query planning and question-bound candidate relevance
+receipts. The published site subject area is optional configuration, never
+conversation history or private profile data. An explicit different subject
+wins over this disambiguation context. A provider failure/empty or off-topic
+result may trigger one distinct read-only query retry. Provider wall-clock waits
+and the complete research operation have separate bounded deadlines. Late
+provider results cannot replace a successful retry. These are read retries,
+not replay of answer generation, bookings or mail.
+
+The existing source/privacy gate still runs before search. The native evidence
+gap branch may supplement an approved public subject once, using the original
+current-question span, never internal repair queries. Explicit local-only and
+no-web requests, unknown/private scope, attachments and Slack context retain
+existing restrictions.
+
+Web provider excerpts are not cut at 500 characters. Where Tavily returns full
+page content, retain it through ranking and use it for source verification;
+otherwise the evidence remains a provider excerpt, not a claimed complete page.
+Remove automatic shortest-source reduction because complementary comparison
+conditions were being discarded. Keep the same natural-answer/source and
+completeness gates. The general-answer bypass experiment failed independent
+scientific correctness review and is absent from this implementation.
+
+Acceptance so far: 227 selected Twin/SAGE tests passed, including privacy,
+rejected candidate IDs/digests, bounded retry, late-result isolation, full-page
+preservation and source coverage. Real original-question replays exposed both
+successful substantive answers (22.0 s before later refinements) and subsequent
+relevance/qualification failures. A later full-page KV execution completed in
+48.8 s, but this is not a latency distribution or sufficient proof of robust
+answer quality. The methodology question also exposed unrelated-industry
+retrieval and provider outages; these failures are retained in QA evidence.
+
+This candidate is NOT yet production acceptance. Do not describe isolated
+model receipt success as independent semantic correctness. Current production
+remains the previous release until original-question relevance and genuine
+public browser acceptance are completed. No engine/router/workstation restart
+is part of this change.

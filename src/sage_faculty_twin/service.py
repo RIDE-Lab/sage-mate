@@ -1992,7 +1992,7 @@ class FacultyTwinWorkflowSupport:
         )
         return context
 
-    def _decide_web_research(self, context) -> WebDecision:
+    def _decide_web_research(self, context, *, evidence_gap=False) -> WebDecision:
         identity = (context.request.owner_id or "guest:").split(":", 1)[0]
         identity = identity if identity in {"account", "api_token", "slack"} else "guest"
         if getattr(context, "is_admin_request", False):
@@ -2011,16 +2011,19 @@ class FacultyTwinWorkflowSupport:
             active=(context.route == "answer" and context.answer is None
                 and proposal is not None and proposal.action in {"answer", "ask_followup"}),
             contains_private_context=bool(context.request.attachments or context.request.slack_channel_context),
+            evidence_gap=evidence_gap,
         )
 
     def _retrieve_web_search_hits(
         self,
         context: ChatWorkflowContext,
+        *, evidence_gap=False,
     ) -> list[WebSearchHit]:
-        decision = getattr(context, "web_decision", None) or self._decide_web_research(context)
+        decision = self._decide_web_research(context, evidence_gap=True) if evidence_gap else (
+            getattr(context, "web_decision", None) or self._decide_web_research(context))
         started_at = perf_counter()
         checked_at = None
-        candidates = []
+        accepted_candidates = []
 
         def observe(status, summary, timestamp):
             nonlocal checked_at
@@ -2029,18 +2032,30 @@ class FacultyTwinWorkflowSupport:
                 summary=summary, status=status,
                 detail=decision.reason + (f" 搜索主题：{decision.query}" if decision.allowed and decision.query else "")
                     + (f" 检索时间：{timestamp}" if timestamp else ""),
-                sources=[dict(title=hit.title, url=hit.url, retrieved_at=timestamp)
-                    for hit in candidates] if status == "completed" else [],
+                sources=[dict(title=hit["title"], url=hit["url"], retrieved_at=timestamp)
+                    for hit in accepted_candidates] if status == "completed" else [],
                 duration_ms=self._elapsed_ms(started_at))
 
         def search(query):
-            nonlocal candidates
-            candidates = [WebSearchHit(title=hit.title, url=hit.url, snippet=hit.snippet, score=hit.score)
+            return [WebSearchHit(title=hit.title, url=hit.url, snippet=hit.snippet, score=hit.score,
+                source_content=getattr(hit, "source_content", None))
                 for hit in self._web_search_client.search(query, max_results=self._settings.web_search_max_results)]
-            return candidates
 
-        hits = execute_web_research(decision, search,
-            observe, timeout_seconds=getattr(self._settings, "web_search_timeout_seconds", 8))
+        def review(request):
+            nonlocal accepted_candidates
+            from sage.runtime.web_search_quality import PROMPT, QUERY_PROMPT, search_review_format, validate_search_review
+            raw = self._call_compact_retry_sync(system_prompt=PROMPT if request.count else QUERY_PROMPT, user_prompt=request.payload,
+                temperature=0.0, max_tokens=int(self._settings.llm_policy_output_max_tokens_cap),
+                cache_namespace=f"web-relevance:{request.digest}", neutral_sampling=True,
+                response_format=search_review_format(request))
+            selected, _ = validate_search_review(request, raw)
+            accepted_candidates = [json.loads(request.payload)["candidates"][i] for i in selected]
+            return raw
+
+        hits = execute_web_research(decision, search, observe, review=review,
+            public_context=getattr(self._settings, "web_search_public_context", ""),
+            search_timeout_seconds=getattr(self._settings, "web_search_timeout_seconds", 12),
+            timeout_seconds=getattr(self._settings, "web_research_timeout_seconds", 35))
         return [hit.model_copy(update={"retrieved_at": checked_at}) for hit in hits]
 
     def prepare_memory_retrieval(self, context: ChatWorkflowContext) -> MemoryRetrievalInput:
@@ -4482,7 +4497,7 @@ class FacultyTwinWorkflowSupport:
                 f"knowledge:{index}", hit.title, str(hit.metadata.get("wiki_url") or ""),
                 hit.source_content if hit.source_content is not None else hit.excerpt,
             ) for index, hit in enumerate(context.knowledge_hits)
-        ) + tuple(PlanSource(f"web:{index}", hit.title, hit.url, hit.snippet or hit.title)
+        ) + tuple(PlanSource(f"web:{index}", hit.title, hit.url, hit.source_content or hit.snippet or hit.title)
                   for index, hit in enumerate(context.web_search_hits)) + context.conversation_sources
 
     def _prepare_source_answer(self, context: ChatWorkflowContext) -> None:

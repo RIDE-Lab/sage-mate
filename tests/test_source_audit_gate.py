@@ -11,7 +11,7 @@ from sage_faculty_twin.service import ChatWorkflowContext, FacultyTwinWorkflowSu
 
 def setup_gate(tmp_path):
     support = object.__new__(FacultyTwinWorkflowSupport)
-    support._settings = AppSettings(knowledge_base_dir=tmp_path)
+    support._settings = AppSettings(knowledge_base_dir=tmp_path, web_search_enabled=False)
     support._trace_callback = None
     support._admin_session_payload = None
     context = ChatWorkflowContext(
@@ -200,7 +200,7 @@ def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_f
     support.answer_with_llm(context)
     result = support.render_chat_response(context)
     assert context.evidence_work.repair_attempted
-    assert len(calls) == 1 and len(context.workflow_trace) == 2  # Query plan; no source audit/model answer.
+    assert len(calls) == 1 and len(context.workflow_trace) == 3  # Includes explicit skipped web capability; no source audit/model answer.
     assert "仍待补充的依据" in result.answer and context.request.question in result.answer
     assert result.knowledge_hits == []
     assert "\n\n".join(block.markdown for block in result.answer_blocks).strip() == result.answer

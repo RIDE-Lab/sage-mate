@@ -225,7 +225,8 @@ class WebSearchHit(BaseModel):
     retrieved_at: str | None = None
     title: str = Field(min_length=1, max_length=300)
     url: str = Field(min_length=1, max_length=16384)
-    snippet: str = Field(default="", max_length=500)
+    snippet: str = Field(default="")
+    source_content: str | None = None
     score: float = Field(default=0.0)
 
     @field_validator("url")

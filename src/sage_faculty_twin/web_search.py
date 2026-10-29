@@ -113,6 +113,7 @@ class WebSearchResult:
     url: str
     snippet: str
     score: float
+    source_content: str | None = None
 
 
 class WebSearchClient:
@@ -171,11 +172,14 @@ class WebSearchClient:
                 tavily_results = self._search_tavily(normalized_query, limit)
                 provider_completed = True
                 if tavily_results:
-                    return self._rerank_results(normalized_query, tavily_results, limit)
+                    ranked = self._rerank_results(normalized_query, tavily_results, limit)
+                    if ranked:
+                        return ranked
             except Exception:
                 pass
 
-        search_query = self._rewrite_query_for_bing(normalized_query)
+        from sage.runtime.web_search_quality import anchored_query
+        search_query = anchored_query(self._rewrite_query_for_bing(normalized_query))
         for searcher in (self._search_bing_rss, self._search_bing_html):
             if monotonic() >= deadline:
                 break
@@ -276,7 +280,7 @@ class WebSearchClient:
         response = client.search(
             query,
             max_results=max_results,
-            include_raw_content=False,
+            include_raw_content=True,
             timeout=max(0.05, min(self._timeout_seconds, (web_research_deadline() or (monotonic() + self._timeout_seconds)) - monotonic())),
         )
         hits: list[WebSearchResult] = []
@@ -289,7 +293,8 @@ class WebSearchClient:
                 WebSearchResult(
                     title=title[:300],
                     url=url,
-                    snippet=(item.get("content") or "")[:500],
+                    snippet=(item.get("content") or ""),
+                    source_content=item.get("raw_content") or None,
                     score=float(item.get("score", max_results - index)),
                 )
             )
@@ -335,7 +340,7 @@ class WebSearchClient:
                 WebSearchResult(
                     title=unescape(title)[:300],
                     url=self._decode_bing_result_url(unescape(link)),
-                    snippet=unescape(description)[:500],
+                    snippet=unescape(description),
                     score=float(max_results - len(results)),
                 )
             )
@@ -417,7 +422,10 @@ class WebSearchClient:
         seen_urls: set[str] = set()
         rescored: list[WebSearchResult] = []
 
+        from sage.runtime.web_search_quality import matches_compound_subject
         for index, result in enumerate(results):
+            if not matches_compound_subject(original_query, result.title, result.snippet):
+                continue
             canonical_url = cls._canonical_url(result.url)
             if canonical_url in seen_urls:
                 continue
@@ -433,6 +441,7 @@ class WebSearchClient:
                     title=result.title,
                     url=result.url,
                     snippet=result.snippet,
+                    source_content=result.source_content,
                     score=score,
                 )
             )
