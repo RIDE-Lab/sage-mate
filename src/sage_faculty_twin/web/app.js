@@ -8574,7 +8574,7 @@ function buildResponseEvidenceModel({basisItems = [], hits = [], answerBlocks = 
 
 function buildResponseEvidenceHtml(model, sourceDetailsHtml = "") {
     return `<aside class="response-evidence${model.warning ? " has-gap" : ""}" aria-label="回答依据" data-evidence-view="v2" data-missing-parts="${model.missingParts.length}">
-        <details><summary>回答依据 · ${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : model.warning ? " · 依据待核对" : ""}</summary>
+        <details><summary>回答依据 · ${escapeHtml(model.source)}${model.missingParts.length ? ` · ${model.missingParts.length} 项依据缺口` : ""}</summary>
         <p>${escapeHtml(model.gap)}</p>
         ${model.missingParts.length ? `<ul class="response-evidence-gaps">${model.missingParts.map(part => `<li>${escapeHtml(part)}</li>`).join("")}</ul><p>可补充对应资料，或明确哪些部分需要进一步检索。</p>` : ""}
         ${model.inference ? `<p>${escapeHtml(model.inference)}</p>` : ""}
@@ -9454,14 +9454,22 @@ function consolidateMessageDiagnostics(message) {
     if (preview) preview.hidden = true;
     const evidence = frame.querySelector(".response-evidence");
     if (evidence) {
+        // Saved HTML may still contain the old generic disclaimer. Remove only
+        // that presentation suffix; retain source records and concrete gaps.
+        const evidenceTitle = evidence.querySelector("details > summary");
+        if (evidenceTitle?.textContent?.endsWith(" · 依据待核对")) {
+            evidenceTitle.textContent = evidenceTitle.textContent.slice(0, -" · 依据待核对".length);
+        }
         let attention = frame.querySelector(".response-evidence-attention");
         const missing = evidence.querySelectorAll(".response-evidence-gaps li");
-        if (missing.length && !attention) {
-            attention = document.createElement("p");
-            attention.className = "response-evidence-attention";
-            attention.setAttribute("role", "status");
+        if (missing.length) {
+            if (!attention) {
+                attention = document.createElement("p");
+                attention.className = "response-evidence-attention";
+                attention.setAttribute("role", "status");
+                advanced.before(attention);
+            }
             attention.textContent = `尚缺资料：${[...missing].map(node => node.textContent.trim()).join("；")}`;
-            advanced.before(attention);
         } else if (!missing.length) attention?.remove();
         if (!content.contains(evidence)) content.prepend(evidence);
     }

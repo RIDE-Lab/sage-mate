@@ -14,6 +14,7 @@ const render = input => context.buildResponseEvidenceHtml(model(input));
 const work = (state, attempt = 1, extra = {}) => ({version:1,namespace:'n',request_id:'r',task_id:'post_answer',state,attempt,...extra});
 const summary = (events, status) => context.buildResponseWorkSummaryHtml(events, status);
 assert.match(render({}), /未附可核验来源/);
+assert.doesNotMatch(render({}), /依据待核对/);
 assert.match(render({externalEvidenceRequired:false}), /未记录来源覆盖情况/);
 assert.doesNotMatch(render({externalEvidenceRequired:false}), /class="response-evidence has-gap"/);
 assert.match(render({isError:true}), /未成功交付/);
