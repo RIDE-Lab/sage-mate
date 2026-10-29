@@ -1110,3 +1110,20 @@ html[data-theme="dark"] .primary-button:hover {
     body:not(.workflow-shell-collapsed) .chat-layout > .chat-shell { grid-column: 2; }
     body:not(.workflow-shell-collapsed) #workflow-shell { grid-column: 3; border-left: 1px solid var(--line); }
 }
+
+@media (max-width: 420px) {
+    /* Keep header controls in flow so the theme button cannot cover the title. */
+    .topbar { gap: 6px; padding-inline: 8px; }
+    .topbar > * { order: 0; }
+    .topbar .topbar-brand { flex: 1 1 auto; min-width: 0; justify-content: flex-start; text-align: left; }
+    .topbar .topbar-brand-copy { min-width: 0; }
+    .topbar .topbar-title { white-space: nowrap; }
+    .topbar .theme-toggle { position: static; margin: 0; }
+    .topbar .session-export-button { width: 36px; height: 36px; padding: 8px; }
+    .topbar .session-export-button > span { display: none; }
+    .topbar .topbar-user-badge { min-width: 36px; width: 36px; padding: 3px; }
+    .composer-row { gap: 4px; }
+    .composer-row textarea { font-size: 14px; padding-inline: 2px; }
+    .composer-row .composer-plus-button, .composer-row .composer-mic-button { width: 30px; min-width: 30px; }
+    .composer-row .send-button { width: 40px; min-width: 40px; }
+}
