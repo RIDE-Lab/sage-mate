@@ -194,3 +194,34 @@ model receipt success as independent semantic correctness. Current production
 remains the previous release until original-question relevance and genuine
 public browser acceptance are completed. No engine/router/workstation restart
 is part of this change.
+
+### 2026-10-29: staged public retrieval and semantic acceptance boundary
+
+The search adapter now obtains advanced-search excerpts first and requests full
+Markdown only for semantically selected URLs. Extraction preserves identity and
+full returned content; an extraction timeout leaves the already accepted excerpt
+available, and late workers cannot replace the result. Provider errors log only
+provider names and exception classes, never queries, credentials or response bodies.
+Published-domain disambiguation is an explicit, receipt-bound choice. The runtime
+adds that approved scope to derived queries. Per-candidate object/outcome roles
+separate direct evidence from cross-domain background; background cannot be
+promoted simply by including its ID in the selected list. Literal phrase matching
+was removed as a transport rejection rule because synonyms and added domain terms
+caused false negatives. No question-specific canned answer or search-term table
+was added.
+
+Validation: 231 combined Twin/SAGE tests passed (68.00 s), including deadline,
+late-result, permissions, extraction identity, scope-binding and background-role
+checks. The earlier missing-client fixture failure was fixed by making extraction
+capability detection safe when web search is disabled.
+
+Independent live-model acceptance remains **failed**. The original system-evaluation
+question still exposed a supplement path expanding to about 841K characters and
+hitting the isolated 80 s request deadline. The original KV migration/recomputation
+question also reached 80 s during answer correction/audit. A role-classification
+probe distinguished the directly relevant computer-performance source from
+business/network-experiment background; this is a limited component result, not
+proof that the complete answer pipeline is correct. The deployed reranker's scores
+did not separate these domains reliably, so it was not wired into web acceptance.
+These are candidate-only changes. No production cutover, GPU/model restart or
+public-browser acceptance of this candidate has occurred.

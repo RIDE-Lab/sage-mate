@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import date
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from html import unescape
+import logging
 from re import IGNORECASE, compile as re_compile
 from time import monotonic
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import httpx
 from sage.runtime.web_research import web_research_budget, web_research_deadline
+
+_logger = logging.getLogger(__name__)
 
 
 _DEFAULT_USER_AGENT = (
@@ -163,8 +166,8 @@ class WebSearchClient:
                 provider_completed = True
                 if official_result is not None:
                     return [official_result]
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("web_search_provider_failed provider=official_award error=%s", type(exc).__name__)
         deadline = web_research_deadline()
         assert deadline is not None
         if self._tavily_api_key and monotonic() < deadline:
@@ -175,8 +178,8 @@ class WebSearchClient:
                     ranked = self._rerank_results(normalized_query, tavily_results, limit)
                     if ranked:
                         return ranked
-            except Exception:
-                pass
+            except Exception as exc:
+                _logger.warning("web_search_provider_failed provider=tavily error=%s", type(exc).__name__)
 
         from sage.runtime.web_search_quality import anchored_query
         search_query = anchored_query(self._rewrite_query_for_bing(normalized_query))
@@ -186,7 +189,8 @@ class WebSearchClient:
             try:
                 results = searcher(search_query, limit)
                 provider_completed = True
-            except Exception:
+            except Exception as exc:
+                _logger.warning("web_search_provider_failed provider=%s error=%s", searcher.__name__, type(exc).__name__)
                 continue
             if results:
                 reranked = self._rerank_results(normalized_query, results, limit)
@@ -280,7 +284,8 @@ class WebSearchClient:
         response = client.search(
             query,
             max_results=max_results,
-            include_raw_content=True,
+            include_raw_content=False,
+            search_depth="advanced",
             timeout=max(0.05, min(self._timeout_seconds, (web_research_deadline() or (monotonic() + self._timeout_seconds)) - monotonic())),
         )
         hits: list[WebSearchResult] = []
@@ -299,6 +304,26 @@ class WebSearchClient:
                 )
             )
         return hits
+
+    def hydrate(self, hits):
+        """Fetch bodies only for selected URLs; keep failed extracts as excerpts."""
+        hits = list(hits)
+        if not self._tavily_api_key:
+            return hits
+        urls = list(dict.fromkeys(h.url for h in hits if not h.source_content))
+        if not urls:
+            return hits
+        from tavily import TavilyClient
+        remaining = (web_research_deadline() or (monotonic() + self._timeout_seconds)) - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("web research deadline exceeded")
+        response = TavilyClient(api_key=self._tavily_api_key).extract(
+            urls, extract_depth="basic", format="markdown",
+            timeout=max(0.05, min(self._timeout_seconds, remaining)))
+        bodies = {item.get("url"): item["raw_content"] for item in response.get("results", [])
+                  if item.get("url") in urls and isinstance(item.get("raw_content"), str)
+                  and item["raw_content"].strip()}
+        return [replace(hit, source_content=bodies.get(hit.url, hit.source_content)) for hit in hits]
 
     def _client(self) -> httpx.Client:
         timeout_seconds = self._timeout_seconds
@@ -403,7 +428,7 @@ class WebSearchClient:
                 WebSearchResult(
                     title=title[:300],
                     url=self._decode_bing_result_url(href),
-                    snippet=snippet[:500],
+                    snippet=snippet,
                     score=float(max_results - len(results)),
                 )
             )
@@ -422,10 +447,7 @@ class WebSearchClient:
         seen_urls: set[str] = set()
         rescored: list[WebSearchResult] = []
 
-        from sage.runtime.web_search_quality import matches_compound_subject
         for index, result in enumerate(results):
-            if not matches_compound_subject(original_query, result.title, result.snippet):
-                continue
             canonical_url = cls._canonical_url(result.url)
             if canonical_url in seen_urls:
                 continue

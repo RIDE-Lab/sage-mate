@@ -2052,7 +2052,16 @@ class FacultyTwinWorkflowSupport:
             accepted_candidates = [json.loads(request.payload)["candidates"][i] for i in selected]
             return raw
 
+        def hydrate(hits):
+            from sage_faculty_twin.web_search import WebSearchResult
+            values = self._web_search_client.hydrate([
+                WebSearchResult(title=h.title, url=h.url, snippet=h.snippet, score=h.score,
+                                source_content=h.source_content) for h in hits])
+            return [WebSearchHit(title=h.title, url=h.url, snippet=h.snippet, score=h.score,
+                                source_content=h.source_content) for h in values]
+
         hits = execute_web_research(decision, search, observe, review=review,
+            hydrate=hydrate if hasattr(getattr(self, "_web_search_client", None), "hydrate") else None,
             public_context=getattr(self._settings, "web_search_public_context", ""),
             search_timeout_seconds=getattr(self._settings, "web_search_timeout_seconds", 12),
             timeout_seconds=getattr(self._settings, "web_research_timeout_seconds", 35))

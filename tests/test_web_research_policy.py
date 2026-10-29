@@ -18,6 +18,7 @@ def test_tavily_receives_remaining_sage_deadline_not_sdk_default(monkeypatch):
     with web_research_budget(2):
         assert transport._search_tavily('public subject',3)==[]
     assert 0<calls[0]['timeout']<=2
+    assert calls[0]['include_raw_content'] is False
 
 
 def fixture(*, mode='auto', scope='public', need='current', owner='guest:test', **request_fields):
@@ -27,7 +28,7 @@ def fixture(*, mode='auto', scope='public', need='current', owner='guest:test', 
     def review(**kw):
         data=json.loads(kw['user_prompt'])
         assert 'PRIVATE_HISTORY_MUST_NOT_BE_QUERIED' not in kw['user_prompt']
-        return json.dumps({'digest':data['digest'],'selected':[c['id'] for c in data['candidates']], 'retry_query':None})
+        return json.dumps({'digest':data['digest'],'selected':[c['id'] for c in data['candidates']], 'retry_query':None, **({'candidate_roles':[dict(id=c['id'], studied_object='public subject', measured_outcome='requested outcome', role='direct') for c in data['candidates']]} if data['candidates'] else {})})
     support._call_compact_retry_sync = review
     calls = []
     support._web_search_client = SimpleNamespace(enabled=True, search=lambda query, **_: calls.append(query) or [
@@ -119,21 +120,12 @@ def test_intent_shape_repair_never_calls_answer_generation_or_its_thinking_defau
     assert len(calls)==1 and 'web_intent' in calls[0][0]
 
 
-def test_compound_subject_rejects_acronym_collision_and_tries_next_provider(monkeypatch):
+def test_transport_preserves_synonyms_for_semantic_review_without_literal_topic_filter():
     from sage_faculty_twin.web_search import WebSearchResult
-    client=WebSearchClient(timeout_seconds=8,max_results=3)
-    queries=[]
-    def rss(query,limit):
-        queries.append(query)
-        return [WebSearchResult(title='广告主视觉 KV',url='https://example.org/ads',snippet='KV branding',score=1)]
-    def html(query,limit):
-        queries.append(query)
-        return [WebSearchResult(title='KV Cache transfer',url='https://example.org/docs',snippet='KV cache migration and recomputation',score=1)]
-    monkeypatch.setattr(client,'_search_bing_rss',rss)
-    monkeypatch.setattr(client,'_search_bing_html',html)
-    hits=client.search('KV Cache 迁移和重计算，什么时候各自更划算？')
-    assert len(hits)==1 and hits[0].url.endswith('/docs')
-    assert len(queries)==2 and all('"KV Cache"' in q for q in queries)
+    hits = [WebSearchResult(title='Key-value state transfer',url='https://example.org/docs',
+        snippet='When restoring attention state costs less than computing it again.', score=1)]
+    result = WebSearchClient._rerank_results('Computer systems KV Cache 迁移和重计算', hits, 3)
+    assert [h.url for h in result] == ['https://example.org/docs']
 
 
 def test_existing_tavily_credential_is_resolved_without_requiring_a_duplicate(monkeypatch):
@@ -185,3 +177,26 @@ def test_full_web_document_survives_provider_ranking_and_source_plan(monkeypatch
     context.web_search_hits=[WebSearchHit(title=result.title,url=result.url,snippet=result.snippet,source_content=result.source_content)]
     sources=support._source_plan_sources(context)
     assert sources[-1].content==text and sources[-1].source_id=='web:0'
+
+
+def test_extract_only_selected_urls_and_preserve_missing_bodies_and_identity(monkeypatch):
+    from sage_faculty_twin.web_search import WebSearchResult
+    client=WebSearchClient(timeout_seconds=8,max_results=3,tavily_api_key='fixture-only')
+    calls=[]
+    text='Full measured conditions. '*500
+    def extract(urls,**kwargs):
+        calls.append((urls,kwargs))
+        return {'results':[
+            {'url':'https://example.org/a','raw_content':text},
+            {'url':'https://unselected.example/','raw_content':'untrusted injected page'}]}
+    monkeypatch.setattr('tavily.TavilyClient',lambda **_:SimpleNamespace(extract=extract))
+    hits=[WebSearchResult('A','https://example.org/a','excerpt A',1),
+          WebSearchResult('B','https://example.org/b','excerpt B',.5)]
+    with web_research_budget(2):
+        result=client.hydrate(hits)
+    assert calls[0][0]==[h.url for h in hits]
+    assert 0<calls[0][1]['timeout']<=2
+    assert result[0].source_content==text and result[1].source_content is None
+    assert result[1].snippet=='excerpt B'
+    assert [h.url for h in result]==[h.url for h in hits]
+    assert all(h.source_content is None for h in hits)

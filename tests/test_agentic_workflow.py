@@ -111,7 +111,7 @@ class IntentAwareLLMClient:
         from sage.runtime.web_search_quality import PROMPT as SEARCH_PROMPT, QUERY_PROMPT as SEARCH_QUERY_PROMPT
         if system_prompt in (SEARCH_PROMPT, SEARCH_QUERY_PROMPT):
             data = json.loads(user_prompt)
-            return json.dumps({"digest": data["digest"], "selected": [c["id"] for c in data["candidates"]], "retry_query": None})
+            return json.dumps({"digest": data["digest"], "selected": [c["id"] for c in data["candidates"]], "retry_query": None, **({"candidate_roles":[dict(id=c["id"], studied_object="fixture subject", measured_outcome="fixture outcome", role="direct") for c in data["candidates"]]} if data["candidates"] else {})})
         from sage.runtime.evidence_query_plan import QUERY_PLAN_PROMPT
         if system_prompt == QUERY_PLAN_PROMPT:
             return json.dumps({"digest": json.loads(user_prompt)["digest"], "queries": []})
