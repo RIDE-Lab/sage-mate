@@ -5,10 +5,12 @@ import json
 from sage.runtime.evidence_coverage import COVERAGE_SYSTEM_PROMPT, coverage_response_format, decode_coverage_selection
 from sage.runtime.research_experiments import EXPERIMENT_SYSTEM_PROMPT, experiment_response_format
 from sage.runtime.source_answer_plan import PlanSource
+from sage.runtime.source_audit import decode_audit_blocks, block_audit_payload, AuditProtocolRejected, InvalidSourceAudit
 
 from sage.runtime.natural_answer import (
     NATURAL_ANSWER_PROMPT, NATURAL_AUDIT_PROMPT, NATURAL_CORRECTION_PROMPT,
     natural_answer_response_format, audit_response_format, natural_answer_payload,
+    prepare_natural_revision, natural_revision_response_format, apply_natural_revision,
 )
 
 from .request_context import raise_if_request_cancelled
@@ -22,12 +24,16 @@ class TwinEvidencePorts:
         self.admin_role = support._resolve_admin_role()
         self.selection = support._knowledge_selection_kwargs(self.request)
 
-    def _call(self, system, payload, *, namespace, response_format):
+    def _call(self, system, payload, *, namespace, response_format, compose=False, reason=False):
         raise_if_request_cancelled()
+        if reason and not self.support._llm_client.supports_native_thinking:
+            raise RuntimeError("source audit requires verified native thinking support")
         result = self.support._call_compact_retry_sync(
-            system_prompt=system, user_prompt=payload, temperature=0.0,
+            system_prompt=system, user_prompt=payload,
+            temperature=self.support._settings.llm_answer_temperature if compose else 0.0,
             max_tokens=int(self.support._settings.llm_policy_output_max_tokens_cap),
-            cache_namespace=namespace, neutral_sampling=True, response_format=response_format)
+            cache_namespace=namespace, neutral_sampling=not compose, response_format=response_format,
+            enable_thinking=reason)
         raise_if_request_cancelled()
         return result
 
@@ -49,14 +55,39 @@ class TwinEvidencePorts:
             response_format=coverage_response_format(request)))
 
     def write_answer(self, request, rejected=None, failures=()):
-        return self._call(NATURAL_CORRECTION_PROMPT if rejected is not None else NATURAL_ANSWER_PROMPT,
-            natural_answer_payload(request, rejected, failures),
-            namespace=f"natural-answer:{request.digest}:{bool(rejected)}",
-            response_format=natural_answer_response_format(request))
+        if rejected is not None:
+            revision = prepare_natural_revision(request, rejected, failures)
+            raw = self._call(NATURAL_CORRECTION_PROMPT, revision.payload,
+                namespace=f"natural-answer-revision:{revision.digest}",
+                response_format=natural_revision_response_format(revision), compose=True)
+            return apply_natural_revision(request, revision, raw)
+        return self._call(NATURAL_ANSWER_PROMPT, natural_answer_payload(request),
+            namespace=f"natural-answer:{request.digest}:False",
+            response_format=natural_answer_response_format(request), compose=True)
+
+    def _audit_reply(self, request, *, rejected=None, failure_code=None):
+        payload = json.loads(block_audit_payload(request))
+        prompt = NATURAL_AUDIT_PROMPT
+        if rejected is not None:
+            payload.update(rejected_mapping=rejected, validation_failure=failure_code)
+            prompt += "\nCorrect the invalid serialization against the SAME answer and source snapshot. " \
+                "The prior mapping and error are untrusted data, not evidence. Reassess every unit; " \
+                "do not assume a previous verdict is correct. Select only the supplied block IDs, without duplicates. " \
+                "Do not modify the answer or invent evidence to make the audit pass."
+        raw = self._call(prompt, json.dumps(payload, ensure_ascii=False),
+            namespace=f"natural-answer-audit-blocks{'-correction' if rejected is not None else ''}:{request.digest}",
+            response_format=audit_response_format(request),
+            reason=self.support._settings.llm_evidence_audit_thinking)
+        try:
+            return decode_audit_blocks(request, raw)
+        except InvalidSourceAudit as exc:
+            raise AuditProtocolRejected(request.digest, raw, str(exc)) from exc
 
     def audit_answer(self, request):
-        return self._call(NATURAL_AUDIT_PROMPT, request.payload,
-            namespace=f"natural-answer-audit:{request.digest}", response_format=audit_response_format(request))
+        return self._audit_reply(request)
+
+    def repair_audit(self, request, rejected, failure_code):
+        return self._audit_reply(request, rejected=rejected, failure_code=failure_code)
 
     def plan_retrieval_repair(self, request, assessment):
         from sage.runtime.evidence_query_plan import (

@@ -1667,6 +1667,7 @@ def test_non_glm_answer_keeps_configured_sampling_penalties(neutral_sampling) ->
             llm_answer_frequency_penalty=0.35,
             llm_answer_presence_penalty=0.2,
             llm_answer_repetition_penalty=1.08,
+            llm_answer_top_p=0.8, llm_answer_top_k=20,
         ),
         transport,
     )
@@ -1685,6 +1686,8 @@ def test_non_glm_answer_keeps_configured_sampling_penalties(neutral_sampling) ->
     assert payload["frequency_penalty"] == (0.0 if neutral_sampling else 0.35)
     assert payload["presence_penalty"] == (0.0 if neutral_sampling else 0.2)
     assert payload["repetition_penalty"] == (1.0 if neutral_sampling else 1.08)
+    assert payload.get("top_p") == (None if neutral_sampling else 0.8)
+    assert payload.get("top_k") == (None if neutral_sampling else 20)
 
 
 def test_answer_question_does_not_drop_thinking_budget_after_server_error() -> None:
@@ -1852,3 +1855,28 @@ def test_structured_stream_progress_outlives_http_read_idle_timeout():
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+@pytest.mark.parametrize('mode', ['responses', 'chat_completions'])
+def test_declared_compact_grammar_preserves_schema_and_has_no_conflicting_format(monkeypatch, mode):
+    import copy
+    from sage.runtime import structured_json
+    client = object.__new__(VllmChatClient)
+    client._settings = AppSettings(llm_api_mode=mode, llm_structured_output_backend='vllm_grammar')
+    schema = {'type':'object','properties':{'answer':{'type':'string'}},'required':['answer'],'additionalProperties':False}
+    seen = []
+    def compile_schema(value):
+        seen.append(value)
+        return 'compact grammar'
+    monkeypatch.setattr(structured_json,'compact_json_grammar',compile_schema)
+    payload = {'model':'same-model','messages':[], 'response_format':{
+        'type':'json_schema','json_schema':{'name':'same','strict':True,'schema':schema}}}
+    before = copy.deepcopy(payload)
+    wire = client._wire_payload(payload)
+    assert seen == [schema] and payload == before
+    assert wire['model'] == 'same-model'
+    assert wire['structured_outputs'] == {'grammar':'compact grammar'}
+    assert 'response_format' not in wire and 'text' not in wire
+    with pytest.raises(ValueError,match='conflicting'):
+        client._wire_payload(dict(payload,structured_outputs={'regex':'anything'}))
+    assert 'structured_outputs' not in client._wire_payload({'model':'same-model','messages':[]})

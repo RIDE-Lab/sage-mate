@@ -38,7 +38,7 @@ def plan_response(payload):
         from sage.runtime.natural_answer import NATURAL_ANSWER_PROMPT
         return response(NATURAL_ANSWER_PROMPT, payload)
     if "requirements" in data:
-        return json.dumps({"digest": data["digest"], "items": [
+        return json.dumps({"digest": data["digest"], **({"source_roles": [dict(source_id=s["source_id"], studied_subject="fixture", role="direct") for s in data["sources"]]} if data["purpose"] == "source_support" else {}), "items": [
             {"requirement_id": r["requirement_id"], "witnesses": [p["id"] for p in data["sources"][0]["paragraphs"]]}
             for r in data["requirements"]]})
     return json.dumps({"digest": data["digest"], "source_ids": ["knowledge:0"], "inferences": []})
@@ -352,3 +352,39 @@ def test_advisory_branch_does_not_become_fact_answer_just_because_history_exists
     context.knowledge_hits = []
     context.workflow_action = "advise_only"
     assert not support._requires_source_audit(context)
+
+
+def test_evidence_composer_uses_configured_sampling_but_classifier_stays_neutral():
+    from types import SimpleNamespace
+    from sage_faculty_twin.evidence_ports import TwinEvidencePorts
+    from sage.runtime.natural_answer import prepare_natural_answer, validate_natural_answer
+    from sage.runtime.source_answer_plan import PlanSource
+    ports = object.__new__(TwinEvidencePorts)
+    calls = []
+    def model(**kw):
+        calls.append(kw)
+        data = json.loads(kw['user_prompt'])
+        if 'rejected_answer' in data:
+            return json.dumps(dict(digest=data['digest'], replacements={'1': None}, additional_paragraphs=[]))
+        return json.dumps(dict(digest=data['digest'], paragraphs=['Supported.']))
+    ports.support = SimpleNamespace(_settings=AppSettings(llm_answer_temperature=.7), _call_compact_retry_sync=model)
+    request = prepare_natural_answer('Question?', (PlanSource('s', 'Doc', '', 'Supported.'),))
+    ports.write_answer(request)
+    result = ports.write_answer(request, 'Supported. Unsupported.', ('unit:1',))
+    assert validate_natural_answer(request, result) == 'Supported.'
+    assert all(c['temperature'] == .7 and c['neutral_sampling'] is False for c in calls)
+    ports._call('classifier', '{"digest":"test"}', namespace='test', response_format={})
+    assert calls[-1]['temperature'] == 0 and calls[-1]['neutral_sampling'] is True
+
+
+def test_native_audit_requirement_cannot_silently_fall_back():
+    from types import SimpleNamespace
+    from sage_faculty_twin.evidence_ports import TwinEvidencePorts
+    from sage.runtime.source_audit import prepare_source_audit
+    ports = object.__new__(TwinEvidencePorts)
+    ports.support = SimpleNamespace(_settings=AppSettings(llm_evidence_audit_thinking=True),
+        _llm_client=SimpleNamespace(supports_native_thinking=False),
+        _call_compact_retry_sync=lambda **_: pytest.fail('must not call unsupported endpoint'))
+    request = prepare_source_audit('Status?', 'Fact.', {'s':'Fact.'})
+    with pytest.raises(RuntimeError, match='verified native thinking'):
+        ports.audit_answer(request)

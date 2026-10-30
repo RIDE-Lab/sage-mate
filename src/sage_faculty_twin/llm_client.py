@@ -594,6 +594,16 @@ class VllmChatClient:
         return converted
 
     def _wire_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        payload = dict(payload)
+        fmt = payload.get("response_format") or {}
+        if (self._settings.llm_structured_output_backend == "vllm_grammar"
+                and fmt.get("type") == "json_schema"):
+            from sage.runtime.structured_json import compact_json_grammar
+            if "structured_outputs" in payload:
+                raise ValueError("conflicting structured output constraints")
+            payload["structured_outputs"] = {
+                "grammar": compact_json_grammar(fmt["json_schema"]["schema"])}
+            payload.pop("response_format")
         if not self._uses_responses_for_payload(payload):
             return dict(payload)
 
@@ -1488,6 +1498,11 @@ class VllmChatClient:
             "presence_penalty": presence_penalty,
             "repetition_penalty": repetition_penalty,
         }
+        if not enable_thinking and not neutral_sampling:
+            for key, value in {"top_p": self._settings.llm_answer_top_p,
+                               "top_k": self._settings.llm_answer_top_k}.items():
+                if value is not None:
+                    payload[key] = value
         if reasoning_effort:
             payload["reasoning"] = {"effort": reasoning_effort}
         if response_format is not None:

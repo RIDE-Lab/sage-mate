@@ -25,6 +25,8 @@ class AppSettings(BaseSettings):
         default="chat_completions",
         description="OpenAI-compatible wire API used by the configured LLM endpoint.",
     )
+    llm_structured_output_backend: Literal["openai", "vllm_grammar"] = Field(
+        default="openai", description="Explicit endpoint capability: compact vLLM grammar or standard OpenAI JSON schema.")
     local_model_backend: str = Field(
         default="none",
         pattern="^(none|vllm_metal)$",
@@ -80,6 +82,12 @@ class AppSettings(BaseSettings):
         le=1.0,
         description="Default temperature for final student-facing answers.",
     )
+    llm_evidence_audit_thinking: bool = Field(default=False,
+        description="Require native model reasoning for source entailment audits; capability must be verified.")
+    llm_answer_top_p: float | None = Field(default=None, gt=0.0, le=1.0,
+        description="Optional provider-supported nucleus sampling for non-thinking prose.")
+    llm_answer_top_k: int | None = Field(default=None, ge=1,
+        description="Optional provider-supported top-k sampling for non-thinking prose.")
     llm_answer_frequency_penalty: float = Field(
         default=0.35,
         ge=-2.0,

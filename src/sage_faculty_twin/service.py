@@ -4519,7 +4519,7 @@ class FacultyTwinWorkflowSupport:
                 with bind_trace_event_sink(lambda _kind, _payload: None):
                     remaining = request_remaining_seconds()
                     context.evidence_work = runtime.run(context.request.question, self._source_plan_sources(context),
-                        TwinEvidencePorts(self, context), task=AnswerTask(
+                        TwinEvidencePorts(self, context), public_context=self._settings.web_search_public_context, task=AnswerTask(
                             context.interaction_intent.task_mode or "facts",
                             context.interaction_intent.task_directive,
                             context.interaction_intent.experiment_directive) if context.interaction_intent else AnswerTask("facts"),
