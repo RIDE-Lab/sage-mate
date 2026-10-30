@@ -275,6 +275,7 @@ class AppSettings(BaseSettings):
     web_search_public_context: str = Field(default="", max_length=512,
         description="Published site subject area used only for search disambiguation; never private profile/history.")
     web_search_max_results: int = Field(default=3, ge=1, le=8)
+    web_search_depth: Literal["basic", "fast", "advanced"] = "advanced"
     tavily_api_key: str = Field(default="")
 
     @field_validator("tavily_api_key", mode="before")

@@ -200,3 +200,18 @@ def test_extract_only_selected_urls_and_preserve_missing_bodies_and_identity(mon
     assert result[1].snippet=='excerpt B'
     assert [h.url for h in result]==[h.url for h in hits]
     assert all(h.source_content is None for h in hits)
+
+
+@pytest.mark.parametrize('depth', ['basic', 'fast', 'advanced'])
+def test_public_search_depth_is_explicit_and_does_not_request_truncated_bodies(monkeypatch, depth):
+    from types import SimpleNamespace
+    from sage_faculty_twin.web_search import WebSearchClient
+    calls = []
+    def search(*args, **kwargs):
+        calls.append(kwargs)
+        return {'results': []}
+    monkeypatch.setattr('tavily.TavilyClient', lambda **_: SimpleNamespace(search=search))
+    client = WebSearchClient(timeout_seconds=8, max_results=5, tavily_api_key='fixture-only', search_depth=depth)
+    client._search_tavily('public comparison', 5)
+    assert calls[0]['search_depth'] == depth
+    assert calls[0]['include_raw_content'] is False  # Full selected bodies are extracted separately.

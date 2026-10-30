@@ -387,4 +387,4 @@ def test_native_audit_requirement_cannot_silently_fall_back():
         _call_compact_retry_sync=lambda **_: pytest.fail('must not call unsupported endpoint'))
     request = prepare_source_audit('Status?', 'Fact.', {'s':'Fact.'})
     with pytest.raises(RuntimeError, match='verified native thinking'):
-        ports.audit_answer(request)
+        ports.final_audit_answer(request)

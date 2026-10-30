@@ -1245,6 +1245,7 @@ class FacultyTwinWorkflowSupport:
             timeout_seconds=settings.web_search_timeout_seconds,
             max_results=settings.web_search_max_results,
             tavily_api_key=settings.tavily_api_key,
+            search_depth=settings.web_search_depth,
         )
 
     def bootstrap_chat(self, request: ChatRequest) -> ChatWorkflowContext:

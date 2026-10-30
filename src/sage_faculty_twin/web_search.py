@@ -129,10 +129,14 @@ class WebSearchClient:
         timeout_seconds: float,
         max_results: int,
         tavily_api_key: str = "",
+        search_depth: str = "advanced",
     ) -> None:
         self._timeout_seconds = max(1.0, float(timeout_seconds))
         self._max_results = max(1, min(int(max_results), 8))
         self._tavily_api_key = (tavily_api_key or "").strip()
+        if search_depth not in {"basic", "fast", "advanced"}:
+            raise ValueError("unsupported public search depth")
+        self._search_depth = search_depth
 
     @property
     def enabled(self) -> bool:
@@ -285,7 +289,7 @@ class WebSearchClient:
             query,
             max_results=max_results,
             include_raw_content=False,
-            search_depth="advanced",
+            search_depth=self._search_depth,
             timeout=max(0.05, min(self._timeout_seconds, (web_research_deadline() or (monotonic() + self._timeout_seconds)) - monotonic())),
         )
         hits: list[WebSearchResult] = []

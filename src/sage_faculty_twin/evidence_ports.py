@@ -65,7 +65,11 @@ class TwinEvidencePorts:
             namespace=f"natural-answer:{request.digest}:False",
             response_format=natural_answer_response_format(request), compose=True)
 
-    def _audit_reply(self, request, *, rejected=None, failure_code=None):
+    @property
+    def requires_final_audit(self):
+        return self.support._settings.llm_evidence_audit_thinking
+
+    def _audit_reply(self, request, *, rejected=None, failure_code=None, final=False):
         payload = json.loads(block_audit_payload(request))
         prompt = NATURAL_AUDIT_PROMPT
         if rejected is not None:
@@ -75,9 +79,9 @@ class TwinEvidencePorts:
                 "do not assume a previous verdict is correct. Select only the supplied block IDs, without duplicates. " \
                 "Do not modify the answer or invent evidence to make the audit pass."
         raw = self._call(prompt, json.dumps(payload, ensure_ascii=False),
-            namespace=f"natural-answer-audit-blocks{'-correction' if rejected is not None else ''}:{request.digest}",
+            namespace=f"natural-answer-audit-blocks{'-final' if final else '-preflight'}{'-correction' if rejected is not None else ''}:{request.digest}",
             response_format=audit_response_format(request),
-            reason=self.support._settings.llm_evidence_audit_thinking)
+            reason=final and self.requires_final_audit)
         try:
             return decode_audit_blocks(request, raw)
         except InvalidSourceAudit as exc:
@@ -85,6 +89,9 @@ class TwinEvidencePorts:
 
     def audit_answer(self, request):
         return self._audit_reply(request)
+
+    def final_audit_answer(self, request):
+        return self._audit_reply(request, final=True)
 
     def repair_audit(self, request, rejected, failure_code):
         return self._audit_reply(request, rejected=rejected, failure_code=failure_code)
