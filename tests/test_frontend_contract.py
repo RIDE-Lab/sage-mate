@@ -729,7 +729,7 @@ def test_completed_answers_keep_a_collapsed_inline_process_summary() -> None:
     ]
     assert 'class="message-workflow-summary message-section"' in summary_fn
     assert 'aria-expanded="false"' in summary_fn
-    assert '<strong class="message-section-title">高级详情</strong>' in summary_fn
+    assert '<strong class="message-section-title">详情</strong>' in summary_fn
     assert '<div class="message-section-content" hidden>' in summary_fn
     assert summary_fn.index('<div class="message-section-content" hidden>') < summary_fn.index(
         "buildNativeExecutionHtml(executionEvents)"

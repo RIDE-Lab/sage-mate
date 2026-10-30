@@ -1494,30 +1494,44 @@ function uiIconSvg(name, className = "") {
     return `<svg class="${classes}" aria-hidden="true" focusable="false"><use href="#icon-${safeName}"></use></svg>`;
 }
 
+let seedChipsIdentityReady = false;
+let seedChipsRenderVersion = 0;
+const seedChipsRenderedSignatures = new WeakMap();
 let publicWikiQuestions = [];
 let publicWikiQuestionsRequest = null;
 async function loadPublicWikiQuestions() {
     if (!publicWikiQuestionsRequest) {
         publicWikiQuestionsRequest = apiRequest('/wiki/questions', { timeoutMs: 4000 })
             .then((data) => { publicWikiQuestions = data.questions || []; return publicWikiQuestions; })
-            .catch(() => [])
-            .finally(() => { publicWikiQuestionsRequest = null; });
+            .catch(() => { publicWikiQuestionsRequest = null; return []; });
     }
     return publicWikiQuestionsRequest;
 }
 
 async function renderSeedChips(profile) {
     const container = document.getElementById("seed-chips-list");
-    if (!container) return;
+    if (!container || !seedChipsIdentityReady) return;
+    const version = ++seedChipsRenderVersion;
     const requestedProfile = profile;
     const identityProfile = starterProfileForIdentity(profile);
+    // Never leave a previous identity's suggestions visible while its catalog
+    // is loading. Ordinary refreshes of the same identity keep their DOM/focus.
+    if (container.dataset.seedProfile && container.dataset.seedProfile !== identityProfile) {
+        container.replaceChildren();
+        seedChipsRenderedSignatures.delete(container);
+    }
+    container.dataset.seedProfile = identityProfile;
     await loadPublicWikiQuestions();
+    if (version !== seedChipsRenderVersion || document.getElementById("seed-chips-list") !== container) return;
     if ((visitorProfileInput?.value || 'general_visitor') !== requestedProfile) return;
     if (starterProfileForIdentity(profile) !== identityProfile) return;
     const pool = wikiStarterQuestions(identityProfile, publicWikiQuestions);
-    // Shuffle and pick SEED_CHIP_COUNT items
-    const shuffled = [...pool].sort(() => Math.random() - 0.5);
-    const picked = shuffled.slice(0, SEED_CHIP_COUNT);
+    // The role pool has a curated order. Opening the page or refreshing session
+    // metadata must not reshuffle questions the visitor is already reading.
+    const picked = pool.slice(0, SEED_CHIP_COUNT);
+    const signature = JSON.stringify([identityProfile, picked.map(({label, question, context}) => [label, question, context])]);
+    if (signature === seedChipsRenderedSignatures.get(container)) return;
+    seedChipsRenderedSignatures.set(container, signature);
     container.replaceChildren(...picked.map((item) => {
         const button = document.createElement('button');
         button.type = 'button';
@@ -2429,8 +2443,7 @@ setSidebarExpanded(
     !isMobileSidebarViewport() && document.body.classList.contains("sidebar-expanded"),
 );
 
-// Seed question chips: render random chips based on current profile
-renderSeedChips(visitorProfileInput?.value || "general_visitor");
+// Starter questions are first rendered after the initial user identity resolves.
 
 luckyQuestionButton?.addEventListener("click", handleLuckyQuestionClick);
 composerUploadButton?.addEventListener("click", () => chatFileInput?.click());
@@ -4411,6 +4424,7 @@ function renderSlackTwinLinkStatus(data) {
 }
 
 function applyUserSession(session) {
+    seedChipsIdentityReady = true;
     const wasAuthenticated = isUserAuthenticated;
     const authenticated = Boolean(session?.is_authenticated && session?.account);
     isUserAuthenticated = authenticated;
@@ -12599,6 +12613,11 @@ async function initializePage() {
     const localCodeConfigPromise = maybeOpenSageMateSetup();
     renderConversationHistoryList();
     applyStoredVisitorProfile();
+    // Resolve identity and catalog in parallel with unrelated status requests.
+    // The greeting/composer can render immediately; starter questions wait for
+    // the verified identity so guests never briefly see a member question pool.
+    const userSessionPromise = refreshUserSession();
+    void loadPublicWikiQuestions();
     applyVisitorProfilePresentation({ syncCourseContext: true });
     updateChatEmptyState();
     // Returning visitors should never wait for health/session APIs before the
@@ -12619,7 +12638,7 @@ async function initializePage() {
         refreshHardwareBar();
     }
     await refreshStatus();
-    await refreshUserSession();
+    await userSessionPromise;
     applyVisitorProfilePresentation({ syncCourseContext: true });
     // Auto-mark identity as guest for unauthenticated users — no landing page needed
     if (!isAdminSession && !isUserAuthenticated) {

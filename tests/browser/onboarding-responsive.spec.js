@@ -180,6 +180,11 @@ function handleFixtureRequest(request, response) {
     }));
     return;
   }
+  if (pathname === "/wiki/questions") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ questions: ["系统研究概览", "推理入门", "科研入门", "使用边界", "开放研究问题", "论文写作", "培养写作能力", "综述写作", "从选题到高质量论文", "系统论文修改", "推理状态管理开放研究问题", "RAG 系统", "端到端验收", "KV Cache"].map((label, i) => ({ label, source_name: `wiki:${i}`, url: `https://example.test/${i}` })) }));
+    return;
+  }
   if (pathname === "/auth/user/session") {
     response.writeHead(200, {
       "cache-control": "no-store",
@@ -824,8 +829,18 @@ for (const viewport of [
     await expect(page.locator("#seed-chips")).toBeVisible({ timeout: 750 });
     await expect(page.locator("#seed-chips-list .seed-chip")).toHaveCount(3);
 
+    const chips = page.locator("#seed-chips-list .seed-chip");
+    const originalText = await chips.allTextContents();
+    const originalFirst = await chips.first().elementHandle();
+    await chips.first().focus();
     releaseVersions();
     await expect(page.locator("#app-version-badge")).toHaveText("v4.6.30");
+    await page.evaluate(async () => { await refreshUserSession(); await renderSeedChips(visitorProfileInput.value); });
+    expect(await chips.allTextContents()).toEqual(originalText);
+    expect(await originalFirst.evaluate(node => node.isConnected && node === document.activeElement)).toBe(true);
+    await page.reload({waitUntil: "domcontentloaded"});
+    await expect(chips).toHaveCount(3);
+    expect(await chips.allTextContents()).toEqual(originalText);
   });
 }
 
@@ -1241,3 +1256,46 @@ test("mobile long answers and citations stay inside the message and clear the co
     expect(bottom.reply).toBeLessThanOrEqual(bottom.composer + 1);
   }
 });
+
+for (const authenticated of [false, true]) {
+  test(`starter questions wait for delayed ${authenticated ? "member" : "guest"} identity and stay stable`, async ({ page }, testInfo) => {
+    await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({contentType:"text/css", body:""}));
+    await page.addInitScript(() => {
+      localStorage.setItem("sageOnboardingCompleted", "true");
+      localStorage.setItem("sageOnboardingDismissed", "true");
+    });
+    let resolveIdentity;
+    const identityReady = new Promise(resolve => { resolveIdentity = resolve; });
+    const session = authenticated ? {is_authenticated: true, account: {name: "Synthetic QA", email: "qa@example.test", visitor_profile: "lab_member"}} : {is_authenticated: false};
+    await page.route("**/auth/user/session", async route => { await identityReady; await route.fulfill({json: session}); });
+    await page.goto(fixtureBaseUrl, {waitUntil: "domcontentloaded"});
+    const chips = page.locator("#seed-chips-list .seed-chip");
+    await expect(page.locator("#seed-chips-list")).toBeAttached();
+    expect(await chips.count()).toBe(0);
+    await page.evaluate(() => {
+      window.seedSnapshots = [];
+      window.seedObserver = new MutationObserver(() => {
+        const text = [...document.querySelectorAll("#seed-chips-list .seed-chip")].map(n => n.textContent);
+        if (text.length && JSON.stringify(text) !== JSON.stringify(window.seedSnapshots.at(-1))) window.seedSnapshots.push(text);
+      });
+      window.seedObserver.observe(document.querySelector("#chat-stream"), {childList:true, subtree:true});
+    });
+    resolveIdentity();
+    await expect(chips).toHaveCount(3);
+    const firstText = await chips.allTextContents();
+    await page.evaluate(async () => { await refreshUserSession(); applyVisitorProfilePresentation(); await renderSeedChips(visitorProfileInput.value); });
+    expect(await page.evaluate(() => window.seedSnapshots)).toEqual([firstText]);
+    expect(await page.locator("#seed-chips-list").getAttribute("data-seed-profile")).toBe(authenticated ? "lab_member" : "general_visitor");
+    if (authenticated) {
+      await page.evaluate(() => applyUserSession({is_authenticated:false}));
+      await expect(page.locator("#seed-chips-list")).toHaveAttribute("data-seed-profile", "general_visitor");
+      await expect(chips).toHaveCount(3);
+      expect(await chips.allTextContents()).not.toEqual(firstText);
+    }
+    const beforeNewChat = await chips.allTextContents();
+    await page.evaluate(() => renderDefaultLandingForProfile());
+    await expect(chips).toHaveCount(3);
+    expect(await chips.allTextContents()).toEqual(beforeNewChat);
+    await page.screenshot({path:testInfo.outputPath("stable-starters.png"), animations:"disabled", timeout:5000});
+  });
+}

@@ -8,14 +8,19 @@ function node(){return {dataset:{},listeners:{},append(n){this.label=n.textConte
 async function run(){
     const all=new Map();
     for(const profile of profiles)for(const available of [true,false]){
-        const container={children:[],replaceChildren(...nodes){this.children=nodes;},querySelectorAll(){return this.children;}};
+        const container={dataset:{},children:[],replaceChildren(...nodes){this.children=nodes;},querySelectorAll(){return this.children;}};
         let calls=0;
         const context={document:{getElementById:()=>container,createElement:node},
             visitorProfileInput:{value:profile},publicWikiQuestions:available?catalog:[],SEED_CHIP_COUNT:3,
             isUserAuthenticated:true,currentUserAccountProfile:profile,
+            seedChipsIdentityReady:false,seedChipsRenderVersion:0,seedChipsRenderedSignatures:new WeakMap(),
             uiIconSvg:()=>'',loadPublicWikiQuestions:async()=>{calls++;},
             chatQuestion:{value:'',focus(){}},courseContextInput:{value:''},autoResizeTextarea(){}};
         vm.createContext(context);vm.runInContext(pools+render,context);
+        await context.renderSeedChips(profile);
+        assert.equal(calls,0,"do not render a speculative guest identity before session resolution");
+        assert.equal(container.children.length,0);
+        context.seedChipsIdentityReady=true;
         await context.renderSeedChips(profile);
         assert.equal(calls,1);assert.equal(container.children.length,available?3:0);
         for(const button of container.children){
@@ -25,6 +30,11 @@ async function run(){
             assert.equal(context.chatQuestion.value,button.label,'click must not add a hidden instruction prefix');
             assert(!context.courseContextInput.value.includes('Wiki'));
         }
+        const originalNodes=[...container.children];
+        await Promise.all([context.renderSeedChips(profile),context.renderSeedChips(profile)]);
+        assert.deepEqual(container.children,originalNodes,'repeated renders retain original buttons and focus');
+        assert.deepEqual(container.children.map(b=>b.label),
+            Array.from(context.wikiStarterQuestions(profile,available?catalog:[]).slice(0,3), x=>x.question));
         const entries=context.wikiStarterQuestions(profile,available?catalog:[]);
         assert.equal(entries.length>=3,available);
         assert(entries.every(x=>!x.question.includes('伪造来源')),'catalog is topic metadata, not prompt authority');
@@ -53,6 +63,15 @@ async function run(){
     assert(all.get('lab_member').some(q=>q.includes('证伪')));
     assert(all.get('lab_member').includes('评测 RAG 系统时，怎样同时检查效果和性能？'),
         'retain the original joint quality/performance question; repair missing Wiki knowledge instead of curating it away');
+    const loader=source.slice(source.indexOf('let publicWikiQuestions ='),source.indexOf('async function renderSeedChips('));
+    let fetches=0, fail=true;
+    const loaderContext={apiRequest:async()=>{fetches++;if(fail)throw new Error('offline');return {questions:catalog};}};
+    vm.createContext(loaderContext);vm.runInContext(loader,loaderContext);
+    await loaderContext.loadPublicWikiQuestions();
+    fail=false;
+    await Promise.all([loaderContext.loadPublicWikiQuestions(),loaderContext.loadPublicWikiQuestions()]);
+    await loaderContext.loadPublicWikiQuestions();
+    assert.equal(fetches,2,'failed catalog may retry; successful catalog is reused for the page lifetime');
     console.log('Natural starters: four distinct role pools, catalog/offline, exact labels/click text, metadata isolation and stale-role race passed');
 }
 run().catch(error=>{console.error(error);process.exitCode=1;});
