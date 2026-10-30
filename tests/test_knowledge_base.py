@@ -131,7 +131,7 @@ def test_research_subjects_are_not_replaced_by_common_wiki_label(tmp_path):
 
 
 @pytest.mark.parametrize("question", ["数据库课程实验说明", "研究生课程的实验要求", "第一个实验怎么做"])
-def test_course_and_unqualified_experiments_keep_teaching_intent(question):
+def test_course_and_numbered_experiments_keep_teaching_intent(question):
     profile = _build_query_profile(question)
     assert "teaching" in profile.topic_domains
     assert "experiment" in profile.document_types
@@ -2064,3 +2064,29 @@ def test_expand_query_synonyms_leaves_unrelated_queries_unchanged() -> None:
 
     query = "明天下午三点的会议"
     assert _expand_query_synonyms(query) == query
+
+
+@pytest.mark.parametrize("question", [
+    "怎样区分系统优化的真实收益和实验干扰？",
+    "How do controlled experiments establish a speedup?",
+    "KV Cache 迁移和重计算，什么时候各自更划算？",
+    "推理系统 Benchmark 指南",
+    "数据库实验中的噪声如何影响测量？",
+])
+def test_subject_and_experiment_words_do_not_grant_teaching_intent(question):
+    profile = _build_query_profile(question)
+    assert "teaching" not in profile.topic_domains
+    assert "experiment" not in profile.document_types
+    assert not profile.course_ids
+
+
+def test_exact_technical_title_survives_final_candidate_filter(tmp_path):
+    store = LocalKnowledgeStore(AppSettings(knowledge_base_dir=tmp_path, knowledge_backend="local"))
+    guide = store.add_document(KnowledgeDocumentCreate(
+        title="推理系统 Benchmark 指南", content="系统测量的实验设计与随机干扰。",
+        tags=["research", "guide"], source_name="public-guide"))
+    store.add_document(KnowledgeDocumentCreate(
+        title="推理系统课程讲义", content="课程教学概述。", tags=["lecture", "teaching"],
+        source_name="course-lecture"))
+    hits = store.search("推理系统 Benchmark 指南")
+    assert hits[0].document_id == guide.document_id

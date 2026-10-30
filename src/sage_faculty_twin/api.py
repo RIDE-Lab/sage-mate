@@ -33,6 +33,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 from sage.edge.app import create_app as create_edge_app
 from sage.runtime.work_journal import WorkCapacityError
+from sage.runtime.adaptive_workflow import execution_budget_seconds
 from sage.runtime.dependency_verifier import DependencyRejected, DependencyVerifier
 
 from .auth import (
@@ -356,6 +357,14 @@ _slack_verified_configuration = None
 http_workflow = None
 
 
+def _chat_execution_budget(request, *, policy=None):
+    policy = settings if policy is None else policy
+    return execution_budget_seconds(
+        standard=CHAT_REQUEST_TIMEOUT_SECONDS, extended=CHAT_LONG_REQUEST_TIMEOUT_SECONDS,
+        requires_native_verification=policy.llm_evidence_audit_thinking,
+        explicit_deep_reasoning=bool(request.deep_thinking and request.deep_thinking_explicit))
+
+
 def _create_http_workflow(instance):
     from sage.runtime.event_journal import EventJournal
 
@@ -381,8 +390,7 @@ def _create_http_workflow(instance):
             cursor = page["cursor"]
 
     async def answer(ingress, *, admission_guard):
-        budget = (CHAT_LONG_REQUEST_TIMEOUT_SECONDS if ingress.request.deep_thinking
-                  and ingress.request.deep_thinking_explicit else CHAT_REQUEST_TIMEOUT_SECONDS)
+        budget = _chat_execution_budget(ingress.request, policy=instance._settings)
         controller = RequestCancellationController()
         key = ingress.delivery.stream_id
         try:
@@ -2062,13 +2070,7 @@ async def chat(
     )
     stage_started = time.perf_counter()
     payload = await _parse_chat_request(raw_request)
-    long_deep_request = (
-        _streamed_chat_request.get()
-        and payload.deep_thinking
-        and payload.deep_thinking_explicit
-    )
-    if long_deep_request:
-        timing.budget_seconds = CHAT_LONG_REQUEST_TIMEOUT_SECONDS
+    timing.budget_seconds = _chat_execution_budget(payload, policy=service._settings)
     identity = await asyncio.to_thread(_resolve_chat_identity,
         raw_request,
         payload.visitor_profile,

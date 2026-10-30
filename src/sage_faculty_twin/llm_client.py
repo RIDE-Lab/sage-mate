@@ -1476,7 +1476,11 @@ class VllmChatClient:
             self._settings.llm_answer_temperature if temperature is None else temperature
         )
         model_name = (self.model_name or "").strip().lower()
-        if neutral_sampling or "glm-4" in model_name:
+        if neutral_sampling or response_format is not None or "glm-4" in model_name:
+            # Schema-constrained output repeats required JSON syntax. Natural
+            # prose penalties can instead induce punctuation-only fields and
+            # runaway arrays. Preserve temperature/top-p/top-k and output budget;
+            # only syntax-level repetition penalties are neutral here.
             # GLM-4-32B is highly sensitive to OpenAI-style frequency penalties:
             # even modest values can turn direct answers into prompt echoes,
             # refusals, or repeated fragments. Keep its decoding neutral.

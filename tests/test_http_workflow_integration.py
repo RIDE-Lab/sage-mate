@@ -239,3 +239,33 @@ def test_http_disconnect_does_not_cancel_producer_or_block_replay(tmp_path, monk
             await instance.aclose()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('streamed', [False, True])
+def test_native_source_verification_gets_declared_worker_budget_without_deep_toggle(tmp_path, monkeypatch, streamed):
+    import json
+    from sage_faculty_twin.models import ChatResponse
+    from sage_faculty_twin.request_context import request_remaining_seconds
+    instance = DigitalTwinService(AppSettings(runtime_dir=tmp_path, model_name='fixture',
+        llm_evidence_audit_thinking=True))
+    observed = []
+    async def answer(*args, **kwargs):
+        observed.append(request_remaining_seconds())
+        await asyncio.sleep(.08)
+        return ChatResponse(answer='Verified fixture', owner_name='Twin', used_model='fixture')
+    monkeypatch.setattr(instance, 'answer', answer)
+    monkeypatch.setattr(api, 'CHAT_LONG_REQUEST_TIMEOUT_SECONDS', 1.0)
+    with http_client(instance, monkeypatch, request_budget=.02) as client:
+        response = client.post('/chat/stream' if streamed else '/chat', json={
+            'student_name': 'Synthetic', 'question': 'Scope test',
+            'deep_thinking': False, 'deep_thinking_explicit': False})
+        assert response.status_code == 200
+        if streamed:
+            frames = [json.loads(line[6:]) for line in response.text.splitlines() if line.startswith('data: ')]
+            assert frames[-1]['type'] == 'result'
+            result = frames[-1]['response']
+        else:
+            result = response.json()
+        assert result['answer'] == 'Verified fixture'
+        assert result['request_timing']['budget_ms'] == 1000
+        assert len(observed) == 1 and observed[0] > .5

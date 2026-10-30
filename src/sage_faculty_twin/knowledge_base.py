@@ -2577,16 +2577,23 @@ def _build_query_profile(
     )
     has_project = bool(re.search(r"\bprojects?\b", lowered) or "项目" in query)
     has_teaching_project_context = bool(
-        course_ids
+        document_types
         or any(marker in query for marker in ("课程", "作业", "实验课", "教学", "课件"))
-        or any(marker in lowered for marker in ("course", "assignment", "class project"))
+        or re.search(r"\b(?:courses?|assignments?|class project)\b", lowered)
+        or re.search(r"(?:第\s*[一二三四五六七八九十百0-9]+\s*(?:个|次)?\s*实验|实验\s*[0-9]+)", query)
+        or re.search(r"\b(?:experiment|lab)\s+[0-9]+\b", lowered)
     )
     if (has_explicit_experiment or has_project) and has_teaching_project_context:
         document_types.add("experiment")
         topic_domains.add("teaching")
 
-    if course_ids:
+    # A subject shared with a course (e.g. inference or databases) is not a
+    # request for teaching materials. Infer a course only inside an explicit
+    # teaching request; otherwise its metadata must not filter research guides.
+    if has_teaching_project_context:
         topic_domains.add("teaching")
+    else:
+        course_ids.clear()
 
     research_markers = (
         "研究主线",
@@ -2610,11 +2617,6 @@ def _build_query_profile(
         or any(marker in query for marker in research_markers)
         or "研究" in query_without_graduate
     )
-    # Research experiments do not imply course handouts. Preserve explicit
-    # course context above and the legacy unqualified teaching query below.
-    if has_explicit_experiment and not has_research_marker and not has_teaching_project_context:
-        document_types.add("experiment")
-        topic_domains.add("teaching")
     if has_research_marker:
         topic_domains.add("research")
         if has_project and any(

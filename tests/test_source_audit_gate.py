@@ -29,6 +29,16 @@ def setup_gate(tmp_path):
 
 def plan_response(payload):
     data = json.loads(payload)
+    if "source_relations" in data:
+        from tests.natural_answer_stub import response
+        from sage.runtime.coverage_relation import RELATION_REVIEW_PROMPT
+        return response(RELATION_REVIEW_PROMPT, payload)
+    if set(data) == {"question", "public_context", "digest"}:
+        return json.dumps({"digest":data["digest"],"requested_relation":data["question"]})
+    if "units" in data and "sources" not in data:
+        from tests.natural_answer_stub import response
+        from sage.runtime.scope_audit import SCOPE_AUDIT_PROMPT
+        return response(SCOPE_AUDIT_PROMPT, payload)
     if "units" in data:
         from tests.natural_answer_stub import response
         from sage.runtime.natural_answer import NATURAL_AUDIT_PROMPT
@@ -69,7 +79,7 @@ def test_render_preserves_full_source_and_receipt(tmp_path):
     assert context.knowledge_hits[0].source_content in response.answer_basis[0].detail
     assert "作者没有测量" not in answer
     support._validate_source_answer(context)
-    assert len(calls) == 4  # Source coverage, natural writing, per-unit audit, answer completeness.
+    assert len(calls) == 7  # Interpretation, coverage, relation veto, writing, audit, completeness, scope veto.
     assert context.source_audit_digest
     context.answer += "作者没有测量"
     with pytest.raises(SourceAuditRejected):
@@ -93,7 +103,6 @@ def test_web_candidates_reach_same_sage_coverage_plan_and_selected_basis(tmp_pat
         snippet="ExampleRelease latest non-prerelease release: v2. Published at 2026-10-20.",
         retrieved_at="2026-10-21T00:00:00+00:00")]
     def call(**kwargs):
-        data = json.loads(kwargs["user_prompt"])
         return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = call
     support._prepare_source_answer(context)
@@ -118,11 +127,10 @@ def test_selected_sources_keep_complete_candidate_binding_without_manual_overflo
     def call(**kwargs):
         calls.append(kwargs)
         assert "unrelated tutorial" not in kwargs["user_prompt"]
-        data = json.loads(kwargs["user_prompt"])
         return plan_response(kwargs["user_prompt"])
     support._call_compact_retry_sync = call
     response = support.render_chat_response(context)
-    assert len(calls) == 4
+    assert len(calls) == 7
     assert len(context.evidence_work.candidates) == 2
     assert context.source_answer_plan.source_ids == ("knowledge:1",)
     assert "unrelated tutorial" not in response.answer
@@ -188,6 +196,8 @@ def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_f
     calls = []
     def model(**kwargs):
         calls.append(kwargs)
+        if kwargs["cache_namespace"].startswith("question-relation:"):
+            return plan_response(kwargs["user_prompt"])
         # Retrieval planning may propose search terms, never assess nonexistent
         # evidence or generate an ungrounded answer.
         assert kwargs["cache_namespace"].startswith("evidence-search-plan:")
@@ -199,7 +209,7 @@ def test_source_grounded_route_with_zero_hits_repairs_then_reports_unknown_not_f
     support.answer_with_llm(context)
     result = support.render_chat_response(context)
     assert context.evidence_work.repair_attempted
-    assert len(calls) == 1 and len(context.workflow_trace) == 3  # Includes explicit skipped web capability; no source audit/model answer.
+    assert len(calls) == 2 and len(context.workflow_trace) == 3  # Includes explicit skipped web capability; no source audit/model answer.
     assert "仍待补充的依据" in result.answer and context.request.question in result.answer
     assert result.knowledge_hits == []
     assert "\n\n".join(block.markdown for block in result.answer_blocks).strip() == result.answer

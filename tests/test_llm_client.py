@@ -1880,3 +1880,24 @@ def test_declared_compact_grammar_preserves_schema_and_has_no_conflicting_format
     with pytest.raises(ValueError,match='conflicting'):
         client._wire_payload(dict(payload,structured_outputs={'regex':'anything'}))
     assert 'structured_outputs' not in client._wire_payload({'model':'same-model','messages':[]})
+
+
+def test_structured_prose_neutralizes_syntax_penalties_without_capping_output():
+    transport = _SequencedHttpxClient([_SequencedChatCompletionResponse('{"answer":"OK"}')])
+    client = _build_retry_test_client(AppSettings(
+        llm_answer_presence_penalty=1.5, llm_answer_frequency_penalty=0.35,
+        llm_answer_repetition_penalty=1.08, llm_answer_top_p=0.8, llm_answer_top_k=20,
+    ), transport)
+    client.model_name = "Qwen/Qwen3.5-35B-A3B"
+    schema = {"type":"json_schema", "json_schema":{"name":"answer", "strict":True,
+        "schema":{"type":"object", "additionalProperties":False, "required":["answer"],
+                  "properties":{"answer":{"type":"string"}}}}}
+    client.answer_question_sync("system", "user", temperature=0.7, enable_thinking=False,
+        max_tokens=32768, use_reuse_hints=False, response_format=schema)
+    _, payload = transport.calls[0]
+    assert payload["presence_penalty"] == payload["frequency_penalty"] == 0.0
+    assert payload["repetition_penalty"] == 1.0
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8 and payload["top_k"] == 20
+    assert payload["max_tokens"] == 32768
+    assert payload["response_format"] == schema
