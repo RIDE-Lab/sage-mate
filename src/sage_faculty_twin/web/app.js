@@ -8995,7 +8995,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${iconX}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${labelX}" y="${labelY}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+(vertex.boundary ? 43 : 13)}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
-    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从上到下：输入 → 分支处理 → 输出。左右并列表示分支，不表示同时执行。</p><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，从上到下阅读"><svg class="native-flow-diagram native-flow-atlas-diagram" data-layout="vertical" style="max-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从上到下：输入 → 分支处理 → 输出。左右并列表示分支，不表示同时执行。</p><details class="native-flow-view"><summary><span class="flow-view-detail">全图概览 · 放大查看节点</span><span class="flow-view-overview">节点视图 · 返回全图</span></summary></details><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，从上到下阅读"><svg class="native-flow-diagram native-flow-atlas-diagram" data-layout="vertical" style="--flow-width:${width}px;--flow-height:${height}px;max-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
 }
 
 function nativeNodeAppearance(name, observed) {
@@ -10287,6 +10287,8 @@ function refreshWorkflowInspector() {
     const focusKey = workflowTrace.contains(focused)
         ? focused?.closest?.("[data-native-node-key]")?.getAttribute("data-native-node-key") : null;
     const focusTag = focused?.tagName;
+    const graphScroll = [...workflowTrace.querySelectorAll(".native-flow-scroll")].map(node => [node.scrollTop, node.scrollLeft]);
+    const graphViewFocused = workflowTrace.contains(focused) && focused?.matches?.(".native-flow-view > summary");
     const top = workflowTraceWrap.scrollTop, left = workflowTraceWrap.scrollLeft;
     workflowTrace.innerHTML = html;
     workflowTrace.dataset.inspectorHtml = html;
@@ -10297,6 +10299,10 @@ function refreshWorkflowInspector() {
             && (focusTag === "g" ? node.matches(".native-flow-node") : node.matches("li")));
         (focusTag === "g" ? entry : entry?.querySelector("summary"))?.focus({preventScroll: true});
     }
+    workflowTrace.querySelectorAll(".native-flow-scroll").forEach((node, index) => {
+        if (graphScroll[index]) [node.scrollTop, node.scrollLeft] = graphScroll[index];
+    });
+    if (graphViewFocused) workflowTrace.querySelector(".native-flow-view > summary")?.focus({preventScroll: true});
     workflowTraceWrap.scrollTop = top; workflowTraceWrap.scrollLeft = left;
 }
 

@@ -1299,3 +1299,58 @@ for (const authenticated of [false, true]) {
     await page.screenshot({path:testInfo.outputPath("stable-starters.png"), animations:"disabled", timeout:5000});
   });
 }
+
+for (const width of [2048, 1280, 390]) for (const theme of ["light", "dark"]) {
+  test(`balanced inspector overview and reading mode ${width} ${theme}`, async ({ page }, testInfo) => {
+    await page.setViewportSize({width, height:900});
+    await page.route(/https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({contentType:"text/css",body:""}));
+    await page.addInitScript(theme => {
+      localStorage.setItem("sageMateTheme", theme);
+      localStorage.setItem("sageOnboardingCompleted","true");
+      localStorage.setItem("sageOnboardingDismissed","true");
+    }, theme);
+    await page.goto(fixtureBaseUrl, {waitUntil:"domcontentloaded"});
+    await page.waitForFunction(() => typeof appendMessage === "function" && seedChipsIdentityReady);
+    await page.evaluate(() => {
+      appendMessage("user", "Synthetic QA", "这个分身能帮我做什么，哪些事情不能代办？");
+      const message = appendMessage("assistant", "Twin", "我可以帮你了解研究方向、查找公开资料、准备交流问题。需要你确认的预约不会直接提交。");
+      message.classList.add("message-ready");
+      const topology = Array.from({length:20}, (_,i) => ({node_id:`node-${i}`,operator_type:"map",operator_key:i===0?"understand":"answer",is_entry:i===0,is_return:i===19,downstream_node_ids:i===19?[]:[`node-${i+1}`]}));
+      const events = topology.map((node,i) => ({version:1,event_id:`e${i}`,sequence:i+1,trace_id:"qa",request_id:"qa",execution_id:`exec${i}`,parent_execution_id:null,program_uri:"flow://qa",program_rev:"v1",node_id:node.node_id,operator_key:node.operator_key,state:"completed",upstream_node_ids:i?[`node-${i-1}`]:[],downstream_node_ids:node.downstream_node_ids,next_nodes:node.downstream_node_ids.map(node_id=>({program_uri:"flow://qa",program_rev:"v1",node_id})),...(i===0?{program_topology:topology}:{})}));
+      message.insertAdjacentHTML("beforeend", `<section class="message-workflow-summary"><button class="message-workflow-summary-toggle" aria-expanded="false">详情</button><div class="message-section-content" hidden>${buildNativeExecutionHtml(events)}</div></section>`);
+      window.layoutQaMessage = message;
+      updateChatEmptyState();
+    });
+    await page.getByRole("button", {name:"详情",exact:true}).click();
+    const panel=page.locator("#workflow-shell");
+    await expect(panel).toBeVisible();
+    const metrics=await page.evaluate(() => {
+      const box=sel=>{const r=document.querySelector(sel).getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height,right:r.right,bottom:r.bottom};};
+      return {shell:box(".chat-shell"),layout:box(".chat-layout"),panel:box("#workflow-shell"),composer:box(".composer-row"),svg:box("#workflow-shell .native-flow-atlas-diagram"),scroll:box("#workflow-shell .native-flow-scroll"),pageWidth:document.documentElement.scrollWidth};
+    });
+    expect(metrics.pageWidth).toBeLessThanOrEqual(width+1);
+    if (width>920) {
+      expect(Math.abs(metrics.shell.x-metrics.layout.x)).toBeLessThan(2);
+      expect(metrics.shell.right).toBeLessThanOrEqual(metrics.panel.x+1);
+      expect(metrics.panel.width).toBeGreaterThanOrEqual(360);
+      expect(Math.abs(metrics.composer.x+metrics.composer.width/2-(metrics.shell.x+metrics.shell.width/2))).toBeLessThan(3);
+    }
+    if (width<=920) expect(metrics.scroll.bottom).toBeLessThanOrEqual(metrics.panel.bottom+1);
+    expect(metrics.svg.height).toBeLessThanOrEqual(metrics.scroll.height+1);
+    expect(metrics.svg.width).toBeLessThanOrEqual(metrics.scroll.width+1);
+    await expect(panel.locator("[data-flow-node]")).toHaveCount(20);
+    await page.screenshot({path:testInfo.outputPath("overview.png"),animations:"disabled",timeout:10000});
+    await panel.locator(".native-flow-view > summary").click();
+    const graph=panel.locator(".native-flow-scroll");
+    expect(await graph.evaluate(el=>el.scrollHeight>el.clientHeight)).toBe(true);
+    await graph.evaluate(el=>{el.scrollTop=200;});
+    const before=await page.locator("#chat-stream").evaluate(el=>el.scrollTop);
+    await page.evaluate(() => {layoutQaMessage.querySelector(".message-section-content").append(document.createTextNode("更新"));});
+    await expect(panel.locator(".native-flow-view")).toHaveAttribute("open", "");
+    expect(await graph.evaluate(el=>el.scrollTop)).toBe(200);
+    await expect(panel.locator(".native-flow-view > summary")).toBeFocused();
+    expect(await page.locator("#chat-stream").evaluate(el=>el.scrollTop)).toBe(before);
+    await panel.locator(".native-flow-view > summary").click();
+    await expect(panel.locator(".native-flow-view")).not.toHaveAttribute("open", "");
+  });
+}
