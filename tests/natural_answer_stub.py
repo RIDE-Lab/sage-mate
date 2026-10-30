@@ -13,3 +13,10 @@ def response(system, payload):
         return json.dumps({"digest": data["digest"], "units": [{"id": u["id"], "verdict": "supported",
             "checked_sources": [{"source_id": data["sources"][0]["id"], "block_ids": [data["sources"][0]["blocks"][0]["id"]]}]} for u in data["units"]]})
     return None
+
+
+def coverage(data, *, first_only=False):
+    return json.dumps({'digest': data['digest'], 'requested_relation': 'fixture relation', 'source_assessments': {
+        source['source_id']: {'studied_subject': 'fixture', 'established_relation': 'fixture relation', 'selection': {'role': 'direct',
+            'requirements': {r['requirement_id']: {p['id']: (not first_only or index == 0) for p in source['paragraphs']} for r in data['requirements']}}}
+        for index, source in enumerate(data['sources'])}})

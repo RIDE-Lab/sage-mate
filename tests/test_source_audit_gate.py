@@ -38,9 +38,8 @@ def plan_response(payload):
         from sage.runtime.natural_answer import NATURAL_ANSWER_PROMPT
         return response(NATURAL_ANSWER_PROMPT, payload)
     if "requirements" in data:
-        return json.dumps({"digest": data["digest"], **({"source_roles": [dict(source_id=s["source_id"], studied_subject="fixture", role="direct") for s in data["sources"]]} if data["purpose"] == "source_support" else {}), "items": [
-            {"requirement_id": r["requirement_id"], "witnesses": [p["id"] for p in data["sources"][0]["paragraphs"]]}
-            for r in data["requirements"]]})
+        from tests.natural_answer_stub import coverage
+        return coverage(data, first_only=True)
     return json.dumps({"digest": data["digest"], "source_ids": ["knowledge:0"], "inferences": []})
 
 

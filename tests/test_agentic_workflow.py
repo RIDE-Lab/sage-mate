@@ -117,9 +117,8 @@ class IntentAwareLLMClient:
             return json.dumps({"digest": json.loads(user_prompt)["digest"], "queries": []})
         if system_prompt == COVERAGE_SYSTEM_PROMPT:
             data = json.loads(user_prompt)
-            return json.dumps({"digest": data["digest"], **({"source_roles": [dict(source_id=s["source_id"], studied_subject="fixture", role="direct") for s in data["sources"]]} if data["purpose"] == "source_support" else {}), "items": [
-                {"requirement_id": r["requirement_id"], "witnesses": [
-                    paragraph["id"] for source in data["sources"] for paragraph in source["paragraphs"]]} for r in data["requirements"]]})
+            from tests.natural_answer_stub import coverage
+            return coverage(data)
         if system_prompt == EXPERIMENT_SYSTEM_PROMPT:
             return experiment_response(json.loads(user_prompt)["digest"])
         if system_prompt == PLAN_SYSTEM_PROMPT:
