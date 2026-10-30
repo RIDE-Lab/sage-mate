@@ -1366,18 +1366,32 @@ for (const width of [2048, 1280, 390, 320]) for (const theme of ["light", "dark"
     });
     await expect(panel.locator(".native-flow-view")).not.toHaveAttribute("open", "");
     await panel.locator(".native-flow-view > summary").click();
+    expect(await graph.evaluate(el=>el.scrollTop)).toBe(200);
     await graph.evaluate(el=>{el.scrollTop=260;el.focus();});
     await page.evaluate(() => {
+      const branches = Array.from({length:12}, (_,i)=>`late-node-${i}`);
       const topology = layoutQaEvents[0].program_topology.map(node => ({...node,
-        downstream_node_ids:node.node_id==="node-38" ? [...node.downstream_node_ids,"late-node"] : node.downstream_node_ids}));
-      topology.push({node_id:"late-node",operator_type:"map",operator_key:"read-wiki",downstream_node_ids:[]});
+        downstream_node_ids:node.node_id==="node-38" ? [...node.downstream_node_ids,...branches] : node.downstream_node_ids}));
+      for (const node_id of branches) topology.push({node_id,operator_type:"map",operator_key:"read-wiki",downstream_node_ids:[]});
       activeExecutionEvents = layoutQaEvents.map((event,i)=>i===0 ? {...event,program_topology:topology}:event);
-      activeExecutionEvents.push({...layoutQaEvents[1],node_id:"late-node",event_id:"new",execution_id:"late-exec",sequence:100,state:"started",operator_key:"read-wiki",upstream_node_ids:["node-38"],downstream_node_ids:[],next_nodes:[]});
+      activeExecutionEvents.push({...layoutQaEvents[1],node_id:"late-node-0",event_id:"new",execution_id:"late-exec",sequence:100,state:"started",operator_key:"read-wiki",upstream_node_ids:["node-38"],downstream_node_ids:[],next_nodes:[]});
       syncNativeExecutionDisplay(); renderWorkflowTrace([], {isStreaming:true});
     });
     await expect(panel.locator(".native-flow-view")).toHaveAttribute("open", "");
     expect(await graph.evaluate(el=>el.scrollTop)).toBe(260);
-    await expect(panel.locator("[data-flow-node]")).toHaveCount(80);
+    await expect(panel.locator("[data-flow-node]")).toHaveCount(91);
+    const centered=await graph.evaluate(el=>Math.abs(el.scrollLeft-(el.scrollWidth-el.clientWidth)/2));
+    expect(centered).toBeLessThanOrEqual(1);
+    await graph.evaluate(el=>{el.scrollLeft+=30;});
+    const pan=await graph.evaluate(el=>el.scrollLeft);
+    await panel.locator(".native-flow-view > summary").click();
+    await panel.locator(".native-flow-view > summary").click();
+    expect(await graph.evaluate(el=>el.scrollLeft)).toBe(pan);
+    expect(await graph.evaluate(el=>el.scrollTop)).toBe(260);
+    await page.evaluate(() => { closeWorkflowMobileSheet(); openWorkflowMobileSheet(); });
+    expect(await graph.evaluate(el=>el.scrollLeft)).toBe(pan);
+    expect(await graph.evaluate(el=>el.scrollTop)).toBe(260);
+    await graph.focus();
     await expect(graph).toBeFocused();
     expect(await page.locator("#chat-stream").evaluate(el=>el.scrollTop)).toBe(before);
     // Completion replaces the source hierarchy; retain the explicit mode.

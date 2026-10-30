@@ -10285,7 +10285,9 @@ function replaceWorkflowTraceHtml(html) {
     const previous = states.get(oldScope) || {disclosures: new Map(), graph: null, top: 0, left: 0};
     workflowTrace.querySelectorAll("details").forEach(node => previous.disclosures.set(workflowDisclosureKey(node), node.open));
     const oldGraph = workflowTrace.querySelector(".native-flow-scroll");
-    if (oldGraph) previous.graph = [oldGraph.scrollTop, oldGraph.scrollLeft];
+    if (oldGraph?.clientWidth && workflowTrace.querySelector(".native-flow-view")?.open) {
+        previous.graph = [oldGraph.scrollTop, oldGraph.scrollLeft, oldGraph.scrollWidth];
+    }
     previous.top = workflowTraceWrap?.scrollTop || 0;
     previous.left = workflowTraceWrap?.scrollLeft || 0;
     states.set(oldScope, previous);
@@ -10306,10 +10308,31 @@ function replaceWorkflowTraceHtml(html) {
         if (state.disclosures.has(key)) node.open = state.disclosures.get(key);
     });
     const graph = workflowTrace.querySelector(".native-flow-scroll");
-    if (graph) {
-        if (state.graph) [graph.scrollTop, graph.scrollLeft] = state.graph;
-        else graph.scrollLeft = Math.max(0, (graph.scrollWidth - graph.clientWidth) / 2);
-    }
+    const view = workflowTrace.querySelector(".native-flow-view");
+    const restoreGraph = () => {
+        if (!graph?.clientWidth || !view?.open) return;
+        graph.scrollTop = state.graph?.[0] || 0;
+        // New parallel branches widen a centered atlas. Keep the reader's pan
+        // relative to that center instead of leaving the trunk off to one side.
+        graph.scrollLeft = state.graph
+            ? state.graph[1] + (graph.scrollWidth - state.graph[2]) / 2
+            : Math.max(0, (graph.scrollWidth - graph.clientWidth) / 2);
+        graph.dataset.readerPositioned = "true";
+    };
+    // Rendering can precede opening a hidden mobile panel. Initialize after
+    // it has a width, but do not reset a reader's pan when reopening it.
+    workflowTrace.restoreReadableGraph = () => {
+        if (graph && !graph.dataset.readerPositioned) restoreGraph();
+    };
+    restoreGraph();
+    states.set(scope, state);
+    view?.querySelector("summary")?.addEventListener("click", event => {
+        event.preventDefault();
+        if (view.open && graph) state.graph = [graph.scrollTop, graph.scrollLeft, graph.scrollWidth];
+        view.open = !view.open;
+        state.disclosures.set(workflowDisclosureKey(view), view.open);
+        restoreGraph();
+    });
     if (focusKey) {
         const entries = [...workflowTrace.querySelectorAll("[data-native-node-key]")];
         const entry = entries.find(node => node.getAttribute("data-native-node-key") === focusKey
@@ -10429,6 +10452,7 @@ function openWorkflowMobileSheet(mode = getStoredWorkflowMobileSheetMode()) {
     }
     if (!isMobileWorkflowViewport()) {
         setWorkflowShellCollapsed(false);
+        workflowTrace?.restoreReadableGraph?.();
         return;
     }
     if (settingsDrawer && !settingsDrawer.classList.contains("hidden")) {
@@ -10439,6 +10463,7 @@ function openWorkflowMobileSheet(mode = getStoredWorkflowMobileSheetMode()) {
     }
     setWorkflowMobileOpen(true);
     setWorkflowMobileSheetMode(mode);
+    workflowTrace?.restoreReadableGraph?.();
 }
 
 function closeWorkflowMobileSheet() {
