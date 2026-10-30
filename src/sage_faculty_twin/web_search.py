@@ -152,57 +152,34 @@ class WebSearchClient:
             return []
 
         limit = self._max_results if max_results is None else max(1, min(int(max_results), 8))
-        provider_completed = False
+        from sage.runtime.web_research import search_provider_fallback
+        from sage.runtime.web_search_quality import anchored_query
+
+        providers = []
         official_repo = self._known_official_release_repo(normalized_query)
         if official_repo is not None:
-            try:
-                official_result = self._search_github_latest_release(*official_repo)
-                provider_completed = True
-                if official_result is not None:
-                    return [official_result]
-            except Exception:
-                pass  # Preserve Tavily/Bing fallback when GitHub is unavailable.
-
+            def release():
+                hit = self._search_github_latest_release(*official_repo)
+                return [hit] if hit is not None else []
+            providers.append(("github_release", release))
         official_award_page = self._known_official_award_page(normalized_query)
         if official_award_page is not None:
-            try:
-                official_result = self._search_official_award_page(*official_award_page)
-                provider_completed = True
-                if official_result is not None:
-                    return [official_result]
-            except Exception as exc:
-                _logger.warning("web_search_provider_failed provider=official_award error=%s", type(exc).__name__)
-        deadline = web_research_deadline()
-        assert deadline is not None
-        if self._tavily_api_key and monotonic() < deadline:
-            try:
-                tavily_results = self._search_tavily(normalized_query, limit)
-                provider_completed = True
-                if tavily_results:
-                    ranked = self._rerank_results(normalized_query, tavily_results, limit)
-                    if ranked:
-                        return ranked
-            except Exception as exc:
-                _logger.warning("web_search_provider_failed provider=tavily error=%s", type(exc).__name__)
-
-        from sage.runtime.web_search_quality import anchored_query
+            def award():
+                hit = self._search_official_award_page(*official_award_page)
+                return [hit] if hit is not None else []
+            providers.append(("official_award", award))
+        if self._tavily_api_key:
+            providers.append(("tavily", lambda: self._rerank_results(
+                normalized_query, self._search_tavily(normalized_query, limit), limit)))
         search_query = anchored_query(self._rewrite_query_for_bing(normalized_query))
         for searcher in (self._search_bing_rss, self._search_bing_html):
-            if monotonic() >= deadline:
-                break
-            try:
-                results = searcher(search_query, limit)
-                provider_completed = True
-            except Exception as exc:
-                _logger.warning("web_search_provider_failed provider=%s error=%s", searcher.__name__, type(exc).__name__)
-                continue
-            if results:
-                reranked = self._rerank_results(normalized_query, results, limit)
-                if reranked:
-                    return reranked
-        if not provider_completed:
-            raise RuntimeError("web_search_providers_unavailable")
-        return []
+            providers.append((searcher.__name__, lambda searcher=searcher: self._rerank_results(
+                normalized_query, searcher(search_query, limit), limit)))
+
+        def observe(name, status, error):
+            if status == "failed":
+                _logger.warning("web_search_provider_failed provider=%s error=%s", name, error)
+        return search_provider_fallback(providers, observe=observe)
 
     @staticmethod
     def _known_official_release_repo(query: str) -> tuple[str, str] | None:
@@ -397,7 +374,10 @@ class WebSearchClient:
             entity = WebSearchClient._extract_news_entity(query)
             if entity:
                 return f"{entity} 新闻"
-        return WebSearchClient._normalize_query(query)
+        # The SAGE planner already supplied approved search terms. Punctuation
+        # can carry meaning (quoted phrases, C++, dotted names, operators); the
+        # ranking tokenizer must not rewrite or truncate a provider request.
+        return query.strip()
 
     def _search_bing_html(self, query: str, max_results: int) -> list[WebSearchResult]:
         with self._client() as client:

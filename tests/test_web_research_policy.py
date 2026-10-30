@@ -8,6 +8,33 @@ from sage_faculty_twin.llm_client import VllmChatClient
 from sage.runtime.web_research import web_research_budget
 
 
+def test_bing_preserves_complete_planned_search_semantics():
+    query = '"KV Cache" migration recomputation "C++" .NET -advertisement ' + 'measurement-controls ' * 12
+    assert len(query) > 160
+    assert WebSearchClient._rewrite_query_for_bing('  ' + query + '  ') == query.strip()
+
+
+def test_provider_fallback_inherits_distinct_deadlines_and_preserves_query(monkeypatch):
+    from time import monotonic
+    from sage.runtime.web_research import web_research_deadline
+    from sage_faculty_twin.web_search import WebSearchResult
+    client = WebSearchClient(timeout_seconds=3, max_results=3, tavily_api_key='fixture-only')
+    calls = []
+    def unavailable(query, limit):
+        calls.append(('primary', query, web_research_deadline() - monotonic()))
+        raise TimeoutError('provider unavailable')
+    def fallback(query, limit):
+        calls.append(('fallback', query, web_research_deadline() - monotonic()))
+        return [WebSearchResult('Relevant', 'https://example.org/document', 'Complete excerpt', 1)]
+    monkeypatch.setattr(client, '_search_tavily', unavailable)
+    monkeypatch.setattr(client, '_search_bing_rss', fallback)
+    monkeypatch.setattr(client, '_search_bing_html', lambda *a: pytest.fail('unneeded provider'))
+    query = '"cache migration" recomputation comparison'
+    assert client.search(query)[0].url == 'https://example.org/document'
+    assert [entry[:2] for entry in calls] == [('primary', query), ('fallback', query)]
+    assert 0 < calls[0][2] <= 1 and calls[0][2] < calls[1][2] <= 1.5
+
+
 def test_tavily_receives_remaining_sage_deadline_not_sdk_default(monkeypatch):
     calls=[]
     transport=WebSearchClient(timeout_seconds=8,max_results=3,tavily_api_key='fixture-only')
