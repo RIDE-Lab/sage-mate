@@ -8995,7 +8995,7 @@ function buildNativeWorkflowAtlasHtml(groups) {
         return `<g class="native-flow-node" data-flow-control="${control}" data-flow-boundary="${vertex.boundary}" ${node.attempts.length ? 'role="button" tabindex="0"' : 'role="img"'} aria-label="${escapeHtml(label+' · '+title)}" data-native-node-key="${escapeHtml(node.key)}" data-flow-state="${escapeHtml(state)}" data-flow-node="${escapeHtml(vertex.id)}"><title>${escapeHtml(title)}</title>${shape}<svg x="${iconX}" y="${vertex.y-9}" width="18" height="18" class="native-flow-icon" aria-hidden="true"><use href="#icon-${vertex.boundary==="input" ? "inbox" : vertex.boundary==="output" ? "send" : icon}"/></svg><text x="${labelX}" y="${labelY}" text-anchor="middle" class="native-flow-label">${escapeHtml(label)}</text><text x="${vertex.x+(vertex.boundary ? 43 : 13)}" y="${vertex.y+18}" class="native-flow-state">${badge}</text></g>`;
     }).join("");
     const calls=links.filter(link=>link.kind==="call").length;
-    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从上到下：输入 → 分支处理 → 输出。左右并列表示分支，不表示同时执行。</p><details class="native-flow-view"><summary><span class="flow-view-detail">全图概览 · 放大查看节点</span><span class="flow-view-overview">节点视图 · 返回全图</span></summary></details><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，从上到下阅读"><svg class="native-flow-diagram native-flow-atlas-diagram" data-layout="vertical" style="--flow-width:${width}px;--flow-height:${height}px;max-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
+    return `<section class="native-workflow-atlas"><header class="native-flow-heading"><h4>统一工作流网络</h4><span>${groups.every(group=>group.topologyComplete) ? "完整拓扑" : "局部拓扑"} · ${vertices.length} 节点 · ${calls} 次原生子流程调用</span></header><p class="native-flow-legend">从上到下：输入 → 分支处理 → 输出。左右并列表示分支，不表示同时执行。</p><details class="native-flow-view" data-disclosure-key="graph-scale" open><summary><span class="flow-view-detail">全图概览 · 返回可读视图</span><span class="flow-view-overview">可读视图 · 缩小看全图</span></summary></details><div class="native-flow-scroll" tabindex="0" aria-label="统一工作流网络，从上到下阅读"><svg class="native-flow-diagram native-flow-atlas-diagram" data-layout="vertical" style="--flow-width:${width}px;--flow-height:${height}px;max-width:${width}px" viewBox="0 0 ${width} ${height}" role="group" aria-label="主干与已记录子流程合并的统一网络">${edges}${nodes}</svg></div></section>`;
 }
 
 function nativeNodeAppearance(name, observed) {
@@ -9242,7 +9242,7 @@ function syncNativeExecutionDisplay() {
             pendingAttention.innerHTML = attentionHtml;
             pendingAttention.hidden = !attentionHtml;
         }
-        if (workflowTrace && !inspectedWorkflowMessage) workflowTrace.innerHTML = html;
+        if (workflowTrace && !inspectedWorkflowMessage) replaceWorkflowTraceHtml(html);
         if (activeWorkflowMessage?.classList.contains("message-ready")) {
             updateMessageExecutionEvidence(activeWorkflowMessage, activeExecutionEvents, activeWorkEvents);
             persistActiveConversationSnapshot();
@@ -10172,17 +10172,17 @@ function renderWorkflowTrace(steps, meta = {}) {
         workflowTrace.classList.remove("workflow-trace-dag");
         workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
         updateWorkflowStats(steps, resolvedMeta);
-        workflowTrace.innerHTML = buildNativeExecutionHtml(activeExecutionEvents)
-            + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`;
+        replaceWorkflowTraceHtml(buildNativeExecutionHtml(activeExecutionEvents)
+            + `<div class="native-work-events">${buildWorkAttemptHtml(activeWorkEvents)}</div>`);
         return;
     }
 
     workflowTrace.classList.remove("workflow-trace-dag");
     workflowTraceWrap?.classList.remove("workflow-trace-wrap-dag");
     updateWorkflowStats(steps, resolvedMeta);
-    workflowTrace.innerHTML = buildNativeExecutionHtml([])
+    replaceWorkflowTraceHtml(buildNativeExecutionHtml([])
         + '<details class="native-business-log"><summary>业务记录（非原生执行状态）</summary>'
-        + buildWorkflowChipRowHtml(steps) + '</details>';
+        + buildWorkflowChipRowHtml(steps) + '</details>');
 }
 
 function renderWorkflowTraceError(message) {
@@ -10202,7 +10202,7 @@ function renderWorkflowTraceError(message) {
         shadowPlannerPreview: latestWorkflowMeta.shadowPlannerPreview,
         plannerComparison: latestWorkflowMeta.plannerComparison,
     });
-    workflowTrace.innerHTML = `
+    replaceWorkflowTraceHtml(`
         <article class="workflow-step workflow-step-error" data-expanded="true">
             <button type="button" class="workflow-step-toggle" aria-expanded="true">
                 <div class="workflow-step-header">
@@ -10221,7 +10221,7 @@ function renderWorkflowTraceError(message) {
             </button>
             <div class="workflow-step-detail">${escapeHtml(message)}</div>
         </article>
-    `;
+    `);
 
     scrollWorkflowToLatest();
 }
@@ -10243,7 +10243,7 @@ function renderWorkflowTracePlaceholder(title, summary, detail) {
         shadowPlannerPreview: null,
         plannerComparison: null,
     });
-    workflowTrace.innerHTML = `
+    replaceWorkflowTraceHtml(`
         <article class="workflow-step workflow-step-empty" data-expanded="true">
             <button type="button" class="workflow-step-toggle" aria-expanded="true">
                 <div class="workflow-step-header">
@@ -10262,9 +10262,65 @@ function renderWorkflowTracePlaceholder(title, summary, detail) {
             </button>
             <div class="workflow-step-detail">${escapeHtml(detail)}</div>
         </article>
-    `;
+    `);
 
     scrollWorkflowToLatest();
+}
+
+function workflowDisclosureKey(node) {
+    const explicit = node.getAttribute("data-disclosure-key");
+    if (explicit) return explicit;
+    const owner = node.closest("[data-native-node-key]")?.getAttribute("data-native-node-key") || "";
+    // Counts and status suffixes change as execution grows; DOM order is not identity.
+    const label = node.querySelector(":scope > summary")?.textContent?.split("·")[0]?.trim() || "";
+    return JSON.stringify([owner, node.className, label]);
+}
+
+function replaceWorkflowTraceHtml(html) {
+    if (!workflowTrace) return;
+    const scope = inspectedWorkflowMessage?.isConnected ? inspectedWorkflowMessage
+        : activeWorkflowMessage || workflowTrace;
+    const states = workflowTrace.readerStates ||= new WeakMap();
+    const oldScope = workflowTrace.readerScope || scope;
+    const previous = states.get(oldScope) || {disclosures: new Map(), graph: null, top: 0, left: 0};
+    workflowTrace.querySelectorAll("details").forEach(node => previous.disclosures.set(workflowDisclosureKey(node), node.open));
+    const oldGraph = workflowTrace.querySelector(".native-flow-scroll");
+    if (oldGraph) previous.graph = [oldGraph.scrollTop, oldGraph.scrollLeft];
+    previous.top = workflowTraceWrap?.scrollTop || 0;
+    previous.left = workflowTraceWrap?.scrollLeft || 0;
+    states.set(oldScope, previous);
+    if (workflowTrace.dataset.inspectorHtml === html && oldScope === scope) return;
+    const state = states.get(scope) || {disclosures: new Map(), graph: null, top: 0, left: 0};
+    const focused = document.activeElement;
+    const sameScope = oldScope === scope;
+    const focusKey = sameScope && workflowTrace.contains(focused)
+        ? focused?.closest?.("[data-native-node-key]")?.getAttribute("data-native-node-key") : null;
+    const graphViewFocused = sameScope && workflowTrace.contains(focused) && focused?.matches?.(".native-flow-view > summary");
+    const graphFocused = sameScope && focused === oldGraph;
+    const focusTag = focused?.tagName;
+    workflowTrace.innerHTML = html;
+    workflowTrace.dataset.inspectorHtml = html;
+    workflowTrace.readerScope = scope;
+    workflowTrace.querySelectorAll("details").forEach(node => {
+        const key = workflowDisclosureKey(node);
+        if (state.disclosures.has(key)) node.open = state.disclosures.get(key);
+    });
+    const graph = workflowTrace.querySelector(".native-flow-scroll");
+    if (graph) {
+        if (state.graph) [graph.scrollTop, graph.scrollLeft] = state.graph;
+        else graph.scrollLeft = Math.max(0, (graph.scrollWidth - graph.clientWidth) / 2);
+    }
+    if (focusKey) {
+        const entries = [...workflowTrace.querySelectorAll("[data-native-node-key]")];
+        const entry = entries.find(node => node.getAttribute("data-native-node-key") === focusKey
+            && (focusTag === "g" ? node.matches(".native-flow-node") : node.matches("li")));
+        (focusTag === "g" ? entry : entry?.querySelector("summary"))?.focus({preventScroll: true});
+    }
+    if (graphViewFocused) workflowTrace.querySelector(".native-flow-view > summary")?.focus({preventScroll: true});
+    if (graphFocused) graph?.focus({preventScroll: true});
+    if (workflowTraceWrap) {
+        workflowTraceWrap.scrollTop = state.top; workflowTraceWrap.scrollLeft = state.left;
+    }
 }
 
 function refreshWorkflowInspector() {
@@ -10280,30 +10336,7 @@ function refreshWorkflowInspector() {
     const copy = source.cloneNode(true);
     copy.querySelector(":scope > summary")?.remove();
     copy.querySelectorAll("[id]").forEach(node => node.removeAttribute("id"));
-    const html = copy.innerHTML;
-    if (workflowTrace.dataset.inspectorHtml === html) return;
-    const open = [...workflowTrace.querySelectorAll("details")].map(node => node.open);
-    const focused = document.activeElement;
-    const focusKey = workflowTrace.contains(focused)
-        ? focused?.closest?.("[data-native-node-key]")?.getAttribute("data-native-node-key") : null;
-    const focusTag = focused?.tagName;
-    const graphScroll = [...workflowTrace.querySelectorAll(".native-flow-scroll")].map(node => [node.scrollTop, node.scrollLeft]);
-    const graphViewFocused = workflowTrace.contains(focused) && focused?.matches?.(".native-flow-view > summary");
-    const top = workflowTraceWrap.scrollTop, left = workflowTraceWrap.scrollLeft;
-    workflowTrace.innerHTML = html;
-    workflowTrace.dataset.inspectorHtml = html;
-    workflowTrace.querySelectorAll("details").forEach((node, index) => { node.open = open[index] ?? false; });
-    if (focusKey) {
-        const entries = [...workflowTrace.querySelectorAll("[data-native-node-key]")];
-        const entry = entries.find(node => node.getAttribute("data-native-node-key") === focusKey
-            && (focusTag === "g" ? node.matches(".native-flow-node") : node.matches("li")));
-        (focusTag === "g" ? entry : entry?.querySelector("summary"))?.focus({preventScroll: true});
-    }
-    workflowTrace.querySelectorAll(".native-flow-scroll").forEach((node, index) => {
-        if (graphScroll[index]) [node.scrollTop, node.scrollLeft] = graphScroll[index];
-    });
-    if (graphViewFocused) workflowTrace.querySelector(".native-flow-view > summary")?.focus({preventScroll: true});
-    workflowTraceWrap.scrollTop = top; workflowTraceWrap.scrollLeft = left;
+    replaceWorkflowTraceHtml(copy.innerHTML);
 }
 
 function inspectMessageWorkflow(message, opener) {

@@ -1075,7 +1075,7 @@ html[data-theme="dark"] .primary-button:hover {
 }
 @media (max-width: 920px) {
     /* On small screens opt-in details occupy a bounded row, never the composer. */
-    body.workflow-shell-mobile-open .chat-layout { grid-template-rows: minmax(0, 1fr) minmax(160px, 34dvh); }
+    body.workflow-shell-mobile-open .chat-layout { grid-template-rows: minmax(0, 1fr) minmax(200px, 42dvh); }
     #workflow-shell { grid-column: 1; grid-row: 2; position: relative; inset: auto; width: 100%;
         height: 100%; max-height: none; min-height: 0; border-radius: 0; transform: none; box-shadow: none;
         display: none; background: var(--surface-solid); }
@@ -1129,7 +1129,15 @@ html[data-theme="dark"] .primary-button:hover {
 #workflow-shell .native-workflow-atlas .native-flow-atlas-diagram { display: block; width: 100%; height: 100%; max-width: none !important; }
 #workflow-shell .native-workflow-atlas:has(> .native-flow-view[open]) .native-flow-atlas-diagram { width: var(--flow-width); height: var(--flow-height); margin-inline: auto; }
 @media (max-width: 920px) {
-    #workflow-shell .native-workflow-atlas .native-flow-scroll { height: clamp(90px, 17dvh, 160px); }
+    #workflow-shell .native-workflow-atlas .native-flow-scroll { height: clamp(90px, calc(42dvh - 160px), 240px); }
     #workflow-shell .native-workflow-atlas > .native-flow-heading,
     #workflow-shell .native-workflow-atlas > .native-flow-legend { display: none; }
 }
+
+/* Readable nodes are the default; the full-map thumbnail is opt-in. */
+#workflow-shell .native-workflow-atlas .native-flow-label { font-size: 14px; font-weight: 600; }
+#workflow-shell .native-workflow-atlas .native-flow-node[data-flow-control="true"] .native-flow-label { opacity: .85; }
+#workflow-shell .native-flow-scroll { overscroll-behavior: contain; scrollbar-gutter: stable; }
+#workflow-shell .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+#workflow-shell .native-workflow-atlas .native-flow-node[data-flow-boundary]:not([data-flow-boundary=""]) .native-flow-label { font-size: 18px; }

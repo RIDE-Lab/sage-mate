@@ -3,13 +3,13 @@ const source=fs.readFileSync(require('node:path').join(__dirname,'../src/sage_fa
 function fn(name){const a=source.indexOf(`function ${name}(`);return source.slice(a,source.indexOf('\n}\n',a)+3);}
 let html='recorded graph',observed,opened=0,focus=0;
 const wrapper={scrollTop:31,scrollLeft:12};
-const details=[{open:true},{open:false}];
-const trace={contains:()=>false,dataset:{},querySelectorAll:()=>details,set innerHTML(value){this.html=value;details.forEach(x=>x.open=false);wrapper.scrollTop=0;},get innerHTML(){return this.html;}};
+const details=[true,false].map((open,i)=>({open,className:`detail-${i}`,getAttribute:()=>null,closest:()=>null,querySelector:()=>({textContent:`Section ${i}`})}));
+const trace={querySelector:()=>null,contains:()=>false,dataset:{},querySelectorAll:()=>details,set innerHTML(value){this.html=value;details.forEach(x=>x.open=false);wrapper.scrollTop=0;},get innerHTML(){return this.html;}};
 const copy={get innerHTML(){return html;},querySelector:()=>({remove(){}}),querySelectorAll:()=>[]};
 const message={isConnected:true,querySelector:()=>({cloneNode:()=>copy}),previousElementSibling:{querySelector:()=>({textContent:'Original question'})}};
 const caption={};const trigger={closest:()=>message,focus(){focus++;}};
-const ctx={document:{activeElement:null},workflowTrace:trace,workflowTraceWrap:wrapper,inspectedWorkflowMessage:null,workflowInspectorObserver:null,workflowInspectorOpener:null,workflowShell:{querySelector:()=>caption},chatStream:{contains:()=>true},MutationObserver:class{constructor(cb){this.cb=cb;observed=this;} observe(node){assert.equal(node,message);} disconnect(){}},openWorkflowMobileSheet(){opened++;}};
-vm.createContext(ctx);for(const name of ['refreshWorkflowInspector','inspectMessageWorkflow','handleWorkflowInspectorClick','renderWorkflowTrace','renderWorkflowTraceError','renderWorkflowTracePlaceholder'])vm.runInContext(fn(name),ctx);
+const ctx={document:{activeElement:null},activeWorkflowMessage:null,workflowTrace:trace,workflowTraceWrap:wrapper,inspectedWorkflowMessage:null,workflowInspectorObserver:null,workflowInspectorOpener:null,workflowShell:{querySelector:()=>caption},chatStream:{contains:()=>true},MutationObserver:class{constructor(cb){this.cb=cb;observed=this;} observe(node){assert.equal(node,message);} disconnect(){}},openWorkflowMobileSheet(){opened++;}};
+vm.createContext(ctx);for(const name of ['workflowDisclosureKey','replaceWorkflowTraceHtml','refreshWorkflowInspector','inspectMessageWorkflow','handleWorkflowInspectorClick','renderWorkflowTrace','renderWorkflowTraceError','renderWorkflowTracePlaceholder'])vm.runInContext(fn(name),ctx);
 let prevented=0;ctx.handleWorkflowInspectorClick({target:{closest:()=>trigger},preventDefault(){prevented++;},stopImmediatePropagation(){}});
 assert.equal(opened,1);assert.equal(prevented,1);assert.equal(caption.textContent,'Original question');
 assert.equal(trace.html,html);assert.deepEqual(details.map(x=>x.open),[true,false]);
