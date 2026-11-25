@@ -1141,3 +1141,85 @@ html[data-theme="dark"] .primary-button:hover {
 #workflow-shell .native-flow-scroll:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 
 #workflow-shell .native-workflow-atlas .native-flow-node[data-flow-boundary]:not([data-flow-boundary=""]) .native-flow-label { font-size: 18px; }
+
+/* Keep chat and workflow surfaces legible when the page uses dark colors. */
+html[data-theme="dark"] .message-user .message-bubble {
+    color: var(--ink);
+    background: var(--surface-muted);
+    border: 1px solid var(--line);
+}
+
+html[data-theme="dark"] .message-user .message-main-copy,
+html[data-theme="dark"] .message-user .message-role {
+    color: var(--ink);
+}
+
+html[data-theme="dark"] .workflow-shell-head,
+html[data-theme="dark"] .workflow-stat-pill,
+html[data-theme="dark"] .workflow-step,
+html[data-theme="dark"] .workflow-step-chip,
+html[data-theme="dark"] .workflow-dag-node-card {
+    color: var(--ink);
+    background: var(--surface-muted);
+    border-color: var(--line);
+}
+
+html[data-theme="dark"] .workflow-dag-layer-group,
+html[data-theme="dark"] .workflow-step-chip-group,
+html[data-theme="dark"] .workflow-step-chip-group-compact,
+html[data-theme="dark"] .workflow-step-chip-group-post_answer {
+    color: var(--ink);
+    background: var(--surface-soft);
+    border-color: var(--line);
+    box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-dag-group-head,
+html[data-theme="dark"] .workflow-step-chip-group-head,
+html[data-theme="dark"] .workflow-step-chip-group-post_answer .workflow-step-chip-group-head {
+    color: var(--text-secondary);
+}
+
+html[data-theme="dark"] .workflow-step-chip-active,
+html[data-theme="dark"] .workflow-step-chip-current,
+html[data-theme="dark"] .workflow-step-current {
+    color: var(--ink);
+    background: #304058;
+    border-color: #647a99;
+}
+
+html[data-theme="dark"] .workflow-step-chip-skipped,
+html[data-theme="dark"] .workflow-step-skipped {
+    color: var(--text-secondary);
+    background: #282828;
+    border-color: var(--line);
+}
+
+html[data-theme="dark"] .workflow-step-index,
+html[data-theme="dark"] .workflow-step-chip-index {
+    color: var(--ink);
+    background: #454540;
+    box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-step-completed .workflow-step-index {
+    color: #d9f7e7;
+    background: #315445;
+    box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-step-current .workflow-step-index {
+    color: #f4f7ff;
+    background: #425b7d;
+    box-shadow: none;
+}
+
+html[data-theme="dark"] .workflow-step-toggle:hover {
+    background: #3b3b3b;
+}
+
+@media (max-width: 760px) {
+    html[data-theme="dark"] .composer-shell {
+        background: var(--surface);
+    }
+}
