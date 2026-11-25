@@ -134,6 +134,7 @@ from .interaction_policy import (
     requires_human_handoff,
 )
 from .knowledge_base import LocalKnowledgeStore, _canonical_source_group
+from .question_relevance import is_underspecified_experiment_question
 from .knowledge_authority import (
     IDENTITY_FLOOR_TITLES,
     OWNER_SYSTEM_OVERVIEW_TITLE,
@@ -1389,6 +1390,19 @@ class FacultyTwinWorkflowSupport:
 
         context.web_source_restricted = context.request.knowledge_sources is not None
         intent, source = self._resolve_interaction_intent(context)
+        if (
+            is_underspecified_experiment_question(context.request.question)
+            and (context.request.course_context or "").strip() in {"", "科研指导"}
+        ):
+            # A generic method question must not inherit a specific course
+            # assignment merely because the intent model chose teaching.
+            intent = intent.model_copy(update={
+                "action": "answer", "domain": "research",
+                "retrieval_scopes": ["research_methodology"],
+                "exclude_scopes": ["courseware"],
+                "decision_mode": "advise_only",
+            })
+            source += "+generic-experiment-guard"
         context.interaction_decision = InteractionDecision(intent=intent, source=source)
         intent = context.interaction_decision.intent
         context.interaction_intent = intent
@@ -6428,6 +6442,8 @@ class FacultyTwinWorkflowSupport:
         question: str,
         knowledge_hits: list[KnowledgeSearchHit],
     ) -> list[KnowledgeSearchHit]:
+        if is_underspecified_experiment_question(question):
+            return [hit for hit in knowledge_hits if not is_teaching_hit(hit)]
         award_markers = ("图灵奖", "turing award", "诺贝尔奖", "nobel prize")
         lowered_question = question.lower()
         if not any(marker in lowered_question for marker in award_markers):

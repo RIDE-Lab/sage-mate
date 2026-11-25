@@ -1449,7 +1449,7 @@ const WIKI_QUESTION_PROFILES = {
         context: "组内研究 · 假设与实验设计",
         questions: [
             ["推理状态管理有哪些值得验证的研究问题？", /推理状态管理开放研究问题/],
-            ["怎样区分系统优化的真实收益和实验干扰？", /Benchmark|开放研究问题|端到端验收/],
+            ["分析实验结果", "请先问我的研究问题、基线、指标和实际结果，再帮我组织实验分析；在这些信息不足时不要假设实验主题。", /Benchmark|开放研究问题|端到端验收/],
             ["KV Cache 迁移和重计算，什么时候各自更划算？", /推理状态管理|分布式推理|KV Cache/],
             ["评测 RAG 系统时，怎样同时检查效果和性能？", /RAG 系统/],
             ["怎样判断一个实验假设是否真的被证伪？", /好的研究问题|开放研究问题/],
@@ -1460,11 +1460,13 @@ const WIKI_QUESTION_PROFILES = {
 
 function wikiStarterQuestions(profile, pages) {
     const design = WIKI_QUESTION_PROFILES[profile] || WIKI_QUESTION_PROFILES.general_visitor;
-    const pool = design.questions.map(([question, topics]) => {
+    const pool = design.questions.map((entry) => {
+        const [label, question, topics] = entry.length === 3
+            ? entry : [entry[0], entry[0], entry[1]];
         const page = pages.find(item => typeof item.label === "string" && topics.test(item.label));
         // Catalog metadata ranks discoverable topics, never rewrites user text.
         // Retrieval scope, ACLs and source constraints belong to the backend.
-        return {label: question, question, context: design.context,
+        return {label, question, context: design.context,
             ...(page ? {source_name: page.source_name, url: page.url} : {})};
     });
     // Do not fill an unavailable public catalog with promises of answers we
